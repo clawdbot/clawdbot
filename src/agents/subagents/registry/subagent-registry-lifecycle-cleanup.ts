@@ -9,12 +9,9 @@ import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  getDeliveryLastError,
-} from "./subagent-delivery-state.js";
+import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
@@ -34,15 +31,9 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
-  markPendingFinalDelivery,
   maskLifecycleIdentifier,
-  safeMarkRequiredCompletionDeliveryBlocked,
-  safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
-import {
-  markRequesterSettleWakePending,
-  scheduleRequesterSettleWake,
-} from "./subagent-registry-lifecycle-wake.js";
+import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
@@ -51,8 +42,8 @@ type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
   // Restart remains one-way; only suspension preserves an admitted cleanup owner.
   return isGatewayRestartDraining()
-    ? runWithGatewayIndependentRootWorkAdmission(run)
-    : runWithGatewayIndependentRootWorkContinuation(run);
+    ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
+    : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup");
 }
 
 export function scheduleResumeSubagentRun(
@@ -80,7 +71,7 @@ export function scheduleResumeSubagentRun(
       }
       params.resumedRuns.delete(runId);
       params.resumeSubagentRun(runId);
-    }).catch((err: unknown) => {
+    }, "subagents:resume").catch((err: unknown) => {
       defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
       const current = params.runs.get(runId);
       if (
@@ -175,44 +166,18 @@ export function suspendPendingFinalDelivery(
   },
 ): void {
   const params = context.options;
-  const previousEntry = structuredClone(args.entry);
-  markPendingFinalDelivery({
-    entry: args.entry,
-    error: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
+  const committed = blockSubagentCompletionDelivery({
+    subagent: args.entry,
+    taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",
+    reason: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
+    suspendedReason: args.reason,
   });
-  const now = Date.now();
-  const delivery = ensureDeliveryState(args.entry);
-  delivery.status = "suspended";
-  delivery.suspendedAt ??= now;
-  delivery.suspendedReason = args.reason;
-  args.entry.cleanupHandled = false;
-  args.entry.wakeOnDescendantSettle = undefined;
-  const completion = ensureCompletionState(args.entry);
-  completion.fallbackResultText = undefined;
-  completion.fallbackCapturedAt = undefined;
-  params.resumedRuns.delete(args.runId);
-  safeSetSubagentTaskDeliveryStatus(params, {
-    entry: args.entry,
-    deliveryStatus: "failed",
-    deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry: args.entry,
-    reason: getDeliveryLastError(args.entry) ?? args.reason,
-  });
-  logAnnounceGiveUp(args.entry, args.reason);
-  markRequesterSettleWakePending(args.entry);
-  try {
-    params.persistOrThrow(args.runId);
-  } catch (error) {
-    for (const key of Object.keys(args.entry)) {
-      Reflect.deleteProperty(args.entry, key);
-    }
-    Object.assign(args.entry, previousEntry);
-    throw error;
+  if (!committed) {
+    throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
   }
-  // Suspension is terminal for automatic retries, so it settles this child
-  // for requester-drain purposes even though cleanup stays incomplete.
+  params.resumedRuns.delete(args.runId);
+  logAnnounceGiveUp(args.entry, args.reason);
+  // Suspension settles this child for requester drain while cleanup stays incomplete.
   scheduleRequesterSettleWake(context, args.runId, args.entry);
 }
 
@@ -514,6 +479,12 @@ async function completeTerminalCleanup(
     return true;
   };
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
+    return;
+  }
+  if (entry.resumptionNotice) {
+    // The recovered run may finish before its resumption notice is delivered.
+    // Restart recovery retries that debt for a bounded terminal window, then
+    // clears it and re-enters cleanup so completion cannot remain wedged.
     return;
   }
   refreshSessionEffectsSuppression();

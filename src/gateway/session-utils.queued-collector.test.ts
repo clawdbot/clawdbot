@@ -240,17 +240,24 @@ describe("queued collector session projection", () => {
   it("keeps preactivation and held cancellation reservations pending until withdrawal", async () => {
     const { entry } = await createQueuedReservation();
     const context = requestContext();
-    const expectQueued = async () => {
+    const expectPreparing = async () => {
       expect(isSubagentRunQueued(entry)).toBe(true);
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context,
+          requestedKey: entry.childSessionKey,
+          canonicalKey: entry.childSessionKey,
+        }),
+      ).toEqual({ active: true, runIds: [entry.runId] });
       expect((await listChildren(context)).sessions).toEqual([
         expect.objectContaining({
-          status: "queued",
+          status: "running",
           hasActiveRun: true,
           activeRunIds: [entry.runId],
         }),
       ]);
     };
-    await expectQueued();
+    await expectPreparing();
     expect(
       resolveVisibleActiveSessionRunState({
         context,
@@ -281,7 +288,7 @@ describe("queued collector session projection", () => {
         }),
         "kill claim",
       );
-      await expectQueued();
+      await expectPreparing();
       expect(start).not.toHaveBeenCalled();
       releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
       expect(hold.withdraw()).toBe(true);

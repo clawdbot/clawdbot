@@ -1,5 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
+
+const repoRoot = path.resolve(import.meta.dirname, "../../..");
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -87,6 +92,7 @@ function setManifestPlugins(plugins: unknown[]) {
 function createMistralManifestPlugin(overrides?: {
   discovery?: "static" | "refreshable" | "runtime";
   origin?: string;
+  cost?: ModelDefinitionConfig["cost"];
 }) {
   return {
     id: "mistral",
@@ -106,7 +112,7 @@ function createMistralManifestPlugin(overrides?: {
               contextWindow: 262144,
               maxTokens: 8192,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-              cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+              cost: overrides?.cost ?? { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
               mediaInput: {
                 image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
               },
@@ -177,35 +183,74 @@ describe("resolveBundledStaticCatalogModel", () => {
     expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(1);
   });
 
-  it("synthesizes a runtime model from an exact bundled static manifest catalog row", () => {
-    setManifestPlugins([createMistralManifestPlugin()]);
+  it.each([false, true])(
+    "synthesizes a runtime model with complete static pricing (tiered=%s)",
+    (tiered) => {
+      const cost = {
+        input: 1.5,
+        output: 7.5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        ...(tiered
+          ? {
+              tieredPricing: [
+                {
+                  input: 1.5,
+                  output: 7.5,
+                  cacheRead: 0.1,
+                  cacheWrite: 0.2,
+                  range: [0, 200_001] as [number, number],
+                },
+                {
+                  input: 3,
+                  output: 15,
+                  cacheRead: 0.3,
+                  cacheWrite: 0.4,
+                  range: [200_001] as [number],
+                },
+              ],
+            }
+          : {}),
+      };
+      setManifestPlugins([createMistralManifestPlugin({ cost })]);
 
-    const model = resolveBundledStaticCatalogModel({
-      provider: "mistral",
-      modelId: "mistral-medium-3-5",
-      cfg: {},
-    });
+      const model = resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        cfg: {},
+      });
 
-    expect(model).toEqual({
-      api: "openai-completions",
-      baseUrl: "https://api.mistral.ai/v1",
-      compat: undefined,
-      contextTokens: undefined,
-      contextWindow: 262144,
-      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
-      headers: undefined,
-      id: "mistral-medium-3-5",
-      input: ["text", "image"],
-      maxTokens: 8192,
-      mediaInput: {
-        image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-      },
-      name: "Mistral Medium 3.5",
-      provider: "mistral",
-      reasoning: true,
-      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-    });
-  });
+      expect(model).toEqual({
+        api: "openai-completions",
+        baseUrl: "https://api.mistral.ai/v1",
+        compat: undefined,
+        contextTokens: undefined,
+        contextWindow: 262144,
+        cost: {
+          ...cost,
+          ...(tiered
+            ? {
+                tieredPricing: [
+                  cost.tieredPricing![0],
+                  { ...cost.tieredPricing![1], range: [200_001, Infinity] },
+                ],
+              }
+            : {}),
+        },
+        headers: undefined,
+        id: "mistral-medium-3-5",
+        input: ["text", "image"],
+        maxTokens: 8192,
+        mediaInput: {
+          image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+        },
+        name: "Mistral Medium 3.5",
+        provider: "mistral",
+        reasoning: true,
+        thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+      });
+    },
+  );
 
   it("ignores non-bundled and non-static manifest catalog rows", () => {
     // Workspace plugins and refreshable/runtime catalogs are not process-stable
@@ -257,6 +302,47 @@ describe("resolveBundledStaticCatalogModel", () => {
     });
 
     expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("keeps the native Gemini transport when Google manifest rows back static fallback", () => {
+    // The bundled google plugin mirrors its runtime static catalog into
+    // modelCatalog.providers.google so Doctor recognizes the ids offline.
+    // Those same rows win over the runtime static provider in bundled
+    // fallback resolution, so the mirror must preserve the provider-level
+    // api/baseUrl or rows normalize to openai-responses with an empty
+    // endpoint (breaking Google completion/compaction fallbacks).
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "extensions/google/openclaw.plugin.json"), "utf8"),
+    ) as {
+      id: string;
+      providers: string[];
+      modelCatalog?: {
+        providers?: Record<string, { api?: string; baseUrl?: string }>;
+      };
+    };
+    setManifestPlugins([{ origin: "bundled", ...manifest }]);
+
+    const resolved = resolveBundledStaticCatalogModel({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(resolved?.provider).toBe("google");
+    expect(resolved?.api).toBe("google-generative-ai");
+    expect(resolved?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+
+    // Runtime-discovery rows stay out of the plain bundled fallback path;
+    // only callers that opt in via includeRuntimeDiscovery reach the mirror,
+    // so the manifest addition does not widen default fallback visibility.
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        cfg: {},
+      }),
+    ).toBeUndefined();
   });
 
   it("requires an exact provider and model match", () => {

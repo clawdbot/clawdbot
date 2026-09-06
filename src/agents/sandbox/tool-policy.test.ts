@@ -370,47 +370,73 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.sandboxed).toBe(false);
   });
 
-  it("rejects a classification agent that conflicts with its session key", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, worker: {} },
-      },
-    } satisfies OpenClawConfig;
+  it.each([
+    { classificationSessionKey: "agent:worker:main", classificationAgentId: "main" },
+    { classificationSessionKey: "global", classificationAgentId: undefined },
+  ])(
+    "rejects ambiguous or conflicting independent classification: $classificationSessionKey",
+    (classification) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, worker: {} },
+        },
+      } satisfies OpenClawConfig;
 
-    expect(() =>
-      resolveSandboxRuntimeStatus({
+      expect(() =>
+        resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          ...classification,
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    },
+  );
+
+  it.each(["agent:work:telegram:default:direct:42", "global"])(
+    "keeps %s ownership as the sandbox classification when none is supplied",
+    (sessionKey) => {
+      const cfg = {
+        session: {
+          store: path.join(
+            sandboxStoreDirs.make("openclaw-owned-sandbox-"),
+            "{agentId}",
+            "sessions.json",
+          ),
+        },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            work: { sandbox: { mode: "all", scope: "agent" } },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const runtime = resolveSandboxRuntimeStatus({
         cfg,
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        classificationSessionKey: "agent:worker:main",
-        classificationAgentId: "main",
-      }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-  });
+        sessionKey,
+        agentId: "work",
+      });
 
-  it("keeps the session identity as the sandbox classification when none is supplied", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: { sandbox: { mode: "non-main", scope: "agent" } } },
-      },
-    } satisfies OpenClawConfig;
-
-    const runtime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:main:telegram:default:direct:42",
-      agentId: "main",
-    });
-
-    expect(runtime).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:default:direct:42",
-      classificationAgentId: "main",
-      classificationSessionKey: "agent:main:telegram:default:direct:42",
-      sandboxed: true,
-    });
-  });
+      expect(runtime).toMatchObject({
+        agentId: "work",
+        sessionKey,
+        classificationAgentId: "work",
+        classificationSessionKey: sessionKey,
+        sandboxed: true,
+      });
+      expect(() =>
+        resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey,
+          agentId: "work",
+          classificationSessionKey: "other-bare-session",
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    },
+  );
 
   it("keeps the agent main session sandboxed in all mode", () => {
     const cfg: OpenClawConfig = {

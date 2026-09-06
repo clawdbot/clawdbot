@@ -19,9 +19,11 @@ import {
   markBackgrounded,
   markExited,
   type ProcessSession,
+  resolveProcessCleanupMs,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -96,7 +98,6 @@ vi.mock("../infra/shell-env.js", async () => {
 vi.mock("../process/supervisor/index.js", () => {
   type SpawnInput = {
     argv?: string[];
-    ptyCommand?: string;
     env?: NodeJS.ProcessEnv;
     onStdout?: (chunk: string) => void;
   };
@@ -111,7 +112,7 @@ vi.mock("../process/supervisor/index.js", () => {
   const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
     env[readPathKey(env)] = value;
   };
-  const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const extractCommand = (input: SpawnInput) => input.argv?.at(-1) ?? "";
   const parseShellSingleQuoted = (input: string) => {
     if (!input.startsWith("'")) {
       return null;
@@ -201,7 +202,9 @@ vi.mock("../process/supervisor/index.js", () => {
         if (stagedOutput) {
           input.onStdout?.(stagedOutput);
         }
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         return {
+          activity,
           runId: "mock-bash-run",
           startedAtMs: Date.now(),
           pid: 123,
@@ -211,7 +214,9 @@ vi.mock("../process/supervisor/index.js", () => {
             await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
+              activity.lastOutputAtMs = Date.now();
             }
+            activity.resultSettled = true;
             return {
               reason: "exit" as const,
               exitCode,
@@ -228,7 +233,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     }),
   };
 });
@@ -636,6 +640,7 @@ const seedFinishedLogSession = (lines: string[]) => {
   const session: ProcessSession = {
     id: `seeded-log-${nextCallId()}`,
     command: "seeded log",
+    cleanupMs: resolveProcessCleanupMs(),
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
@@ -819,15 +824,18 @@ describe("exec notifyOnExit", () => {
     expect(formatted).toBeUndefined();
   });
 
-  it("consumes only the polled completion event", async () => {
+  it("consumes only the acknowledged poll's completion event", async () => {
     const tool = createNotifyOnExitExecTool();
     const unpolledSessionId = await startBackgroundCommand(tool, shellEcho("unpolled"));
     await waitForNotifyEvent(unpolledSessionId);
     const sessionId = await startBackgroundCommand(tool, shellEcho("polled"));
     await waitForNotifyEvent(sessionId);
-    const poll = await pollProcessSession({ tool: processTool, sessionId });
+    const queued = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY);
+    const poll = await executeProcessTool(processTool, { action: "poll", sessionId });
 
-    expect(poll.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(readProcessStatus(poll.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect(peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY)).toEqual(queued);
+    acknowledgeInternalToolResult(poll);
     expect(hasNotifyEventForSession(sessionId)).toBe(false);
     expect(hasNotifyEventForSession(unpolledSessionId)).toBe(true);
   });

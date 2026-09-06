@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { CommandClientPresentationAction } from "../../app/command-client-presentation.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -7,6 +8,7 @@ import type {
   ChatAttachment,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
@@ -17,7 +19,7 @@ import type { ChatInputHistoryState } from "./input-history.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ChatScrollHost } from "./scroll.ts";
-import type { ToolStreamHost } from "./tool-stream.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -28,6 +30,7 @@ export type ChatHost = ChatInputHistoryState &
   ToolStreamHost &
   ChatCommandHost & {
     sessions: SessionCapability;
+    chatSubmissions: ApplicationChatSubmissions;
     /** Initial placement owns admission even while transport loss hides its content. */
     hasPendingInitialTurn?: (sessionKey: string) => boolean;
     client: GatewayBrowserClient | null;
@@ -37,6 +40,10 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    canRestoreComposer?: () => boolean;
+    chatMentions?: readonly HumanMention[];
+    /** Captured once at submit; queued delivery never re-reads the current page. */
+    getWorkContext?: () => string | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;
@@ -51,7 +58,6 @@ export type ChatHost = ChatInputHistoryState &
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;
     chatRunStartup?: ChatRunStartupState | null;
-    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: ChatRunError | null;

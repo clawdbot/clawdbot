@@ -1,32 +1,25 @@
 import type { WorkerSessionsSendParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
+import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { WorkerSessionToolOutcomeUnknownError } from "./worker-session-tool-result.js";
 import {
-  resolveWorkerSessionToolSource as exactSource,
   resolveWorkerSessionToolTarget as exactAuthorizedTarget,
   type WorkerSessionToolSource as ExactSource,
   type WorkerSessionToolTarget as ExactTarget,
 } from "./worker-session-tool-topology.js";
 
-export async function executeWorkerSessionSend(
-  placements: WorkerSessionPlacementStore,
-  operation: {
-    source: ExactSource;
-    identity: WorkerConnectionIdentity;
-    target: ExactTarget;
-    request: WorkerSessionsSendParams;
-    idempotencyKey: string;
-    signal?: AbortSignal;
-  },
-) {
-  operation.signal?.throwIfAborted();
-  exactSource({ identity: operation.identity, placements });
+export async function executeWorkerSessionSend(operation: {
+  source: ExactSource;
+  target: ExactTarget;
+  request: WorkerSessionsSendParams;
+  idempotencyKey: string;
+  assertSource: () => void;
+  callGateway: AgentToolGatewayRequestCaller;
+  signal?: AbortSignal;
+}) {
   const config = getRuntimeConfig();
   const executeFencedSend = async () => {
     const assertCurrentTarget = () => {
@@ -50,16 +43,14 @@ export async function executeWorkerSessionSend(
       idempotencyKey: operation.idempotencyKey,
       config,
       ...(operation.signal ? { signal: operation.signal } : {}),
-      callGateway: (request) =>
-        callAgentToolGatewayRequest({
-          ...request,
-          ...(operation.signal ? { signal: operation.signal } : {}),
-        }),
+      callGateway: (request) => {
+        assertCurrentTarget();
+        return operation.callGateway(request);
+      },
     });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        operation.signal?.throwIfAborted();
-        exactSource({ identity: operation.identity, placements });
+        operation.assertSource();
         assertCurrentTarget();
         return await tool.execute(operation.request.toolCallId, {
           sessionKey: operation.target.sessionKey,

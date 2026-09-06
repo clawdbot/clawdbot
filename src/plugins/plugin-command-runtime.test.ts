@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+const getCurrentPluginConversationBinding = vi.hoisted(() => vi.fn(async () => null));
 const cleanupReplacedPluginHostRegistry = vi.hoisted(() =>
   vi.fn(async () => ({ cleanupCount: 0, failures: [] })),
 );
 
 vi.mock("./host-hook-cleanup.js", () => ({ cleanupReplacedPluginHostRegistry }));
+vi.mock("./conversation-binding.js", () => ({
+  getCurrentPluginConversationBinding,
+  requestPluginConversationBinding: vi.fn(),
+  detachPluginConversationBinding: vi.fn(),
+}));
 
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import { createPluginRecord } from "./loader-records.js";
-import { withPluginCommandAccountStartScope } from "./plugin-command-account-start-scope.js";
 import {
   createPluginCommandRuntime,
   executePluginCommandDispatch,
@@ -71,6 +77,7 @@ function requirePluginDispatch(
 
 afterEach(() => {
   cleanupReplacedPluginHostRegistry.mockClear();
+  getCurrentPluginConversationBinding.mockClear();
   resetPluginRuntimeStateForTest();
 });
 
@@ -183,6 +190,63 @@ describe("plugin command runtime", () => {
     expect(scopedHandler).toHaveBeenCalledOnce();
     expect(ambientHandler).not.toHaveBeenCalled();
   });
+
+  it.each(["provider", "fallback"])(
+    "resolves %s conversation bindings through the command's selected registry",
+    async (resolution) => {
+      const createRegistry = (owner: string) =>
+        createTestRegistry([
+          {
+            pluginId: "room-chat",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "room-chat",
+                config: { defaultAccountId: () => `${owner}-account` },
+              }),
+              bindings: {
+                resolveCommandConversation: () =>
+                  resolution === "provider" ? { conversationId: `${owner}-room` } : null,
+              },
+              messaging: { normalizeTarget: () => `channel:${owner}-room` },
+            },
+          },
+        ]);
+      const ambient = createRegistry("ambient");
+      const scoped = createRegistry("scoped");
+      expect(
+        registerPluginCommandInRegistry(
+          scoped,
+          "demo",
+          {
+            name: "demo",
+            description: "Inspect this conversation",
+            handler: async (ctx) => {
+              await ctx.getCurrentConversationBinding();
+              return { text: ctx.accountId };
+            },
+          },
+          { pluginRoot: "/plugins/demo" },
+        ),
+      ).toEqual({ ok: true });
+      setActivePluginRegistry(ambient);
+
+      const dispatch = withPluginRuntimeRegistryScope(scoped, () =>
+        requirePluginDispatch(createPluginCommandRuntime().listNativeCandidates("room-chat")[0]!),
+      );
+      await expect(
+        dispatch.execute({ ...executionContext, channel: "room-chat", to: "room-chat:opaque" }),
+      ).resolves.toEqual({ text: "scoped-account" });
+      expect(getCurrentPluginConversationBinding).toHaveBeenCalledWith({
+        pluginRoot: "/plugins/demo",
+        conversation: {
+          channel: "room-chat",
+          accountId: "scoped-account",
+          conversationId: "scoped-room",
+        },
+      });
+    },
+  );
 
   it("rejects forged, cross-runtime, wrong-channel, and retired selections", async () => {
     const registry = createEmptyPluginRegistry();
@@ -314,7 +378,7 @@ describe("plugin command runtime", () => {
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
   });
 
-  it("retains only a supported provider in its matching account startup scope", () => {
+  it("preserves the shipped catalog-retention call and rejects retired runtimes", () => {
     const registry = createEmptyPluginRegistry();
     registerCommand(registry, {
       pluginId: "demo",
@@ -324,15 +388,8 @@ describe("plugin command runtime", () => {
     });
     setActivePluginRegistry(registry);
     const runtime = createPluginCommandRuntime();
-    const retainCatalog = vi.fn();
-
-    runtime.retainNativeCatalog("telegram");
-    withPluginCommandAccountStartScope({ channelId: "telegram", retainCatalog }, () => {
-      runtime.retainNativeCatalog("discord");
-      runtime.retainNativeCatalog("telegram");
-    });
-
-    expect(retainCatalog).toHaveBeenCalledOnce();
+    expect(() => runtime.retainNativeCatalog("telegram")).not.toThrow();
+    expect(() => runtime.retainNativeCatalog("discord")).not.toThrow();
     markPluginRegistryRetired(registry);
     expect(() => runtime.retainNativeCatalog("telegram")).toThrow("retired registry generation");
   });

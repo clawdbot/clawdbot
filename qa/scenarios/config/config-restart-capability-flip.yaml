@@ -53,16 +53,16 @@ flow:
         - set: originalImageGenerationModelPrimary
           value:
             expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
-        - set: originalTerminal
+        - set: originalControlUi
           value:
-            expr: "original.config.gateway && Object.prototype.hasOwnProperty.call(original.config.gateway, 'terminal') ? structuredClone(original.config.gateway.terminal) : undefined"
-        - set: restartTerminalEnabled
+            expr: "original.config.gateway && Object.prototype.hasOwnProperty.call(original.config.gateway, 'controlUi') ? structuredClone(original.config.gateway.controlUi) : undefined"
+        - set: restartControlUiBasePath
           value:
-            # Terminal is enabled unless explicitly false. This expression flips both effective states.
-            expr: "originalTerminal?.enabled === false ? true : false"
-        - set: originalTerminalEnabledPresent
+            # Control UI routing is startup-owned; terminal settings are hot-reloaded.
+            expr: "originalControlUi?.basePath === '/qa-capability-flip' ? '/qa-capability-flip-alt' : '/qa-capability-flip'"
+        - set: originalControlUiBasePathPresent
           value:
-            expr: "originalTerminal !== undefined && Object.prototype.hasOwnProperty.call(originalTerminal, 'enabled')"
+            expr: "originalControlUi !== undefined && Object.prototype.hasOwnProperty.call(originalControlUi, 'basePath')"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -123,9 +123,9 @@ flow:
                               primary:
                                 ref: originalImageGenerationModelPrimary
                       gateway:
-                        terminal:
-                          enabled:
-                            ref: restartTerminalEnabled
+                        controlUi:
+                          basePath:
+                            ref: restartControlUiBasePath
                     sessionKey:
                       ref: sessionKey
                     deliveryContext:
@@ -135,7 +135,7 @@ flow:
                       ref: wakeMarker
                     replacePaths:
                       - tools.deny
-                      - gateway.terminal.enabled
+                      - gateway.controlUi.basePath
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -258,8 +258,8 @@ flow:
                         deny:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
                       gateway:
-                        terminal:
-                          expr: "originalTerminal === undefined ? null : (originalTerminalEnabledPresent ? originalTerminal : { ...originalTerminal, enabled: null })"
+                        controlUi:
+                          expr: "originalControlUi === undefined ? null : (originalControlUiBasePathPresent ? originalControlUi : { ...originalControlUi, basePath: null })"
                     replacePaths:
                       - tools.deny
               - call: waitForGatewayHealthy

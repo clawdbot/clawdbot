@@ -20,7 +20,7 @@ type SendCronFailureAlertParams = Parameters<
   NonNullable<CronServiceParams["sendCronFailureAlert"]>
 >[0];
 
-describe.sequential("CronService silent failure alerts", () => {
+describe("CronService silent failure alerts", { concurrent: false }, () => {
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
   });

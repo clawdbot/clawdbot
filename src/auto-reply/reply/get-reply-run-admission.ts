@@ -4,8 +4,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -16,7 +17,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { interruptSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getSessionWorkAdmissionOwnerRelease,
+  interruptSessionWorkAdmissions,
+} from "../../sessions/session-lifecycle-admission.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -55,7 +60,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -101,6 +106,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } = params;
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes the first token and silently shadows any
@@ -124,6 +133,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
+      thinkLevelOverride = maybeLevel;
       prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
@@ -140,9 +150,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return;
     }
-    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
-    const systemEventSessionKeys =
-      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+    const eventContext = getReplySystemEventContext(opts);
+    const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
+    const systemEventSessionKeys = context.isHeartbeat
+      ? [routeSystemEventSessionKey ?? sessionKey]
+      : routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
@@ -153,7 +165,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        // A heartbeat may consume only its prepared generic selection, never
+        // dedicated reminders or arrivals that were not part of this turn.
+        events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -191,6 +205,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
         const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
         return await ensureSkillSnapshot({
+          agentId,
           sessionEntry,
           sessionEntryHandle,
           sessionStore,
@@ -410,7 +425,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
       };
@@ -439,6 +454,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
       authProfileId: selection?.profileId,
@@ -468,15 +486,27 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
+  let recoveryOwnerActive = false;
   const resolveQueueBusyState = () => {
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
+    const recoveryOwnerRelease = storePath
+      ? getSessionWorkAdmissionOwnerRelease({
+          scope: storePath,
+          identities: [sessionKey, preparedSessionState.sessionId],
+          owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        })
+      : undefined;
+    recoveryOwnerActive = recoveryOwnerRelease !== undefined;
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
-    if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
+    if (
+      !activeSessionId ||
+      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !recoveryOwnerActive)
+    ) {
       return { activeSessionId: undefined, isActive: false };
     }
-    if (isOwnPreDispatchOperationSession(activeSessionId)) {
+    if (!recoveryOwnerRelease && isOwnPreDispatchOperationSession(activeSessionId)) {
       return { activeSessionId, isActive: false };
     }
     const replyOperationActive =
@@ -487,7 +517,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       isActive:
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
+        replyOperationActive ||
+        recoveryOwnerActive,
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -540,14 +571,16 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
     !visibleTurnPreemptsHeartbeat &&
+    !recoveryOwnerActive &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
-    ((isRoomEvent && isActive) ||
-      resolvedQueue.mode === "steer" ||
-      resolvedQueue.mode === "followup" ||
-      resolvedQueue.mode === "collect");
+    (recoveryOwnerActive ||
+      (!visibleTurnPreemptsHeartbeat &&
+        ((isRoomEvent && isActive) ||
+          resolvedQueue.mode === "steer" ||
+          resolvedQueue.mode === "followup" ||
+          resolvedQueue.mode === "collect")));
   const activeRunQueueAction = resolveActiveRunQueueAction({
     queueAdmissionState,
     isActive,
@@ -624,6 +657,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     sessionEntry,
     skillsSnapshot,

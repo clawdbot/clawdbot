@@ -90,6 +90,7 @@ const hoisted = vi.hoisted(() => {
     return normalized || null;
   });
   const cleanupFailedAcpSpawnMock = vi.fn();
+  const closeRuntimeOnFailureMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
@@ -182,6 +183,7 @@ const hoisted = vi.hoisted(() => {
     areHeartbeatsEnabledMock,
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
+    closeRuntimeOnFailureMock,
     registerSubagentRunMock,
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
@@ -710,6 +712,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
@@ -751,6 +754,7 @@ describe("spawnAcpDirect", () => {
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
+        closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
         runtime: {
           close: vi.fn().mockResolvedValue(undefined),
         },
@@ -881,6 +885,7 @@ describe("spawnAcpDirect", () => {
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
     expect(accepted.inlineDelivery).toBe(true);
+    expect(accepted.expectsCompletionMessage).toBe(false);
     expectCreatedSessionFields({
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
@@ -2988,6 +2993,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.expectsCompletionMessage).toBe(true);
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
       expectRecordFields(
@@ -3437,36 +3443,55 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
-  it("persists separate requester and executor agents for global cross-agent tasks", async () => {
-    replaceSpawnConfig({
-      ...hoisted.state.cfg,
-      session: {
-        ...hoisted.state.cfg.session,
-        scope: "global",
-      },
-    });
+  it.each(["off", "all"] as const)(
+    "preserves global requester ownership with sandbox mode %s",
+    async (sandboxMode) => {
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        agents: {
+          ...hoisted.state.cfg.agents,
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: sandboxMode } },
+            ops: {},
+          },
+        },
+        session: {
+          ...hoisted.state.cfg.session,
+          scope: "global",
+        },
+      });
 
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-      },
-      {
-        agentSessionKey: "global",
-        requesterAgentIdOverride: "research",
-      },
-    );
+      const result = await spawnAcpDirect(
+        {
+          task: "Investigate flaky tests",
+          agentId: "codex",
+        },
+        {
+          agentSessionKey: "global",
+          requesterAgentIdOverride: "research",
+        },
+      );
 
-    expectAcceptedSpawn(result);
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "global",
-        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
-        agentId: "codex",
-        requesterAgentId: "research",
-      }),
-    );
-  });
+      if (sandboxMode === "all") {
+        expect(expectFailedSpawn(result, "forbidden").error).toContain(
+          "Sandboxed sessions cannot spawn ACP sessions",
+        );
+        expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+        expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+        return;
+      }
+      expectAcceptedSpawn(result);
+      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requesterSessionKey: "global",
+          childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+          agentId: "codex",
+          requesterAgentId: "research",
+        }),
+      );
+    },
+  );
 
   it("does not implicitly stream for subagent requester sessions when heartbeat is disabled", async () => {
     replaceSpawnConfig({
@@ -3786,11 +3811,8 @@ describe("spawnAcpDirect", () => {
     expect(relayHandle.notifyStarted).not.toHaveBeenCalled();
     expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        runtimeCloseHandle: expect.objectContaining({
-          handle: expect.objectContaining({
-            backend: "acpx",
-          }),
-        }),
+        sessionEntry: expect.objectContaining({ sessionId: expect.any(String) }),
+        closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
       }),
     );
   });

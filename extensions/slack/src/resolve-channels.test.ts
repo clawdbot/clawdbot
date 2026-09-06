@@ -31,6 +31,12 @@ describe("resolveSlackChannelAllowlist", () => {
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.conversationsList).toHaveBeenCalledOnce();
+    expect(slackClientMocks.conversationsList).toHaveBeenCalledWith({
+      types: "public_channel,private_channel",
+      exclude_archived: false,
+      limit: 1000,
+      cursor: undefined,
+    });
   });
 
   it("returns stable channel ids without listing a workspace", async () => {

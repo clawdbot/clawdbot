@@ -43,7 +43,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
-import type { PluginJsonValue } from "./host-hooks.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
@@ -111,10 +111,8 @@ export type WorkerDesktopEndpoint = {
 /** Placement execution modes a worker provider can carry. */
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
-/** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment = {
-  openclawVersion: string;
-  /** Immutable node distribution prepared by the Gateway for this enrollment only. */
+type WorkerNodeBootstrapAccess = {
+  /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
     token: string;
@@ -124,14 +122,32 @@ export type WorkerNodeEnrollment = {
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
   };
-  displayName: string;
-  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
   signal?: AbortSignal;
+};
+
+/** Operation-bound immutable artifacts without a node identity or enrollment credential. */
+export type WorkerNodeRuntimePreparation = WorkerNodeBootstrapAccess & {
+  workerBundle: {
+    url: string;
+    token: string;
+    sha256: string;
+    bytes: number;
+    tlsFingerprint?: string;
+    /** Core-owned location within the installed node package, outside dist and enrollment state. */
+    packageRelativePath: string;
+  };
+};
+
+/** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
+export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
+  openclawVersion: string;
+  displayName: string;
   waitForDeviceId: () => Promise<string>;
 } & (
-  | { mode: "connect"; setupCode: string; setupId: string }
-  | { mode: "resume"; deviceId: string }
-);
+    | { mode: "connect"; setupCode: string; setupId: string }
+    | { mode: "resume"; deviceId: string }
+  );
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
@@ -213,6 +229,8 @@ export type WorkerProvider = {
   provisionBeforeInstallation?: boolean;
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
+  /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
+  supportsProjectPreparation?: (profile: WorkerProfile, machineClass?: string) => boolean;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.
    * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
@@ -230,9 +248,23 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+      project?: {
+        key: string;
+        baseCommit: string;
+        signal: AbortSignal;
+        assertCurrent: () => void;
+        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        prepare: (transport: {
+          runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+        }) => Promise<{ seedKey: string; cacheHit: boolean }>;
+      };
     },
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
@@ -249,8 +281,20 @@ export type WorkerProvider = {
    */
   resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
+  /**
+   * Bounded cleanup for configured profiles, including when no leases remain. Core schedules
+   * one pass at a time without blocking allocation. Check authority before external effects
+   * and after awaits before persistence; settle only after all owned commands have stopped.
+   */
+  maintain?: (context: {
+    profiles: readonly WorkerProfile[];
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
+  resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
 /** Speech capability registered by a plugin. */

@@ -2,11 +2,28 @@ import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+  withServer,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createA2aHttpHandler } from "./http.js";
 import { A2aTaskStore } from "./task-store.js";
 import type { A2aChannelConfig } from "./types.js";
+
+vi.mock("node:timers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers")>();
+  return {
+    ...actual,
+    setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(callback, delay, ...args)) as typeof actual.setTimeout,
+    clearTimeout: ((timer: ReturnType<typeof globalThis.setTimeout> | undefined) =>
+      globalThis.clearTimeout(timer)) as typeof actual.clearTimeout,
+  };
+});
 
 const activeStores = new Set<A2aTaskStore>();
 
@@ -101,6 +118,7 @@ async function startHttpHarness(options?: {
   return {
     baseUrl,
     taskStore,
+    handler,
     async get(endpoint: string) {
       return await dispatchRequest({ method: "GET", endpoint });
     },
@@ -291,14 +309,176 @@ describe("A2A HTTP authentication and request limits", () => {
     }
   });
 
-  it("returns a readable HTTP 413 response for request bodies above 1 MiB", async () => {
+  it("delivers HTTP 413 over the wire and closes for request bodies above 1 MiB", async () => {
     const harness = await startHttpHarness();
-    const response = await harness.post("x".repeat(1024 * 1024 + 1));
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+      },
+      async (baseUrl) => {
+        // Declared and sent in one write: the shape whose rejection used to race the flush.
+        const result = await postRawWebhook({
+          url: `${baseUrl}/a2a/v1`,
+          body: "x".repeat(1024 * 1024 + 1),
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer alpha-secret",
+          },
+        });
 
-    expect(response.status).toBe(413);
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(result.headers.connection).toBe("close");
+        expect(JSON.parse(result.body)).toEqual({
+          error: "Request body exceeds the 1 MiB limit",
+        });
+        expect(result.closedByServer).toBe(true);
+      },
+    );
+  });
+
+  it("delivers the JSON-RPC timeout response before closing a partial upload", async () => {
+    const harness = await startHttpHarness();
+    const requestReceived = createDeferred<void>();
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+        // Observe after the body reader is installed; Bun's socket wrapper omits raw data events.
+        req.once("data", () => requestReceived.resolve());
+      },
+      async (baseUrl) => {
+        vi.useFakeTimers();
+        try {
+          const resultPromise = postRawWebhook({
+            url: `${baseUrl}/a2a/v1`,
+            body: "{",
+            contentLength: 2,
+            idleTimeoutMs: 60_000,
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer alpha-secret",
+            },
+          });
+
+          await requestReceived.promise;
+          await vi.advanceTimersByTimeAsync(31_000);
+          const result = await resultPromise;
+
+          expect(result.statusLine).toBe("HTTP/1.1 200 OK");
+          expect(result.headers.connection).toBe("close");
+          expect(JSON.parse(result.body)).toEqual({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32000, message: "Request body could not be read" },
+          });
+          expect(result.closedByServer).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+  });
+
+  it("rejects oversized batches with one bounded error", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.post(Array.from({ length: 1_000 }, () => null));
+
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining("1 MiB"),
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("batch") },
     });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("charges schema-invalid requests to the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 1 } });
+
+    const invalid = await harness.post({ jsonrpc: "2.0", id: "invalid" });
+    await expect(invalid.json()).resolves.toMatchObject({ error: { code: -32600 } });
+
+    const limited = await harness.post({
+      jsonrpc: "2.0",
+      id: "limited",
+      method: "GetTask",
+      params: { id: "missing" },
+    });
+    await expect(limited.json()).resolves.toMatchObject({
+      id: "limited",
+      error: { code: -32000, message: expect.stringContaining("rate limited") },
+    });
+  });
+
+  it("replaces oversized RPC results with a bounded error", async () => {
+    const harness = await startHttpHarness();
+    const task = harness.taskStore.create("ctx-large", "alpha");
+    const oversizedText = "x".repeat(1024 * 1024);
+    harness.taskStore.completeNext(task.contextId, oversizedText, "alpha");
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "large-result",
+      method: "GetTask",
+      params: { id: task.id },
+    });
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: "large-result",
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+    expect(
+      stringifySpy.mock.calls.some(
+        ([value]) =>
+          (value as { result?: { artifacts?: Array<{ parts?: Array<{ text?: string }> }> } })
+            ?.result?.artifacts?.[0]?.parts?.[0]?.text === oversizedText,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the overflow fallback bounded when its request ID cannot fit", async () => {
+    const harness = await startHttpHarness();
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "i".repeat(1024 * 1024 - 25),
+    });
+    expect(Buffer.byteLength(requestBody)).toBeLessThanOrEqual(1024 * 1024);
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("preserves batch response IDs when aggregate results exceed the response limit", async () => {
+    const harness = await startHttpHarness();
+    const taskA = harness.taskStore.create("ctx-large-a", "alpha");
+    const taskB = harness.taskStore.create("ctx-large-b", "alpha");
+    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
+    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+
+    const response = await harness.post([
+      { jsonrpc: "2.0", id: "large-a", method: "GetTask", params: { id: taskA.id } },
+      { jsonrpc: "2.0", id: "large-b", method: "GetTask", params: { id: taskB.id } },
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      {
+        jsonrpc: "2.0",
+        id: "large-a",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+      {
+        jsonrpc: "2.0",
+        id: "large-b",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+    ]);
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
   });
 });
 

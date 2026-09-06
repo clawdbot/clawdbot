@@ -11,6 +11,7 @@ import {
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -51,10 +52,10 @@ const listSessionStateEventsSinceMock = vi.hoisted(() =>
     historyGap: false,
   })),
 );
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "session-status-test-empty-plugin-metadata",
-  plugins: [],
-}));
+  ...createPluginMetadataSnapshotFixture(),
+};
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
@@ -251,7 +252,6 @@ function createProviderUsageModuleMock() {
       updatedAt: Date.now(),
       providers: [],
     }),
-    formatUsageSummaryLine: () => null,
   };
 }
 
@@ -356,7 +356,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
-vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
+vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
@@ -1033,7 +1033,7 @@ describe("session_status tool", () => {
     expect(sessionEntry.thinkingLevel).toBe("high");
   });
 
-  it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
+  it("resolves sessionKey=current to runSessionKey under explicit tree visibility (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
         sessionId: "s-tg-direct",
@@ -1047,8 +1047,10 @@ describe("session_status tool", () => {
       },
     });
 
-    // Default visibility is "tree". The tool is constructed with the Telegram
-    // sandbox key as agentSessionKey but the live run session key as runSessionKey.
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
+
+    // Explicit tree visibility protects the semantic-current alias. The tool uses
+    // the Telegram key as agentSessionKey and the live run key as runSessionKey.
     // semantic-current must be treated as self for visibility purposes.
     const tool = createSessionStatusTool({
       agentSessionKey: "agent:main:telegram:default:direct:1234",
@@ -1266,6 +1268,8 @@ describe("session_status tool", () => {
         status: "running",
       },
     });
+
+    mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
 
     // Same setup but with an explicit key — should NOT bypass visibility.
     const tool = createSessionStatusTool({
@@ -2270,7 +2274,7 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("temp:slug-generator");
   });
 
-  it("blocks cross-agent session_status without agent-to-agent access", async () => {
+  it("blocks cross-agent session_status when agent-to-agent access is disabled", async () => {
     resetSessionStore({
       "agent:other:main": {
         sessionId: "s2",
@@ -2281,8 +2285,31 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:main");
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Session status visibility is restricted",
+      "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
     );
+  });
+
+  it("returns another agent's session status by default with no tools configuration", async () => {
+    resetSessionStore({
+      "agent:other:main": {
+        sessionId: "s2",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call5-default", { sessionKey: "agent:other:main" });
+    expect((result.details as { ok?: boolean }).ok).toBe(true);
   });
 
   it.each([

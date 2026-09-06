@@ -4,6 +4,7 @@
  * timeout classification, and owner-provided approval outcomes.
  */
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import { getRuntimeConfig } from "../config/config.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
@@ -316,7 +317,7 @@ async function requestPluginToolApproval(params: {
             timeoutMs,
             twoPhase: true,
           },
-          { expectFinal: false },
+          { expectFinal: false, signal: params.signal },
         ),
     );
     gatewayApprovalPhase = "none";
@@ -354,38 +355,17 @@ async function requestPluginToolApproval(params: {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
       gatewayApprovalPhase = "wait";
-      const waitPromise: Promise<{
+      const waitResult: {
         id?: string;
         decision?: unknown;
-      }> = callGatewayTool(
+      } = await callGatewayTool(
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
         // and respond before the client-side RPC timeout fires.
         { timeoutMs: gatewayTimeoutMs },
         { id },
+        { signal: params.signal },
       );
-      let waitResult: { id?: string; decision?: unknown } | undefined;
-      if (params.signal) {
-        let onAbort: (() => void) | undefined;
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (params.signal!.aborted) {
-            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
-            return;
-          }
-          onAbort = () =>
-            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
-          params.signal!.addEventListener("abort", onAbort, { once: true });
-        });
-        try {
-          waitResult = await Promise.race([waitPromise, abortPromise]);
-        } finally {
-          if (onAbort) {
-            params.signal.removeEventListener("abort", onAbort);
-          }
-        }
-      } else {
-        waitResult = await waitPromise;
-      }
       // Bind the verdict to the request that parked this call. A stale or
       // misrouted reply must never release a different tool gate.
       decision = waitResult?.id === id ? waitResult.decision : undefined;
@@ -560,10 +540,14 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
   ctx?: HookContext;
   signal?: AbortSignal;
 }): Promise<HookOutcome | undefined> {
+  if (params.toolName !== "skill_workshop") {
+    return undefined;
+  }
   const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
-    ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    config: params.ctx?.config ?? getRuntimeConfig(),
+    ...(params.ctx?.agentId ? { agentId: params.ctx.agentId } : {}),
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
@@ -575,21 +559,4 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
     signal: params.signal,
     baseParams: params.params,
   });
-}
-
-// Success output schemas do not describe policy-layer terminal results. Track
-// identity so catalog boundaries can reject them without trusting spoofable status fields.
-
-function toApprovalErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value, { cause: value });
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

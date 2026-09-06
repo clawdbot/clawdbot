@@ -2,11 +2,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
+import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -43,9 +44,9 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   const critical = diskSpace.status === "critical";
   return html`
     <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--${critical
-        ? "danger"
-        : "warn"} chat-cloud-disk-space-notice"
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${
+        critical ? "danger" : "warn"
+      } chat-cloud-disk-space-notice"
       role=${critical ? "alert" : "status"}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
@@ -66,8 +67,12 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   `;
 }
 
-function renderErrorNotice(error: string, action: TemplateResult | typeof nothing = nothing) {
-  const lines = error
+function renderErrorNotice(
+  error: string,
+  action: TemplateResult | typeof nothing = nothing,
+  displayError = formatWebUiIconErrorText(error),
+) {
+  const lines = displayError
     .trim()
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/gu, " ").trim());
@@ -83,20 +88,22 @@ function renderErrorNotice(error: string, action: TemplateResult | typeof nothin
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
       >
-      ${hasDetails
-        ? html`<details class="chat-error__content">
-            <summary class="chat-error__summary">
-              <strong>${summary}</strong>
-              <span>${t("chat.errorDetails")}</span>
-              <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
-            </summary>
-            <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
-${error}</pre>
-            ${renderCopyButton(error, t("chat.copyError"))}
-          </details>`
-        : html`<span class="chat-error__content"
-            ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
-          >`}
+      ${
+        hasDetails
+          ? html`<details class="chat-error__content">
+              <summary class="chat-error__summary">
+                <strong>${summary}</strong>
+                <span>${t("chat.details")}</span>
+                <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+                ${renderCopyButton(error, t("chat.copyError"))}
+              </summary>
+              <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
+${displayError}</pre>
+            </details>`
+          : html`<span class="chat-error__content"
+              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+            >`
+      }
       ${action}
     </div>
   `;
@@ -121,20 +128,22 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
       ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
-      ${props.focusMode && props.onToggleFocusMode
-        ? html`
-            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label=${t("chat.actions.exitFocusMode")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
+      ${
+        props.focusMode && props.onToggleFocusMode
+          ? html`
+              <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
+                <button
+                  class="chat-focus-exit"
+                  type="button"
+                  @click=${props.onToggleFocusMode}
+                  aria-label=${t("chat.actions.exitFocusMode")}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -163,18 +172,32 @@ function renderPlacementStartupError(
     return nothing;
   }
   const checking = status.action === "check-delivery";
+  const statusError = status.error ?? t("newSession.createFailed");
   const error = checking
     ? [t("chat.queue.checkDeliveryHelp"), status.error].filter(Boolean).join("\n\n")
-    : t("newSession.placementStartFailed", { error: status.error ?? t("newSession.createFailed") });
+    : t("newSession.placementStartFailed", { error: statusError });
+  const displayStatusError = formatWebUiIconErrorText(statusError);
+  const displayError = checking
+    ? [t("chat.queue.checkDeliveryHelp"), status.error ? displayStatusError : undefined]
+        .filter(Boolean)
+        .join("\n\n")
+    : t("newSession.placementStartFailed", { error: displayStatusError });
   // History can own the bubble before startup observes its receipt. Keep the
   // banner action reachable when transcript deduplication hides the row.
   const hasInlineTurn =
-    status.initialTurn && !chatMessagesContainQueuedSend(messages, status.initialTurn, true);
-  const retry =
-    status.retryable && onRetry && !hasInlineTurn
+    status.initialTurn && !findChatSubmissionMessage(messages, status.initialTurn.sendRunId, true);
+  const action = status.discardAndReload
+    ? html`<button
+        class="btn btn--sm danger chat-error__discard"
+        type="button"
+        @click=${status.discardAndReload}
+      >
+        ${t("newSession.discardUnsavedAndReload")}
+      </button>`
+    : status.retryable && onRetry && !hasInlineTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, retry);
+  return renderErrorNotice(error, action, displayError);
 }

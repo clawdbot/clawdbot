@@ -13,6 +13,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
   getSessionKysely,
@@ -22,10 +23,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  appendTranscriptEventsInTransaction,
-  readTranscriptIdentityByEventId,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
@@ -146,7 +144,11 @@ async function applySqliteCompactionCheckpointSessionOperation(
         result,
       };
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+    emitCommittedSessionIdentityDiff(
+      resolved.agentId,
+      committed.previousIdentity,
+      committed.currentIdentity,
+    );
     return committed.result;
   });
 }

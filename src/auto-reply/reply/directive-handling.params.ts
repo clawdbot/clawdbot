@@ -13,6 +13,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./
 /** Core directive handler inputs that do not depend on the inbound message shape. */
 type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
@@ -43,6 +44,7 @@ type HandleDirectiveOnlyCoreParams = {
 
 /** Full directive-only command handler inputs. */
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  onRejection?: () => void;
   ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;

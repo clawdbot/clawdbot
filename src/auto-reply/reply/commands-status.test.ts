@@ -5,7 +5,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -58,24 +58,20 @@ type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(
-    async (): Promise<StatusPluginHealthSnapshot> => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
-  collectRuntimePluginHealthSnapshot: vi.fn(
-    (): StatusPluginHealthSnapshot => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
+  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
+  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
@@ -123,11 +119,18 @@ const codexStatusModel: ModelDefinitionConfig = {
   maxTokens: 128_000,
 };
 
-async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
-  const commandParams = buildCommandTestParams("/status", baseCfg);
+async function buildStatusReplyForTest(params: {
+  sessionKey?: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  verbose?: boolean;
+}) {
+  const cfg = params.cfg ?? baseCfg;
+  const commandParams = buildCommandTestParams("/status", cfg);
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
-    cfg: baseCfg,
+    cfg,
+    agentId: params.agentId,
     command: commandParams.command,
     sessionEntry: commandParams.sessionEntry,
     sessionKey,
@@ -465,6 +468,45 @@ describe("buildStatusReply subagent summary", () => {
 
     expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total");
     expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
+  });
+
+  it.each(["research", "ops"])("isolates global task status for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-status-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildStatusReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: "all" } },
+            ops: { sandbox: { mode: "off" } },
+          },
+        },
+      },
+    });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
+    expect(reply?.text).toContain(`${agentId} private task`);
+    expect(reply?.text).not.toContain(
+      `${agentId === "research" ? "ops" : "research"} private task`,
+    );
+    expect(reply?.text).not.toContain("unknown private task");
+    expect(reply?.text).toContain(`Execution: ${agentId === "research" ? "docker/all" : "direct"}`);
   });
 
   it("hides stale completed task rows from the session task line", async () => {
@@ -2463,6 +2505,41 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+    expect(normalizeTestText(text)).toContain("previous runtime: OpenClaw Default");
+  });
+
+  it("labels a divergent locked harness as an active session pin in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-locked-agent",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Runtime: OpenAI Codex (session pin: OpenClaw Default)",
+    );
   });
 });
 

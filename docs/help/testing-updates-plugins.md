@@ -22,9 +22,11 @@ keys and network-touching suites, see [Testing live](/help/testing-live).
 - A user can move from an older published package to the candidate package
   without losing config, agents, sessions, workspaces, plugin allowlists, or
   channel config.
-- `openclaw doctor --fix --non-interactive` owns legacy cleanup and repair
-  paths. Startup should not grow hidden compatibility migrations for stale
-  plugin state.
+- `openclaw doctor --fix --non-interactive` owns legacy migrations and repairs,
+  including genuinely dangling plugin-runtime aliases. Package postinstall owns
+  package-local dependency debris; both preserve valid shared runtime roots that
+  another installation or profile may use. Startup should not grow hidden
+  compatibility migrations for stale plugin state.
 - Plugin installs work from local directories, git repos, npm packages, and the
   ClawHub registry path.
 - Plugin npm dependencies install in one managed npm project per plugin,
@@ -111,7 +113,7 @@ Important lanes:
 - `test:docker:upgrade-survivor` installs the candidate tarball over a dirty
   old-user fixture, runs package update plus non-interactive doctor, then starts
   a loopback Gateway and checks state preservation.
-- `test:docker:published-upgrade-survivor` first installs a published baseline,
+- `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
   probes `/healthz`, `/readyz`, and RPC status.
@@ -120,11 +122,11 @@ Important lanes:
   `openclaw update --yes --json`, and requires the candidate update command to
   restart the Gateway before the normal probes.
 - `test:docker:update-migration` is the cleanup-heavy published-update lane. It
-  starts from a configured Discord/Telegram-style user state, runs baseline
-  doctor so configured plugin dependencies have a chance to materialize, seeds
-  legacy plugin dependency debris for a configured packaged plugin, updates to
-  the candidate tarball, and requires post-update doctor to remove the legacy
-  dependency roots.
+  installs the latest stable release by default, starts from a configured
+  Discord/Telegram-style user state, seeds package-local plugin dependency debris
+  and shared runtime sentinels, and updates to the candidate tarball. Package
+  postinstall must remove package-local debris while update and Doctor preserve
+  the shared runtime roots.
 
 Useful published-upgrade survivor variants:
 
@@ -181,10 +183,11 @@ Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 idempotent Doctor pass is 60 seconds; override it with
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` on slower hosts.
 
-Full update migration is intentionally separate from Full Release CI. Use the
-manual `Update Migration` workflow when the release question is "can every
-published stable release from 2026.4.23 onward update to this candidate and
-clean up plugin dependency debris?":
+The manual `Update Migration` workflow defaults to the latest stable release
+and updates it to the selected `package_ref` artifact (`main` by default).
+Leave `baselines` blank to use that default. For an explicit historical replay
+from every published stable release since 2026.4.23, pass
+`baselines=all-since-2026.4.23`:
 
 ```bash
 gh workflow run update-migration.yml \
@@ -235,7 +238,6 @@ When release soak is enabled (forced on for `release_profile=stable` and
 `full`), they also pass:
 
 ```text
-published_upgrade_survivor_baselines=last-stable-4 2026.4.23 2026.5.2 2026.4.15
 published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
@@ -245,15 +247,15 @@ tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
 update behavior, and Telegram package QA on the same resolved artifact without
 making the default release package gate walk every published release.
 
-`last-stable-4` resolves to the four latest stable npm-published OpenClaw
-releases. Release package acceptance pins `2026.4.23` as the first plugin-update
-compatibility boundary, `2026.5.2` as a plugin-architecture churn boundary, and
-`2026.4.15` as an older 2026.4.1x published-update baseline; the resolver
-dedupes pins that are already in the latest four. For exhaustive published
-update migration coverage, use `all-since-2026.4.23` in the separate Update
-Migration workflow instead of Full Release CI. `release-history` remains
-available for manual wider sampling when you also want the legacy pre-date
-anchor.
+Routine release proof resolves npm `latest` once to an exact stable package
+before Docker fanout and runs every `reported-issues` scenario against that
+baseline. The candidate remains the selected package-under-test tarball.
+
+For manual historical coverage, `last-stable-4` selects four recent stable
+npm-published releases. Exact versions, `all-since-2026.4.23`, and
+`release-history` remain available through `published_upgrade_survivor_baselines`.
+Use those overrides when replaying a historical migration, rather than adding
+old releases to every routine release run.
 
 When multiple published-upgrade survivor baselines are selected, the reusable
 Docker workflow shards each baseline into its own targeted runner job. Each
@@ -270,7 +272,6 @@ gh workflow run package-acceptance.yml \
   -f source=npm \
   -f package_spec=openclaw@beta \
   -f suite_profile=package \
-  -f published_upgrade_survivor_baselines="last-stable-4 2026.4.23 2026.5.2 2026.4.15" \
   -f published_upgrade_survivor_scenarios=reported-issues \
   -f telegram_mode=mock-openai
 ```

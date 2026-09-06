@@ -143,7 +143,7 @@ prepare_init() {
   review_validate_artifacts "$pr" || return 1
   require_ready_review_recommendation || return 1
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" true || return 1
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/review.md
@@ -166,6 +166,9 @@ prepare_init() {
     echo "Prepare init failed: missing PR_HEAD_SHA in .local/pr-meta.env. Re-run review-init."
     exit 1
   fi
+  # Keep clean-state admission and recoverable detachment without visiting main.
+  # Fetch cannot update pr-$pr while that branch is checked out.
+  checkout_pr_worktree_target "$pr" "$reviewed_head_sha" || return 1
 
   local json
   json=$(pr_meta_json "$pr")

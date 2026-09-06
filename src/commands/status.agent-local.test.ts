@@ -16,7 +16,7 @@ vi.mock("../config/sessions/paths.js", () => ({
     `/tmp/${scope.agentId}/sessions.json`,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesReadOnly: () => [],
+  readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
 }));
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),

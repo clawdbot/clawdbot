@@ -341,10 +341,15 @@ describe("createBeamMirrorRunner", () => {
       const runtime = {
         config: { current: () => beamTestMirrorConfig({ endpoint }) },
       } as unknown as PluginRuntime;
+      let active = true;
       const createRunner = () =>
         createBeamTestRunner({
           runtime,
-          listCatalogs: () => [createBeamTestCatalog()],
+          listCatalogs: () => [
+            createBeamTestCatalog({
+              sessions: () => (active ? [{ threadId: "t1", recencyAt: beamTestNow }] : []),
+            }),
+          ],
         });
       const runner = createRunner();
 
@@ -354,8 +359,24 @@ describe("createBeamMirrorRunner", () => {
       await restartedRunner.tick();
       endpoint = `${origin}/direct`;
       await restartedRunner.tick();
-
+      await restartedRunner.tick();
+      endpoint = `${origin}/another-receiver`;
+      active = false;
+      await restartedRunner.tick();
       expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
+      active = true;
+      await restartedRunner.tick();
+      await restartedRunner.tick();
+      endpoint = `${origin}/direct`;
+      await restartedRunner.tick();
+
+      expect(requests).toEqual([
+        "/redirecting",
+        "/redirecting",
+        "/direct",
+        "/another-receiver",
+        "/direct",
+      ]);
     } finally {
       await closeTestServer(server);
     }
@@ -403,6 +424,41 @@ describe("createBeamMirrorRunner", () => {
       expect(cancel).toHaveBeenCalledOnce();
     },
   );
+
+  it("includes the latest source model without changing the sanitized message payload", async () => {
+    const sent: SentRequest[] = [];
+    const catalog = createBeamTestCatalog({
+      sessions: [
+        {
+          threadId: "t-model",
+          name: "Model source",
+          modelProvider: "openai",
+          recencyAt: beamTestNow,
+        },
+      ],
+      items: [
+        { type: "agentMessage", text: "Latest", model: "gpt-5.6-sol" },
+        { type: "agentMessage", text: "Earlier", model: "gpt-5.6-terra" },
+        { type: "userMessage", text: "Continue this" },
+      ],
+    });
+    const runner = createBeamTestRunner({
+      fetchFn: captureFetch(sent),
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+
+    expect(sent[0]?.payload.sourceModel).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    expect(sent[0]?.payload.items).toEqual([
+      { type: "userMessage", text: "Continue this" },
+      { type: "agentMessage", text: "Earlier" },
+      { type: "agentMessage", text: "Latest" },
+    ]);
+  });
 
   it("does not split a surrogate pair when clipping the session title", async () => {
     const sent: SentRequest[] = [];

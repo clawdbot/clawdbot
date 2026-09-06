@@ -10,6 +10,7 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -35,6 +36,14 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
     plugins: [],
   })),
+}));
+
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
@@ -970,7 +979,6 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
-
   it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -1152,16 +1160,13 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
-  it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const warn = vi.fn();
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
+  it.each(["linux", "win32"] as const)(
+    "ignores missing passEnv values while blocking populated dangerous values on %s",
+    async (platform) => {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      const env = isolatedPlanEnv({
+        SYSTEMROOT: " ",
+        SAFE_PASS_ENV: " safe-value ",
         BASH_ENV: "/tmp/openclaw-test-bashenv",
         XDG_CONFIG_HOME: "/tmp/openclaw-test-xdg-home",
         XDG_CONFIG_DIRS: "/etc/xdg:/opt/xdg",
@@ -1169,64 +1174,84 @@ describe("buildGatewayInstallPlan", () => {
         AWS_ACCESS_KEY_ID: "aws-access-key",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         NODE_TLS_REJECT_UNAUTHORIZED: "0",
-      }),
-      port: 3000,
-      runtime: "node",
-      warn,
-      config: {
-        secrets: {
-          providers: {
-            onepassword: {
-              source: "exec",
-              command: "/usr/bin/op",
-              args: ["read", "op://Private/Discord/password"],
-              passEnv: [
-                "HOME",
-                "BASH_ENV",
-                "XDG_CONFIG_HOME",
-                "XDG_CONFIG_DIRS",
-                "GH_TOKEN",
-                "AWS_ACCESS_KEY_ID",
-                "DOCKER_HOST",
-                "NODE_TLS_REJECT_UNAUTHORIZED",
-              ],
+      });
+      Object.setPrototypeOf(env, { WINDIR: "C:/Inherited" });
+      const warn = vi.fn();
+      const plan = await buildGatewayInstallPlan({
+        env,
+        port: 3000,
+        runtime: "node",
+        platform,
+        warn,
+        config: {
+          secrets: {
+            providers: {
+              onepassword: {
+                source: "exec",
+                command: "/usr/bin/op",
+                args: ["read", "op://Private/Discord/password"],
+                passEnv: [
+                  "HOME",
+                  "NODE_OPTIONS",
+                  "SYSTEMROOT",
+                  "WINDIR",
+                  "SAFE_PASS_ENV",
+                  "BASH_ENV",
+                  "XDG_CONFIG_HOME",
+                  "XDG_CONFIG_DIRS",
+                  "GH_TOKEN",
+                  "AWS_ACCESS_KEY_ID",
+                  "DOCKER_HOST",
+                  "NODE_TLS_REJECT_UNAUTHORIZED",
+                ],
+              },
+            },
+          },
+          channels: {
+            discord: {
+              token: { source: "exec", provider: "onepassword", id: "value" },
             },
           },
         },
-        channels: {
-          discord: {
-            token: { source: "exec", provider: "onepassword", id: "value" },
-          },
-        },
-      },
-    });
+      });
 
-    expect(plan.environment.HOME).toBe(isolatedHome);
-    expect(plan.environment.BASH_ENV).toBeUndefined();
-    expect(plan.environment.XDG_CONFIG_HOME).toBeUndefined();
-    expect(plan.environment.XDG_CONFIG_DIRS).toBeUndefined();
-    expect(plan.environment.GH_TOKEN).toBeUndefined();
-    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
-    expect(plan.environment.DOCKER_HOST).toBeUndefined();
-    expect(plan.environment.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-    expect(warn).not.toHaveBeenCalledWith(
-      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
-      "Config SecretRef",
-    );
-    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
-    for (const blockedName of [
-      "XDG_CONFIG_HOME",
-      "XDG_CONFIG_DIRS",
-      "BASH_ENV",
-      "GH_TOKEN",
-      "AWS_ACCESS_KEY_ID",
-      "DOCKER_HOST",
-      "NODE_TLS_REJECT_UNAUTHORIZED",
-    ]) {
-      expect(warningOutput).toContain(blockedName);
-    }
-    expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
-  });
+      expect(plan.environment.HOME).toBe(isolatedHome);
+      expect(plan.environment.SAFE_PASS_ENV).toBe("safe-value");
+      for (const blockedName of [
+        "NODE_OPTIONS",
+        "SYSTEMROOT",
+        "WINDIR",
+        "BASH_ENV",
+        "XDG_CONFIG_HOME",
+        "XDG_CONFIG_DIRS",
+        "GH_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "DOCKER_HOST",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+      ]) {
+        expect(plan.environment[blockedName]).toBeUndefined();
+      }
+      const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
+      for (const silentName of ["HOME", "NODE_OPTIONS", "SYSTEMROOT", "WINDIR"]) {
+        expect(warn).not.toHaveBeenCalledWith(
+          `Exec SecretRef passEnv ref "${silentName}" blocked by host-env security policy`,
+          "Config SecretRef",
+        );
+      }
+      for (const blockedName of [
+        "XDG_CONFIG_HOME",
+        "XDG_CONFIG_DIRS",
+        "BASH_ENV",
+        "GH_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "DOCKER_HOST",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+      ]) {
+        expect(warningOutput).toContain(blockedName);
+      }
+      expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+    },
+  );
 
   it("blocks dangerous passEnv values for auth-profile exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({

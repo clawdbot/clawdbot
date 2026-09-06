@@ -146,7 +146,7 @@ describe("pending tab acquisition claims", () => {
       const first = f.client();
       await first.attach();
       const other = f.client();
-      first.close();
+      await first.close();
       await flush();
       const before = f.commands("detach").length;
       if (peer === "delivered peer") {
@@ -162,8 +162,9 @@ describe("pending tab acquisition claims", () => {
         peer === "pending peer"
           ? other.send("Target.attachToTarget", undefined, { targetId: "target-1" })
           : undefined;
-      lost.close();
+      const closing = lost.close();
       f.release();
+      await closing;
       if (waiting !== undefined) {
         expect((await other.response(waiting)).error).toBeUndefined();
       }
@@ -193,7 +194,8 @@ describe("pending tab acquisition claims", () => {
     f.release();
     expect.soft((await c.response(request)).error).toBeDefined();
     await peer.response(pending);
-    expect.soft(c.attached()).toHaveLength(1);
+    expect.soft(c.attached()).toHaveLength(2);
+    expect(c.attached()[1]).toMatchObject({ targetInfo: { targetId: "target-2" } });
     expect(peer.attached()).toHaveLength(1);
     expect(peer.attached()[0]).toMatchObject({ targetInfo: { targetId: "target-2" } });
     expect(f.commands("detach")).toEqual([]);

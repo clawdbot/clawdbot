@@ -1,26 +1,10 @@
+import { hasSameCompactionWriter } from "../../auto-reply/reply/agent-runner-compaction-accounting.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type {
-  CompactionAccountingFact,
-  CompactionAccountingTarget,
-} from "../embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 
 type DurableCompactionFact = Extract<CompactionAccountingFact, { kind: "durable" }>;
-
-function hasSameCompactionWriter(
-  previous: CompactionAccountingTarget | undefined,
-  current: CompactionAccountingTarget,
-): boolean {
-  // Physical session IDs may rotate while the binding and retained writer stay fixed.
-  return (
-    previous !== undefined &&
-    previous.agentId === current.agentId &&
-    previous.sessionKey === current.sessionKey &&
-    previous.storePath === current.storePath &&
-    previous.lifecycleRevision === current.lifecycleRevision &&
-    previous.activeWriterRunId === current.activeWriterRunId
-  );
-}
 
 /** Keeps command context observations and completed counts on their original writer. */
 export function createCommandCompactionAccounting(params: {
@@ -30,17 +14,28 @@ export function createCommandCompactionAccounting(params: {
   refreshSessionEntry: (sessionKey: string) => void;
 }) {
   let accounting: DurableCompactionFact | undefined;
+  let requestBudget: CompactionRequestBudget | undefined;
   return {
     get fact() {
       return accounting;
     },
-    beginCandidate() {
+    get requestBudget() {
+      return requestBudget;
+    },
+    beginCandidate(signal?: AbortSignal) {
+      let acceptsRequestBudget = true;
+      requestBudget = undefined;
       if (accounting?.currentContextSnapshot) {
         // Only an ordered fact from this candidate can restore current context.
         accounting = { ...accounting, currentContextSnapshot: { tokens: undefined } };
       }
       let candidateFact: CompactionAccountingFact | undefined;
       return {
+        observeRequestBudget: (budget: CompactionRequestBudget | undefined) => {
+          if (acceptsRequestBudget && !signal?.aborted) {
+            requestBudget = budget;
+          }
+        },
         observe: (fact: CompactionAccountingFact | undefined) => {
           if (
             fact?.kind === "durable" &&
@@ -57,6 +52,8 @@ export function createCommandCompactionAccounting(params: {
           }
         },
         async finish(sessionEntry: SessionEntry | undefined) {
+          // Close the foreground observer before count persistence can yield to late callbacks.
+          acceptsRequestBudget = false;
           const fact = candidateFact;
           if (fact?.kind !== "durable") {
             return;

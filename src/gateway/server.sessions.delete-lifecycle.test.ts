@@ -32,6 +32,7 @@ import {
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 
 const {
   createConfiguredGlobalAgentSessionStore,
@@ -299,62 +300,72 @@ test("sessions.delete rejects a stale expected session id without interrupting i
   }
 });
 
-test("sessions.delete rechecks its expected id before interrupting replacement work", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:subagent:worker";
-  const originalSessionId = "sess-original";
-  const replacementSessionId = "sess-replacement";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(originalSessionId),
-    },
-  });
-  let replacementInterrupted = false;
-  const replacementAdmission = await beginSessionWorkAdmission({
-    scope: storePath,
-    identities: [sessionKey, replacementSessionId],
-    assertAllowed: () => {},
-    onInterrupt: () => {
-      replacementInterrupted = true;
-    },
-  });
-  let releaseBlockingMutation = () => {};
-  let markBlockingMutationStarted = () => {};
-  const blockingMutationStarted = new Promise<void>((resolve) => {
-    markBlockingMutationStarted = resolve;
-  });
-  const blockingMutation = runExclusiveSessionLifecycleMutation({
-    scope: storePath,
-    identities: [sessionKey],
-    run: async () => {
-      markBlockingMutationStarted();
-      await new Promise<void>((release) => {
-        releaseBlockingMutation = release;
-      });
-    },
-  });
-  await blockingMutationStarted;
+test.each(["session id", "updated at"] as const)(
+  "sessions.delete rechecks expected %s before interrupting replacement work",
+  async (guard) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:subagent:worker";
+    const originalSessionId = "sess-original";
+    const replacementSessionId = guard === "session id" ? "sess-replacement" : originalSessionId;
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(originalSessionId, {
+          updatedAt: 1,
+          lifecycleRevision: "same-lifecycle",
+        }),
+      },
+    });
+    let replacementInterrupted = false;
+    const replacementAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, replacementSessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        replacementInterrupted = true;
+      },
+    });
+    let releaseBlockingMutation = () => {};
+    let markBlockingMutationStarted = () => {};
+    const blockingMutationStarted = new Promise<void>((resolve) => {
+      markBlockingMutationStarted = resolve;
+    });
+    const blockingMutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey],
+      run: async () => {
+        markBlockingMutationStarted();
+        await new Promise<void>((release) => {
+          releaseBlockingMutation = release;
+        });
+      },
+    });
+    await blockingMutationStarted;
 
-  const deletion = directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedSessionId: originalSessionId,
-  });
-  await Promise.resolve();
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(replacementSessionId),
-    },
-  });
-  releaseBlockingMutation();
+    const deletion = directSessionReq("sessions.delete", {
+      key: sessionKey,
+      expectedSessionId: originalSessionId,
+      ...(guard === "updated at" ? { expectedSessionUpdatedAt: 1 } : {}),
+    });
+    await Promise.resolve();
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(replacementSessionId, {
+          updatedAt: 2,
+          lifecycleRevision: "same-lifecycle",
+        }),
+      },
+    });
+    releaseBlockingMutation();
 
-  try {
-    const [deleted] = await Promise.all([deletion, blockingMutation]);
-    expect(deleted.ok).toBe(false);
-    expect(replacementInterrupted).toBe(false);
-  } finally {
-    replacementAdmission.release();
-  }
-});
+    try {
+      const [deleted] = await Promise.all([deletion, blockingMutation]);
+      expect(deleted.ok).toBe(false);
+      expect(replacementInterrupted).toBe(false);
+    } finally {
+      replacementAdmission.release();
+    }
+  },
+);
 
 test("sessions.delete rejects a replacement with the same updated-at timestamp", async () => {
   const sessionKey = "agent:main:cron:cleanup";
@@ -589,15 +600,32 @@ test("sessions.delete keeps lifecycle admission blocked through session unbindin
     });
   });
 
-  const deletion = directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: sessionKey,
+  let workerDraining = false;
+  const workerEnvironmentService = createWorkerInferenceDrainService(() => {
+    workerDraining = true;
+    return {
+      drained: Promise.resolve(),
+      hasWork: () => false,
+      release: () => {
+        workerDraining = false;
+      },
+    };
   });
+  const deletion = directSessionReq<{ ok: true; deleted: boolean }>(
+    "sessions.delete",
+    { key: sessionKey },
+    { context: { workerEnvironmentService } },
+  );
   await unbindStarted;
   let replacementAdmitted = false;
   const replacement = beginSessionWorkAdmission({
     scope: storePath,
     identities: [sessionKey, sessionId],
-    assertAllowed: () => {},
+    assertAllowed: () => {
+      if (workerDraining) {
+        throw new Error("worker drain still owns the session");
+      }
+    },
   }).then((lease) => {
     replacementAdmitted = true;
     return lease;
@@ -680,30 +708,47 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
-test("sessions.delete scopes selected global deletes to the requested agent", async () => {
-  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
-
-  await expectSessionDeleteSucceeds({
-    key: "global",
-    agentId: "work",
-    deleteTranscript: false,
-  });
-  expect(
-    loadSessionEntry({
+test.each(["sessions.delete", "sessions.reset"] as const)(
+  "%s scopes selected global cleanup to the requested agent",
+  async (method) => {
+    const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
+    const mainTarget = {
       agentId: "main",
       sessionKey: "global",
       storePath: globalStores.mainStorePath,
-    })?.sessionId,
-  ).toBe("sess-main-global");
-  expect(
-    loadSessionEntry({
-      agentId: "work",
-      sessionKey: "global",
-      storePath: globalStores.workStorePath,
-    }),
-  ).toBeUndefined();
-  await resetConfiguredGlobalAgentSessionStore(globalStores);
-});
+    };
+    const workTarget = { ...mainTarget, agentId: "work", storePath: globalStores.workStorePath };
+    for (const target of [mainTarget, workTarget]) {
+      await replaceSessionEntry(
+        target,
+        sessionStoreEntry(`sess-${target.agentId}-global`, {
+          pluginExtensions: { fixture: { state: { owner: target.agentId } } },
+        }),
+      );
+    }
+    const mainBefore = loadSessionEntry(mainTarget);
+    const { ws } = await openClient();
+    try {
+      const result = await rpcReq(ws, method, {
+        key: "global",
+        agentId: "work",
+        ...(method === "sessions.delete" ? { deleteTranscript: false } : {}),
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(loadSessionEntry(mainTarget)).toEqual(mainBefore);
+      const workAfter = loadSessionEntry(workTarget);
+      if (method === "sessions.delete") {
+        expect(workAfter).toBeUndefined();
+      } else {
+        expect(workAfter?.sessionId).toBe("sess-work-global");
+        expect(workAfter?.pluginExtensions).toBeUndefined();
+      }
+    } finally {
+      ws.close();
+      await resetConfiguredGlobalAgentSessionStore(globalStores);
+    }
+  },
+);
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
   const { dir } = await createSessionStoreDir();

@@ -9,6 +9,7 @@ import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
@@ -275,6 +276,7 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  ensurePendingInputConsumptionColumn(db);
   if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
     // NULL records an older writer's unclassified projection; the transcript
     // reconcile owner fills it without parsing payloads during schema open.

@@ -12,8 +12,6 @@ doc-schema-version: 1
 
 A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
-
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
 adds native widget-panel, camera, screen, notification, and computer-control commands
@@ -54,6 +52,19 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
+
+Headless node hosts report the hardware model on macOS and Linux.
+
+Connected CLI node hosts and the macOS app report CPU count, load averages,
+memory, and home-volume disk capacity every 60 seconds, starting on connection.
+The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
+`node.describe`. When received, it saves the snapshot on the paired node
+record, so offline nodes keep showing last-known stats with the original
+`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
+and `openclaw nodes describe` show a compact stats summary with a last-known age
+for offline nodes. Windows omits load averages, and unavailable disk capacity is
+omitted. See
+[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order
 
@@ -687,6 +698,40 @@ The Control UI can drag files into an open paired-node terminal. The native node
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
 
+### Agent file transfers
+
+The [File Transfer plugin](/plugins/reference/file-transfer) provides independently
+selectable directory-listing, fetch, and write tools. Allowing one tool does not
+make the others available; node-command and path policies still apply.
+
+Every successful file fetch saves the bytes in the Gateway's file-transfer media
+store and returns both `localPath` and `mediaId`, including for inlined text and
+images. Fetched files keep a sanitized filename stem in saved copies and forwarded
+attachments. The detected media type selects the extension: `train.py` classified
+as plain text becomes `train.txt`. Saved copies include a unique suffix to keep
+repeated fetches distinct.
+
+When node writing is available, pass that `mediaId` as `sourceMediaId` to
+reuse the saved bytes. `sourceMediaId` does not accept a local path or an ID from
+another media store. For inline bytes, use `contentBase64` instead.
+
+Directory tools return at most 8192 UTF-8 bytes of model-visible text, including
+the external-content wrapper. `dir_list` shows complete names, directory flags,
+and sizes. To continue a text-limited listing, pass the **text's** `nextPageToken`
+as `pageToken` with the same node and path; it resumes immediately after the last
+displayed entry. The default request remains 200 entries, with a ceiling of 5000.
+Full returned metadata and the original page token remain in structured details.
+
+`dir_fetch` saves the whole tree and shows its local `rootDir`, total `fileCount`,
+and a bounded prefix of complete `relPath` and size records. Combine `rootDir`
+with a listed `relPath` for local follow-up operations. Omitted files remain
+saved under that root and can be inspected with available local file or directory
+capabilities; fetching has no pagination. Full manifest and attachment metadata
+remain in structured details. If a path exceeds the text budget or would be
+rewritten by security sanitization, the text reports the omission rather than
+showing a partial or altered path. A listing that cannot display its first entry
+explicitly reports that pagination cannot advance.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -979,7 +1024,9 @@ Notes:
 
 ## Exec node binding
 
-When multiple nodes are available, you can bind exec to a specific node. This sets the default node for `exec host=node` (and can be overridden per agent).
+With no node target set, `exec host=node` selects the sole paired, connected node that supports `system.run`. Other paired devices do not make the selection ambiguous. If multiple executable nodes are connected, choose a target per call or bind exec to a specific node; the active Canvas target does not select the exec host. A bound or explicit target that is offline or cannot execute commands is rejected rather than redirected to another node.
+
+A binding sets the default node for `exec host=node` and can be overridden per agent.
 
 Global default:
 
@@ -994,7 +1041,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Unset to allow any node:
+Unset the binding to use the sole eligible node, or choose a target per call when multiple eligible nodes are connected:
 
 ```bash
 openclaw config unset tools.exec.node

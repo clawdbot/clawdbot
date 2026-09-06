@@ -12,6 +12,24 @@ export type RoleContentMessage = {
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
+/** Removes private yield inputs from a display copy without changing the source argument objects. */
+export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "toolCall" || entry.name !== "sessions_yield") {
+    return false;
+  }
+  let changed = false;
+  for (const field of ["arguments", "input"]) {
+    const toolInput = readRecord(entry[field]);
+    if (!toolInput || !("message" in toolInput)) {
+      continue;
+    }
+    const { message: _, ...publicInput } = toolInput;
+    entry[field] = publicInput;
+    changed = true;
+  }
+  return changed;
+}
+
 export function takeAssistantManagedMediaUrlsForDisplay(
   entry: Record<string, unknown>,
   role: string,
@@ -38,7 +56,7 @@ export function stripAssistantMediaDirectivesForDisplay(
   text: string,
   managedMediaUrls: readonly string[],
 ): string {
-  if (!/(?:^|\n)\s*MEDIA:/iu.test(text) || managedMediaUrls.length === 0) {
+  if (managedMediaUrls.length === 0 || !/(?:^|\n)\s*MEDIA:/iu.test(text)) {
     return text;
   }
   const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));
@@ -124,7 +142,7 @@ export function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
 }
 
-function isAssistantInternalReasoningContentType(type: unknown): boolean {
+export function isAssistantInternalReasoningContentType(type: unknown): boolean {
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
@@ -165,6 +183,9 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return true;
   }
+  if (!hasAssistantDisplayableNonTextContent(message)) {
+    return false;
+  }
   const content = message.text ?? message.content;
   const texts =
     typeof content === "string"
@@ -180,11 +201,7 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
               : [];
           })
         : [];
-  return (
-    texts.length > 0 &&
-    texts.every((text) => isSuppressedControlReplyText(text)) &&
-    hasAssistantDisplayableNonTextContent(message)
-  );
+  return texts.length > 0 && texts.every((text) => isSuppressedControlReplyText(text));
 }
 
 export function asRoleContentMessage(message: Record<string, unknown>): RoleContentMessage | null {

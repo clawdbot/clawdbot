@@ -373,9 +373,15 @@ describe("xai responses tool helpers", () => {
     });
   });
 
-  it("rejects successful Responses tool payloads without answer text", () => {
-    expect(() => requireXaiResponseTextAndCitations({}, "xAI tool failed")).toThrow(
-      "xAI tool failed: malformed JSON response",
+  it.each([
+    {},
+    { output: [] },
+    { output_text: "" },
+    { output: [{ type: "code_interpreter_call" }] },
+    { output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] },
+  ])("reports missing answer text without blaming JSON decoding: %j", (data) => {
+    expect(() => requireXaiResponseTextAndCitations(data, "xAI tool failed")).toThrow(
+      "xAI tool failed: no answer text returned; try a simpler request",
     );
   });
 });

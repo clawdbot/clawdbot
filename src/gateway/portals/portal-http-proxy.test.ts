@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import {
   createServer,
   request,
@@ -9,6 +10,7 @@ import net, { type AddressInfo } from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getFreePort } from "../../test-utils/ports.js";
 import type { PortalTarget } from "./portal-http-proxy.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
@@ -596,6 +598,56 @@ describe("portal HTTP proxy", () => {
     releaseDial();
 
     expect(await response).toMatchObject({ status: 200, body: "worker /slow" });
+  });
+
+  it("contains browser socket errors while a worker WebSocket is attaching", async () => {
+    targetHandler = (_req, res) => res.end("still available");
+    const httpServers: Server[] = [];
+    const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers });
+    services.add(service);
+    const dialing = createDeferredCore();
+    const attachment = createDeferredCore<Duplex>();
+    let firstConnection = true;
+    const portal = await service.open({
+      targetPort,
+      target: workerTarget(async () => {
+        if (!firstConnection) {
+          return createWorkerStream(targetPort);
+        }
+        firstConnection = false;
+        dialing.resolve();
+        return await attachment.promise;
+      }, targetPort),
+    });
+    const upgrade = createDeferredCore<Duplex>();
+    httpServers[0]!.once("upgrade", (_req, socket) => upgrade.resolve(socket));
+    const browser = net.connect({ host: "127.0.0.1", port: portal.listenPort });
+    const [lateStream, peer] = createWorkerStreamPair();
+    let transport: Duplex | undefined;
+    try {
+      await once(browser, "connect");
+      browser.write(
+        `GET /hmr?${portal.tokenQuery} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+      );
+      await dialing.promise;
+      transport = await upgrade.promise;
+      const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      expect(() => transport!.emit("error", reset)).not.toThrow();
+      expect(transport.destroyed).toBe(true);
+      const lateClosed = once(lateStream, "close");
+      attachment.resolve(lateStream);
+      await lateClosed;
+      expect(lateStream.destroyed).toBe(true);
+      expect(
+        await httpCall({ port: portal.listenPort, headers: { Cookie: portalAuthCookie(portal) } }),
+      ).toMatchObject({ status: 200, body: "still available" });
+    } finally {
+      attachment.resolve(lateStream);
+      browser.destroy();
+      transport?.destroy();
+      lateStream.destroy();
+      peer.destroy();
+    }
   });
 
   it.each([

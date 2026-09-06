@@ -23,6 +23,8 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
+  loadExactSessionEntryReadOnly:
+    vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
   taskRegistrySummary: {
     total: 0,
     active: 0,
@@ -53,25 +55,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   getInspectableTaskRegistrySummary: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
   ),
-  taskAuditFindings: [
-    {
-      severity: "warn",
-      code: "delivery_failed",
-      detail: "terminal update delivery failed",
-      task: {
-        taskId: "task-delivery",
-        runtime: "subagent",
-        ownerKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        scopeKind: "session",
-        task: "Deliver update",
-        status: "failed",
-        deliveryStatus: "failed",
-        notifyPolicy: "done_only",
-        createdAt: 1,
-      },
-    },
-  ] as TaskAuditFinding[],
+  taskAuditFindings: [] as TaskAuditFinding[],
   getInspectableTaskAuditFindings: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskAuditFindings,
   ),
@@ -148,14 +132,41 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
-    const entry = statusSummaryMocks
-      .listSessionEntriesCore()
-      .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
-    return entry ? { sessionKey, entry } : undefined;
+  loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
+  readSessionStoreSummaryReadOnly: (
+    scope: Parameters<
+      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
+    >[0],
+    options: Parameters<
+      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
+    >[1],
+  ) => {
+    const entries = statusSummaryMocks
+      .listSessionEntriesCore(scope)
+      .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
+      .map(({ sessionKey, entry }) => ({
+        sessionKey,
+        entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+      }))
+      .toSorted(
+        (left, right) =>
+          right.entry.updatedAt - left.entry.updatedAt ||
+          (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
+      );
+    const summarize = (rows: typeof entries) => ({
+      count: rows.length,
+      recent: rows.slice(0, options.recentLimit),
+    });
+    return {
+      ...summarize(entries),
+      byAgent: new Map(
+        options.agentIds.map((agentId) => [
+          agentId,
+          summarize(entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`))),
+        ]),
+      ),
+    };
   },
-  listSessionEntriesCore: statusSummaryMocks.listSessionEntriesCore,
-  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntriesCore,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -207,6 +218,7 @@ vi.mock("../status/link-channel.js", () => ({
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
+const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
 let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
@@ -258,6 +270,15 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
+    statusSummaryMocks.loadExactSessionEntryReadOnly.mockImplementation(({ sessionKey }) => {
+      const entry = statusSummaryMocks
+        .listSessionEntriesCore()
+        .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
+      return entry
+        ? { sessionKey, entry: { sessionId: sessionKey, updatedAt: 0, ...entry } }
+        : undefined;
+    });
     vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
     vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
@@ -267,6 +288,8 @@ describe("getStatusSummary", () => {
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }],
@@ -281,6 +304,42 @@ describe("getStatusSummary", () => {
     setSessions: (store) =>
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
+
+  it.each(["per-sender", "global"] as const)(
+    "summarizes every configured agent's pending events without an ambient owner (%s)",
+    async (scope) => {
+      const agents = [{ id: "research" }, { id: "ops" }];
+      vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+        defaultId: "research",
+        mainKey: "inbox",
+        scope,
+        agents,
+        ownership: "explicit",
+        selectionRequired: true,
+      });
+      vi.mocked(peekSystemEvents).mockImplementation((key) => [`pending: ${key}`]);
+
+      const summary = await getStatusSummary({
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { research: {}, ops: {} },
+            defaults: { heartbeat: { agentId: "ops", every: "0m" } },
+          },
+          session: { scope, mainKey: "inbox" },
+        },
+        includeSensitive: false,
+        includeChannelSummary: false,
+      });
+
+      expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
+      expect(summary.queuedSystemEvents).toEqual(
+        scope === "global"
+          ? ["pending: global"]
+          : ["pending: agent:research:inbox", "pending: agent:ops:inbox"],
+      );
+    },
+  );
 
   it.each([true, false])(
     "keeps public summary fields with includeSensitive=%s",
@@ -348,6 +407,23 @@ describe("getStatusSummary", () => {
 
     expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
   });
+
+  it.each([
+    { target: "owner", every: "0m", enabled: false },
+    { target: "none", every: "30m", enabled: true },
+    { target: "telegram", every: "30m", enabled: true },
+  ])(
+    "does not read an unused heartbeat route for $target/$every",
+    async ({ target, every, enabled }) => {
+      const summary = await getStatusSummary({
+        config: { agents: { defaults: { heartbeat: { target, every } } } },
+        includeChannelSummary: false,
+      });
+
+      expect(summary.heartbeat.agents[0]).toMatchObject({ enabled, waitingForRoute: false });
+      expect(statusSummaryMocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
+    },
+  );
 
   it("skips session model discovery and projection when sensitive output is disabled", async () => {
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
@@ -744,85 +820,11 @@ describe("getStatusSummary", () => {
     });
   });
 
-  it("hydrates only recent session rows while preserving total counts", async () => {
-    const store = Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => {
-        const number = index + 1;
-        return [
-          `agent:main:session-${number}`,
-          {
-            sessionId: `session-${number}`,
-            updatedAt: number,
-          },
-        ];
-      }),
-    );
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store));
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.count).toBe(12);
-    expect(summary.sessions.byAgent[0]?.count).toBe(12);
-    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
-      "agent:main:session-12",
-      "agent:main:session-11",
-      "agent:main:session-10",
-      "agent:main:session-9",
-      "agent:main:session-8",
-      "agent:main:session-7",
-      "agent:main:session-6",
-      "agent:main:session-5",
-      "agent:main:session-4",
-      "agent:main:session-3",
-    ]);
-    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
-      summary.sessions.recent.map((session) => session.key),
-    );
-
-    const hydratedKeys = vi
-      .mocked(statusSummaryRuntime.resolveSessionRuntime)
-      .mock.calls.map(([params]) => params.sessionKey);
-    expect(hydratedKeys).not.toContain("agent:main:session-1");
-    expect(hydratedKeys).not.toContain("agent:main:session-2");
-  });
-
-  it("preserves store order for tied recent session timestamps", async () => {
-    const store = Object.fromEntries(
-      Array.from({ length: 11 }, (_, index) => {
-        const number = index + 1;
-        return [
-          `agent:main:session-${number}`,
-          {
-            sessionId: `session-${number}`,
-            updatedAt: 1,
-          },
-        ];
-      }),
-    );
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store));
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
-      "agent:main:session-1",
-      "agent:main:session-2",
-      "agent:main:session-3",
-      "agent:main:session-4",
-      "agent:main:session-5",
-      "agent:main:session-6",
-      "agent:main:session-7",
-      "agent:main:session-8",
-      "agent:main:session-9",
-      "agent:main:session-10",
-    ]);
-    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
-      summary.sessions.recent.map((session) => session.key),
-    );
-  });
-
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],

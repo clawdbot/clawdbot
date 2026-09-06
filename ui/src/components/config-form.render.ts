@@ -69,42 +69,48 @@ export function renderConfigTierGroups(params: {
   // parent (the channel forms) do not render the tiers flush against each other.
   return html`
     <div class="config-tier-groups">
-      ${split.common || params.commonPrelude
-        ? html`<div class="settings-group">
-            ${params.commonPrelude ?? nothing}${split.common
-              ? params.renderTier(split.common)
-              : nothing}
-          </div>`
-        : nothing}
-      ${split.advanced && split.advancedLeafCount > 0
-        ? html`<details
-            class="config-advanced-disclosure"
-            ?open=${params.revealAdvanced}
-            @toggle=${(event: Event) => {
-              const disclosure = event.currentTarget;
-              if (!(disclosure instanceof HTMLDetailsElement)) {
-                return;
+      ${
+        split.common || params.commonPrelude
+          ? html`<div class="settings-group">
+              ${params.commonPrelude ?? nothing}${
+                split.common ? params.renderTier(split.common) : nothing
               }
-              if (disclosure.open === params.revealAdvanced) {
-                return;
+            </div>`
+          : nothing
+      }
+      ${
+        split.advanced && split.advancedLeafCount > 0
+          ? html`<details
+              class="config-advanced-disclosure"
+              ?open=${params.revealAdvanced}
+              @toggle=${(event: Event) => {
+                const disclosure = event.currentTarget;
+                if (!(disclosure instanceof HTMLDetailsElement)) {
+                  return;
+                }
+                if (disclosure.open === params.revealAdvanced) {
+                  return;
+                }
+                if (disclosure.open) {
+                  params.onShowAdvanced();
+                } else if (params.onHideAdvanced) {
+                  params.onHideAdvanced();
+                } else {
+                  disclosure.open = true;
+                }
+              }}
+            >
+              <summary class="settings-section__heading config-advanced-disclosure__summary">
+                ${t("configForm.advancedSettings")}
+              </summary>
+              ${
+                params.revealAdvanced
+                  ? html`<div class="settings-group">${params.renderTier(split.advanced)}</div>`
+                  : nothing
               }
-              if (disclosure.open) {
-                params.onShowAdvanced();
-              } else if (params.onHideAdvanced) {
-                params.onHideAdvanced();
-              } else {
-                disclosure.open = true;
-              }
-            }}
-          >
-            <summary class="settings-section__heading config-advanced-disclosure__summary">
-              ${t("configForm.advancedSettings")}
-            </summary>
-            ${params.revealAdvanced
-              ? html`<div class="settings-group">${params.renderTier(split.advanced)}</div>`
-              : nothing}
-          </details>`
-        : nothing}
+            </details>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -240,39 +246,45 @@ export function renderConfigForm(props: ConfigFormProps) {
       <section class="settings-section" id=${params.id}>
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${params.label}</h2>
-          ${props.sectionActions || docsUrl
-            ? html`<div class="settings-section__actions">
-                ${props.sectionActions ?? nothing}
-                ${docsUrl
-                  ? html`
-                      <span class="settings-section__docs">
-                        ${renderSettingsHelpTrigger({
-                          id: docsTriggerId,
-                          label: t("configForm.sectionHelp", { section: params.label }),
-                          tooltip: t("configForm.sectionHelp", { section: params.label }),
-                          icon: "question",
-                          popoverId: `settings-section-help-popover-${params.id}`,
-                        })}
-                        <wa-popover
-                          id=${`settings-section-help-popover-${params.id}`}
-                          class="settings-section__help-popover"
-                          for=${docsTriggerId}
-                          placement="bottom-end"
-                        >
-                          <div class="settings-section__help-panel">
-                            ${params.description ? html`<p>${params.description}</p>` : nothing}
-                            ${renderLearnMoreLink(docsUrl)}
-                          </div>
-                        </wa-popover>
-                      </span>
-                    `
-                  : nothing}
-              </div>`
-            : nothing}
+          ${
+            props.sectionActions || docsUrl
+              ? html`<div class="settings-section__actions">
+                  ${props.sectionActions ?? nothing}
+                  ${
+                    docsUrl
+                      ? html`
+                          <span class="settings-section__docs">
+                            ${renderSettingsHelpTrigger({
+                              id: docsTriggerId,
+                              label: t("configForm.sectionHelp", { section: params.label }),
+                              tooltip: t("configForm.sectionHelp", { section: params.label }),
+                              icon: "question",
+                              popoverId: `settings-section-help-popover-${params.id}`,
+                            })}
+                            <wa-popover
+                              id=${`settings-section-help-popover-${params.id}`}
+                              class="settings-section__help-popover"
+                              for=${docsTriggerId}
+                              placement="bottom-end"
+                            >
+                              <div class="settings-section__help-panel">
+                                ${params.description ? html`<p>${params.description}</p>` : nothing}
+                                ${renderLearnMoreLink(docsUrl)}
+                              </div>
+                            </wa-popover>
+                          </span>
+                        `
+                      : nothing
+                  }
+                </div>`
+              : nothing
+          }
         </div>
-        ${params.description
-          ? html`<p class="settings-section__desc">${params.description}</p>`
-          : nothing}
+        ${
+          params.description
+            ? html`<p class="settings-section__desc">${params.description}</p>`
+            : nothing
+        }
         ${renderConfigTierGroups({
           schema: params.node,
           path: params.path,

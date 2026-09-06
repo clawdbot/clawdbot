@@ -1,12 +1,22 @@
 // Gateway probe tests cover bootstrap auth, pairing prompts, startup retries,
 // event-loop readiness checks, and close/error reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isGatewayProtocolResponseError,
+  retainGatewayResponsePayload,
+} from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError as MockGatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   startCalls: 0,
-  startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+  startMode: "hello" as
+    | "hello"
+    | "close"
+    | "connect-error-close"
+    | "startup-retry-then-hello"
+    | "defer",
   socketOpened: true,
   transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
@@ -63,20 +73,6 @@ const eventLoopReadyState = vi.hoisted(() => ({
   },
 }));
 
-class MockGatewayClientRequestError extends Error {
-  readonly code: string;
-  readonly gatewayCode: string;
-  readonly details?: unknown;
-
-  constructor(error: { code?: string; message?: string; details?: unknown }) {
-    super(error.message ?? "gateway request failed");
-    this.name = "GatewayClientRequestError";
-    this.code = error.code ?? "UNAVAILABLE";
-    this.gatewayCode = this.code;
-    this.details = error.details;
-  }
-}
-
 class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
 
@@ -112,6 +108,9 @@ class MockGatewayClient {
 
   start(): void {
     gatewayClientState.startCalls += 1;
+    if (gatewayClientState.startMode === "defer") {
+      return;
+    }
     void Promise.resolve()
       .then(async () => {
         if (gatewayClientState.startMode === "close") {
@@ -121,12 +120,12 @@ class MockGatewayClient {
         if (gatewayClientState.startMode === "connect-error-close") {
           const onConnectError = this.opts.onConnectError;
           if (typeof onConnectError === "function") {
-            onConnectError(
-              new MockGatewayClientRequestError({
-                message: gatewayClientState.connectError,
-                details: gatewayClientState.connectErrorDetails,
-              }),
-            );
+            const error = new MockGatewayClientRequestError({
+              message: gatewayClientState.connectError,
+              details: gatewayClientState.connectErrorDetails,
+            });
+            retainGatewayResponsePayload(error, undefined);
+            onConnectError(error);
           }
           this.emitClose();
           return;
@@ -171,6 +170,7 @@ class MockGatewayClient {
 vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
   GatewayClientRequestError: MockGatewayClientRequestError,
+  isGatewayProtocolResponseError,
 }));
 
 vi.mock("../infra/device-identity.js", () => ({
@@ -238,8 +238,10 @@ function nextProbeUrl(label: string): string {
 
 function setDeviceRequiredProbeMode(): void {
   deviceIdentityState.cachedToken = null;
-  gatewayClientState.startMode = "close";
+  gatewayClientState.startMode = "connect-error-close";
   gatewayClientState.close = { code: 1008, reason: "device identity required" };
+  gatewayClientState.connectError = "gateway closed (1008): device identity required";
+  gatewayClientState.connectErrorDetails = null;
 }
 
 function lastGatewayClientOptions(): Record<string, unknown> | null {
@@ -399,6 +401,21 @@ describe("probeGateway", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
     expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(0);
+  });
+
+  it("stops an active probe when its owner aborts", async () => {
+    gatewayClientState.startMode = "defer";
+    const controller = new AbortController();
+    const probe = runTokenLightweightProbe({
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(gatewayClientState.startCalls).toBe(1));
+
+    controller.abort();
+
+    await expect(probe).resolves.toMatchObject({ ok: false, error: "aborted" });
+    expect(gatewayClientState.stopAndWaitCalls).toEqual([{ timeoutMs: 1_000 }]);
   });
 
   it("connects with operator.read scope", async () => {
@@ -798,6 +815,7 @@ describe("probeGateway", () => {
     });
     expect(gatewayClientState.startCalls).toBe(startCalls);
     expect(lastGatewayClientOptions()).toBeNull();
+    expect(result.gatewayReached).toBeUndefined();
   });
 
   it("does not cache other policy-close reasons", async () => {

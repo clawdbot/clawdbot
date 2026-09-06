@@ -165,6 +165,30 @@ function query(database: DatabaseSync) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(database);
 }
 
+function activeRow(db: DatabaseSync, key: string): Array<Pick<CronRunReceiptRow, "job_id">>;
+function activeRow(db: DatabaseSync, key: string, jobId: string): CronRunReceiptRow | undefined;
+function activeRow(db: DatabaseSync, key: string, jobId?: string) {
+  const find = () => {
+    const active = query(db)
+      .selectFrom("cron_run_receipts")
+      .where("store_key", "=", key)
+      .where("status", "=", "running");
+    return jobId === undefined
+      ? executeSqliteQuerySync(db, active.select("job_id")).rows
+      : executeSqliteQueryTakeFirstSync(db, active.selectAll().where("job_id", "=", jobId));
+  };
+  try {
+    return find();
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
+      throw error;
+    }
+    // A direct transaction can be the first receipt user after upgrade.
+    ensureCronRunReceiptSchema(db);
+    return find();
+  }
+}
+
 function withReceiptWrite<T>(
   operationLabel: string,
   options: OpenClawStateDatabaseOptions,
@@ -251,35 +275,9 @@ function receiptFromRow(row: CronRunReceiptRow): CronRunReceipt {
   };
 }
 
-function activeRow(database: DatabaseSync, storeKey: string, jobId: string) {
-  const find = () =>
-    executeSqliteQueryTakeFirstSync(
-      database,
-      query(database)
-        .selectFrom("cron_run_receipts")
-        .selectAll()
-        .where("store_key", "=", storeKey)
-        .where("job_id", "=", jobId)
-        .where("status", "=", "running"),
-    );
-  try {
-    return find();
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
-      throw error;
-    }
-    // A direct transaction can be the first receipt user after upgrade.
-    ensureCronRunReceiptSchema(database);
-    return find();
-  }
-}
-
 function currentJob(database: DatabaseSync, storeKey: string, jobId: string): CronJob | undefined {
-  const rows = loadCronRows(database, storeKey);
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return loadedCronStoreFromRows(rows).store.jobs.find((job) => job.id === jobId);
+  const rows = loadCronRows(database, storeKey, new Set([jobId]));
+  return loadedCronStoreFromRows(rows).store.jobs[0];
 }
 
 function sameOwner(left: CronRunReceiptRow, right: CronRunReceiptOwnerObservation): boolean {
@@ -526,6 +524,13 @@ export function findActiveCronRunReceiptInDatabase(params: {
   return row ? receiptHandle(receiptFromRow(row)) : undefined;
 }
 
+export function listActiveCronRunReceiptJobIdsInDatabase(
+  database: DatabaseSync,
+  storePath: string,
+) {
+  return new Set(activeRow(database, cronStoreKey(storePath)).map((row) => row.job_id));
+}
+
 export function inspectActiveCronRunReceipt(params: {
   storePath: string;
   jobId: string;
@@ -606,6 +611,7 @@ export function assertCronRunReceiptCurrent(params: {
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
   isAgentAvailable?: (agentId: string) => boolean;
+  allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
 }): void {
   if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
@@ -619,11 +625,9 @@ export function assertCronRunReceiptCurrent(params: {
     "cron.run-receipt.assert-current",
     params.env ? { env: params.env } : {},
     (database) =>
-      assertCronRunReceiptCurrentInDatabase({
-        database,
-        handle: params.handle,
-        resolveAgentId: params.resolveAgentId,
-      }),
+      params.allowMissingJob
+        ? assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle })
+        : assertCronRunReceiptCurrentInDatabase({ database, ...params }),
   );
 }
 

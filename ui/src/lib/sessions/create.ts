@@ -10,7 +10,7 @@ export type SessionCreateOutcome = {
   entry?: Readonly<Record<string, unknown>>;
   initialRun:
     | { status: "idle" }
-    | { status: "started"; runId?: string; messageSeq?: number }
+    | { status: "started"; runId?: string }
     | { status: "rejected"; error: string };
 };
 
@@ -45,13 +45,9 @@ export async function requestSessionCreate(
   let initialRun: SessionCreateOutcome["initialRun"] = { status: "idle" };
   if (result.runStarted) {
     const runId = stringValue(result.runId) ?? "";
-    const messageSeq = result.messageSeq;
     initialRun = {
       status: "started",
       ...(runId ? { runId } : {}),
-      ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
-        ? { messageSeq }
-        : {}),
     };
   } else if (result.runError !== undefined) {
     const message = stringValue(result.runError?.message) ?? "";

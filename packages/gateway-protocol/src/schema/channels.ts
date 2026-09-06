@@ -251,6 +251,8 @@ export const TalkClientMutationResultSchema = closedObject({
 export const TalkClientToolCallResultSchema = closedObject({
   runId: NonEmptyString,
   idempotencyKey: NonEmptyString,
+  agentId: NonEmptyString,
+  agentSessionKey: NonEmptyString,
 });
 
 /** Text steering request for a Talk session bound to an agent turn. */
@@ -712,6 +714,7 @@ export const ChannelsStartParamsSchema = closedObject({
 
 /** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
   force: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   verbose: Type.Optional(Type.Boolean()),
@@ -725,6 +728,8 @@ const QrDataUrlSchema = Type.String({
 
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),
   currentQrDataUrl: Type.Optional(QrDataUrlSchema),

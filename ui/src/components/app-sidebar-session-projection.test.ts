@@ -14,7 +14,7 @@ function sessionRow(
   return {
     key,
     label: key,
-    href: `/chat/${key}`,
+    renameValue: "",
     active: false,
     visuallyActive: false,
     hasActiveRun: false,
@@ -44,7 +44,7 @@ function projectionInput(
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
-    hideEmptyOwnerFilteredGroup: () => false,
+    hideEmptyGroups: false,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",

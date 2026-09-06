@@ -40,6 +40,7 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
@@ -63,6 +64,7 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;

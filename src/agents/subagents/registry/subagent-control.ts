@@ -1,13 +1,5 @@
-/** Controller-authorized subagent list, kill, steer, and message operations. */
-export {
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
-  killSubagentRunAdmin,
-} from "./subagent-control-kill.js";
-export {
-  sendControlledSubagentMessage,
-  steerControlledSubagentRun,
-} from "./subagent-control-messaging.js";
+/** Controller-authorized subagent list and kill operations. */
+export { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control-kill.js";
 export {
   buildControlledSubagentRunsReadContext,
   DEFAULT_RECENT_MINUTES,

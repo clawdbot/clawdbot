@@ -57,6 +57,7 @@ function resolveDiscordDeliveryOptions(
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
   };
 }
 

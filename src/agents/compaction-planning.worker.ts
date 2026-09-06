@@ -1,7 +1,7 @@
 /**
  * Worker-thread entrypoint for serializable compaction planning requests.
  */
-import { parentPort, workerData } from "node:worker_threads";
+import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import {
   buildOversizedFallbackPlan,
   buildStageSplitPlan,
@@ -38,17 +38,6 @@ export type CompactionPlanningWorkerValue =
       ratio: number;
     };
 
-/** Serializable success/failure envelope posted by the worker. */
-export type CompactionPlanningWorkerResult =
-  | {
-      status: "ok";
-      value: CompactionPlanningWorkerValue;
-    }
-  | {
-      status: "failed";
-      error: string;
-    };
-
 function isWorkerInput(value: unknown): value is CompactionPlanningWorkerInput {
   if (!value || typeof value !== "object" || !("kind" in value)) {
     return false;
@@ -81,9 +70,11 @@ function createMessageIndexer(source: AgentMessage[]): (selected: AgentMessage[]
     });
 }
 
-function planCompactionWorkerInput(
-  input: CompactionPlanningWorkerInput,
-): CompactionPlanningWorkerValue {
+/** Run one compaction planning request and return a serializable value. */
+export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlanningWorkerValue {
+  if (!isWorkerInput(input)) {
+    throw new Error("invalid compaction planning worker input");
+  }
   switch (input.kind) {
     case "summaryChunks":
       return {
@@ -117,22 +108,4 @@ function planCompactionWorkerInput(
   throw new Error("unsupported compaction planning worker input");
 }
 
-/** Run one compaction planning request and return a serializable result. */
-export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlanningWorkerResult {
-  if (!isWorkerInput(input)) {
-    return { status: "failed", error: "invalid compaction planning worker input" };
-  }
-
-  try {
-    return { status: "ok", value: planCompactionWorkerInput(input) };
-  } catch (error) {
-    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-if (parentPort) {
-  // Worker-thread mode: process the single workerData payload and post one result.
-  const sendToParent: (message: CompactionPlanningWorkerResult) => void =
-    parentPort.postMessage.bind(parentPort);
-  sendToParent(runCompactionPlanningWorkerInput(workerData));
-}
+serveWorkerTasks(runCompactionPlanningWorkerInput);

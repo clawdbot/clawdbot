@@ -58,13 +58,16 @@ function createFirecrawlProvider(
   });
 }
 
-function createThirdPartyFetchProvider(): PluginWebFetchProviderEntry {
+function createThirdPartyFetchProvider(
+  overrides: Partial<WebFetchTestProviderParams> = {},
+): PluginWebFetchProviderEntry {
   return createWebFetchTestProvider({
     pluginId: "third-party-fetch",
     id: "thirdparty",
     credentialPath: "plugins.entries.third-party-fetch.config.webFetch.apiKey",
     autoDetectOrder: 0,
     getConfiguredCredentialValue: () => "runtime-key",
+    ...overrides,
   });
 }
 
@@ -142,6 +145,11 @@ describe("web fetch runtime", () => {
   });
 
   it("prefers the runtime-selected provider when metadata is available", async () => {
+    const unrelated = createThirdPartyFetchProvider({
+      getConfiguredCredentialValue: () => {
+        throw new Error("selected provider resolution probed unrelated credentials");
+      },
+    });
     const provider = createFirecrawlProvider({
       createTool: ({ runtimeMetadata }) => ({
         description: "firecrawl",
@@ -152,8 +160,8 @@ describe("web fetch runtime", () => {
         }),
       }),
     });
-    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
-    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
 
     const runtimeWebFetch: RuntimeWebFetchMetadata = {
       providerSource: "auto-detect",

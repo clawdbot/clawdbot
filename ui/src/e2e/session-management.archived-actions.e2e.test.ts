@@ -2,6 +2,8 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -10,9 +12,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -26,9 +26,7 @@ suite.define(() => {
     it(`keeps archived transcript actions inert on ${viewport.label}`, async () => {
       const context = await suite.browser.newContext({
         locale: "en-US",
-        recordVideo: captureUiProofEnabled
-          ? { dir: uiProofArtifactDir, size: viewport }
-          : undefined,
+        recordVideo: captureUiProofEnabled ? { dir: suite.artifactDir, size: viewport } : undefined,
         serviceWorkers: "block",
         viewport,
       });
@@ -139,6 +137,19 @@ suite.define(() => {
         await rewind.click();
         await page.locator(".chat-confirm-popover").waitFor({ state: "visible" });
 
+        const confirmation = page.locator(".chat-confirm-popover");
+        const remember = confirmation.getByRole("checkbox");
+        await remember.check();
+        expect(await remember.isChecked()).toBe(true);
+        await remember.uncheck();
+        await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+        await confirmation.waitFor({ state: "detached" });
+        expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
+        expect(await initialMenu.isVisible()).toBe(true);
+        expect(await rewind.evaluate((element) => element === document.activeElement)).toBe(true);
+        await rewind.click();
+        await confirmation.waitFor({ state: "visible" });
+
         await gateway.emitGatewayEvent("sessions.changed", {
           ...session,
           archived: true,
@@ -179,7 +190,9 @@ suite.define(() => {
               ),
           ).toBe(true);
         }
-        await captureUiProof(page, `archived-actions-${viewport.label}.png`);
+        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`, menu, [
+          actions.first(),
+        ]);
         expect(
           await page.evaluate(() => {
             const portal = document.querySelector<HTMLElement>(".chat-reply-context-menu");
@@ -218,7 +231,7 @@ suite.define(() => {
         await context.close();
         if (proofVideo) {
           await proofVideo.saveAs(
-            path.join(uiProofArtifactDir, `archived-actions-${viewport.label}.webm`),
+            path.join(suite.artifactDir, `archived-actions-${viewport.label}.webm`),
           );
         }
       }
@@ -226,11 +239,7 @@ suite.define(() => {
   }
 
   it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const archived = sessionRow(
       "agent:main:dashboard:cold-archive",

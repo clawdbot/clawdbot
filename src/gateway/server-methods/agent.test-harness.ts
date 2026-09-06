@@ -17,6 +17,7 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryForTests,
@@ -305,18 +306,20 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) =>
     generation === mocks.lifecycleGeneration,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  getAgentRunLifecycleGeneration: () => mocks.lifecycleGeneration,
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
@@ -399,6 +402,7 @@ vi.mock("../../channels/message/runtime.js", async () => {
 
 export const makeContext = (): GatewayRequestContext =>
   ({
+    trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -614,6 +618,7 @@ function resetSessionAccessorMocks() {
       : options.message;
     return message
       ? {
+          state: "queued",
           inputId: "test-user-turn",
           message,
           run: (operation) => operation(),
@@ -1075,6 +1080,7 @@ export async function invokeAgentIdentityGet(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -1090,7 +1096,7 @@ export async function invokeAgentIdentityGet(
       id: options?.reqId ?? "agent-identity-test-req",
       method: "agent.identity.get",
     },
-    client: null,
+    client: options?.client ?? null,
     isWebchatConnect: () => false,
   });
   return respond;
@@ -1113,6 +1119,8 @@ export function applyGatewaySubagentRegistryTestDeps(
       endedAt: Date.now(),
     })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
+    // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ...overrides,
   });
 }

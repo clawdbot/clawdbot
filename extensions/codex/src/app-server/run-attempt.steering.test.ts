@@ -1,5 +1,6 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -17,12 +18,14 @@ import {
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
   cancelPendingAgentQuestionForSession: vi.fn(),
@@ -34,6 +37,26 @@ const activeRunRegistrationMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  const gatewayCall = async (...args: Parameters<typeof actual.callGatewayTool>) => {
+    const [method, , rawParams] = args;
+    const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+    if (method === "question.request") {
+      return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+    }
+    if (method === "question.waitAnswer") {
+      return await new Promise((resolve) => {
+        activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
+      });
+    }
+    if (method === "question.resolve") {
+      const result = params?.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: params?.answers };
+      activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
+      return result;
+    }
+    return await actual.callGatewayTool(...args);
+  };
   return {
     ...actual,
     cancelPendingAgentQuestionForSession: async (
@@ -47,25 +70,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
     },
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
+    agentHarnessStructuredInput: {
+      ...actual.agentHarnessStructuredInput,
+      run: (params: Parameters<typeof actual.agentHarnessStructuredInput.run>[0]) =>
+        actual.agentHarnessStructuredInput.run({ ...params, gatewayCall }),
     },
     clearActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.clearActiveEmbeddedRun>
@@ -118,6 +126,149 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
+  it.each([
+    { incognito: false, interruptFails: false, terminationFails: false },
+    { incognito: true, interruptFails: false, terminationFails: false },
+    { incognito: false, interruptFails: true, terminationFails: false },
+    { incognito: false, interruptFails: false, terminationFails: true },
+  ])(
+    "joins permission-change cleanup without cancelling the enclosing run (incognito: $incognito, interrupt failure: $interruptFails, terminal failure: $terminationFails)",
+    async ({ incognito, interruptFails, terminationFails }) => {
+      const terminalCleanup = createDeferred<void>();
+      let terminalRunning = true;
+      const { requests, waitForMethod } = createStartedThreadHarness(async (method) => {
+        if (method === "turn/interrupt" && interruptFails) {
+          throw new Error("native interrupt unavailable");
+        }
+        if (method === "thread/backgroundTerminals/list") {
+          return { data: terminalRunning ? [{ processId: "42" }] : [], nextCursor: null };
+        }
+        if (method === "thread/backgroundTerminals/terminate") {
+          await terminalCleanup.promise;
+          if (terminationFails) {
+            throw new Error("native terminal cleanup unavailable");
+          }
+          terminalRunning = false;
+          return { terminated: true };
+        }
+        return undefined;
+      });
+      const params = createSteeringParams();
+      if (incognito) {
+        params.sessionKey = `agent:main:dashboard:incognito-${params.sessionId}`;
+      }
+      await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
+      const onAttemptAbort = vi.fn();
+      params.onAttemptAbort = onAttemptAbort;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
+      let acknowledgeApplied: ((applied: boolean) => void) | undefined;
+      const application = new Promise<boolean>((resolve) => {
+        acknowledgeApplied = resolve;
+      });
+      const permissionChange = {
+        owner: {},
+        baseExecOverrides: {},
+        notice: "Permission change. Continue with updated permissions.",
+        request: vi.fn(() => application),
+        applied: vi.fn(() => true),
+        recordApplied: vi.fn(),
+      };
+      params.permissionChange = permissionChange;
+      const run = runCodexAppServerAttempt(params);
+      const outcome = run.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const settled = vi.fn();
+      void outcome.then(settled);
+      await waitForMethod("turn/start");
+      expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+        additionalContext: {
+          openclaw_permission_change: { kind: "application", value: permissionChange.notice },
+        },
+      });
+      let handle:
+        | {
+            abort: () => void;
+            applyPermissionMode?: (mode: "full", revokeApprovals: () => void) => Promise<boolean>;
+          }
+        | undefined;
+      await vi.waitFor(() => {
+        handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+          (call) => call[0] === params.sessionId,
+        )?.[1] as typeof handle;
+        expect(handle).toBeDefined();
+      }, fastWait);
+      try {
+        expect(handle?.applyPermissionMode).toBeTypeOf("function");
+        const revokeApprovals = vi.fn();
+        const applied = handle!.applyPermissionMode!("full", revokeApprovals);
+        const acknowledged = vi.fn();
+        void applied.then(acknowledged);
+        expect(revokeApprovals).toHaveBeenCalledOnce();
+        if (!interruptFails) {
+          await waitForMethod("thread/backgroundTerminals/terminate", fastWait.timeout);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).not.toHaveBeenCalled();
+          expect(requests.some((request) => request.method === "thread/unsubscribe")).toBe(false);
+          terminalCleanup.resolve();
+        }
+        const error = await outcome;
+        if (interruptFails) {
+          expect(error).toMatchObject({
+            message: "Permission change could not confirm the previous Codex turn stopped.",
+          });
+          expect(requests.some((request) => request.method.includes("backgroundTerminals"))).toBe(
+            false,
+          );
+        } else if (terminationFails) {
+          expect(error).toMatchObject({
+            message:
+              "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
+          });
+        } else {
+          expect(error).toBeUndefined();
+          expect(terminalRunning).toBe(false);
+          expect(requests).toContainEqual({
+            method: "thread/backgroundTerminals/terminate",
+            params: { threadId: "thread-1", processId: "42" },
+          });
+        }
+        expect(acknowledged).not.toHaveBeenCalled();
+        expect(onAttemptAbort).not.toHaveBeenCalled();
+        expect(
+          onAgentEvent.mock.calls.some(
+            ([event]) =>
+              event.stream === "lifecycle" &&
+              ["end", "error", "finishing"].includes(event.data.phase),
+          ),
+        ).toBe(false);
+        expect(permissionChange.request).toHaveBeenCalledWith("full");
+        expect(requests).toContainEqual({
+          method: "turn/interrupt",
+          params: { threadId: "thread-1", turnId: "turn-1" },
+        });
+        expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
+          threadId: "thread-1",
+        });
+        if (incognito) {
+          expect(requests.some((request) => request.method === "thread/unsubscribe")).toBe(false);
+        }
+        const shouldApply = !interruptFails && !terminationFails;
+        acknowledgeApplied?.(shouldApply);
+        await expect(applied).resolves.toBe(shouldApply);
+      } finally {
+        terminalCleanup.resolve();
+        handle?.abort();
+        acknowledgeApplied?.(false);
+        await outcome;
+      }
+    },
+  );
+
   it("marks the active run aborted before asynchronous cleanup releases its handle", async () => {
     const { requests, waitForMethod } = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -192,6 +343,7 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
       sessionKey: params.sessionKey,
       resolvedBy: "image-reply",
+      authority: { kind: "run", assertCurrent: expect.any(Function) },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -218,8 +370,14 @@ describe("runCodexAppServerAttempt steering", () => {
   ])(
     "persists every completed answer before $name",
     async ({ barrierType, isInboundUserMessage, provenance }) => {
-      const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+      const { requests, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
+      const started = createDeferred<void>();
+      params.onAgentEvent = (event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          started.resolve();
+        }
+      };
       const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
       const sessionTarget = {
         agentId: "main",
@@ -274,10 +432,13 @@ describe("runCodexAppServerAttempt steering", () => {
         hasPersisted: () => steerPersisted,
       } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
+      // Transcript ordering is independent of wall-clock filesystem latency.
+      vi.useFakeTimers();
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
       });
-      await waitForMethod("turn/start");
+      await started.promise;
+      expect(requests.some((entry) => entry.method === "turn/start")).toBe(true);
       const onQueueAccepted = vi.fn();
       await notify({
         method: "item/completed",
@@ -362,6 +523,7 @@ describe("runCodexAppServerAttempt steering", () => {
         fastWait,
       );
       const steer = requests.find((entry) => entry.method === "turn/steer");
+      const persistedBeforeNativeSubmission = userTurnTranscriptRecorder.hasPersisted();
       const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
         ?.clientUserMessageId;
       if (!clientUserMessageId) {
@@ -424,8 +586,10 @@ describe("runCodexAppServerAttempt steering", () => {
         },
       });
       await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const completedRun = await run;
 
+      expect(readAttemptTerminal(completedRun)).toMatchObject({ aborted: false, timedOut: false });
+      expect(persistedBeforeNativeSubmission).toBe(true);
       expect(steer?.params).toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
@@ -503,6 +667,15 @@ describe("runCodexAppServerAttempt steering", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         item: { id: "unrelated-user-message", type: "userMessage", clientId: "other-client-id" },
+      },
+    });
+    expect(deliverySettled).toBe(false);
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "other-turn",
+        item: { id: "wrong-turn-user-message", type: "userMessage", clientId: clientUserMessageId },
       },
     });
     expect(deliverySettled).toBe(false);
@@ -753,15 +926,23 @@ describe("runCodexAppServerAttempt steering", () => {
     { name: "gateway-backed", isSecret: false },
     { name: "secret", isSecret: true },
   ])("routes $name user prompts without consuming internal steering", async ({ isSecret }) => {
+    const turnStarted = createDeferred<void>();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
       if (method === "turn/start") {
+        turnStarted.resolve();
         return turnStartResult();
       }
       return {};
@@ -793,10 +974,7 @@ describe("runCodexAppServerAttempt steering", () => {
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      { interval: 1 },
-    );
+    await turnStarted.promise;
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
 
     const response = handleRequest?.({

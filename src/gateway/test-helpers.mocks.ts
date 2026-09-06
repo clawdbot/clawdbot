@@ -27,6 +27,8 @@ function createEmbeddedRunMockExports() {
     isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
       embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -188,22 +190,31 @@ vi.mock("../infra/tailscale.js", async () => {
     await vi.importActual<typeof import("../infra/tailscale.js")>("../infra/tailscale.js");
   return {
     ...actual,
-    readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
+    readTailscaleWhoisIdentity: async (
+      ip: string,
+      _exec: unknown,
+      opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
+    ) => {
+      testTailscaleWhois.calls.push({ ip, opts });
+      return testTailscaleWhois.value;
+    },
   };
 });
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const { createGatewayConfigModuleMock } = await import("./test-helpers.config-runtime.js");
-  return createGatewayConfigModuleMock(actual);
+  const { createGatewayConfigOverrides } = await import("./test-helpers.config-runtime.js");
+  return Object.defineProperties(
+    { ...actual },
+    Object.getOwnPropertyDescriptors(createGatewayConfigOverrides(actual)),
+  );
 });
 
 vi.mock("../config/io.js", async () => {
   const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
-  const configActual =
-    await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const { createGatewayConfigModuleMock } = await import("./test-helpers.config-runtime.js");
-  const configMock = createGatewayConfigModuleMock(configActual);
+  // The config facade re-exports IO; waiting for it here can deadlock a fresh module graph.
+  const { createGatewayConfigOverrides } = await import("./test-helpers.config-runtime.js");
+  const configMock = createGatewayConfigOverrides(actual);
   const createConfigIO = vi.fn(() => ({
     ...actual.createConfigIO(),
     getRuntimeConfig: configMock.getRuntimeConfig,

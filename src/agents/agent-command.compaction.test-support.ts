@@ -25,12 +25,15 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
 type RunSessionCompaction =
   (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runSessionCompactionIfNeeded"];
+type RunMemoryFlush =
+  (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runMemoryFlushIfNeeded"];
 type CaptureSessionDiffBaseline =
   (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 type CliCompaction = typeof import("./command/cli-compaction.js").runCliTurnCompactionLifecycle;
@@ -45,11 +48,14 @@ const compactionTestState = vi.hoisted(() => ({
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
   runCliTurnCompactionLifecycleMock: vi.fn<CliCompaction>(async (params) => params.sessionEntry),
-  runMemoryFlushIfNeededMock: vi.fn(async (params: { sessionEntry?: SessionEntry }) => ({
+  runMemoryFlushIfNeededMock: vi.fn<RunMemoryFlush>(async (params) => ({
     sessionEntry: params.sessionEntry,
     outcome: "completed" as const,
   })),
   runSessionCompactionIfNeededMock: vi.fn<RunSessionCompaction>(
+    async (params) => params.sessionEntry,
+  ),
+  runSessionPreflightCompactionMock: vi.fn<RunSessionCompaction>(
     async (params) => params.sessionEntry,
   ),
   deliverAgentCommandResultMock: vi.fn(),
@@ -70,18 +76,17 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => ({
-    loadedRaw: compactionTestState.cfg,
-    sourceConfig: compactionTestState.cfg,
-    cfg: compactionTestState.cfg,
-  }),
+  resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
     isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
@@ -138,9 +143,9 @@ vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async () => undefined),
 }));
 
-vi.mock("./auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-profiles/store.js")>(
-    "./auth-profiles/store.js",
+vi.mock("./auth-profiles/store-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
+    "./auth-profiles/store-runtime.js",
   );
   return {
     ...actual,
@@ -212,10 +217,12 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+  runMemoryFlushIfNeeded: (params: Parameters<RunMemoryFlush>[0]) =>
     compactionTestState.runMemoryFlushIfNeededMock(params),
   runSessionCompactionIfNeeded: (params: Parameters<RunSessionCompaction>[0]) =>
-    compactionTestState.runSessionCompactionIfNeededMock(params),
+    params.beforeCompaction
+      ? compactionTestState.runSessionPreflightCompactionMock(params)
+      : compactionTestState.runSessionCompactionIfNeededMock(params),
 }));
 
 vi.mock("../infra/agent-events.js", async () => {
@@ -257,6 +264,7 @@ export function registerAgentCommandCompactionTestHooks(): void {
       compactionTestState.runCliTurnCompactionLifecycleMock,
       compactionTestState.runMemoryFlushIfNeededMock,
       compactionTestState.runSessionCompactionIfNeededMock,
+      compactionTestState.runSessionPreflightCompactionMock,
       compactionTestState.deliverAgentCommandResultMock,
       compactionTestState.captureSessionDiffBaselineMock,
     ]) {
@@ -294,6 +302,13 @@ export function registerAgentCommandCompactionTestHooks(): void {
 
   afterEach(async () => {
     const storePath = compactionTestState.cfg?.session?.store;
+    if (storePath) {
+      await Promise.all(
+        listSessionEntriesCore({ storePath }).map(({ sessionKey }) =>
+          waitForSessionMaintenance(sessionKey),
+        ),
+      );
+    }
     compactionTestState.cfg = undefined;
     compactionTestState.workspaceDir = undefined;
     compactionTestState.agentDir = undefined;

@@ -151,13 +151,11 @@ export async function resolveCurrentTurnImages(params: {
       includeRecentHistoryImages: false,
       includeAttachmentIndexes: true,
     });
-    const images = resolved.attachments.map(
-      (attachment): ImageContent => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mediaType,
-      }),
-    );
+    const images = resolved.attachments.map((attachment): ImageContent => ({
+      type: "image",
+      data: attachment.data,
+      mimeType: attachment.mediaType,
+    }));
     const resolvedIndexes = resolved.attachmentIndexes ?? [];
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(

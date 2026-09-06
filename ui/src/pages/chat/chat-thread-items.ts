@@ -7,6 +7,8 @@ import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
+  canvasPreviewsMatch,
+  readCanvasContentPreview,
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
@@ -28,22 +30,14 @@ export function appendCanvasBlockToAssistantMessage(
       : typeof raw.text === "string"
         ? [{ type: "text", text: raw.text }]
         : [];
-  const alreadyHasArtifact = existingContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as {
-      type?: unknown;
-      preview?: { kind?: unknown; viewId?: unknown; url?: unknown };
-    };
-    return (
-      typed.type === "canvas" &&
-      typed.preview?.kind === "canvas" &&
-      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
-        (preview.url && typed.preview.url === preview.url))
-    );
-  });
-  if (alreadyHasArtifact) {
+  // A shortcode carries identity, not the tool's sandbox or App descriptor.
+  // Only an existing structured block can replace the canonical projection.
+  if (
+    existingContent.some((block) => {
+      const existing = readCanvasContentPreview(block);
+      return existing && canvasPreviewsMatch(existing, preview);
+    })
+  ) {
     return message;
   }
   return {
@@ -67,28 +61,6 @@ export function messageMatchesSearchQuery(message: unknown, query: string): bool
   );
 }
 
-export function turnHasMatchingAssistant(
-  messages: unknown[],
-  sourceIndex: number,
-  searchQuery: string,
-): boolean {
-  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    const normalized = safeNormalizeMessage(message);
-    if (!normalized) {
-      continue;
-    }
-    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-    if (role === "user" || role === "system") {
-      return false;
-    }
-    if (role === "assistant" && messageMatchesSearchQuery(message, searchQuery)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 type ChatMessagePreview = {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
@@ -99,7 +71,7 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
-  const cards = extractToolCardsCached(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage);
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -130,7 +102,11 @@ export function canvasPreviewBaseIdentity(
   source: ChatMessagePreview,
 ): string | null {
   const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-  const previewId = source.preview.viewId ?? source.preview.url;
+  const previewId = source.preview.viewId
+    ? `viewId:${source.preview.viewId}`
+    : source.preview.url
+      ? `url:${source.preview.url}`
+      : null;
   return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
 }
 
@@ -176,12 +152,12 @@ export function transcriptPositionTimestamp(
   return next;
 }
 
-export function findNearestAssistantMessageIndex(
+export function findNearestAssistantMessage(
   items: ChatItem[],
   toolTimestamp: number | null,
   minimumIndex = 0,
   maximumIndex = items.length,
-): number | null {
+) {
   let currentTurnStart = minimumIndex;
   let currentTurnEnd = maximumIndex;
   for (let index = minimumIndex; index < maximumIndex; index += 1) {
@@ -201,47 +177,34 @@ export function findNearestAssistantMessageIndex(
     }
     currentTurnStart = index + 1;
   }
-  const assistantEntries = items
-    .map((item, index) => {
-      if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
-        return null;
-      }
-      const message = asRecord(item.message);
-      const role = typeof message?.role === "string" ? message.role.toLowerCase() : "";
-      if (role !== "assistant") {
-        return null;
-      }
-      return {
-        index,
-        timestamp: safeNormalizeMessage(item.message)?.timestamp ?? null,
-      };
-    })
-    .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
-  if (assistantEntries.length === 0) {
-    return null;
-  }
-  if (toolTimestamp == null) {
-    return assistantEntries[assistantEntries.length - 1]?.index ?? null;
-  }
-  let previous: { index: number; timestamp: number } | null = null;
-  let next: { index: number; timestamp: number } | null = null;
-  for (const entry of assistantEntries) {
-    if (entry.timestamp == null) {
+  type Anchor = { index: number; item: Extract<ChatItem, { kind: "message" }> };
+  let last: Anchor | null = null;
+  let previous: { anchor: Anchor; timestamp: number } | null = null;
+  // Keep stable traversal order: last preceding / first following assistant,
+  // not a timestamp sort that could cross an existing reply.
+  for (let index = currentTurnStart; index < currentTurnEnd; index++) {
+    const item = items[index];
+    if (item?.kind !== "message") {
       continue;
     }
-    if (entry.timestamp <= toolTimestamp) {
-      previous = { index: entry.index, timestamp: entry.timestamp };
+    const message = asRecord(item.message);
+    if (typeof message?.role !== "string" || message.role.toLowerCase() !== "assistant") {
       continue;
     }
-    next = { index: entry.index, timestamp: entry.timestamp };
-    break;
+    last = { index, item };
+    const timestamp = safeNormalizeMessage(item.message)?.timestamp;
+    if (toolTimestamp == null || timestamp == null) {
+      continue;
+    }
+    if (timestamp <= toolTimestamp) {
+      previous = { anchor: last, timestamp };
+      continue;
+    }
+    return previous && toolTimestamp - previous.timestamp <= timestamp - toolTimestamp
+      ? previous.anchor
+      : last;
   }
-  if (previous && next) {
-    const previousDelta = toolTimestamp - previous.timestamp;
-    const nextDelta = next.timestamp - toolTimestamp;
-    return nextDelta < previousDelta ? next.index : previous.index;
-  }
-  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
+  return previous?.anchor ?? last;
 }
 
 export function findCanvasInsertionIndex(
@@ -323,12 +286,10 @@ export function readChatThreadMessageIdentity(message: unknown) {
   return readSessionMessageIdentity(message, { messageId: surfaceId });
 }
 
-/** Every projection of one composer submit (pending queue row, locally
- * materialized turn, authoritative history) shares this identity so the
- * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-export function userTurnSendIdentity(message: unknown): string | null {
+/** Causal boundaries follow execution ownership, which can differ from the submit key. */
+export function userTurnRunId(message: unknown): string | null {
   const identity = readChatThreadMessageIdentity(message);
-  return identity?.role === "user" && identity.runId ? `send:${identity.runId}` : null;
+  return identity?.role === "user" ? identity.runId : null;
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
@@ -342,11 +303,10 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
-  const sendIdentity = userTurnSendIdentity(message);
-  if (sendIdentity) {
-    return sendIdentity;
-  }
   const identity = readChatThreadMessageIdentity(message);
+  if (identity?.sendId) {
+    return `send:${identity.sendId}`;
+  }
   if (identity?.isImported) {
     if (identity.externalSource) {
       return `import:${identity.externalSource}`;
@@ -381,8 +341,11 @@ function messageProjectionDigest(message: unknown): string {
   return digest;
 }
 
-export function buildMessageKeys(messages: unknown[], indexOffset = 0): string[] {
-  const sourceKeys = messages.map(transcriptMessageSourceKey);
+export function buildMessageItems<Message>(
+  messages: Message[],
+  resolveSourceKey: (message: Message) => string | null = transcriptMessageSourceKey,
+): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
+  const sourceKeys = messages.map(resolveSourceKey);
   const sourceCounts = new Map<string, number>();
   for (const sourceKey of sourceKeys) {
     if (sourceKey) {
@@ -398,7 +361,15 @@ export function buildMessageKeys(messages: unknown[], indexOffset = 0): string[]
       : (sourceKey ?? "legacy");
     const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
     projectionOccurrences.set(projectionKey, occurrence + 1);
-    return messageKey(message, index + indexOffset, `${projectionKey}:${occurrence}`);
+    const record = asRecord(message);
+    const callId = typeof record?.toolCallId === "string" ? record.toolCallId : "";
+    const role = typeof record?.role === "string" ? record.role : "unknown";
+    const transcriptKey = `${projectionKey}:${occurrence}`;
+    return {
+      kind: "message",
+      key: callId ? `tool:${role}:${callId}:${transcriptKey}` : `msg:${transcriptKey}`,
+      message,
+    };
   });
 }
 
@@ -411,9 +382,12 @@ export function hasRenderableNormalizedMessage(
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
-  const media = role === "user" && readTranscriptMediaEntries(message).length;
   return Boolean(
-    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    (role === "user" && readTranscriptMediaEntries(message).length),
   );
 }
 
@@ -478,6 +452,12 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
 // assistant replies when their timestamps come from different clocks (#112943).
 export type TurnInsertionBounds = { afterKey?: string; beforeKey?: string };
 
+export type ChatProjection<Item extends ChatItem = ChatItem> = {
+  item: Item;
+  bounds?: TurnInsertionBounds;
+  predecessorKey?: string;
+};
+
 export function insertionIndexesForBounds(
   items: ChatItem[],
   bounds: TurnInsertionBounds | undefined,
@@ -494,26 +474,32 @@ export function insertionIndexesForBounds(
   };
 }
 
-export function insertChatItemsByTimestamp(
-  items: ChatItem[],
-  inserts: ChatItem[],
-  insertionBoundsByKey: ReadonlyMap<string, TurnInsertionBounds>,
-  toolStreamPredecessors: ReadonlyMap<string, string>,
-): void {
+export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
   const timestampsByKey = new Map<string, number>();
-  for (const item of inserts) {
+  const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();
+  for (const { item, bounds, predecessorKey } of inserts) {
     const timestamp = chatItemTimestamp(item);
     if (timestamp != null) {
       timestampsByKey.set(item.key, timestamp);
     }
+    // Repeated logical keys share the last supplied fact for each field;
+    // an unbounded projection must not erase an earlier causal constraint.
+    const placement = placementsByKey.get(item.key) ?? {};
+    if (bounds) {
+      placement.bounds = bounds;
+    }
+    if (predecessorKey) {
+      placement.predecessorKey = predecessorKey;
+    }
+    placementsByKey.set(item.key, placement);
   }
   // Sort inserts among themselves by timestamp, preserving the original index
   // order for ties and honoring predecessor relationships so a stream segment
   // stays before the tool card it introduced.
   const sortedInserts = inserts
-    .map((item, index) => {
+    .map(({ item }, index) => {
       const rawTimestamp = chatItemTimestamp(item);
-      const predecessorKey = toolStreamPredecessors.get(item.key);
+      const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
       const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
       return {
         item,
@@ -550,7 +536,7 @@ export function insertChatItemsByTimestamp(
   for (const { item, effectiveTimestamp } of sortedInserts) {
     const { minimum, maximum } = insertionIndexesForBounds(
       items,
-      insertionBoundsByKey.get(item.key),
+      placementsByKey.get(item.key)?.bounds,
     );
     if (effectiveTimestamp == null) {
       items.splice(maximum, 0, item);
@@ -574,26 +560,4 @@ export function insertChatItemsByTimestamp(
       items.splice(insertionIndex, 0, item);
     }
   }
-}
-
-export function messageKey(message: unknown, index: number, transcriptKey?: string): string {
-  const m = asRecord(message) ?? {};
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
-  const role = typeof m.role === "string" ? m.role : "unknown";
-  const id = typeof m.id === "string" && m.id ? m.id : null;
-  const messageId = typeof m.messageId === "string" && m.messageId ? m.messageId : null;
-  const identity = id ?? messageId;
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-  if (toolCallId) {
-    const suffix =
-      transcriptKey ?? identity ?? (timestamp == null ? index : `${timestamp}:${index}`);
-    return `tool:${role}:${toolCallId}:${suffix}`;
-  }
-  if (transcriptKey) {
-    return `msg:${transcriptKey}`;
-  }
-  if (identity) {
-    return `msg:${identity}`;
-  }
-  return timestamp == null ? `msg:${role}:${index}` : `msg:${role}:${timestamp}:${index}`;
 }

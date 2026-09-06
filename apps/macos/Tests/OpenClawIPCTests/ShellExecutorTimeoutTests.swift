@@ -16,6 +16,10 @@ private actor ShellLineRecorder {
 }
 
 struct ShellExecutorTimeoutTests {
+    /// The executor's deadline starts at spawn, so allow ample process startup time.
+    /// This is a fixture budget, not the timeout behavior under test.
+    private static let fixtureTimeout: TimeInterval = 1.0
+
     @Test func `streaming captures both streams while delivering stdout lines`() async {
         let recorder = ShellLineRecorder()
         let result = await ShellExecutor.runStreamingDetailed(
@@ -69,14 +73,14 @@ struct ShellExecutorTimeoutTests {
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.1,
+                timeout: Self.fixtureTimeout,
                 onStandardOutputLine: { _ in })
         } else {
             await ShellExecutor.runDetailed(
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.1)
+                timeout: Self.fixtureTimeout)
         }
 
         #expect(result.timedOut)
@@ -116,14 +120,14 @@ struct ShellExecutorTimeoutTests {
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.2,
+                timeout: Self.fixtureTimeout,
                 onStandardOutputLine: { _ in })
         } else {
             await ShellExecutor.runDetailed(
                 command: command,
                 cwd: nil,
                 env: environment,
-                timeout: 0.2)
+                timeout: Self.fixtureTimeout)
         }
 
         #expect(result.timedOut)
@@ -139,6 +143,9 @@ struct ShellExecutorTimeoutTests {
     }
 
     private func readPID(from file: URL) throws -> pid_t {
+        try #require(
+            FileManager.default.fileExists(atPath: file.path),
+            "Timeout fixture did not publish its PID file: \(file.path)")
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(value))

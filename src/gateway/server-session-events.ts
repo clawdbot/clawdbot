@@ -354,7 +354,6 @@ async function handleTranscriptUpdateBroadcast(
     agentId: eventAgentId,
     includeSession: true,
     activeRunState,
-    status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
   });
   if (message === undefined) {
     // A committed batch or unavailable selected row must invalidate
@@ -454,7 +453,10 @@ export function createLifecycleEventBroadcastHandler(params: {
       );
       return;
     }
-    const sessionRow = loadGatewaySessionRow(event.sessionKey, { agentId: routingAgentId });
+    const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+      agentId: routingAgentId,
+      ...(event.reason === "swarm" ? { includeSwarmSummary: true } : {}),
+    });
     const activeRunState =
       sessionRow && (sessionRow.key !== "global" || routingAgentId)
         ? resolveVisibleActiveSessionRunState({

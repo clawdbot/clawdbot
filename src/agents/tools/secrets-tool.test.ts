@@ -589,6 +589,137 @@ describe("secrets tool", () => {
     await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
   });
 
+  it("publishes its own credential prompt when no harness reserved one", async () => {
+    // A harness that dispatches tools directly reserves nothing, so the credential
+    // request would register and then wait behind a link the operator never sees.
+    const sessionKey = "agent:main:secret-direct-dispatch";
+    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+    const sent: { text?: string; channelData?: unknown }[] = [];
+    let finishWait: ((value: unknown) => void) | undefined;
+    const gateway = gatewayStub(async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      if (method === "secrets.store.list") {
+        return { entries: [unrelatedEnv, secretEntry] };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pending = createSecretsTool({
+      config: { gateway: { publicOrigin: "https://ops.example.test" } },
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+        },
+        messageChannel: "telegram",
+      },
+    }).execute("call-secret-direct", args);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    finishWait?.({
+      status: "answered",
+      answers: { answers: { secret_value: ["stored"] } },
+    });
+
+    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
+    expect(sent[0]?.text).toContain("https://ops.example.test/ask/");
+    expect(sent[0]?.text).toContain("SERVICE_API_KEY");
+  });
+
+  it("ends credential publication before post-answer metadata finishes", async () => {
+    const sessionKey = "agent:main:secret-direct-dispatch-abort";
+    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+    let capturedSignal: AbortSignal | undefined;
+    let aborted = false;
+    let finishWait: ((value: unknown) => void) | undefined;
+    const metadataStarted = createDeferred();
+    const metadata = createDeferred<{ entries: (typeof secretEntry)[] }>();
+    const gateway = gatewayStub(async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          finishWait = resolve;
+        });
+      }
+      if (method === "secrets.store.list") {
+        metadataStarted.resolve();
+        return metadata.promise;
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pending = createSecretsTool({
+      config: { gateway: { publicOrigin: "https://ops.example.test" } },
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (_payload, options) => {
+          capturedSignal = options?.signal;
+          return new Promise<void>(() => {});
+        },
+        messageChannel: "telegram",
+      },
+    }).execute("call-secret-direct-abort", args);
+
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    capturedSignal?.addEventListener(
+      "abort",
+      () => {
+        aborted = true;
+      },
+      { once: true },
+    );
+    finishWait?.(storedAnswer);
+    try {
+      await metadataStarted.promise;
+      expect(aborted).toBe(true);
+    } finally {
+      metadata.resolve({ entries: [secretEntry] });
+      await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
+    }
+  });
+
+  it("keeps the credential prompt off a channel that cannot carry a Control UI link", async () => {
+    // Native credential cards arrive through question.requested instead, and chat
+    // must never become the place a credential is asked for.
+    const sessionKey = "agent:main:secret-native-only";
+    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+    const sent: { text?: string }[] = [];
+    const gateway = gatewayStub(async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return { status: "expired" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await createSecretsTool({
+      config: { gateway: { publicOrigin: "https://ops.example.test" } },
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+        },
+        messageChannel: "control-ui-only",
+      },
+    }).execute("call-secret-native", args);
+
+    expect(sent).toEqual([]);
+    expect(result.details).toMatchObject({ status: "no_answer" });
+  });
+
   it("lists store metadata and environment previews", async () => {
     const entries = [
       {

@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
@@ -54,6 +55,7 @@ async function createTimelinePath(): Promise<string> {
 }
 
 async function readTimeline(pathname: string): Promise<Record<string, unknown>[]> {
+  flushDiagnosticsTimeline();
   const content = await readFile(pathname, "utf8");
   return content
     .trim()
@@ -73,6 +75,7 @@ describe("plugins marketplace entries", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
     vi.unstubAllEnvs();
   });
 
@@ -194,7 +197,7 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(mocks.defaultRuntime.writeJson.mock.calls)).not.toContain(privateQuery);
   });
 
-  it("prints bundled fallback entries without failing", async () => {
+  it("prints npm first even for a catalog with the old ClawHub default", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
       source: "bundled-fallback",
@@ -206,7 +209,7 @@ describe("plugins marketplace entries", () => {
             install: {
               clawhubSpec: "clawhub:@openclaw/acpx",
               npmSpec: "@openclaw/acpx",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
             },
           },
         },

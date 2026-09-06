@@ -74,11 +74,15 @@ suite.define(() => {
       const composerHandle = await page.evaluateHandle<
         typeof import("../pages/chat/composer-persistence.ts")
       >('import("/src/pages/chat/composer-persistence.ts")');
+      const sessionKeyHandle = await page.evaluateHandle<
+        typeof import("../lib/sessions/session-key.ts")
+      >('import("/src/lib/sessions/session-key.ts")');
       const result = await page.evaluate(
-        async ({ draftStore, composer }) => {
+        async ({ draftStore, sessionKeys, composer }) => {
           const client = { recoveryScope: "credential-a", recoveryScopeReady: true };
           const state = {
             settings: { gatewayUrl: "owner-fence-gateway" },
+            hello: null,
             sessionKey: "agent:main:owner-fence",
             chatMessage: "",
             chatAttachments: [],
@@ -91,7 +95,7 @@ suite.define(() => {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: client.recoveryScope,
             scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(
-              composer.resolveStoredChatOutboxScope(state, state.sessionKey),
+              sessionKeys.resolveUiConversationIdentity(state, state.sessionKey),
             )}`,
           };
           const persistence = new composer.ChatComposerPersistence(() => state);
@@ -128,7 +132,7 @@ suite.define(() => {
           );
           return draftStore.readDurableComposerDraft(scope);
         },
-        { draftStore: storeHandle, composer: composerHandle },
+        { draftStore: storeHandle, sessionKeys: sessionKeyHandle, composer: composerHandle },
       );
 
       expect(result).toMatchObject({
@@ -435,11 +439,14 @@ suite.define(() => {
       const composerHandle = await page.evaluateHandle<
         typeof import("../pages/chat/composer-persistence.ts")
       >('import("/src/pages/chat/composer-persistence.ts")');
+      const sessionKeyHandle = await page.evaluateHandle<
+        typeof import("../lib/sessions/session-key.ts")
+      >('import("/src/lib/sessions/session-key.ts")');
       const durableHandle = await page.evaluateHandle<
         typeof import("../pages/chat/durable-composer-persistence.ts")
       >('import("/src/pages/chat/durable-composer-persistence.ts")');
       const result = await page.evaluate(
-        async ({ draftStore, composer, durable }) => {
+        async ({ draftStore, sessionKeys, composer, durable }) => {
           const waitFor = async (predicate: () => Promise<boolean>) => {
             for (let attempt = 0; attempt < 100; attempt += 1) {
               if (await predicate()) {
@@ -453,6 +460,7 @@ suite.define(() => {
           };
           const state = {
             settings: { gatewayUrl: "incognito-chat-gateway" },
+            hello: null,
             sessionKey: "agent:main:incognito-chat",
             chatMessage: "",
             chatAttachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
@@ -464,7 +472,7 @@ suite.define(() => {
             connected: true,
             selectedChatSessionIncognito: false,
           };
-          const storedScope = composer.resolveStoredChatOutboxScope(state, state.sessionKey);
+          const storedScope = sessionKeys.resolveUiConversationIdentity(state, state.sessionKey);
           const scope = {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: state.client.recoveryScope,
@@ -513,7 +521,12 @@ suite.define(() => {
             attachments: restartedState.chatAttachments.length,
           };
         },
-        { draftStore: storeHandle, composer: composerHandle, durable: durableHandle },
+        {
+          draftStore: storeHandle,
+          sessionKeys: sessionKeyHandle,
+          composer: composerHandle,
+          durable: durableHandle,
+        },
       );
 
       expect(result).toEqual({ message: "", attachments: 0 });
@@ -624,7 +637,8 @@ suite.define(() => {
             oversizedScope,
             {
               revision: 30,
-              text: "oversized",
+              text: "@Alex oversized",
+              mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
               attachments: [
                 {
                   blob: tooLargeBlob,
@@ -911,6 +925,8 @@ suite.define(() => {
             oversized: oversized.status,
             oversizedRead: oversizedRead.status,
             oversizedText: oversizedRead.status === "found" ? oversizedRead.draft.text : null,
+            oversizedMentions:
+              oversizedRead.status === "found" ? oversizedRead.draft.mentions : null,
             oversizedAttachmentCount:
               oversizedRead.status === "found" ? oversizedRead.draft.attachments.length : null,
             oversizeConflict: oversizeConflict.status,
@@ -959,7 +975,8 @@ suite.define(() => {
         missingPredecessor: "conflict",
         oversized: "payload-too-large",
         oversizedRead: "found",
-        oversizedText: "oversized",
+        oversizedText: "@Alex oversized",
+        oversizedMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
         oversizedAttachmentCount: 0,
         oversizeConflict: "conflict",
         oversizeConflictRead: "found",

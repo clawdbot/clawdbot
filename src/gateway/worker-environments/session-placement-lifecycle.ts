@@ -1,3 +1,4 @@
+import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
@@ -19,7 +20,7 @@ type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
 
-export class SessionWorkerPlacementMutationError extends Error {
+class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${state}.`);
   }
@@ -230,9 +231,11 @@ export function prepareSessionWorkerPlacementStop(params: {
 }): () => Promise<void> {
   const { agentId, context, sessionId, sessionKey } = params;
   const expected = readSessionWorkerPlacement(params);
+  // Cron run aliases share their base's physical session, even after session-id adoption.
   const matches = (candidate: Placement) =>
     candidate.sessionId === sessionId &&
-    candidate.sessionKey === sessionKey &&
+    (candidate.sessionKey === sessionKey ||
+      parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === sessionKey) &&
     candidate.agentId === agentId;
   if (expected && !matches(expected)) {
     throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);
@@ -267,7 +270,7 @@ export function prepareSessionWorkerPlacementStop(params: {
     // The dispatch owner rechecks source eligibility before its own drain, and
     // caller authority throughout reconciliation. Never force-abandon unsynced work.
     const reclaimed = await context.workerPlacementDispatchService.reclaim(
-      { agentId, sessionId, sessionKey },
+      { agentId, sessionId, sessionKey: expected.sessionKey },
       params.authorize,
       beforeDrain,
     );

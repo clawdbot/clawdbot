@@ -9,8 +9,10 @@ import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
@@ -40,6 +42,10 @@ async function openDashboard(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
   await page.addInitScript(
     ({ key, storageKey }) => {
+      // Init scripts also run in opaque widget frames; only the dashboard owns settings.
+      if (window !== window.top) {
+        return;
+      }
       const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
         string,
         unknown
@@ -114,6 +120,8 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       });
       contexts.add(context);
       const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
       const origin = new URL(controlUi.baseUrl).origin;
       const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/a2ui-v0.9.bundle.js`;
       const messages = [
@@ -216,7 +224,11 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         .toBe(true);
       const widgetFrame = outerFrame!.childFrames()[0]!;
       await widgetFrame.getByText("A2UI board widget").waitFor();
-      await widgetFrame.getByText("Refresh data").click();
+      await expect
+        .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      expect(await outer.getAttribute("inert")).toBeNull();
+      await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
       await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
       expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({
         ticket: "ticket",
@@ -264,10 +276,10 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         scrollbar.thumbBackground,
       );
       expect(scrollbar.ratio).toBeLessThan(0.2);
+      expect(pageErrors).toEqual([]);
       if (scrollbarProofLabel) {
         const screenshotPath = path.resolve(
-          process.cwd(),
-          ".artifacts/control-ui-e2e/widget-scrollbar",
+          createControlUiE2eArtifactDir("widget-scrollbar"),
           `${scrollbarProofLabel}-${colorScheme}.png`,
         );
         await mkdir(path.dirname(screenshotPath), { recursive: true });

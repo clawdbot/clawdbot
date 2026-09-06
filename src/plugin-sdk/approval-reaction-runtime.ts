@@ -361,6 +361,16 @@ function buildApprovalReactionPromptText(params: {
     info.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     info.push(`**Full id:** \`${view.approvalId}\``);
     sections.push(info.join("\n"));
+  } else if (view.approvalKind === "system-agent") {
+    const details = [
+      "**OpenClaw change requires approval**",
+      `**Change:** ${view.operationSummary}`,
+    ];
+    if (view.agentId) {
+      details.push(`**Agent:** ${view.agentId}`);
+    }
+    details.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
+    sections.push(details.join("\n"));
   } else {
     const header = ["**Plugin approval required**", `**ID:** ${view.approvalId}`];
     sections.push(header.join("\n"));
@@ -492,6 +502,25 @@ export function buildApprovalReactionPendingContent(params: {
         ...payload,
         text: replaceApprovalIdPlaceholder(payload.text, request.id),
       }),
+    };
+  }
+  if (params.view.approvalKind === "system-agent") {
+    if (request.approvalKind !== "system-agent") {
+      throw new Error("approval request and view kinds do not match");
+    }
+    return {
+      reactionPayload,
+      manualFallbackPayload: withoutPresentation(
+        buildApprovalPendingReplyPayload({
+          approvalKind: "system-agent",
+          approvalId: request.id,
+          approvalSlug: request.id.slice(0, 8),
+          text: reactionPayload.text ?? "",
+          agentId: params.view.agentId ?? null,
+          allowedDecisions: reactionPayload.allowedDecisions,
+          sessionKey: request.request.sessionKey ?? null,
+        }),
+      ),
     };
   }
   if (request.approvalKind !== "exec") {

@@ -4,10 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import type { SetupMigrationPromotionContinuation } from "./setup.migration-promotion.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 import {
   createSetupMigrationStage,
   recoverSetupMigrationPromotion,
@@ -289,6 +290,43 @@ describe("setup migration stage", () => {
     });
     expect(await fs.readdir(workspaceDir)).toEqual([]);
     expect((await fs.stat(workspaceDir)).mode & 0o777).toBe(0o755);
+    await stage.cleanup();
+  });
+
+  it("rejects a dangling promotion target without replacing it", async () => {
+    const root = tempRoots.make("openclaw-migration-stage-");
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const workspaceReferent = path.join(root, "workspace-referent");
+    const reportDir = path.join(stateDir, "migration", "claude", "attempt");
+    await fs.mkdir(workspaceReferent, { recursive: true });
+    await fs.symlink(
+      workspaceReferent,
+      workspaceDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await fs.rmdir(workspaceReferent);
+    const stage = await createSetupMigrationStage({
+      providerId: "claude",
+      stateDir,
+      workspaceDir,
+      reportDir,
+      targetConfig: { agents: { defaults: { workspace: workspaceDir } } },
+    });
+    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
+
+    await expect(
+      stage.promote({
+        expectedConfig: {},
+        continuation: continuation(),
+        readConfigFile: async () => ({}),
+        commitConfigFile: async (config) => config,
+      }),
+    ).rejects.toBeInstanceOf(SetupMigrationTargetChangedError);
+
+    expect((await fs.lstat(workspaceDir)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(workspaceReferent)).rejects.toThrow();
+    await expect(fs.access(path.join(reportDir, "onboarding-promotion.json"))).rejects.toThrow();
     await stage.cleanup();
   });
 

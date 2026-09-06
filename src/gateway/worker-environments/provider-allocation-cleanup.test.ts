@@ -45,6 +45,7 @@ describe("worker allocation cleanup", () => {
     const pending = expectDefined(support.testState.store.list()[0], "invalid allocation intent");
     await expect(service.destroy(pending.environmentId)).rejects.toMatchObject({
       code: "provider_failure",
+      message: "Worker provider returned an invalid allocation identity",
     });
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "provisioning",
@@ -148,11 +149,16 @@ describe("worker allocation cleanup", () => {
         throw new Error("allocation response lost");
       });
       const resolveAllocation = vi.fn(async () => ({ leaseId, sharedHost: false }));
+      const secret = "fixture-release-secret";
       const destroy = vi
         .fn(async () => {
           physicalLeases.delete(leaseId);
         })
-        .mockRejectedValueOnce(new Error("release outcome unknown"));
+        .mockRejectedValueOnce(
+          new Error(
+            `release outcome unknown;\n retry cleanup; token=${secret}; ${"detail ".repeat(200)}`,
+          ),
+        );
       const provider = support.createProvider({ provision, resolveAllocation, destroy });
       const first = support.createService(provider);
       await expect(first.create("development", "lost-allocation")).rejects.toMatchObject({
@@ -166,11 +172,16 @@ describe("worker allocation cleanup", () => {
         lastError: "allocation response lost",
       });
       await support.reopenWorkerEnvironmentStore();
-      await expect(
-        support.createService(provider).destroy(pending.environmentId),
-      ).rejects.toMatchObject({
+      const cleanupFailure = await support
+        .createService(provider)
+        .destroy(pending.environmentId)
+        .catch((error: unknown) => error);
+      expect(cleanupFailure).toMatchObject({
         code: "provider_failure",
+        message: expect.stringContaining("release outcome unknown; retry cleanup;"),
       });
+      expect(cleanupFailure).toHaveProperty("message", expect.not.stringContaining(secret));
+      expect(cleanupFailure).toHaveProperty("message", expect.stringMatching(/^[^\n]{1,1024}$/u));
       expect(physicalLeases).toEqual(new Set([leaseId]));
       expect(support.testState.store.get(pending.environmentId)).toMatchObject({
         state: "destroying",
@@ -278,8 +289,9 @@ describe("worker allocation cleanup", () => {
       code: "provider_failure",
     });
     const pending = expectDefined(support.testState.store.list()[0], "pending resolution");
-    await expect(service.destroy(pending.environmentId)).rejects.toMatchObject({
+    await expect.soft(service.destroy(pending.environmentId)).rejects.toMatchObject({
       code: "provider_failure",
+      message: "Worker provider operation timed out after 20ms",
     });
     const retry = service.destroy(pending.environmentId);
     let stopped = false;

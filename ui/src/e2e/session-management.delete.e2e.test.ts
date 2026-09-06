@@ -2,15 +2,14 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
 
@@ -278,7 +277,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -299,9 +298,15 @@ suite.define(() => {
       await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
       await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(page, "sessions-bulk-delete-original-confirm.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sessions-bulk-delete-original-confirm.png",
+        confirmModal.locator("dialog"),
+        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
+      );
 
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([replacement]));
+      await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
       await gateway.emitGatewayEvent("sessions.changed", {
         ...replacement,
         reason: "update",
@@ -323,13 +328,11 @@ suite.define(() => {
         .poll(() => page.locator(".sessions-error[role=alert]").textContent())
         .toContain("changed before deletion. Retry.");
       await replacementLabel.waitFor();
-      await captureUiProof(page, "sessions-bulk-delete-replacement-protected.png");
+      await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(
-          path.join(uiProofArtifactDir, "sessions-bulk-delete-replaced.webm"),
-        );
+        await proofVideo.saveAs(path.join(suite.artifactDir, "sessions-bulk-delete-replaced.webm"));
       }
     }
   });
@@ -341,7 +344,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -376,7 +379,13 @@ suite.define(() => {
         .click();
 
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(page, "sidebar-delete-session-confirm.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-delete-session-confirm.png",
+        confirmModal.locator("dialog"),
+        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
+      );
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).evaluate((button) => {
         if (!(button instanceof HTMLButtonElement)) {
@@ -401,13 +410,13 @@ suite.define(() => {
         .toContain("changed before deletion. Retry.");
       expect(await visibleError.textContent()).not.toContain("GatewayRequestError");
       await row.waitFor({ state: "visible" });
-      await captureUiProof(page, "sidebar-delete-session-replaced-error.png");
+      await captureUiProof(suite, page, "sidebar-delete-session-replaced-error.png");
       expect(nativeDialogs).toEqual([]);
     } finally {
       await context.close();
       if (proofVideo) {
         await proofVideo.saveAs(
-          path.join(uiProofArtifactDir, "sidebar-delete-session-replaced.webm"),
+          path.join(suite.artifactDir, "sidebar-delete-session-replaced.webm"),
         );
       }
     }
@@ -420,7 +429,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -468,14 +477,20 @@ suite.define(() => {
         .poll(() => worktreeModal.textContent())
         .toContain("OpenClaw could not create a safety snapshot");
       await expect.poll(() => worktreeModal.textContent()).toContain("Remove?");
-      await captureUiProof(page, "sidebar-delete-preserved-snapshot-failed.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-delete-preserved-snapshot-failed.png",
+        worktreeModal.locator("dialog"),
+        [worktreeModal.getByRole("button", { name: "Cancel", exact: true })],
+      );
       await worktreeModal.getByRole("button", { name: "Cancel", exact: true }).click();
       expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
     } finally {
       await context.close();
       if (proofVideo) {
         await proofVideo.saveAs(
-          path.join(uiProofArtifactDir, "sidebar-delete-preserved-snapshot-failed.webm"),
+          path.join(suite.artifactDir, "sidebar-delete-preserved-snapshot-failed.webm"),
         );
       }
     }

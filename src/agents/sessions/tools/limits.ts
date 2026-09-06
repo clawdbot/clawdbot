@@ -27,3 +27,11 @@ export function appendBoundedTextTail(
   const tail = truncateUtf8Suffix(combined, effectiveMaxBytes);
   return { tail, droppedBytes: Buffer.byteLength(combined) - Buffer.byteLength(tail) };
 }
+
+/** Label lost stderr before the retained diagnostic so it cannot look complete. */
+export function formatStderrTail(tail: string, droppedBytes: number, fallback: string): string {
+  const diagnostic = tail.trim() || fallback;
+  return droppedBytes > 0
+    ? `[${droppedBytes} UTF-8 bytes of earlier stderr discarded at the ${SESSION_TOOL_STDERR_TAIL_BYTES}-byte retention cap]\n${diagnostic}`
+    : diagnostic;
+}

@@ -46,6 +46,11 @@ export {
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+export type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../infra/system-agent-approvals.js";
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,

@@ -84,8 +84,8 @@ export async function gatherDispatchRequest(
             turnAdoptionLifecycle: {
               ...turnAdoptionLifecycle,
               onAdopted: async () => {
-                // The upstream owner is durable only after its callback commits.
-                // A rejected callback must leave replay dedupe releasable.
+                // Adoption is durable only after this callback commits. Input
+                // already retained by another run separately forbids replay.
                 await turnAdoptionLifecycle.onAdopted();
                 turnAdoptionState.adopted = true;
               },
@@ -94,16 +94,26 @@ export async function gatherDispatchRequest(
         : {}),
     },
   };
+  const replyOperationRunState: ReplyOperationRunState =
+    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
+  let replayUnsafeActivity = false;
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    inboundDedupeReplayUnsafe: false,
+    get inboundDedupeReplayUnsafe() {
+      // Read the recorded input outcome even when source adoption or cleanup fails.
+      // Queued followups have not transferred custody to the active run yet.
+      const admission = replyOperationRunState.admission;
+      return (
+        replayUnsafeActivity ||
+        (admission?.status === "accepted" && admission.mode === "steer") ||
+        (admission?.status === "skipped" && admission.reason === "question-response-indeterminate")
+      );
+    },
     turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
-  const replyOperationRunState: ReplyOperationRunState =
-    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
@@ -192,6 +202,7 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
+    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -229,7 +240,7 @@ export async function gatherDispatchRequest(
   };
 
   const markInboundDedupeReplayUnsafe = () => {
-    state.inboundDedupeReplayUnsafe = true;
+    replayUnsafeActivity = true;
   };
 
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -480,9 +491,11 @@ export async function gatherDispatchRequest(
       stageRemoteInboundMediaIfNeeded({
         ctx: hookCtx,
         cfg,
+        agentId: sessionAgentId,
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",
+        abortSignal: getPreDispatchAbortSignal(),
       }),
     );
     if (staged) {
@@ -534,6 +547,7 @@ export async function gatherDispatchRequest(
     notePreparedSession,
     resolvePreparedTranscriptBinding,
     sessionAgentId,
+    noteRunVerbosity: verboseProgress.noteRunVerbosity,
     shouldEmitVerboseProgress,
     shouldEmitFullVerboseProgress,
     replyRoute,

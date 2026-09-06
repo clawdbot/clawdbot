@@ -44,7 +44,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.3.16"
+        "typebox": "1.3.18"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"

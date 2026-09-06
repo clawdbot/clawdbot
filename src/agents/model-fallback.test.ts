@@ -16,9 +16,11 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
+import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -78,7 +80,6 @@ vi.mock("../infra/file-lock.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
 const providerModelNormalizationMock = vi.hoisted(() => ({
@@ -841,55 +842,6 @@ describe("runWithModelFallback", () => {
 
     expect(error).toMatchObject({ reason: "auth", status: 401, code });
     expect(error.attempts).toMatchObject([{ code }, { code }]);
-  });
-
-  it("does not replay CLI max-turn failures on configured fallback models", async () => {
-    const failure = new FailoverError(
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
-      {
-        provider: "claude-cli",
-        model: "sonnet",
-        reason: "unknown",
-        code: "cli_max_turns",
-      },
-    );
-    const run = vi.fn().mockRejectedValue(failure);
-
-    await expect(
-      runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
-        provider: "claude-cli",
-        model: "sonnet",
-        run,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not replay aggregate failures containing a CLI max-turn stop", async () => {
-    const maxTurns = new FailoverError("max turns", {
-      provider: "claude-cli",
-      model: "sonnet",
-      reason: "unknown",
-      code: "cli_max_turns",
-    });
-    const failure = new AggregateError(
-      [maxTurns, new Error("fork successor persistence failed")],
-      "CLI turn failed and its fork successor could not be persisted",
-    );
-    const run = vi.fn().mockRejectedValue(failure);
-
-    await expect(
-      runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
-        provider: "claude-cli",
-        model: "sonnet",
-        run,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
@@ -2385,6 +2337,22 @@ describe("runWithModelFallback", () => {
           }),
         }),
     ],
+    [
+      "active turn claim",
+      () =>
+        Object.assign(new Error("session already has an active turn claim"), {
+          name: "ActiveTurnClaimError",
+        }),
+    ],
+    [
+      "wrapped active turn claim",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("session already has an active turn claim"), {
+            name: "ActiveTurnClaimError",
+          }),
+        }),
+    ],
   ])("aborts fallback on %s worker coordination failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
@@ -2599,39 +2567,54 @@ describe("runWithModelFallback", () => {
     expect(error.attempts[0]?.error).not.toBe(rawError);
   });
 
-  it("preserves structured timeout attribution after fallback exhaustion", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["google/gemini-3-pro-preview"],
+  it.each([false, true])(
+    "attributes the final failed candidate after fallback (watchdog=%s)",
+    async (watchdog) => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-7",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
           },
         },
-      },
-    });
-    const run = vi.fn().mockRejectedValue(
-      new FailoverError("CLI produced no output", {
-        reason: "timeout",
-      }),
-    );
-    const error = requireFallbackSummaryError(
-      await captureRejection(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          run,
-        }),
-      ),
-    );
+      });
+      const timeout = createCliTimeoutError(
+        {},
+        {
+          mode: "no-output",
+          timeoutSeconds: 30,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      );
+      const providerFailure = Object.assign(new Error("500 upstream failure"), { status: 500 });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(watchdog ? providerFailure : timeout)
+        .mockRejectedValueOnce(watchdog ? timeout : providerFailure);
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            run,
+          }),
+        ),
+      );
 
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
-      stopReason: "timeout",
-      timeoutPhase: "provider",
-    });
-  });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(error.attempts.map(({ status }) => status)).toEqual(
+        watchdog ? [500, 408] : [408, 500],
+      );
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual(
+        watchdog ? { stopReason: "timeout", timeoutPhase: "provider" } : {},
+      );
+    },
+  );
 
   it("carries request attribution through exhausted fallback summaries", async () => {
     const cfg = makeCfg({
@@ -3351,6 +3334,33 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("plans requested and fallback routes without provider runtime hooks when normalization is disabled", () => {
+    const normalize = providerModelNormalizationMock.normalizeProviderModelIdWithRuntime;
+    normalize.mockImplementation(() => {
+      throw new Error("runtime hook entered pure planning");
+    });
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: { primary: "custom/primary", fallbacks: ["custom/fallback"] },
+              models: { "custom/fallback": { alias: "other" } },
+            },
+          },
+        }),
+        provider: "custom",
+        model: "primary",
+        requestedRouteResolution: "resolved",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual([
+      { provider: "custom", model: "primary" },
+      { provider: "custom", model: "fallback" },
+    ]);
+    expect(normalize).not.toHaveBeenCalled();
+  });
+
   it("treats normalized default refs as primary and keeps configured fallback chain", () => {
     const cfg = makeCfg({
       agents: {
@@ -4056,6 +4066,42 @@ describe("runWithModelFallback", () => {
     ).toEqual([
       { provider: "anthropic", model: "claude-opus-4-5" },
       { provider: "anthropic", model: "claude-haiku-3-5" },
+    ]);
+  });
+
+  it("keeps the configured-primary tail when inherited fallbacks stay unset", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    // Reply/command preparation must project inherited fallbacks to `undefined`
+    // so the candidate resolver owns the ladder and appends the configured
+    // primary as the final candidate (C -> B -> A, not C -> B).
+    const fallbacksOverride = resolveEffectiveModelFallbacks({
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: false,
+    });
+    expect(fallbacksOverride).toBeUndefined();
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride,
+      }),
+    ).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+      { provider: "openai", model: "gpt-4.1-mini" },
     ]);
   });
 
@@ -5286,131 +5332,6 @@ describe("runWithModelFallback", () => {
           abortSignal: controller.signal,
         }),
       ).rejects.toBe(rateLimitLikeError);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: job execution timed out");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats phase-suffixed cron timeout reason as terminal (covers `(last phase: ...)` variant)", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: job execution timed out (last phase: model_call_started)");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats isolated-agent setup-timeout (and phase suffix) as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort(
-        "cron: isolated agent setup timed out before runner start (last phase: workspace_provision)",
-      );
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats isolated-agent pre-execution stall (and phase suffix) as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort(
-        "cron: isolated agent run stalled before execution start (last phase: runner_ready)",
-      );
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats bare isolated-agent pre-execution stall as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const controller = new AbortController();
-      controller.abort("cron: isolated agent run stalled before execution start");
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
-
-      expect(run).toHaveBeenCalledTimes(1);
-    });
-
-    it("treats an Error whose .message matches a known terminal string as terminal", async () => {
-      const cfg = makeCfg();
-      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
-
-      const wrapped = new Error("cron: job execution timed out");
-      const controller = new AbortController();
-      controller.abort(wrapped);
-
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          run,
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBeInstanceOf(Error);
 
       expect(run).toHaveBeenCalledTimes(1);
     });

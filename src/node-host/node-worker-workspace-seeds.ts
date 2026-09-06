@@ -1,14 +1,82 @@
 import type fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import {
+  MAX_WORKSPACE_GIT_CANDIDATES,
+  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+} from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkerWorkspaceSeedInput } from "../worker/node-workspace-protocol.js";
+import {
+  selectWorkspaceSeedsToPrune,
+  WORKSPACE_SEED_RETENTION,
+} from "../worker/workspace-seed-retention.js";
 
-const MAX_SEED_ENTRIES = 6;
-const SEED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const SEED_TEMP_RETENTION_MS = 60 * 60 * 1_000;
 const seedQueue = new KeyedAsyncQueue();
+
+export async function copyNodeWorkerProjectSeedObjects(params: {
+  seedsRoot: string;
+  gatewayNamespace: string;
+  seedKey: string;
+  workspaceDir: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  const root = await fsp.realpath(params.seedsRoot).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!root) {
+    return false;
+  }
+  const namespaceDir = path.join(root, params.gatewayNamespace);
+  const seedDir = path.join(namespaceDir, params.seedKey);
+  return await seedQueue.enqueue(seedDir, async () => {
+    if (
+      !(await readSeedDirectory(root, namespaceDir)) ||
+      !(await readSeedDirectory(namespaceDir, seedDir))
+    ) {
+      return false;
+    }
+    const gitDir = path.join(seedDir, ".git");
+    const objectsDir = path.join(gitDir, "objects");
+    if (
+      !(await readSeedDirectory(seedDir, gitDir)) ||
+      !(await readSeedDirectory(gitDir, objectsDir))
+    ) {
+      throw new Error("Prepared project seed has no Git objects");
+    }
+    let bytes = 0;
+    let entries = 0;
+    // Only objects cross this boundary. Recreate config/index/refs locally and
+    // omit info (including alternates), which can reference another repository.
+    await fsp.cp(objectsDir, path.join(params.workspaceDir, ".git", "objects"), {
+      recursive: true,
+      filter: async (source) => {
+        params.signal?.throwIfAborted();
+        if (path.relative(objectsDir, source).split(path.sep)[0] === "info") {
+          return false;
+        }
+        const stat = await fsp.lstat(source);
+        if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+          throw new Error("Prepared project seed contains an unsafe Git object");
+        }
+        bytes += stat.isFile() ? stat.size : 0;
+        if (
+          ++entries > MAX_WORKSPACE_GIT_CANDIDATES ||
+          bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES
+        ) {
+          throw new Error("Prepared project seed Git objects exceed the transfer limit");
+        }
+        return true;
+      },
+    });
+    params.signal?.throwIfAborted();
+    return true;
+  });
+}
 
 async function readSeedDirectory(parent: string, target: string): Promise<fs.Stats | undefined> {
   let stats: fs.Stats;
@@ -38,34 +106,34 @@ async function removeSeedDirectory(root: string, target: string): Promise<void> 
   }
 }
 
-async function pruneWorkspaceSeeds(root: string, namespaceDir: string): Promise<void> {
-  const entries: Array<{ target: string; mtimeMs: number; temporary: boolean }> = [];
+async function pruneWorkspaceSeeds(
+  root: string,
+  namespaceDir: string,
+  preserveKey: string,
+): Promise<void> {
+  const entries: Array<{ name: string; mtimeMs: number }> = [];
   for (const entry of await fsp.readdir(namespaceDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^(?:[a-f0-9]{64}|\.tmp-[a-f0-9]{64}-.+)$/u.test(entry.name)) {
+    if (!entry.isDirectory()) {
       continue;
     }
     const target = path.join(namespaceDir, entry.name);
     const stats = await readSeedDirectory(namespaceDir, target);
     if (stats) {
-      entries.push({ target, mtimeMs: stats.mtimeMs, temporary: entry.name.startsWith(".tmp-") });
+      entries.push({ name: entry.name, mtimeMs: stats.mtimeMs });
     }
   }
-  let retained = 0;
-  const now = Date.now();
-  const newest = entries.toSorted(
-    (left, right) => right.mtimeMs - left.mtimeMs || left.target.localeCompare(right.target),
-  );
-  for (const entry of newest) {
-    const expired =
-      now - entry.mtimeMs > (entry.temporary ? SEED_TEMP_RETENTION_MS : SEED_RETENTION_MS);
-    if (!expired && (entry.temporary || ++retained <= MAX_SEED_ENTRIES)) {
-      continue;
-    }
-    await seedQueue.enqueue(entry.target, async () => {
-      const current = await readSeedDirectory(namespaceDir, entry.target);
+  for (const entry of selectWorkspaceSeedsToPrune(
+    entries,
+    WORKSPACE_SEED_RETENTION,
+    Date.now(),
+    preserveKey,
+  )) {
+    const target = path.join(namespaceDir, entry.name);
+    await seedQueue.enqueue(target, async () => {
+      const current = await readSeedDirectory(namespaceDir, target);
       // Apply/store can refresh a seed after enumeration; eviction shares their lock.
       if (current?.mtimeMs === entry.mtimeMs) {
-        await removeSeedDirectory(root, entry.target);
+        await removeSeedDirectory(root, target);
       }
     });
   }
@@ -119,7 +187,7 @@ export async function runNodeWorkerWorkspaceSeed(params: {
     return "stored" as const;
   });
   if (result === "stored") {
-    await pruneWorkspaceSeeds(root, namespaceDir);
+    await pruneWorkspaceSeeds(root, namespaceDir, seed.key);
   }
   return result;
 }

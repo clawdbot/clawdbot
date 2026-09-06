@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -293,6 +294,54 @@ describe("thread binding lifecycle", () => {
     }
     return binding;
   };
+
+  it.each([false, true])(
+    "ignores stale sweep results after rebinding (restart=%s)",
+    async (restart) => {
+      vi.useFakeTimers();
+      const probe = createDeferred<void>();
+      let manager = createDefaultSweeperManager();
+      try {
+        await bindDefaultThreadTarget(manager);
+        hoisted.restGet.mockImplementationOnce(async () => {
+          await probe.promise;
+          return {
+            id: "thread-1",
+            type: 11,
+            parent_id: "parent-1",
+            thread_metadata: { archived: true },
+          };
+        });
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(hoisted.restGet).toHaveBeenCalledTimes(1);
+
+        if (restart) {
+          manager.stop();
+          manager = createDefaultSweeperManager();
+        }
+        await manager.bindTarget({
+          threadId: "thread-1",
+          channelId: "parent-1",
+          targetKind: "subagent",
+          targetSessionKey: "agent:main:subagent:replacement",
+          agentId: "main",
+          webhookId: "wh-1",
+          webhookToken: "tok-1",
+        });
+        probe.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
+          "agent:main:subagent:replacement",
+        );
+        expect(hoisted.sendMessageDiscord).not.toHaveBeenCalled();
+      } finally {
+        probe.resolve();
+        manager.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     {
@@ -1025,23 +1074,27 @@ describe("thread binding lifecycle", () => {
     expect(usedStartupCfg).toBe(false);
   });
 
-  it("refreshes manager token when an existing manager is reused", async () => {
-    createTestThreadBindingManager({
+  it.each([false, true])("keeps refreshed tokens after stale cleanup=%s", async (lateStop) => {
+    const initialOptions = {
       accountId: "runtime",
       token: "token-old",
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
-    });
+    };
+    const initial = createTestThreadBindingManager(initialOptions);
+    if (lateStop) {
+      initial.stop();
+      createTestThreadBindingManager(initialOptions);
+    }
     const manager = createTestThreadBindingManager({
-      accountId: "runtime",
+      ...initialOptions,
       token: "token-new",
-      persist: false,
-      enableSweeper: false,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
     });
+    if (lateStop) {
+      initial.stop();
+    }
 
     hoisted.createThreadDiscord.mockClear();
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-token-refresh" });
@@ -1254,66 +1307,69 @@ describe("thread binding lifecycle", () => {
     expect(hoisted.restPost).not.toHaveBeenCalled();
   });
 
-  it("preserves direct-binding metadata when rebinding the same conversation", async () => {
-    createTestThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      createTestThreadBindingManager({
         accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        agentId: "codex",
+        persist: false,
+        enableSweeper: false,
+        idleTimeoutMs: 24 * 60 * 60 * 1000,
+        maxAgeMs: 0,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "owner-plugin",
+          pluginRoot: "/plugins/owner-plugin",
+          agentId: "previous-agent",
+          boundBy: "system",
+        },
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: replace ? "agent:main:acp:replacement" : "plugin-binding:owner-plugin:dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        },
+        placement: "current",
+        metadata: {
+          label: "updated",
+        },
+      });
+
+      const resolved = requireRecord(
+        getSessionBindingService().resolveByConversation({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:1177378744822943744",
+        }),
+        "resolved binding",
+      );
+      expectFields(requireRecord(resolved.metadata, "resolved metadata"), "resolved metadata", {
+        pluginBindingOwner: replace ? undefined : "plugin",
+        pluginId: replace ? undefined : "owner-plugin",
+        pluginRoot: replace ? undefined : "/plugins/owner-plugin",
+        agentId: replace ? "main" : "previous-agent",
         boundBy: "system",
-      },
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      placement: "current",
-      metadata: {
-        label: "codex-dm",
-      },
-    });
-
-    const resolved = requireRecord(
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      }),
-      "resolved binding",
-    );
-    expectFields(requireRecord(resolved.metadata, "resolved metadata"), "resolved metadata", {
-      pluginBindingOwner: "plugin",
-      pluginId: "openclaw-codex-app-server",
-      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      agentId: "codex",
-      boundBy: "system",
-      label: "codex-dm",
-    });
-    expect(hoisted.restGet).not.toHaveBeenCalled();
-    expect(hoisted.restPost).not.toHaveBeenCalled();
-  });
+        label: "updated",
+      });
+      expect(hoisted.restGet).not.toHaveBeenCalled();
+      expect(hoisted.restPost).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps overlapping thread ids isolated per account", async () => {
     const a = createTestThreadBindingManager({

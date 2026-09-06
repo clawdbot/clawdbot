@@ -221,8 +221,12 @@ function extractHeadings(raw) {
     const trimmed = rawLine.trim();
     const fenceMatch = /^(?<marker>`{3,}|~{3,})/u.exec(trimmed);
     if (fenceMatch) {
-      const marker = fenceMatch.groups.marker[0];
-      fenceMarker = fenceMarker === marker ? null : (fenceMarker ?? marker);
+      const marker = fenceMatch.groups.marker;
+      if (!fenceMarker) {
+        fenceMarker = marker;
+      } else if (marker[0] === fenceMarker[0] && marker.length >= fenceMarker.length) {
+        fenceMarker = null;
+      }
       continue;
     }
     if (fenceMarker) {

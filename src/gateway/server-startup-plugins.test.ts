@@ -25,25 +25,23 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
-const pluginManifestRegistry = vi.hoisted(
-  (): PluginManifestRegistry => ({
-    plugins: [
-      {
-        id: "telegram",
-        origin: "bundled",
-        rootDir: "/package/dist/extensions/telegram",
-        source: "/package/dist/extensions/telegram/index.js",
-        manifestPath: "/package/dist/extensions/telegram/package.json",
-        channels: ["telegram"],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-      },
-    ],
-    diagnostics: [],
-  }),
-);
+const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
+  plugins: [
+    {
+      id: "telegram",
+      origin: "bundled",
+      rootDir: "/package/dist/extensions/telegram",
+      source: "/package/dist/extensions/telegram/index.js",
+      manifestPath: "/package/dist/extensions/telegram/package.json",
+      channels: ["telegram"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+    },
+  ],
+  diagnostics: [],
+}));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -62,6 +60,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
+    bundledManifestRegistry: pluginManifestRegistry,
     plugins: [],
     diagnostics: [],
     byPluginId: new Map(),
@@ -75,6 +74,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -98,6 +98,7 @@ const pluginLookUpTableMetrics = vi.hoisted(() => ({
 }));
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
+    ...pluginMetadataSnapshot,
     manifestRegistry: pluginManifestRegistry,
     startup: {
       pluginIds: ["telegram"] as string[],
@@ -125,6 +126,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
   tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/workspace",
+}));
+
+vi.mock("../agents/workspace-state-dirs.js", () => ({
+  assertConfiguredWorkspaceStateReady: () => {},
 }));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
@@ -311,6 +316,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadGatewayStartupPlugins.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
+      ...pluginMetadataSnapshot,
       manifestRegistry: pluginManifestRegistry,
       startup: {
         pluginIds: ["telegram"] as string[],
@@ -479,7 +485,9 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
     const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
     loadPluginLookUpTable.mockReturnValueOnce({
+      ...pluginMetadataSnapshot,
       manifestRegistry: emptyManifestRegistry,
+      bundledManifestRegistry: emptyManifestRegistry,
       startup: {
         pluginIds: [],
         channelPluginIds: [],

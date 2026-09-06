@@ -8,7 +8,6 @@ import {
   handleDiscordMessageAction,
   requestDiscord,
 } from "@openclaw/discord/api.js";
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
@@ -286,7 +285,7 @@ export const discordQaStatusReactionsToolOnlyScenario: DiscordQaScenarioImplemen
         "Think briefly, then reply with only this exact marker:",
         token,
       ].join(" "),
-      expectedSequence: ["👀", DEFAULT_EMOJIS.thinking, DEFAULT_EMOJIS.done],
+      expectedSequence: ["👀"],
     };
   },
 };

@@ -26,13 +26,17 @@ import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
 
 function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
@@ -70,13 +74,14 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 
 function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   const persistence = { runtimeEpoch: "approval-handler-test", databaseOptions };
+  const execOptions: ExecApprovalManagerOptions<ExecApprovalRequestPayload> = {
+    approvalKind: "exec",
+    persistence,
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+  };
   const managers = {
-    exec: new ExecApprovalManager<ExecApprovalRequestPayload>({
-      approvalKind: "exec",
-      persistence,
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
-    }),
+    exec: new ExecApprovalManager(execOptions),
     plugin: new ExecApprovalManager<PluginApprovalRequestPayload>({
       approvalKind: "plugin",
       persistence,
@@ -291,8 +296,9 @@ describe("unified approval handlers", () => {
       }
     }
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
+      closeOpenClawStateDatabaseByPath(path.join(dir, "state.sqlite"));
       fs.rmSync(dir, { force: true, recursive: true });
     }
   });
@@ -333,6 +339,46 @@ describe("unified approval handlers", () => {
     expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
       expect.objectContaining({ approvalKind: "system-agent" }),
     );
+  });
+
+  it("resolves a system-agent proposal through its channel reviewer custody", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:channel-reviewer");
+    prepareApprovalChannelCustodyMock.mockImplementation(
+      ({ approvalKind }: { approvalKind: string }) =>
+        approvalKind === "system-agent"
+          ? {
+              resolverId: "telegram:ops",
+              authorizes: (record: { request: SystemAgentApprovalRequestPayload }) =>
+                record.request.sessionId === "delegation-1",
+            }
+          : null,
+    );
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "system-agent",
+        decision: "allow-once",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "allowed", decision: "allow-once" },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
   });
 
   it("checks live channel custody before the canonical resolution CAS", async () => {
@@ -780,17 +826,19 @@ describe("unified approval handlers", () => {
     await expect(pending.decision).resolves.toBe("deny");
   });
 
-  it.each([
+  it.for([
     ["approval.get", String.fromCharCode(0xd800)],
     ["approval.resolve", String.fromCharCode(0xd800)],
     ["approval.get", "."],
     ["approval.resolve", ".."],
-  ] as const)("rejects unsafe approval id through %s: %s", async (method, id) => {
+  ] as const)("rejects unsafe approval id through %s: %s", async ([method, id], testContext) => {
     const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unsafe-approval-id-"));
     tempDirs.push(databasePath);
     const handlers = createApprovalHandlers({
-      execApprovalManager: new ExecApprovalManager(),
-      pluginApprovalManager: new ExecApprovalManager<PluginApprovalRequestPayload>(),
+      execApprovalManager: createTestApprovalManager(testContext),
+      pluginApprovalManager: createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+      }),
       databaseOptions: { path: databasePath },
     });
 
@@ -808,15 +856,20 @@ describe("unified approval handlers", () => {
     expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
-  it.each(["approval.get", "approval.resolve"] as const)(
+  it.for(["approval.get", "approval.resolve"] as const)(
     "returns sanitized UNAVAILABLE when %s cannot read durable state",
-    async (method) => {
+    async (method, testContext) => {
       const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-broken-db-"));
       tempDirs.push(databasePath);
       const context = createContext();
       const handlers = createApprovalHandlers({
-        execApprovalManager: new ExecApprovalManager(),
-        pluginApprovalManager: new ExecApprovalManager<PluginApprovalRequestPayload>(),
+        execApprovalManager: createTestApprovalManager(testContext),
+        pluginApprovalManager: createTestApprovalManager<PluginApprovalRequestPayload>(
+          testContext,
+          {
+            approvalKind: "plugin",
+          },
+        ),
         databaseOptions: { path: databasePath },
       });
 
@@ -900,8 +953,8 @@ describe("unified approval handlers", () => {
     });
   });
 
-  it("cancels only approvals bound to the exact fenced worker claim", async () => {
-    const manager = new ExecApprovalManager({
+  it("cancels only approvals bound to the exact fenced worker claim", async (testContext) => {
+    const manager = createTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const claim = {
@@ -979,6 +1032,7 @@ describe("unified approval handlers", () => {
     expect(
       cancelAgentRuntimeBoundApprovals({
         authority: oldAuthority,
+        reason: "permission-change",
         manager: managers.exec,
         publish: () => {},
       }),
@@ -986,6 +1040,7 @@ describe("unified approval handlers", () => {
     expect(
       cancelAgentRuntimeBoundApprovals({
         authority: oldAuthority,
+        reason: "permission-change",
         manager: managers.plugin,
         publish: () => {},
       }),
@@ -993,6 +1048,8 @@ describe("unified approval handlers", () => {
 
     await expect(oldExec.decision).resolves.toBeNull();
     await expect(oldPlugin.decision).resolves.toBeNull();
+    expect(oldExec.record.resolvedBy).toBe("permission-change");
+    expect(oldPlugin.record.resolvedBy).toBe("permission-change");
     expect(managers.exec.getSnapshot(successorExec.record.id)?.resolvedAtMs).toBeUndefined();
     expect(managers.plugin.getSnapshot(successorPlugin.record.id)?.resolvedAtMs).toBeUndefined();
     managers.exec.resolve(successorExec.record.id, "deny");

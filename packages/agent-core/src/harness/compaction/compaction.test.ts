@@ -16,6 +16,21 @@ import {
 } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
+function createSummaryModel(reasoning = false): Model {
+  return {
+    id: "summary-model",
+    name: "Summary Model",
+    api: "test-api",
+    provider: "test-provider",
+    baseUrl: "https://example.test",
+    reasoning,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 8_000,
+  };
+}
+
 function createUsage(totalTokens: number): Usage {
   return {
     input: totalTokens,
@@ -339,8 +354,9 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
+    const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: latestRequest, timestamp: 1 }, 0),
       createMessageEntry(createAssistant("earlier work", createUsage(10), 2), 1),
       createMessageEntry(createBashMessage("private output ".repeat(6_000), 3, true), 2),
       createMessageEntry(createAssistant("latest", createUsage(10), 4), 3),
@@ -352,11 +368,15 @@ describe("session-entry compaction budgeting", () => {
       isSplitTurn: true,
     });
 
-    const preparation = prepareCompaction(entries, {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 1,
-    });
+    const preparation = prepareCompaction(
+      entries,
+      {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 1,
+      },
+      "unresolved",
+    );
 
     expect(preparation.ok).toBe(true);
     if (!preparation.ok || !preparation.value) {
@@ -368,6 +388,10 @@ describe("session-entry compaction budgeting", () => {
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
+    expect(preparation.value.latestUnresolvedUserRequest).toHaveLength(800);
+    expect(preparation.value.latestUnresolvedUserRequest).toMatch(
+      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
+    );
     expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
@@ -784,18 +808,7 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
 
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
+    const model = createSummaryModel();
     let consumed = false;
     const streamFn = vi.fn<StreamFn>(() => ({
       [Symbol.asyncIterator]() {
@@ -886,18 +899,7 @@ describe("generateSummary thinking options", () => {
     ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
     ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
   ])("rejects %s compaction output", async (_name, content) => {
-    const model: Model = {
-      id: "summary-model",
-      name: "Summary Model",
-      api: "test-api",
-      provider: "test-provider",
-      baseUrl: "https://example.test",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 8_000,
-    };
+    const model = createSummaryModel(true);
     const streamFn = vi.fn<StreamFn>(() => {
       const stream = createAssistantMessageEventStream();
       stream.push({
@@ -945,6 +947,14 @@ describe("generateSummary thinking options", () => {
 
 describe("split-turn compaction", () => {
   const operatorFocus = "Preserve API decisions.";
+  const runtimeContext: AgentMessage = {
+    role: "custom",
+    customType: "openclaw.runtime-context",
+    content: "PRIVATE_RUNTIME_CONTEXT",
+    display: false,
+    details: { runtimeContextCarrier: true },
+    timestamp: 1,
+  };
   it.each([
     { name: "ordinary history", history: true, prefix: false, budgets: [800] },
     { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
@@ -956,21 +966,17 @@ describe("split-turn compaction", () => {
       budgets: [800, 500],
       focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
     },
+    {
+      name: "active overflow request",
+      history: true,
+      prefix: false,
+      budgets: [800],
+      activeRequest: "finish the current deployment review",
+    },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus = operatorFocus }) => {
-      const model: Model = {
-        id: "summary-model",
-        name: "Summary Model",
-        api: "test-api",
-        provider: "test-provider",
-        baseUrl: "https://example.test",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 100_000,
-        maxTokens: 8_000,
-      };
+    async ({ history, prefix, budgets, focus = operatorFocus, activeRequest }) => {
+      const model = createSummaryModel();
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
       const usageSink = vi.fn();
@@ -992,16 +998,9 @@ describe("split-turn compaction", () => {
         const stream = createAssistantMessageEventStream();
         setTimeout(() => {
           active--;
-          const response: AssistantMessage = {
-            role: "assistant",
-            content: [{ type: "text", text: "summary" }],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createUsage(outputBudgets.length * 10 + 1),
-            stopReason: "stop",
-            timestamp: 1,
-          };
+          const usage = createUsage(outputBudgets.length * 10 + 1);
+          const response = createAssistant("summary", usage, 1);
+          response.model = model.id;
           stream.push({ type: "done", reason: "stop", message: response });
           stream.end();
         }, 5);
@@ -1010,9 +1009,14 @@ describe("split-turn compaction", () => {
       const result = await compact(
         {
           firstKeptEntryId: "kept-entry",
-          messagesToSummarize: history ? [{ role: "user", content: "history", timestamp: 1 }] : [],
-          turnPrefixMessages: prefix ? [{ role: "user", content: "prefix", timestamp: 2 }] : [],
+          messagesToSummarize: history
+            ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
+            : [],
+          turnPrefixMessages: prefix
+            ? [{ role: "user", content: "prefix", timestamp: 2 }, runtimeContext]
+            : [],
           isSplitTurn: prefix,
+          ...(activeRequest ? { latestUnresolvedUserRequest: activeRequest } : {}),
           tokensBefore: 100,
           fileOps: createFileOps(),
           settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
@@ -1036,7 +1040,21 @@ describe("split-turn compaction", () => {
       );
       for (const prompt of prompts) {
         expect(prompt).toContain(focus);
+        expect(prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
+      }
+      if (prefix) {
+        expect(prompts.at(-1)).toContain("## Original Request");
+        expect(prompts.at(-1)).not.toContain("## Goal");
+      }
+      if (history) {
+        expect(prompts[0]).toContain("## Goal");
+        expect(prompts[0]).not.toContain("## Original Request");
+      }
+      if (result.ok && activeRequest) {
+        expect(result.value.summary).toContain(
+          `## Latest unresolved user request\n${JSON.stringify(activeRequest)}`,
+        );
       }
     },
   );

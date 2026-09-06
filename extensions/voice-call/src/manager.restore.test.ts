@@ -388,7 +388,7 @@ describe("CallManager verification on restore", () => {
     },
   );
 
-  it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
+  it("keeps terminal identity when a replay key is retained or evicted", async () => {
     const storePath = createTestStorePath();
     const replayKeys = Array.from(
       { length: MAX_CALL_REPLAY_KEYS + 2 },
@@ -435,6 +435,9 @@ describe("CallManager verification on restore", () => {
       to: "+15550000001",
     });
 
-    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(manager.getActiveCalls()).toHaveLength(0);
+    expect(new Set((await manager.getCallHistory()).map((call) => call.callId))).toEqual(
+      new Set([persisted.callId]),
+    );
   });
 });

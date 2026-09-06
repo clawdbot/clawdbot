@@ -1,5 +1,5 @@
 // Normalizes provider model compatibility metadata from plugins.
-import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
+import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/tool-schema";
 import { resolveOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";

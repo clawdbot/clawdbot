@@ -1,6 +1,7 @@
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sha256File } from "../infra/directory-durability.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { root } from "../infra/fs-safe.js";
@@ -25,16 +26,6 @@ export type SnapshotArtifactDigest = {
 };
 
 type OpenFileHandle = Awaited<ReturnType<typeof fs.open>>;
-
-export function containsAsciiControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export async function hashSnapshotArtifact(snapshotDir: string): Promise<SnapshotArtifactDigest> {
   const snapshotRoot = await root(snapshotDir);

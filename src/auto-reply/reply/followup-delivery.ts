@@ -73,7 +73,10 @@ type FollowupDeliveryDecision =
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & { compactionNotice?: ReplyPayload };
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
@@ -277,6 +280,15 @@ export function resolveFollowupDeliveryDecision(params: {
     });
     payloads = [...compactionNotices, ...payloads];
   }
+  if (accounting.diagnosticsPayload && payloads.length > 0) {
+    payloads = [
+      ...payloads,
+      ...resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [accounting.diagnosticsPayload],
+      }),
+    ];
+  }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
     agentDir: turn.queued.run.agentDir,
@@ -399,6 +411,7 @@ async function sendFollowupPayloads(params: {
         payload,
         channel: originatingChannel,
         to: originatingTo,
+        agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,
@@ -415,6 +428,12 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
+      if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        logVerbose(
+          `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
+        );
+        continue;
+      }
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);

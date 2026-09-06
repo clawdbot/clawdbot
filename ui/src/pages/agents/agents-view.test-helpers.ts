@@ -1,4 +1,4 @@
-import { GitHubIdentityController } from "./github-identity-controller.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
@@ -16,7 +16,6 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    authToken: null,
     loading: false,
     error: null,
     agentsList: {
@@ -83,6 +82,7 @@ export function createAgentViewTestProps(
       error: null,
       result: null,
     },
+    onOpenGitHubConnections: () => undefined,
     githubIdentity: new GitHubIdentityController({
       requestUpdate: () => undefined,
       runExternalMutation: async () => ({

@@ -98,7 +98,7 @@ function readProviderResponseBytes(
   label: string,
   kind: string,
   opts?: ProviderResponseReadOptions,
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
     ...opts,
     chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
@@ -273,6 +273,10 @@ async function extractProviderErrorInfo(
   }).catch((error: unknown) => {
     if (error instanceof ProviderErrorBodyTimeout) {
       throw error.timeoutError;
+    }
+    // Fetch keeps its request deadline active while the response body is consumed.
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw error;
     }
     return undefined;
   });
@@ -502,7 +506,7 @@ export async function readProviderBinaryResponse(
   label: string,
   kind = "binary",
   opts?: ProviderResponseReadOptions,
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   try {
     assertProviderBinaryResponseContent(response, label, kind);
   } catch (error) {

@@ -237,6 +237,14 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+Failure is not permission to send the same payload through another path.
+Once admitted, the queue owns retry or reconciliation until its exact owner
+acknowledges or terminally retires the intent. Pending custody is not a
+delivery receipt: preserve partial receipts, and do not report an unconfirmed
+`ask_user` prompt as visible. Gateway `OUTBOUND_DELIVERY_QUEUED` responses mean
+delivery is pending and must not be resent; an ambiguous send may need
+reconciliation rather than an automatic retry.
+
 When a transport creates a thread during its first successful send, the
 outbound adapter may implement `adoptTargetFromDelivery(...)`. Return the
 typed thread ID from the platform receipt and core carries it into later
@@ -303,3 +311,20 @@ Assemble inbound reply dispatch through `dispatchChannelInboundReply(...)`
 from `channel-inbound`. Keep platform delivery in the delivery adapter; use
 `channel-outbound` for message adapters, durable sends, receipts, live
 preview, and reply pipeline options.
+
+### Migrating from channel-message
+
+`openclaw/plugin-sdk/channel-message` is a deprecated compatibility entrypoint.
+It still re-exports `channel-outbound` and preserves three dispatch aliases.
+Migrate those aliases to `openclaw/plugin-sdk/channel-inbound`:
+
+| Deprecated alias                   | Replacement                         |
+| ---------------------------------- | ----------------------------------- |
+| `hasFinalChannelTurnDispatch`      | `hasFinalInboundReplyDispatch`      |
+| `hasVisibleChannelTurnDispatch`    | `hasVisibleInboundReplyDispatch`    |
+| `resolveChannelTurnDispatchCounts` | `resolveInboundReplyDispatchCounts` |
+
+Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migration).
+This subpath is not tied to the next Plugin SDK major, and eligibility does not
+itself remove an export. External imports do not emit a runtime warning; update
+plugin imports rather than waiting for one.

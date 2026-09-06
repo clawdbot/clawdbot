@@ -1,18 +1,21 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
-import { loadChatBranches, loadChatHistory } from "./chat-history.ts";
+import { loadChatBranches } from "./chat-history-branches.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
   scheduleStoredChatOutboxRetry,
-  UNCONFIRMED_CHAT_SEND_ERROR,
   type ChatOutboxDrainDependencies,
   type QueuedChatSendOptions,
   type QueuedChatSendResult,
@@ -23,11 +26,11 @@ import {
   excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
 import { createResetSlashCommandSender } from "./chat-reset-delivery.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { cancelChatDelivery, canRestoreComposer } from "./chat-send-composer.ts";
+import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
@@ -43,6 +46,8 @@ import { isActiveLeafChangedError, requestChatSend } from "./chat-send-request.t
 import {
   formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  UNCONFIRMED_CHAT_SEND_ERROR,
+  requiresChatInputConsumption,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import {
@@ -52,11 +57,6 @@ import {
   updateChatSendAckTiming,
 } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch, refreshChatSessionListForTarget } from "./chat-session.ts";
-import {
-  INTERRUPTED_SETTINGS_WAIT_ERROR,
-  listStoredChatOutboxes,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
@@ -80,7 +80,7 @@ async function settleDeliverySettings(
   consumed: Set<Promise<boolean>>,
 ): Promise<ChatQueueItem | QueuedChatSendResult> {
   const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
+  const setState = deliveryStateWriter(host, storageMode, item.id);
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   let current = readQueuedMessageById(host, item.id);
   let pendingSettings =
@@ -102,9 +102,9 @@ async function settleDeliverySettings(
       return "failed";
     }
     if (!ready) {
-      if (routeVisible(current.agentId) && canRestoreComposer(host, options)) {
-        cancelChatDelivery(host, current, options ?? {});
-      } else if (!setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
+      const restored =
+        routeVisible(current.agentId) && restoreRejectedChatDelivery(host, current, options);
+      if (!restored && !setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
         setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       }
       host.requestUpdate?.();
@@ -119,14 +119,12 @@ function publishSettledDeliverySettings(
   host: ChatHost,
   item: ChatQueueItem,
   storageMode: QueuedChatStorageMode,
-  queueSessionKey: string,
 ): ChatQueueItem | QueuedChatSendResult {
   // Keep one non-drainable durable barrier across the complete picker tail.
   // Publishing earlier can let reconnect race a newer or cancelled selection.
   const current = deliveryStateWriter(
     host,
     storageMode,
-    queueSessionKey,
     item.id,
   )(reconnectSafeQueuedSendState(host));
   if (!current) {
@@ -193,7 +191,7 @@ async function sendQueuedChatMessage(
     return prepared;
   }
   if (consumedSettings.size) {
-    prepared = publishSettledDeliverySettings(host, prepared, storageMode, queueSessionKey);
+    prepared = publishSettledDeliverySettings(host, prepared, storageMode);
     if (typeof prepared === "string") {
       return prepared;
     }
@@ -208,7 +206,7 @@ async function sendQueuedChatMessage(
   if (!prepared.sendRunId || !prepared.sendState) {
     const sessionKey = prepared.sessionKey ?? queuedSessionKey;
     prepared =
-      updateQueuedSendItem(host, storageMode, sessionKey, prepared.id, (item) => ({
+      updateQueuedSendItem(host, storageMode, prepared.id, (item) => ({
         ...item,
         sendAttempts: item.sendAttempts ?? 0,
         sendRunId: item.sendRunId ?? generateUUID(),
@@ -228,14 +226,15 @@ async function sendQueuedChatMessage(
       text: prepared.localCommandArgs ? `/reset ${prepared.localCommandArgs}` : "/reset",
     };
   }
-  const message = prepared.intent ? prepared.text : prepared.text.trim();
+  const submitted = trimHumanMentions(prepared.text, prepared.mentions);
+  const message = prepared.intent ? prepared.text : submitted.text;
   const attachments = (queued.attachmentPayload ? queued.attachments : prepared.attachments) ?? [];
   if (!message && attachments.length === 0) {
-    removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
+    removeQueuedMessageWithoutReleasing(host, id);
     return "sent";
   }
   const sessionKey = prepared.sessionKey ?? host.sessionKey;
-  const setState = deliveryStateWriter(host, storageMode, sessionKey, id);
+  const setState = deliveryStateWriter(host, storageMode, id);
   if (options?.target) {
     const access = readChatResetTargetAccess(host, options.target);
     if (!access.allowed) {
@@ -246,8 +245,7 @@ async function sendQueuedChatMessage(
   }
   if (!host.connected || !host.client) {
     const waiting = setState("waiting-reconnect");
-    if (!waiting && canRestoreComposer(host, options)) {
-      cancelChatDelivery(host, prepared, options ?? {});
+    if (!waiting && restoreRejectedChatDelivery(host, prepared, options)) {
       return "failed";
     }
     if (!waiting) {
@@ -261,7 +259,7 @@ async function sendQueuedChatMessage(
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
   const requestStartedAtMs = controlUiNowMs();
-  const sendingItem = updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+  const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
     sendError: undefined,
@@ -285,13 +283,15 @@ async function sendQueuedChatMessage(
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
-    // Steers continue the current run, so its transient commentary and tools keep that ownership.
-    if (prepared.queueMode !== "steer" || !host.chatRunId) {
+    // Keep the current run intact until an ACK or live event owns its replacement.
+    if (!host.chatRunId) {
       resetToolStream(host);
     }
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {
       clearRunStatus: true,
+      // A send has not replaced the active run; its progress and approvals still belong to it.
+      clearIndicators: !host.chatRunId,
     });
   }
 
@@ -301,10 +301,12 @@ async function sendQueuedChatMessage(
       : options?.expectedLeafEntryId;
     const ack = await requestChatSend(host, {
       message,
+      mentions: submitted.mentions,
       attachments: attachments.length ? attachments : undefined,
       runId,
       sessionKey,
       agentId: prepared.agentId,
+      ...(prepared.sessionId ? { sessionId: prepared.sessionId } : {}),
       ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
       ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
       ...(prepared.queueMode !== "steer" && expectedLeafEntryId !== undefined
@@ -322,15 +324,18 @@ async function sendQueuedChatMessage(
       ...chatSendAckServerTimingEventFields(ack),
     });
     if (isTerminalFailureChatSendAck(ack)) {
+      if (ack.stopReason === "restart" && storageMode === "durable") {
+        setState("waiting-reconnect");
+        return "pending";
+      }
       const error = formatTerminalChatSendAckError(ack, "chat");
-      const restoreCommand =
-        options?.restoreOnTerminalFailure === true && canRestoreComposer(host, options);
       // Release in-flight ownership before publishing Retry; an immediate click
       // must not see this completed send as the run that blocks its replacement.
       finishScopedChatSending(host, scope);
-      if (restoreCommand) {
-        cancelChatDelivery(host, prepared, options ?? {});
-      } else {
+      const restoreCommand =
+        options?.restoreOnTerminalFailure === true &&
+        restoreRejectedChatDelivery(host, prepared, options);
+      if (!restoreCommand) {
         setState("failed", error);
       }
       if (isVisible()) {
@@ -364,10 +369,13 @@ async function sendQueuedChatMessage(
       });
       return "failed";
     }
-    const retireOnAck = ack.status === "ok" || storageMode === "memory";
+    const retireOnAck =
+      storageMode === "memory" ||
+      ack.messageSeq !== undefined ||
+      (ack.status === "ok" && !requiresChatInputConsumption(prepared));
     let retirementFailed = false;
     if (retireOnAck) {
-      removeQueuedMessageWithoutReleasing(host, id, sessionKey);
+      removeQueuedMessageWithoutReleasing(host, id);
       retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
     }
     if (isVisible()) {
@@ -378,6 +386,7 @@ async function sendQueuedChatMessage(
         });
         const projectedMessage = buildLocalUserMessage({
           text: message,
+          mentions: submitted.mentions,
           ...(attachments.length ? { attachments } : {}),
           createdAt: startedAt,
           runId,
@@ -411,7 +420,9 @@ async function sendQueuedChatMessage(
           publishRunStatus: false,
           armLocalTerminalReconcile: true,
         });
-        void loadChatHistory(host);
+        void loadChatHistory(host).then(() =>
+          flushStoredChatOutbox(host, chatOutboxDrainDependencies),
+        );
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
         // A steer ACK identifies its client operation, not the active model run.
         if (prepared.queueMode !== "steer" || !host.chatRunId) {
@@ -442,17 +453,13 @@ async function sendQueuedChatMessage(
       ? t("chat.sendErrors.activeLeafChanged")
       : formatConnectError(err);
     if (err instanceof GatewayPayloadLimitError) {
-      if (canRestoreComposer(host, options)) {
-        cancelChatDelivery(host, prepared, options ?? {});
-      } else {
+      if (!restoreRejectedChatDelivery(host, prepared, options)) {
         setState("failed", error);
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
       recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
       return "failed";
     }
-    const restoreCommand =
-      options?.restoreOnTerminalFailure === true && canRestoreComposer(host, options);
     const recoverable =
       !activeLeafChanged &&
       (err instanceof GatewayRequestError
@@ -472,11 +479,9 @@ async function sendQueuedChatMessage(
           }
         : {};
       if (storageMode === "memory") {
-        const restore = safelyRejected && canRestoreComposer(host, options);
-        if (restore) {
-          cancelChatDelivery(host, prepared, options ?? {});
-        } else {
-          updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+        const restore = safelyRejected && restoreRejectedChatDelivery(host, prepared, options);
+        if (!restore) {
+          updateQueuedSendItem(host, storageMode, id, (item) => ({
             ...item,
             ...rollbackAttempt,
             sendError: safelyRejected ? error : UNCONFIRMED_CHAT_SEND_ERROR,
@@ -494,18 +499,17 @@ async function sendQueuedChatMessage(
         });
         return restore ? "failed" : "pending";
       }
-      const waiting = updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+      const waiting = updateQueuedMessage(host, id, (item) => ({
         ...item,
         ...rollbackAttempt,
         sendError: error,
         sendState: "waiting-reconnect",
       }));
       if (!waiting) {
-        const restore = failedBeforeTransport && canRestoreComposer(host, options);
-        if (restore) {
-          cancelChatDelivery(host, prepared, options ?? {});
-        } else {
-          updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+        const restore =
+          failedBeforeTransport && restoreRejectedChatDelivery(host, prepared, options);
+        if (!restore) {
+          updateQueuedMessage(host, id, (item) => ({
             ...item,
             sendError: OFFLINE_QUEUE_STORAGE_ERROR,
             sendState: "failed",
@@ -540,9 +544,10 @@ async function sendQueuedChatMessage(
     }
     // Keep the retry action behind terminal ownership release, as above.
     finishScopedChatSending(host, scope);
-    if (restoreCommand) {
-      cancelChatDelivery(host, prepared, options ?? {});
-    } else {
+    const restoreCommand =
+      options?.restoreOnTerminalFailure === true &&
+      restoreRejectedChatDelivery(host, prepared, options);
+    if (!restoreCommand) {
       setState("failed", error);
     }
     if (isVisible()) {
@@ -582,7 +587,7 @@ export async function deliverChatQueueItem(
       candidate.queue.some((entry) => entry.id === item.id),
     );
     if (!outbox) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      // Admission succeeded; removal or another drain can retire the row while we yield.
       return "pending";
     }
     let drainResult: QueuedChatSendResult | undefined;
@@ -616,7 +621,7 @@ export async function deliverChatQueueItem(
         );
       }
       if (typeof admitted !== "string") {
-        admitted = publishSettledDeliverySettings(host, admitted, storageMode, sessionKey);
+        admitted = publishSettledDeliverySettings(host, admitted, storageMode);
       }
       if (typeof admitted === "string") {
         drainResult = admitted;
@@ -660,10 +665,10 @@ export async function deliverChatQueueItem(
     result = drainResult ?? "pending";
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
-    setLastActiveSessionKey(host, sessionKey);
     resetChatInputHistoryNavigation(host);
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
+      host.chatMentions = options.previousMentions ?? [];
     }
     if (options.restoreAttachments && options.previousAttachments?.length) {
       host.chatAttachments = options.previousAttachments;

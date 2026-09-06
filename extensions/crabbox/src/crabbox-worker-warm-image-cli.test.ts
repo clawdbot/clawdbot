@@ -1,11 +1,14 @@
 import { Command } from "commander";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
 import {
   openCrabboxWarmImageStore,
-  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,14 +31,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function pendingCapture(): WarmImageRecord {
+function pendingCapture(): WarmProfileRecord {
   const now = Date.now();
   return {
-    checkpointId: "chk_last_good",
-    kind: "native",
-    state: "available",
-    createdAtMs: now - 86_400_000,
-    lastUsedAtMs: now,
+    version: 2,
+    allocations: {},
+    image: {
+      checkpointId: "chk_last_good",
+      kind: "native",
+      state: "available",
+      createdAtMs: now - 86_400_000,
+      lastUsedAtMs: now,
+    },
     operation: {
       type: "capture",
       id: SELECTOR,
@@ -54,6 +61,34 @@ async function runCli(...args: string[]) {
 }
 
 describe("Crabbox warm-image CLI", () => {
+  it("recovers a legacy allocation only after acknowledgment of the exact unchanged row", async () => {
+    const legacy = createPluginStateSyncKeyedStoreForTests<{ machineClass: string }>("crabbox", {
+      namespace: "warm-leases",
+      maxEntries: 256,
+    });
+    legacy.register("cbx_legacy", { machineClass: "standard" });
+    await runCli("--json");
+    const selector = JSON.parse(output).legacyLeases[0].selector as string;
+    expect(JSON.parse(output).legacyLeases[0]).toMatchObject({
+      leaseId: "cbx_legacy",
+      machineClass: "standard",
+    });
+    await expect(runCli("--recover", selector)).rejects.toThrow("--acknowledge-provider-cleanup");
+    legacy.register("cbx_legacy", { machineClass: "fast" });
+    await expect(runCli("--recover", selector, "--acknowledge-provider-cleanup")).rejects.toThrow(
+      "selector is absent or changed",
+    );
+    expect(legacy.lookup("cbx_legacy")).toEqual({ machineClass: "fast" });
+    output = "";
+    await runCli("--json");
+    await runCli(
+      "--recover",
+      JSON.parse(output).legacyLeases[0].selector,
+      "--acknowledge-provider-cleanup",
+    );
+    expect(legacy.lookup("cbx_legacy")).toBeUndefined();
+  });
+
   it("inspects retained capture ownership after reopening SQLite without changing it", async () => {
     const record = pendingCapture();
     openCrabboxWarmImageStore().register("profile", record);
@@ -62,13 +97,15 @@ describe("Crabbox warm-image CLI", () => {
     await runCli("--json");
 
     expect(JSON.parse(output)).toEqual({
+      legacyLeases: [],
       images: [
         {
           profileKey: "profile",
           checkpointId: "chk_last_good",
           state: "available",
-          createdAtMs: record.createdAtMs,
-          lastUsedAtMs: record.lastUsedAtMs,
+          createdAtMs: record.image!.createdAtMs,
+          lastUsedAtMs: record.image!.lastUsedAtMs,
+          allocations: {},
           capture: {
             selector: SELECTOR,
             startedAtMs:
@@ -111,9 +148,9 @@ describe("Crabbox warm-image CLI", () => {
 
   it("acknowledges only the selected capture and preserves its last-good checkpoint and other retirement", async () => {
     const record = pendingCapture();
-    const retiring: WarmImageRecord = {
+    const retiring: WarmProfileRecord = {
       ...record,
-      checkpointId: "chk_replacement",
+      image: { ...record.image!, checkpointId: "chk_replacement" },
       operation: { type: "retire", checkpointId: "chk_predecessor" },
     };
     openCrabboxWarmImageStore().register("profile", record);

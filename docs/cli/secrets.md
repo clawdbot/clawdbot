@@ -5,7 +5,7 @@ read_when:
   - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "Secrets"
+title: "Secrets CLI"
 ---
 
 # `openclaw secrets`
@@ -193,6 +193,8 @@ openclaw secrets configure --json
 ```
 
 Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply.
+
+For `env` and `store` refs, no provider entry is required when `provider` matches that source's effective default: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. Other aliases and all `file`/`exec` refs require a matching `secrets.providers` entry.
 
 Flags:
 

@@ -1,6 +1,8 @@
 // Approval request delivery fans out external routes while preserving the
 // approval record's visibility boundary for mobile and browser push targets.
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { runWithRetainedGatewayRootWork } from "../../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { isApprovalRecordVisibleToClient } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -22,6 +24,10 @@ type ApprovalDeliveryLogContext = {
   >;
   logGateway?: { error?: (message: string) => void };
 };
+
+function trackApprovalDelivery<T>(run: () => Promise<T>): Promise<T> {
+  return trackAsyncWork(() => runWithRetainedGatewayRootWork(run));
+}
 
 function resolveFirstSuccessfulApprovalDelivery(
   deliveryTasks: readonly Promise<boolean>[],
@@ -67,7 +73,7 @@ export function runApprovalRequestDeliveries<TPayload>(params: {
     }
     const [run, errorLabel] = delivery;
     return [
-      run(isTargetVisible).catch((err: unknown) => {
+      trackApprovalDelivery(() => run(isTargetVisible)).catch((err: unknown) => {
         params.context.logGateway?.error?.(`${errorLabel}: ${String(err)}`);
         return false;
       }),
@@ -77,7 +83,7 @@ export function runApprovalRequestDeliveries<TPayload>(params: {
     const webPushDelivery = params.context.approvalWebPushDelivery?.handleRequested(params.record);
     if (webPushDelivery !== false && webPushDelivery !== undefined) {
       deliveryTasks.push(
-        Promise.resolve(webPushDelivery).catch((err: unknown) => {
+        trackApprovalDelivery(() => Promise.resolve(webPushDelivery)).catch((err: unknown) => {
           params.context.logGateway?.error?.(`approval Web Push request failed: ${String(err)}`);
           return false;
         }),

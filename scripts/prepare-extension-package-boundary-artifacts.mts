@@ -12,10 +12,7 @@ import {
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   BOUNDARY_CACHE_ROOT,
   BOUNDARY_PLUGIN_UNITS,
@@ -23,21 +20,25 @@ import {
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
 } from "./lib/extension-boundary-inputs.mts";
-import { isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
+import { ensureRepoNodeModulesLink, isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { prepareTsgoCommand } from "./run-tsgo.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mts");
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
+  bin?: string;
+  shell?: boolean;
+  windowsVerbatimArguments?: boolean;
   abortController?: AbortController;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdoutLine?: (line: string) => boolean;
 };
-type NodeStep = Pick<NodeStepParams, "abortKillGraceMs" | "env" | "onStdoutLine"> & {
+type NodeStep = Omit<NodeStepParams, "abortController"> & {
   args: string[];
   label: string;
   timeoutMs: number;
@@ -100,15 +101,19 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
+  if (params.abortController?.signal.aborted || nodeStepParentSignal) {
+    throw new Error(`${label} canceled before starting`);
+  }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
   const stdoutWriter = createPrefixedOutputWriter(label, process.stdout, params.onStdoutLine);
   const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
   const command = runManagedCommand({
-    bin: process.execPath,
+    bin: params.bin ?? process.execPath,
     args,
     cwd: repoRoot,
     env: params.env ? { ...process.env, ...params.env } : process.env,
-    shell: false,
+    shell: params.shell ?? false,
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
     stdio: ["ignore", "pipe", "pipe"],
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
@@ -169,10 +174,8 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   const results = await Promise.allSettled(
     steps.map((step) =>
       runNodeStep(step.label, step.args, step.timeoutMs, {
+        ...step,
         abortController,
-        abortKillGraceMs: step.abortKillGraceMs,
-        env: step.env,
-        onStdoutLine: step.onStdoutLine,
       }),
     ),
   );
@@ -209,11 +212,26 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 
   for (const step of steps) {
-    await runNodeStep(step.label, step.args, step.timeoutMs, {
-      env: step.env,
-      onStdoutLine: step.onStdoutLine,
-    });
+    await runNodeStep(step.label, step.args, step.timeoutMs, step);
   }
+}
+
+async function runTsgoSteps(steps: NodeStep[]) {
+  const commands = steps.flatMap((step) => {
+    const command = prepareTsgoCommand(step.args, step.env ?? process.env, repoRoot);
+    return command
+      ? [
+          {
+            ...step,
+            ...command,
+            timeoutMs: Math.min(step.timeoutMs, command.timeoutMs ?? step.timeoutMs),
+          },
+        ]
+      : [];
+  });
+  // The native bin stays in this owner's group; no nested CLI supervisor can escape its join.
+  await runNodeSteps(commands);
+  return new Set(commands.map((command) => command.label));
 }
 
 async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
@@ -235,7 +253,13 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
       fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
-      return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
+      if (unit.id !== "plugin-sdk") {
+        // Relocated declarations still resolve third-party types through their package owner.
+        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
+          cwd: resolve(repoRoot, unit.outDir),
+        });
+      }
+      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
     }),
   );
   for (const batch of batches) {
@@ -290,12 +314,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         return Object.assign(unit, { recordPath, buildInfo, args, outputs, startedAt: 0 });
       })
       .filter((unit) => unit !== null);
-    await runNodeSteps(
+    const emitted = await runTsgoSteps(
       pending.map((unit) => {
         unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
-          args: distArtifactEntryArgs(runTsgoScript, unit.args.slice(1)),
+          args: unit.args.slice(1),
           timeoutMs: unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
           onStdoutLine(line: string) {
             if (!line.startsWith("TSFILE: ")) {
@@ -312,25 +336,27 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     }
     const after = new BoundaryInputSnapshot(repoRoot);
     // Join and validate every owner before publishing any success in this batch.
-    const completed = pending.map((unit) => {
-      const outputs = [...unit.outputs].toSorted();
-      if (
-        [...unit.required, unit.buildInfo].some((file) => !unit.outputs.has(file)) ||
-        outputs.some((file) => !file.startsWith(`${unit.outDir}/`))
-      ) {
-        throw new Error(`Incomplete ${unit.id} native declaration inventory`);
-      }
-      const record = after.record(
-        unit.config,
-        unit.args,
-        unit.buildInfo,
-        outputs,
-        before,
-        unit.startedAt,
-        unit.outputRoot,
-      );
-      return Object.assign(unit, { record });
-    });
+    const completed = pending
+      .filter((unit) => emitted.has(`${unit.id} boundary dts`))
+      .map((unit) => {
+        const outputs = [...unit.outputs].toSorted();
+        if (
+          [...unit.required, unit.buildInfo].some((file) => !unit.outputs.has(file)) ||
+          outputs.some((file) => !file.startsWith(`${unit.outDir}/`))
+        ) {
+          throw new Error(`Incomplete ${unit.id} native declaration inventory`);
+        }
+        const record = after.record(
+          unit.config,
+          unit.args,
+          unit.buildInfo,
+          outputs,
+          before,
+          unit.startedAt,
+          unit.outputRoot,
+        );
+        return Object.assign(unit, { record });
+      });
     for (const unit of completed) {
       // Surviving files are cleanup candidates, never evidence of successful emit.
       for (const file of listCacheFiles(

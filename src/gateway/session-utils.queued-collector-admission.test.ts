@@ -6,9 +6,15 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
-import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../infra/agent-run-registry.js";
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
+import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "./server-plugins.js";
@@ -113,6 +119,28 @@ describe("queued collector native admission", () => {
         expect(admission.executionStarted).toBe(false);
         expect(getAgentRunContext(entry.runId)).toBeDefined();
         expect(isSubagentRunQueued(entry)).toBe(true);
+        expect(
+          resolveVisibleActiveSessionRunState({
+            context,
+            requestedKey: entry.childSessionKey,
+            canonicalKey: entry.childSessionKey,
+          }).status,
+        ).toBeUndefined();
+        const releaseCapacityWait = registerAgentRunCapacityWait(
+          entry.runId,
+          getAgentRunLifecycleGeneration(),
+        );
+        try {
+          expect(
+            resolveVisibleActiveSessionRunState({
+              context,
+              requestedKey: entry.childSessionKey,
+              canonicalKey: entry.childSessionKey,
+            }).status,
+          ).toBe("queued");
+        } finally {
+          releaseCapacityWait?.();
+        }
         expect(entry.execution.startedAt).toBeUndefined();
         const respond = vi.fn();
         await sessionAbortHandlers["sessions.abort"]!({

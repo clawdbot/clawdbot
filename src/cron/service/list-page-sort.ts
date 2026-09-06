@@ -7,12 +7,17 @@ export function sortCronJobs(
   sortDir: CronSortDir,
 ): CronJob[] {
   const dir = sortDir === "desc" ? -1 : 1;
-  return jobs.toSorted((a, b) => {
-    let cmp;
+  // Explicit options bypass native localeCompare caching; keep collation local to this sort.
+  let compareNames: Intl.Collator["compare"] | undefined;
+  // oxlint-disable-next-line unicorn/no-array-sort -- Both callers supply fresh filtered arrays.
+  return jobs.sort((a, b) => {
+    let cmp = 0;
     if (sortBy === "name") {
       const aName = typeof a.name === "string" ? a.name : "";
       const bName = typeof b.name === "string" ? b.name : "";
-      cmp = aName.localeCompare(bName, undefined, { sensitivity: "base" });
+      // oxlint-disable-next-line typescript/unbound-method -- Intl.Collator.compare returns a bound function.
+      compareNames ??= new Intl.Collator(undefined, { sensitivity: "base" }).compare;
+      cmp = compareNames(aName, bName);
     } else if (sortBy === "updatedAtMs") {
       cmp = a.updatedAtMs - b.updatedAtMs;
     } else {
@@ -20,14 +25,9 @@ export function sortCronJobs(
       const bNext = b.state.nextRunAtMs;
       if (typeof aNext === "number" && typeof bNext === "number") {
         cmp = aNext - bNext;
-      } else if (typeof aNext === "number") {
-        // Missing run times are not directional sort keys. Keep paused jobs
-        // after runnable jobs so descending pages do not hide scheduled work.
-        return -1;
-      } else if (typeof bNext === "number") {
-        return 1;
-      } else {
-        cmp = 0;
+      } else if (typeof aNext === "number" || typeof bNext === "number") {
+        // Missing run times stay last in either direction so paused jobs cannot hide scheduled work.
+        return typeof aNext === "number" ? -1 : 1;
       }
     }
     if (cmp !== 0) {

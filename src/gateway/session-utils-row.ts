@@ -1,29 +1,18 @@
 import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
-import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import {
-  countActiveDescendantRuns,
-  getSessionDisplaySubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunLive,
-  isSubagentRunQueued,
-  resolveSubagentSessionStatus,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
-  buildGroupDisplayName,
-  buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
-  resolveSessionGoalDisplayState,
   resolveProjectedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
@@ -31,12 +20,15 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
@@ -48,10 +40,9 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveStoredSessionKeyForAgentStore,
-} from "./session-store-key.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
@@ -65,6 +56,12 @@ import {
   resolveRuntimeChildSessionKeys,
 } from "./session-utils-core.js";
 import {
+  resolveGatewaySessionDisplayName,
+  resolveGatewaySessionKind,
+  projectGatewaySessionRunState,
+  resolveGatewaySessionGoal,
+} from "./session-utils-display.js";
+import {
   resolveGatewaySessionThinkingProjectionInternal,
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
@@ -74,7 +71,7 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
-import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
+import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -97,9 +94,10 @@ export function buildGatewaySessionRow(params: {
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
-  agentId?: string;
+  agentId: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  includeSwarmChildren?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
@@ -128,148 +126,53 @@ export function buildGatewaySessionRow(params: {
       : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
-  const sessionKind = classifySessionKind(key, entry);
-  // The older Gateway wire kind folds cron/spawn-child into direct.
-  const gatewayKind =
-    sessionKind === "cron" || sessionKind === "spawn-child" ? "direct" : sessionKind;
+  const gatewayKind = resolveGatewaySessionKind(key, entry);
   const deliveryFields = projectSessionDeliveryFields(entry?.delivery);
   const channel = deliveryFields.channel ?? parsed?.channel;
   const subject = entry?.subject;
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
-  const id = parsed?.id;
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const origin = storedOrigin
     ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
     : undefined;
-  const originLabel = origin?.label;
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
   const channelAvatarUrl = avatar
     ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
     : undefined;
-  const parsedAgent = parseAgentSessionKey(key);
-  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
-  const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  // A user-assigned label is an explicit rename; it must win over stored
-  // channel-derived display names or renames silently vanish on refresh.
-  // Group sessions prefer the human chat title (subject/#channel) over the
-  // stored compact token displayName (e.g. "slack:g-general").
-  const displayName =
-    entry?.label ??
-    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
-    entry?.displayName ??
-    (isGroupSession && channel
-      ? buildGroupDisplayName({
-          provider: channel,
-          subject,
-          groupChannel,
-          space,
-          id,
-          key,
-        })
-      : undefined) ??
-    // Dashboard origin labels identify the authenticated sender. Using them as
-    // titles leaks account names into the sidebar while the generated title is pending.
-    (isDashboardSession ? undefined : originLabel);
-  const sessionAgentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
-  );
+  const displayName = resolveGatewaySessionDisplayName(key, entry);
+  const sessionAgentId = params.agentId;
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
-  const subagentRun = rowContext
-    ? rowContext.subagentRuns.getDisplaySubagentRun(key)
-    : getSessionDisplaySubagentRunByChildSessionKey(key);
-  const subagentOwner =
-    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
-    normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
-  const hasActiveSubagentRun =
-    liveSubagentRunActive ||
-    (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
-  const persistedSessionStatus = entry?.status;
-  const persistedSessionEndedAt = entry?.endedAt;
-  const persistedSessionStartedAt = entry?.startedAt;
-  const persistedSessionRuntimeMs = entry?.runtimeMs;
-  const subagentRunState = subagentRun
-    ? liveSubagentRunActive
-      ? "active"
-      : typeof subagentRun.execution.endedAt === "number" ||
-          persistedSessionStatus === "done" ||
-          persistedSessionStatus === "failed" ||
-          persistedSessionStatus === "killed" ||
-          persistedSessionStatus === "timeout" ||
-          typeof persistedSessionEndedAt === "number"
-        ? "historical"
-        : "interrupted"
-    : undefined;
-  const subagentStatus = subagentRun
-    ? liveSubagentRunActive
-      ? resolveSubagentSessionStatus(subagentRun)
-      : persistedSessionStatus === "running"
-        ? undefined
-        : (persistedSessionStatus ??
-          (typeof subagentRun.execution.endedAt === "number"
-            ? resolveSubagentSessionStatus(subagentRun)
-            : undefined))
-    : undefined;
-  const subagentStartedAt = subagentRun
-    ? liveSubagentRunActive
-      ? getSubagentSessionStartedAt(subagentRun)
-      : (persistedSessionStartedAt ?? getSubagentSessionStartedAt(subagentRun))
-    : undefined;
-  const subagentEndedAt = subagentRun
-    ? liveSubagentRunActive
-      ? subagentRun.execution.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
-    : undefined;
-  const subagentRuntimeMs = subagentRun
-    ? liveSubagentRunActive
-      ? getSubagentSessionRuntimeMs(subagentRun, now)
-      : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.execution.endedAt === "number"
-          ? getSubagentSessionRuntimeMs(subagentRun, now)
-          : undefined))
-    : undefined;
+  const {
+    subagentRun,
+    subagentOwner,
+    fields: runFields,
+  } = projectGatewaySessionRunState({ key, entry, now, rowContext });
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
+    sessionKey: key,
     entry,
     agentId: sessionAgentId,
     rowContext,
     allowPluginNormalization: !lightweight,
   });
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-    { allowPluginNormalization: !lightweight },
-  );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
-  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    !skipTranscriptUsage &&
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
-      entry,
-      rowContext,
-    }) === undefined;
-  const transcriptUsage =
-    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
-      ? resolveTranscriptUsageFallback({
-          cfg,
-          key,
-          entry,
-          storePath,
-          fallbackProvider: resolvedModel.provider,
-          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
-          rowContext: params.rowContext,
-          agentId: sessionAgentId,
-        })
-      : null;
+  const transcriptUsage = !skipTranscriptUsage
+    ? resolveTranscriptUsageFallback({
+        cfg,
+        key,
+        entry,
+        storePath,
+        freshTotalTokens: freshSessionTotalTokens,
+        fallbackModelRef: subagentRun?.model,
+        allowPluginNormalization: !lightweight,
+        maxTranscriptBytes: params.transcriptUsageMaxBytes,
+        rowContext: params.rowContext,
+        agentId: sessionAgentId,
+      })
+    : null;
   const totalTokens =
     freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
@@ -277,20 +180,11 @@ export function buildGatewaySessionRow(params: {
     (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const goal = entry?.goal
-    ? resolveSessionGoalDisplayState(
-        {
-          goal: entry.goal,
-          totalTokens,
-          totalTokensFresh,
-          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
-        },
-        now,
-        // Session listing is read-only; stale goal baselines are adopted only
-        // by goal commands/tools that can persist the first fresh snapshot.
-        { adoptFreshBaseline: false },
-      )
-    : undefined;
+  const goal = resolveGatewaySessionGoal(entry, now, {
+    totalTokens,
+    totalTokensFresh,
+    totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
+  });
   const childSessions = params.storeChildSessionsByKey
     ? mergeChildSessionKeys(
         resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
@@ -304,19 +198,26 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const selectedModelProvider = selectedModel.provider;
-  const selectedModelId = selectedModel.model;
-  const rowModelIdentity = lightweight
-    ? { provider: selectedModelProvider, model: selectedModelId }
-    : resolveSessionDisplayModelIdentityRefCached({
-        cfg,
-        agentId: sessionAgentId,
-        provider: selectedModelProvider,
-        model: selectedModelId,
-        rowContext: params.rowContext,
-      });
-  const rowModelProvider = rowModelIdentity.provider;
-  const rowModel = rowModelIdentity.model;
+  const rowModelProvider = selectedModel.provider;
+  const rowModel = selectedModel.model;
+  const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
+    cfg,
+    provider: rowModelProvider,
+    model: rowModel,
+    rowContext: params.rowContext,
+  });
+  // Display aliases do not change the selected route's catalog or runtime policy.
+  const runtimeModels = resolveSelectedAndActiveModel({
+    selectedProvider: rowModelProvider,
+    selectedModel: rowModel,
+    sessionEntry: entry,
+  });
+  const activeFallback = resolveActiveFallbackState({
+    selectedModelRef: runtimeModels.selected.label,
+    activeModelRef: runtimeModels.active.label,
+    config: cfg,
+    state: entry,
+  });
   const acpSessionKey = resolveStoredSessionKeyForAgentStore({
     cfg,
     agentId: sessionAgentId,
@@ -416,8 +317,8 @@ export function buildGatewaySessionRow(params: {
   });
   const fastModeState = resolveFastModeState({
     cfg,
-    provider: selectedModelProvider,
-    model: selectedModelId,
+    provider: rowModelProvider,
+    model: rowModel,
     agentId: sessionAgentId,
     sessionEntry:
       entry?.fastMode !== undefined
@@ -428,9 +329,28 @@ export function buildGatewaySessionRow(params: {
   });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
+  const repositoryWorkspace = entry?.repositoryWorkspaceId
+    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
+    : undefined;
+  const repository =
+    repositoryWorkspace?.agentId === sessionAgentId && repositoryWorkspace.sessionKey === key
+      ? {
+          url: repositoryWorkspace.url,
+          ...(repositoryWorkspace.requestedRef ? { ref: repositoryWorkspace.requestedRef } : {}),
+          branch: repositoryWorkspace.branch,
+        }
+      : undefined;
 
+  const swarm = buildSessionSwarmSummary(
+    rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
+    key,
+    sessionAgentId,
+    { includeChildren: params.includeSwarmChildren },
+  );
   return {
     key,
+    // Presence records a completed registry projection; event merges may clear only that fact.
+    ...(rowContext ? { swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -440,10 +360,13 @@ export function buildGatewaySessionRow(params: {
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     permissionMode: entry?.permissionMode,
+    permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+    ...(repository ? { repository } : {}),
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
     forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
@@ -458,7 +381,13 @@ export function buildGatewaySessionRow(params: {
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.size
+      ? [...participants.values()].slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.size
+      ? [...participants.values()].slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
     participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
@@ -484,6 +413,7 @@ export function buildGatewaySessionRow(params: {
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
+    archiveReason: entry?.archiveReason,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),
@@ -532,15 +462,10 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     goal,
     estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
+    ...runFields,
     lastRunError: entry?.lastRunError,
     lastRunId: entry?.lastRunId,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
-    subagentRunState,
-    hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
-    startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
-    endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
-    runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
     childSessions,
@@ -556,8 +481,10 @@ export function buildGatewaySessionRow(params: {
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: rowModelProvider,
-    model: rowModel,
+    modelProvider: rowModelIdentity.provider,
+    model: rowModelIdentity.model,
+    activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
+    activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
     modelOverrideSource: resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),

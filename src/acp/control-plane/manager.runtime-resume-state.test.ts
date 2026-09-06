@@ -9,6 +9,7 @@ vi.mock("../../globals.js", () => ({
   logVerbose: logVerboseMock,
 }));
 
+import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpRuntimeBackend } from "../runtime/registry.js";
 import { tryPrepareFreshManagerRuntimeSession } from "./manager.runtime-resume-state.js";
 import type { SessionAcpMeta } from "./manager.types.js";
@@ -28,6 +29,7 @@ function callParams(backend: AcpRuntimeBackend | null) {
     cfg: {},
     meta,
     sessionKey: "agent:main:acp:test",
+    agentId: "main",
     logPrefix: "sessions.session-reset",
   };
 }
@@ -76,7 +78,18 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
       },
     } as AcpRuntimeBackend;
     await tryPrepareFreshManagerRuntimeSession(callParams(backend));
-    expect(prepareFreshSession).toHaveBeenCalledWith({ sessionKey: "agent:main:acp:test" });
+    expect(prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:main:acp:test",
+      agentId: "main",
+      persistedHandle: {
+        sessionKey: "agent:main:acp:test",
+        agentId: "main",
+        backend: "acpx",
+        runtimeSessionName: "acp:test",
+        cwd: undefined,
+        acpxRecordId: undefined,
+      },
+    });
     expect(logVerboseMock).not.toHaveBeenCalled();
   });
 
@@ -103,4 +116,26 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
       ),
     );
   });
+});
+
+it("does not turn an owner migration rejection into successful fresh preparation", async () => {
+  const error = new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "run doctor --fix", {
+    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+  });
+  const backend: AcpRuntimeBackend = {
+    id: "acpx",
+    runtime: {
+      ownerAwareSessions: 1,
+      ensureSession: vi.fn(),
+      async *runTurn() {},
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      prepareFreshSession: vi.fn(async () => {
+        throw error;
+      }),
+    },
+  };
+  await expect(
+    tryPrepareFreshManagerRuntimeSession({ ...callParams(backend), sessionKey: "global" }),
+  ).rejects.toBe(error);
 });

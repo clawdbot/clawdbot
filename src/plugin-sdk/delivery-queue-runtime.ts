@@ -38,5 +38,5 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
           ? { match: false, bypassBackoff: false }
           : opts.selectEntry(entry, now),
     });
-  });
+  }, "delivery-queue:drain");
 }

@@ -72,17 +72,13 @@ function rejectSubagentSpawnRequest(
 export function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
-  requestedAgent: {
-    initial?: string;
-    applyDefault: (agentId?: string) => string | undefined;
-  },
 ): ResolveSubagentSpawnRequestResult {
+  const requestedAgentId = params.agentId?.trim();
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
     return rejectSubagentSpawnRequest("error", taskNameResult.error);
   }
   const taskName = taskNameResult.taskName;
-  const requestedAgentId = requestedAgent.initial;
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
   // Without this gate, error-message strings like "Agent not found: xyz" pass
@@ -191,7 +187,7 @@ export function resolveSubagentSpawnRequest(
   const usingDefaultAgentId =
     params.collect === true && !requestedAgentId && Boolean(swarmConfig.defaultAgentId);
   const effectiveRequestedAgentId = usingDefaultAgentId
-    ? requestedAgent.applyDefault(swarmConfig.defaultAgentId)
+    ? swarmConfig.defaultAgentId
     : requestedAgentId;
   if (usingDefaultAgentId) {
     if (!isValidAgentId(effectiveRequestedAgentId)) {
@@ -212,7 +208,7 @@ export function resolveSubagentSpawnRequest(
       (requesterRunId ? `swarm:${requesterInternalKey}:${requesterRunId}` : undefined))
     : undefined;
   const swarmSchedulerGroupKey = swarmGroupId
-    ? JSON.stringify([requesterInternalKey, swarmGroupId])
+    ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
@@ -245,6 +241,9 @@ export function resolveSubagentSpawnRequest(
         resolveAdmission,
       });
   const admission = admissionReservation ?? resolveAdmission();
+  if (admissionReservation?.ok) {
+    ctx.onSpawnEffectsStart?.();
+  }
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
@@ -273,13 +272,18 @@ export function resolveSubagentSpawnRequest(
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
+    // Swarm reservation can reconcile existing lane state even when it rejects a duplicate.
+    ctx.onSpawnEffectsStart?.();
     if (
       !reserveSwarmRun({
         groupId: swarmSchedulerGroupKey,
         runId: childIdem,
         maxConcurrent: swarmConfig.maxConcurrent,
         activeRunIds: groupRuns
-          .filter((entry) => entry.execution.status === "running")
+          .filter(
+            (entry) =>
+              entry.execution.status === "running" || entry.execution.status === "interrupted",
+          )
           .map((entry) => entry.schedulerSlotId ?? entry.runId),
       })
     ) {

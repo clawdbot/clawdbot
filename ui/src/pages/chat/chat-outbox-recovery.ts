@@ -9,11 +9,11 @@ import {
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
 import {
-  resolveStoredChatOutboxScope,
   storageTargetForGateway,
   storedChatOutboxScopeKey,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
@@ -116,7 +116,7 @@ class ChatOutboxRecovery extends LitElement {
         this.error = t("chat.outboxRecoveryConflict");
         return;
       }
-      const scope = resolveStoredChatOutboxScope(host, host.sessionKey);
+      const scope = resolveUiConversationIdentity(host, host.sessionKey);
       const destination = captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
       const store = await draftStore;
@@ -193,19 +193,23 @@ class ChatOutboxRecovery extends LitElement {
       ${rows.map(
         (entry) => html`<div class="chat-outbox-recovery-row">
           <p>
-            ${"id" in entry
-              ? [entry.session.draft, ...(entry.session.queue ?? []).map((item) => item.text)]
-                  .filter(Boolean)
-                  .join(" · ")
-                  .slice(0, 240)
-              : entry.text.slice(0, 240)}
+            ${
+              "id" in entry
+                ? [entry.session.draft, ...(entry.session.queue ?? []).map((item) => item.text)]
+                    .filter(Boolean)
+                    .join(" · ")
+                    .slice(0, 240)
+                : entry.text.slice(0, 240)
+            }
           </p>
           <p>
-            ${"id" in entry
-              ? t("chat.outboxRecoveryMessages", {
-                  count: String(entry.session.queue?.length ?? 0),
-                })
-              : entry.attachmentNames.join(", ").slice(0, 240)}
+            ${
+              "id" in entry
+                ? t("chat.outboxRecoveryMessages", {
+                    count: String(entry.session.queue?.length ?? 0),
+                  })
+                : entry.attachmentNames.join(", ").slice(0, 240)
+            }
           </p>
           <button
             class="btn"

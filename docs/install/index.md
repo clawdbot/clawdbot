@@ -164,7 +164,7 @@ openclaw onboard --install-daemon
 
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
 If Corepack is unavailable, install that version explicitly with
-`npm install -g pnpm@12.1.0 --allow-scripts=pnpm@12.1.0`; keep npm install scripts and optional dependencies
+`npm install -g pnpm@12.3.4 --allow-scripts=pnpm@12.3.4`; keep npm install scripts and optional dependencies
 enabled so pnpm can provision its native executable.
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
@@ -183,9 +183,6 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
-  </Card>
-  <Card title="ClawDock" href="/install/clawdock" icon="container">
-    Community Docker Compose setup and shell helpers.
   </Card>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
@@ -211,6 +208,17 @@ If you want managed startup after install:
 - macOS: LaunchAgent via `openclaw onboard --install-daemon` or `openclaw gateway install`
 - Linux/WSL2: systemd user service via the same commands
 - Native Windows: Scheduled Task first, with a per-user Startup-folder login item fallback if task creation is denied
+
+## Next: run onboarding and connect a channel
+
+<CardGroup cols={2}>
+  <Card title="Getting started" href="/start/getting-started" icon="rocket">
+    Run onboarding, install the Gateway service, and open the dashboard.
+  </Card>
+  <Card title="Connect a channel" href="/channels" icon="message-square">
+    Message your agent from Telegram, Discord, Slack, WhatsApp, and more.
+  </Card>
+</CardGroup>
 
 ## Hosting and deployment
 

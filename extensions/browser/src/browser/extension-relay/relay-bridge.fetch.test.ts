@@ -228,7 +228,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     pausedRequestId(owner, sessionId);
     reply = (message) =>
       message.type === "cdp" && message.method === "Fetch.failRequest" ? null : replyFor(message);
-    owner.close();
+    const closing = owner.close();
     await flush();
 
     const cleanup = fetchCommands().find((frame) => frame.method === "Fetch.failRequest");
@@ -242,6 +242,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
         JSON.stringify({ type: "result", seq: cleanup.seq, result: {} }),
       );
     }
+    await closing;
     await flush();
 
     expect
@@ -263,7 +264,7 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
       message.type === "cdp" && message.method === "Fetch.failRequest"
         ? { type: "error", seq: message.seq, message: "cleanup completion unknown" }
         : replyFor(message);
-    owner.close();
+    await expect(owner.close()).rejects.toThrow("Fetch owner cleanup failed");
     await flush();
     await flush();
 
@@ -402,11 +403,12 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     const enabling = owner.send("Fetch.enable", sessionId);
     await flush();
     expect(heldEnable).toMatchObject({ method: "Fetch.enable", tabId: 1 });
-    owner.close();
+    const closing = owner.close();
     reply = replyFor;
     extension.handlers.onMessage(
       JSON.stringify({ type: "result", seq: heldEnable?.seq, result: {} }),
     );
+    await closing;
     await flush();
 
     expect(owner.response(enabling)).toBeUndefined();

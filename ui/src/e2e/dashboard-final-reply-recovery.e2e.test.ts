@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,7 +11,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-final-reply-recovery");
 
 function dashboardPath(): string {
   return controlUiSessionPath(sessionKey).replace(/^\/chat\//u, "/dashboard/");
@@ -20,13 +20,20 @@ suite.define(() => {
   it("projects a distinct durable reply after interim text and a message-less terminal", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "dashboard-final-reply-recovery"), {
+        recursive: true,
+      });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -156,7 +163,7 @@ suite.define(() => {
       });
 
       const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 100 });
+      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 80 });
       // The first authoritative snapshot can promote the same interim text to
       // a durable row before the distinct terminal reply is committed. That
       // identity change is not a recovered final; retry until new content lands.
@@ -174,16 +181,24 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.history")).length)
         .toBe(historyCount + 2);
       if (recordProof) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "dashboard-final-reply-recovered.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+            "dashboard-final-reply-recovered.png",
+          ),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [visibleFinal]),
+        );
       }
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(proofDir, "dashboard-final-reply-recovered.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+            "dashboard-final-reply-recovered.webm",
+          ),
+        );
       }
     }
   });

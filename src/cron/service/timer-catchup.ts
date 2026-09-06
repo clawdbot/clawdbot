@@ -7,7 +7,9 @@ import {
 import type { CronJob } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  hasActiveCronRun,
   isJobEnabled,
+  recomputeJobNextRunAtMs,
   resolveJobErrorBackoffUntilMs,
 } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
@@ -34,53 +36,97 @@ import {
 } from "./timer-execution-timeout.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { createCompletedCronRunOutcomeDrain } from "./timer-outcome-finalization.js";
-import { collectRunnableJobs, hasMissedCronSlotSinceLastRun } from "./timer-runnable.js";
+import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "./timer-runnable.js";
 import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
-function deferPendingBackoffMissedCronSlots(
+function collectStartupCatchupJobs(
   state: CronServiceState,
   nowMs: number,
   opts?: { skipJobIds?: ReadonlySet<string> },
-): boolean {
+): CronJob[] {
   if (!state.store) {
-    return false;
+    return [];
   }
+  const missed: CronJob[] = [];
+  const skippedJobIds: string[] = [];
+  const postPersistNotifications: DeferredCronNotifications = [];
   const committedJobs = commitCronRuntimeRows({
     state,
     jobIds: state.store.jobs.map((job) => job.id),
-    operationLabel: "cron.startup-backoff",
-    mutate: ({ jobs }) => {
+    operationLabel: "cron.startup-schedules",
+    mutate: ({ database, jobs }) => {
       const committed: CronJob[] = [];
       for (const job of jobs.values()) {
         if (
           !isJobEnabled(job) ||
-          job.schedule.kind !== "cron" ||
           opts?.skipJobIds?.has(job.id) ||
-          typeof job.state.queuedAtMs === "number" ||
-          typeof job.state.runningAtMs === "number"
+          hasActiveCronRun(job) ||
+          findActiveCronRunReceiptInDatabase({
+            database,
+            storePath: state.deps.storePath,
+            jobId: job.id,
+          })
         ) {
           continue;
         }
-        const backoffUntilMs = resolveJobErrorBackoffUntilMs(
-          job,
-          DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-        );
+        const backoffUntilMs =
+          job.schedule.kind === "cron"
+            ? resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS)
+            : undefined;
         if (
-          backoffUntilMs === undefined ||
-          nowMs >= backoffUntilMs ||
-          !hasMissedCronSlotSinceLastRun(job, nowMs) ||
-          job.state.nextRunAtMs === backoffUntilMs
+          backoffUntilMs !== undefined &&
+          nowMs < backoffUntilMs &&
+          hasMissedCronSlotSinceLastRun(job, nowMs) &&
+          job.state.nextRunAtMs !== backoffUntilMs
+        ) {
+          job.state.nextRunAtMs = backoffUntilMs;
+          committed.push(job);
+          continue;
+        }
+        if (
+          !isRunnableJob({
+            state,
+            job,
+            nowMs,
+            skipAtIfAlreadyRan: true,
+            allowCronMissedRunByLastRun: true,
+          })
         ) {
           continue;
         }
-        job.state.nextRunAtMs = backoffUntilMs;
-        committed.push(job);
+        if (
+          state.deps.cronConfig?.skipMissedJobs &&
+          (job.schedule.kind === "cron" || job.schedule.kind === "every")
+        ) {
+          // Commit before returning even an empty plan; the first tick reloads
+          // these rows. Run history must not readmit the skipped occurrence.
+          if (
+            recomputeJobNextRunAtMs({
+              state,
+              job,
+              nowMs,
+              deferredNotifications: postPersistNotifications,
+            })
+          ) {
+            committed.push(job);
+          }
+          skippedJobIds.push(job.id);
+        } else {
+          missed.push(job);
+        }
       }
       return { upsertJobIds: committed.map((job) => job.id), value: committed };
     },
   });
+  runPostPersistCronNotifications(state, postPersistNotifications);
   applyCronRuntimeRowsToState(state, committedJobs);
-  return committedJobs.length > 0;
+  if (skippedJobIds.length > 0) {
+    state.deps.log.info(
+      { count: skippedJobIds.length, jobIds: skippedJobIds },
+      "cron: skipped missed recurring jobs after restart",
+    );
+  }
+  return missed;
 }
 
 function commitStartupCatchupRows(params: {
@@ -271,13 +317,8 @@ async function planStartupCatchup(
     }
 
     const now = state.deps.nowMs();
-    deferPendingBackoffMissedCronSlots(state, now, {
+    const missed = collectStartupCatchupJobs(state, now, {
       skipJobIds: opts?.skipJobIds,
-    });
-    const missed = collectRunnableJobs(state, now, {
-      skipJobIds: opts?.skipJobIds,
-      skipAtIfAlreadyRan: true,
-      allowCronMissedRunByLastRun: true,
     });
     if (missed.length === 0) {
       return { candidates: [], deferredJobs: [] };

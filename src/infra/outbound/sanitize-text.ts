@@ -9,13 +9,15 @@ export { stripInternalRuntimeScaffolding };
 
 // A tag name ends at whitespace, `/`, or `>`; `<user@example.com>` is prose, not markup.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+const LABELED_ANGLE_LINK_RE =
+  /<(?:https?:\/\/|mailto:)[^<>\s|]+\|([^<>\r\n|]*[^<>\s|][^<>\r\n|]*)>/gi;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
 const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
-  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li|p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 // br, p, and div own line structure, so they stay outside the inert-tree removal pass.
 const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
@@ -36,8 +38,10 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
   // Remove inner elements first so an empty nested tree cannot synthesize markers.
   const converted = removeMatchesUntilStable(
     text
-      // Preserve angle-bracket autolinks as plain URLs before tag stripping.
-      .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
+      // `|` ends the autolink URL so `<url|Label>` reaches the label projection.
+      .replace(/<((?:https?:\/\/|mailto:)[^<>\s|]+)>/gi, "$1")
+      // Raw channel link syntax is not an input dialect; retain only its visible label.
+      .replace(LABELED_ANGLE_LINK_RE, "$1")
       // Normalize attributes once; conversions below only need exact bare tag names.
       .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>"),
     EMPTY_HTML_ELEMENT_RE,
@@ -73,25 +77,23 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
   if (codeRegions.length === 0) {
     return convertHtmlOutsideCode(prepared, options);
   }
-  const preservedCode: string[] = [];
+  const preservedText = new Map([[CODE_ESCAPE, "\u0000"]]);
   let masked = "";
   let cursor = 0;
   for (const region of codeRegions) {
     masked += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
-    masked += CODE_PLACEHOLDER;
-    preservedCode.push(prepared.slice(region.start, region.end));
+    const placeholder = `${CODE_PLACEHOLDER}${preservedText.size};`;
+    masked += placeholder;
+    preservedText.set(placeholder, prepared.slice(region.start, region.end));
     cursor = region.end;
   }
   masked += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
 
-  const converted = convertHtmlOutsideCode(masked, options);
-  let restored = "";
-  cursor = 0;
-  for (const code of preservedCode) {
-    const placeholder = converted.indexOf(CODE_PLACEHOLDER, cursor);
-    restored += converted.slice(cursor, placeholder).replaceAll(CODE_ESCAPE, "\u0000");
-    restored += code;
-    cursor = placeholder + CODE_PLACEHOLDER.length;
-  }
-  return restored + converted.slice(cursor).replaceAll(CODE_ESCAPE, "\u0000");
+  // HTML attributes can consume markers. Restore by identity in one pass so
+  // surviving code keeps its position and literal marker-shaped text stays inert.
+  return convertHtmlOutsideCode(masked, options).replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- Intentional NUL delimiters distinguish internal markers from escaped user text.
+    /\u0000(?:e|p\d+;)/g,
+    (marker) => preservedText.get(marker) ?? marker,
+  );
 }

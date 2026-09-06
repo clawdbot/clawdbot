@@ -497,9 +497,6 @@ export class TelegramPollingSession {
         }
       };
       if (message.type === "poll-start") {
-        this.opts.log(
-          `[telegram][diag] isolated polling worker poll-start offset=${message.offset ?? "null"}`,
-        );
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
         pollState.offset = message.offset;

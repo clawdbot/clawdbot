@@ -43,7 +43,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -86,7 +86,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     });
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Investigating" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Investigating" } },
       },
     });
 
@@ -153,6 +153,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
+      { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");
@@ -181,7 +182,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: false, commentary: true },
+          progress: { toolProgress: true, label: false, commentary: true },
         },
       },
     });
@@ -250,7 +251,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { commentary: false },
+          progress: { toolProgress: true, commentary: false },
         },
       },
     });
@@ -283,7 +284,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
       const ctx = await createAutomaticDraftContext({
         discordConfig: {
-          streaming: { mode: "progress", progress: { label: "Shelling" } },
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
         },
       });
 
@@ -320,7 +321,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling", commentary: true },
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
         },
       },
     });
@@ -357,6 +358,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: false,
           },
         },
@@ -365,7 +367,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec", { complete: true });
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Temporary note.");
     // Cleanup still removes the unfinished tool-progress draft at run end.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -395,6 +397,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: false,
             commentary: true,
           },
@@ -419,6 +422,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
           },
         },
@@ -449,6 +453,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
           },
         },
@@ -457,7 +462,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done", {
+      complete: true,
+    });
     expectFinalAnswerText("done");
   });
 
@@ -480,6 +487,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
           },
         },
@@ -488,7 +496,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done", {
+      complete: true,
+    });
     // The delivered final consumed the draft; the later tool warning must not
     // resurrect it or produce a second visible reply.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -514,7 +524,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -549,7 +559,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -583,7 +593,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -615,7 +625,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -644,7 +654,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -676,6 +686,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
             commandText: "raw",
           },
@@ -687,6 +698,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Shelling\n\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
+      { complete: true },
     );
   });
 
@@ -711,6 +723,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
             commandText: "status",
           },
@@ -720,7 +733,9 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done", {
+      complete: true,
+    });
   });
 
   it("preserves command output text when raw Discord progress is configured", async () => {
@@ -746,7 +761,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling", commandText: "raw" },
+          progress: { toolProgress: true, label: "Shelling", commandText: "raw" },
         },
       },
     });
@@ -773,6 +788,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
             maxLines: 4,
           },
@@ -782,6 +798,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🧩 First\n🧩 Second\n🧩 Third");
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🧩 First\n🧩 Second\n🧩 Third", {
+      complete: true,
+    });
   });
 });

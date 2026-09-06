@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -8,16 +9,13 @@ import {
   requireRecord,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("applies provider-specific reasoning after the selected model is saved", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:session-a";
     const fableSession = {
@@ -119,7 +117,10 @@ suite.define(() => {
       });
       await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.model-switch-reasoning", artifactDirParent)
+        : undefined;
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/model-thinking-sync.png`,

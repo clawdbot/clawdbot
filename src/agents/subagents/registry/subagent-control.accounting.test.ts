@@ -12,11 +12,7 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-c
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
-import {
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
-  killSubagentRunAdmin,
-} from "./subagent-control.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun } from "./subagent-registry.js";
@@ -59,7 +55,7 @@ async function seed() {
 }
 
 it.each(
-  (["bulk", "controlled", "admin"] as const).flatMap((boundary) =>
+  (["bulk", "admin"] as const).flatMap((boundary) =>
     (["root traversal", "descendant drain"] as const).map((phase) => ({ boundary, phase })),
   ),
 )(
@@ -112,14 +108,12 @@ it.each(
     const pending =
       boundary === "bulk"
         ? killAllControlledSubagentRuns({ cfg, controller, runs: [root] })
-        : boundary === "controlled"
-          ? killControlledSubagentRun({ cfg, controller, entry: root })
-          : killSubagentRunAdmin({
-              cfg,
-              sessionKey: key("root"),
-              expectedRunId: "root",
-              expectedOwnerKey: owner,
-            });
+        : killSubagentRunAdmin({
+            cfg,
+            sessionKey: key("root"),
+            expectedRunId: "root",
+            expectedOwnerKey: owner,
+          });
     try {
       if (phase === "descendant drain") {
         await Promise.race([
@@ -151,17 +145,15 @@ it.each(
               failed: 1,
               labels: Array(1 + childKills).fill("shared label"),
             }
-          : boundary === "controlled"
-            ? { status: "error", killed: true, cascadeKilled: childKills }
-            : {
-                found: true,
-                killed: true,
-                cascadeKilled: childKills,
-                targetState: {
-                  state: "terminal",
-                  task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
-                },
+          : {
+              found: true,
+              killed: true,
+              cascadeKilled: childKills,
+              targetState: {
+                state: "terminal",
+                task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
               },
+            },
       );
     } finally {
       armed = false;

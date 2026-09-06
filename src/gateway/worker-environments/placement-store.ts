@@ -50,6 +50,10 @@ import {
 } from "./placement-turn-claims.js";
 import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
 import {
+  assertSessionWorkspaceUnreserved,
+  createPlacementWorkspaceReservationOps,
+} from "./placement-workspace-reservation.js";
+import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
@@ -134,6 +138,7 @@ export function createWorkerSessionPlacementStore(
   };
 
   const store = {
+    ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
@@ -224,6 +229,7 @@ export function createWorkerSessionPlacementStore(
       const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
+        assertSessionWorkspaceUnreserved(db, identity.sessionId);
         if (
           current.state !== "local" &&
           current.state !== "reclaimed" &&

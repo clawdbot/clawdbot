@@ -7,12 +7,12 @@ import {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
   extractArchive,
-  type ArchiveEntryKind,
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
-import { humanSize, readClampedInt } from "../shared/params.js";
+import { readClampedInt } from "../shared/params.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
   DIR_FETCH_HARD_MAX_BYTES,
@@ -25,6 +25,7 @@ import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.
 // Larger trees still land on disk but we don't spam the channel adapter
 // with hundreds of attachments.
 const MEDIA_URL_CAP = 25;
+const DIRECTORY_TEXT_MAX_BYTES = 8192;
 
 // Hard timeout for gateway-side archive extraction.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
@@ -40,15 +41,6 @@ const TAR_UNPACK_MAX_ENTRIES = 5000;
 // enforced by fs-safe while extracting.
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
-
-function filterDirFetchArchiveEntry(entry: {
-  path: string;
-  kind: ArchiveEntryKind;
-}): "extract" | "skip" {
-  return (entry.kind === "file" || entry.kind === "directory") && !entry.path.includes("\\")
-    ? "extract"
-    : "skip";
-}
 
 function classifyArchiveFailure(error: unknown): {
   auditCode: "TREE_TOO_LARGE" | "UNSAFE_ARCHIVE";
@@ -94,6 +86,50 @@ type UnpackedFileEntry = {
   sha256: string;
   localPath: string;
 };
+
+function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string {
+  const visible: Array<{ relPath: string; size: number }> = [];
+  const render = () => {
+    const manifest = JSON.stringify({
+      rootDir,
+      fileCount: files.length,
+      displayedCount: visible.length,
+      files: visible,
+    });
+    const omitted = files.length - visible.length;
+    // A stable footer lets each additional complete record consume more bytes,
+    // including the last one; omission guidance must not crowd out a full manifest.
+    const note = `${omitted} saved files omitted from this text (byte limit or reserved path markers). All remain under rootDir; inspect them with available local file or directory capabilities.`;
+    const wrapped = wrapExternalContent(`Fetched ${files.length} files.\n${manifest}\n${note}`, {
+      source: "unknown",
+    });
+    // Keep complete, exact local paths: the security wrapper can rewrite reserved
+    // markers, and its warning and escaping must fit inside the same byte budget.
+    return wrapped.includes(manifest) &&
+      Buffer.byteLength(wrapped, "utf8") <= DIRECTORY_TEXT_MAX_BYTES
+      ? wrapped
+      : undefined;
+  };
+  let text = render();
+  // Sort only the text projection; manifest and attachment order are unchanged.
+  for (const { relPath, size } of files.toSorted((a, b) =>
+    a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
+  )) {
+    visible.push({ relPath, size });
+    const candidate = render();
+    if (!candidate) {
+      break;
+    }
+    text = candidate;
+  }
+  return (
+    text ??
+    wrapExternalContent(
+      `Fetched ${files.length} files. Saved paths omitted: rootDir cannot be represented safely within the 8192-byte text limit. No usable local path is shown.`,
+      { source: "unknown" },
+    )
+  );
+}
 
 /**
  * Walk a directory recursively, collecting file entries (skips directories).
@@ -187,7 +223,8 @@ export function createDirFetchTool(): AnyAgentTool {
           tarGzip: true,
           timeoutMs: TAR_UNPACK_TIMEOUT_MS,
           entryModes: "clamp",
-          entryFilter: filterDirFetchArchiveEntry,
+          // fs-safe validates raw paths before supplying canonical pre-strip names.
+          entryFilter: ({ kind }) => (kind === "file" || kind === "directory" ? "extract" : "skip"),
           onFiltered: "reject-archive",
           limits: {
             maxArchiveBytes: DIR_FETCH_HARD_MAX_BYTES,
@@ -237,14 +274,7 @@ export function createDirFetchTool(): AnyAgentTool {
       const imageFiles = files.filter((f) => IMAGE_MIME_INLINE_SET.has(f.mimeType));
       const nonImageFiles = files.filter((f) => !IMAGE_MIME_INLINE_SET.has(f.mimeType));
       const allOrdered = [...imageFiles, ...nonImageFiles];
-      const droppedFromMedia = Math.max(0, allOrdered.length - MEDIA_URL_CAP);
       const mediaUrls = allOrdered.slice(0, MEDIA_URL_CAP).map((f) => f.localPath);
-
-      const shortHash = sha256.slice(0, 12);
-      const mediaNote = droppedFromMedia
-        ? ` (channel attaches first ${MEDIA_URL_CAP}; ${droppedFromMedia} more in details.files)`
-        : "";
-      const summaryText = `Fetched ${fileCount} files from ${canonicalPath} (${humanSize(tarBytes)} compressed, sha256:${shortHash}) — saved on the gateway under ${rootDir}/${mediaNote}`;
 
       await appendFileTransferAudit({
         op: "dir.fetch",
@@ -259,7 +289,7 @@ export function createDirFetchTool(): AnyAgentTool {
       });
 
       return {
-        content: [{ type: "text" as const, text: summaryText }],
+        content: [{ type: "text" as const, text: savedDirectoryText(rootDir, files) }],
         details: {
           path: canonicalPath,
           rootDir,

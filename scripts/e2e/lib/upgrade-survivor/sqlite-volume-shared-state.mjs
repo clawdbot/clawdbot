@@ -114,15 +114,16 @@ async function seedBaselinePluginState(packageRoot) {
     process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION,
     "baseline SDK package version differs from the installed CLI",
   );
-  const sdkExport = manifest.exports?.["./plugin-sdk/runtime-doctor"];
-  let hasStoreDeclaration = false;
-  if (sdkExport?.types !== undefined) {
+  const storeExport = manifest.exports?.["./plugin-sdk/plugin-state-store-runtime"];
+  const sdkExport = storeExport ?? manifest.exports?.["./plugin-sdk/runtime-doctor"];
+  let hasStoreDeclaration = Boolean(storeExport);
+  if (!hasStoreDeclaration && sdkExport?.types !== undefined) {
     assert.equal(typeof sdkExport.types, "string", "baseline doctor SDK type declaration missing");
     const declarations = fs.readFileSync(path.resolve(packageRoot, sdkExport.types), "utf8");
     hasStoreDeclaration = /\bcreatePluginStateSyncKeyedStore\b/u.test(declarations);
   }
-  // April/May baselines expose doctor helpers but no keyed store constructor.
-  // A declared constructor whose runtime import is broken must still fail below.
+  // Modern packages expose the dedicated store without declarations. Older doctor
+  // exports need their declaration to distinguish packages with no store constructor.
   if (!hasStoreDeclaration) {
     const reason = "baseline SDK does not declare createPluginStateSyncKeyedStore";
     recordBaselineSharedState(stateDir, {
@@ -138,7 +139,13 @@ async function seedBaselinePluginState(packageRoot) {
   const installedRequire = createRequire(packageJsonPath);
   // Resolve the published SDK from its own package; importing checkout source would
   // silently create the candidate schema and erase the upgrade boundary under test.
-  const sdkUrl = pathToFileURL(installedRequire.resolve("openclaw/plugin-sdk/runtime-doctor"));
+  const sdkUrl = pathToFileURL(
+    installedRequire.resolve(
+      storeExport
+        ? "openclaw/plugin-sdk/plugin-state-store-runtime"
+        : "openclaw/plugin-sdk/runtime-doctor",
+    ),
+  );
   const { createPluginStateSyncKeyedStore } = await import(sdkUrl.href);
   assert.equal(
     typeof createPluginStateSyncKeyedStore,

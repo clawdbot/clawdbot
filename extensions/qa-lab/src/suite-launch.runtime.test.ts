@@ -725,7 +725,7 @@ describe("qa suite runtime launcher", () => {
         }),
       ]),
     );
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("preserves completed partitions when a retryable channel fails twice", async () => {
@@ -788,7 +788,7 @@ describe("qa suite runtime launcher", () => {
         }),
       ]),
     );
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("records an exhausted fail-fast partition without starting later partitions", async () => {
@@ -844,7 +844,7 @@ describe("qa suite runtime launcher", () => {
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
     expect(result.observedCells).toEqual([]);
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("attributes an exhausted fail-fast retry to the later scenario that actually started", async () => {
@@ -913,7 +913,7 @@ describe("qa suite runtime launcher", () => {
         },
       },
     ]);
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
@@ -933,43 +933,47 @@ describe("qa suite runtime launcher", () => {
     expect(maxActive()).toBe(2);
   });
 
-  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
-    const maxActive = trackMaxActiveFlowRuns();
+  it.each([false, true])(
+    "runs isolated same-channel adapter instances within the suite budget (fail-fast=%s)",
+    async (failFast) => {
+      const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+      const maxActive = trackMaxActiveFlowRuns();
 
-    const isolatedScenarioId = "matrix-approval-channel-target-both";
-    const sharedScenarioIds = [
-      "matrix-approval-deny-reaction",
-      "matrix-approval-exec-metadata-chunked",
-      "matrix-approval-exec-metadata-single-event",
-      "matrix-approval-plugin-metadata-single-event",
-      "matrix-approval-thread-target",
-    ];
-    const scenarioIds = [isolatedScenarioId, ...sharedScenarioIds];
-    await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
-      providerMode: "mock-openai",
-      channelDriver: "live",
-      adapterFactories: [
-        {
-          id: "matrix",
-          isolatesInstances: true,
-          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
-          create: vi.fn(),
-        },
-      ],
-      concurrency: 6,
-      scenarioIds,
-    });
+      const isolatedScenarioId = "matrix-approval-channel-target-both";
+      const sharedScenarioIds = [
+        "matrix-approval-deny-reaction",
+        "matrix-approval-exec-metadata-chunked",
+        "matrix-approval-exec-metadata-single-event",
+        "matrix-approval-plugin-metadata-single-event",
+        "matrix-approval-thread-target",
+      ];
+      const scenarioIds = [isolatedScenarioId, ...sharedScenarioIds];
+      await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+        providerMode: "mock-openai",
+        channelDriver: "live",
+        adapterFactories: [
+          {
+            id: "matrix",
+            isolatesInstances: true,
+            matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+            create: vi.fn(),
+          },
+        ],
+        concurrency: 6,
+        failFast,
+        scenarioIds,
+      });
 
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
-    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
-      ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
-      [isolatedScenarioId],
-    ]);
-    expect(maxActive()).toBe(6);
-  });
+      expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+      expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+        ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
+        [isolatedScenarioId],
+      ]);
+      expect(maxActive()).toBe(failFast ? 1 : 6);
+    },
+  );
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [
@@ -1353,8 +1357,8 @@ describe("qa suite runtime launcher", () => {
         writeEvidenceFile: false,
       }),
     );
-    await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    await fs.access(path.join(outputDir, "qa-suite-summary.json"));
+    await fs.access(path.join(outputDir, "qa-evidence.json"));
     await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
       {
         code: "ENOENT",
@@ -2556,8 +2560,8 @@ describe("qa suite runtime launcher", () => {
       counts: { failed: number; passed: number; total: number };
     };
     expect(summary.counts).toMatchObject({ total: 2, passed: 1, failed: 1 });
-    await expect(fs.access(result.result.evidencePath)).resolves.toBeUndefined();
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.evidencePath);
+    await fs.access(result.result.reportPath);
   });
 
   it("reuses unavailable channel credential evidence across serial partitions", async () => {

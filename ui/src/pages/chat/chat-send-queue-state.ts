@@ -1,6 +1,11 @@
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  captureChatOutboxAdmission,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -12,7 +17,7 @@ import type {
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   readQueuedMessageById,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -23,7 +28,6 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
-import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
@@ -56,10 +60,11 @@ export function createPendingSendMessage(
   queueMode?: ChatQueueItem["queueMode"],
   intent?: ChatQueueItem["intent"],
   expectedLeafEntryId?: string | null,
+  mentions?: readonly HumanMention[],
 ): { item: ChatQueueItem; admission: ReturnType<typeof captureChatOutboxAdmission> } | null {
-  const trimmed = text.trim();
+  const submitted = trimHumanMentions(text, mentions);
   const hasAttachments = Boolean(attachments && attachments.length > 0);
-  if (!trimmed && !hasAttachments) {
+  if (!submitted.text && !hasAttachments) {
     return null;
   }
   const admission = captureChatOutboxAdmission(host, host.sessionKey);
@@ -68,7 +73,8 @@ export function createPendingSendMessage(
   // retired by the write that admits this replacement, not here.
   const pending: ChatQueueItem = {
     id: generateUUID(),
-    text: intent ? text : trimmed,
+    text: intent ? text : submitted.text,
+    ...(submitted.mentions ? { mentions: submitted.mentions } : {}),
     createdAt: Date.now(),
     ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
     attachments: hasAttachments ? attachments : undefined,
@@ -125,23 +131,21 @@ export function captureChatConnectionOwner(
 export function updateQueuedSendItem(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
-  sessionKey: string,
   id: string,
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return storageMode === "memory"
     ? updateVolatileQueuedMessage(host, id, update, { retryable: true })
-    : updateQueuedMessageForSession(host, sessionKey, id, update);
+    : updateQueuedMessage(host, id, update);
 }
 
 export function deliveryStateWriter(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
-  sessionKey: string,
   id: string,
 ) {
   return (sendState: ChatQueueItem["sendState"], sendError?: string) =>
-    updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+    updateQueuedSendItem(host, storageMode, id, (item) => ({
       ...item,
       sendError,
       sendState,
@@ -156,7 +160,7 @@ export function finishChatDeliveryAdmission(
   options?: QueuedChatSendOptions,
 ): ChatQueueItem | QueuedChatSendResult {
   const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
+  const setState = deliveryStateWriter(host, storageMode, item.id);
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   const current = readQueuedMessageById(host, item.id);
   if (!current) {
@@ -249,7 +253,7 @@ export async function prepareQueuedChatPayload(
   }
   if (payload.status === "failed") {
     const failed = failOutboxPayload(current, payload.reason);
-    updateQueuedMessageForSession(host, sessionKey, id, () => failed);
+    updateQueuedMessage(host, id, () => failed);
     surfaceChatDeliveryFailure(host, sessionKey, original.agentId, failed.sendError);
     return "failed";
   }
@@ -258,12 +262,12 @@ export async function prepareQueuedChatPayload(
     hydrated.attachmentPayload?.key !== original.attachmentPayload?.key &&
     hydrated.sendState === "unconfirmed"
   ) {
-    updateQueuedMessageForSession(host, sessionKey, id, () => hydrated);
+    updateQueuedMessage(host, id, () => hydrated);
     return "pending";
   }
   if (
     (!original.attachmentPayload || original.attachmentStorageError) &&
-    !updateQueuedMessageForSession(host, sessionKey, id, () => hydrated)
+    !updateQueuedMessage(host, id, () => hydrated)
   ) {
     if (!original.attachmentPayload) {
       retireOutboxPayload(payload.update);

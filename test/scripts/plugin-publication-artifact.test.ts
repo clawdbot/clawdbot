@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { deflateRawSync, gzipSync } from "node:zlib";
+import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -159,17 +159,6 @@ function paxRecord(key: string, value: string): Buffer {
     }
     length = actualLength;
   }
-}
-
-function crc32(bytes: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 type ZipFile = {
@@ -1016,6 +1005,15 @@ describe("plugin publication artifact", () => {
     tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
+  });
+
+  it("rejects changed ZIP payload bytes with matching header checksums", () => {
+    const zip = createZip([{ bytes: Buffer.from("payload"), name: "payload.txt" }]);
+    const dataOffset = 30 + Buffer.byteLength("payload.txt");
+    // Keep both header CRCs unchanged so corruption reaches the payload check.
+    zip[dataOffset] = zip.readUInt8(dataOffset) ^ 0xff;
+
+    expect(() => inspectTestZip(zip)).toThrow(/checksum mismatch for payload\.txt/u);
   });
 
   it("accepts canonical signed data descriptors and rejects noncanonical ZIP structure", () => {

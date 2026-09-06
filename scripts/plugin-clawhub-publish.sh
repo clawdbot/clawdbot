@@ -139,7 +139,7 @@ pack_cmd=(
   "${clawhub_workdir}"
   package
   pack
-  "${package_source}"
+  .
   --pack-destination
   "${pack_dir}"
   --json
@@ -174,6 +174,7 @@ if [[ "${packed_mode}" == "false" ]]; then
 
   pack_json="${pack_dir}/pack.json"
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
     node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"

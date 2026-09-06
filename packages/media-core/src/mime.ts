@@ -162,8 +162,9 @@ const MIME_SYNONYMS: Record<string, string> = {
   "text/yaml": "application/yaml",
   "application/x-yaml": "application/yaml",
   "application/xml": "text/xml",
-  // Preserve the shipped AVI filename/header spelling for byte-detected containers.
+  // Preserve shipped filename/header spellings for byte-detected container aliases.
   "video/vnd.avi": "video/x-msvideo",
+  "video/matroska": "video/x-matroska",
 };
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding registered synonyms. */
@@ -274,8 +275,10 @@ export async function detectMime(opts: {
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =
-    mimeHints.find((mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred) ??
-    (extMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[extMime] === inferred ? extMime : undefined);
+    inferred &&
+    [...mimeHints, extMime].find(
+      (mime) => mime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
+    );
   if (audioContainerHint) {
     return audioContainerHint;
   }

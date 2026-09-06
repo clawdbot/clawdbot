@@ -23,6 +23,7 @@ import {
   BEAM_MAX_SESSIONS,
   BEAM_RETENTION_MS,
   type BeamTranscriptItem,
+  type BeamSourceModel,
   type BeamUpload,
 } from "./types.js";
 
@@ -75,15 +76,10 @@ function boundedNumber(value: unknown, fallback: number, min: number, max: numbe
 }
 
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
-export function parseBeamMirrorConfig(config: unknown): BeamMirrorConfig | undefined | string {
-  if (!isRecord(config)) {
-    return undefined;
-  }
-  const plugins = isRecord(config.plugins) ? config.plugins : undefined;
-  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
-  const entry = isRecord(entries?.beam) ? entries.beam : undefined;
-  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
-  const mirror = pluginConfig?.mirror;
+export function parseBeamMirrorConfig(
+  config: ReturnType<PluginRuntime["config"]["current"]>,
+): BeamMirrorConfig | undefined | string {
+  const mirror = config.plugins?.entries?.beam?.config?.mirror;
   if (mirror === undefined) {
     return undefined;
   }
@@ -199,10 +195,28 @@ export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
 type BeamMirrorCandidate = {
   catalogId: string;
   hostId: string;
+  modelProvider?: string;
   threadId: string;
   title: string;
   recencyAt: number;
 };
+
+function sourceModelForMirror(
+  providerValue: string | undefined,
+  items: readonly SessionCatalogTranscriptItem[],
+): BeamSourceModel | undefined {
+  const provider = providerValue?.trim().toLowerCase();
+  const rawModel = items.find((item) => item.type === "agentMessage" && item.model?.trim())?.model;
+  if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !rawModel) {
+    return undefined;
+  }
+  const prefixed = rawModel.trim();
+  const model = truncateUtf16Safe(
+    prefixed.startsWith(`${provider}/`) ? prefixed.slice(provider.length + 1) : prefixed,
+    256,
+  ).trim();
+  return model && /^\S+$/u.test(model) ? { provider, model } : undefined;
+}
 
 function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
   return `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
@@ -235,7 +249,8 @@ export function createBeamMirrorRunner(params: {
   const { signal } = controller;
   let lastWarnAt = 0;
   let warnedProcessHomeIsolation = false;
-  let redirectBlockedEndpoint: string | undefined;
+  let endpoint = "";
+  let redirectBlocked = false;
   let activeTick: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   const stopError = new Error("Beam mirror stopped");
@@ -289,15 +304,10 @@ export function createBeamMirrorRunner(params: {
     }
   };
 
-  const upload = async (
-    endpoint: string,
-    token: string | undefined,
-    payload: BeamUpload,
-  ): Promise<boolean> => {
-    if (signal.aborted || redirectBlockedEndpoint === endpoint) {
+  const upload = async (token: string | undefined, payload: BeamUpload): Promise<boolean> => {
+    if (signal.aborted || redirectBlocked) {
       return false;
     }
-    redirectBlockedEndpoint = undefined;
 
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     try {
@@ -326,7 +336,7 @@ export function createBeamMirrorRunner(params: {
         // Repeating the same poll cannot satisfy direct-only delivery. Hold this exact
         // endpoint for this service instance; a fresh instance probes once so a receiver
         // fixed in place can recover without a meaningless config change.
-        redirectBlockedEndpoint = endpoint;
+        redirectBlocked = true;
         params.logger.warn(
           `beam mirror upload blocked for ${payload.source}: receiver returned redirect (${error.status}); redirects are not followed; configure the final endpoint`,
         );
@@ -340,9 +350,8 @@ export function createBeamMirrorRunner(params: {
       signal.throwIfAborted();
       if (!response.ok) {
         warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
-        return false;
       }
-      return true;
+      return response.ok;
     } finally {
       // The mirror uses only the status; cancel the ignored payload so slow
       // receiver responses cannot retain connection slots across poll retries.
@@ -367,6 +376,7 @@ export function createBeamMirrorRunner(params: {
     );
     signal.throwIfAborted();
     const reduced = buildBeamMirrorItems(transcript.items);
+    const sourceModel = sourceModelForMirror(candidate.modelProvider, transcript.items);
     const items = reduced.items.length
       ? reduced.items
       : [{ type: "other" as const, text: "no shareable messages yet" }];
@@ -377,6 +387,7 @@ export function createBeamMirrorRunner(params: {
       title: truncateUtf16Safe(redactToolPayloadText(candidate.title), 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
+      ...(sourceModel ? { sourceModel } : {}),
       ...(reduced.truncated || transcript.nextCursor ? { truncated: true } : {}),
       items,
     });
@@ -395,6 +406,12 @@ export function createBeamMirrorRunner(params: {
       if (typeof mirror === "string") {
         warnThrottled(`beam mirror disabled: ${mirror}`);
         return;
+      }
+      if (endpoint !== mirror.endpoint) {
+        // Acknowledgements, terminal retries, and redirect blocks belong to one receiver.
+        endpoint = mirror.endpoint;
+        tracked.clear();
+        redirectBlocked = false;
       }
       let agentId: string;
       try {
@@ -459,6 +476,7 @@ export function createBeamMirrorRunner(params: {
               const candidate = {
                 catalogId: catalog.id,
                 hostId: host.hostId,
+                modelProvider: session.modelProvider,
                 threadId: session.threadId,
                 title: session.name?.trim() || `${catalog.id} session`,
                 recencyAt: session.recencyAt ?? session.updatedAt ?? 0,
@@ -489,7 +507,7 @@ export function createBeamMirrorRunner(params: {
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
           }
-          const uploaded = await upload(mirror.endpoint, token, payload);
+          const uploaded = await upload(token, payload);
           signal.throwIfAborted();
           if (uploaded) {
             trackSuccessfulUpload(key, candidate, fingerprint);
@@ -529,7 +547,7 @@ export function createBeamMirrorRunner(params: {
           try {
             const payload = await buildUpload(agentId, catalog, entry.candidate, true);
             signal.throwIfAborted();
-            uploaded = await upload(mirror.endpoint, token, payload);
+            uploaded = await upload(token, payload);
             signal.throwIfAborted();
           } catch {
             signal.throwIfAborted();

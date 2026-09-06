@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
-import { testing } from "../infra/session-delivery-queue-runtime.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDeliveries,
   releaseSessionDeliveryClaim,
   SESSION_DELIVERY_QUEUE_NAME,
 } from "../infra/session-delivery-queue-storage.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
@@ -18,6 +18,12 @@ import {
 } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+// Keep the real delivery scheduler, but disable optional idle cache work that
+// can retain admissions after this fixture closes its Gateway.
+vi.mock("./server-idle-task.js", () => ({
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
 
 async function startProofProvider(requests: string[]): Promise<http.Server> {
   const server = http.createServer((request, response) => {
@@ -77,7 +83,6 @@ async function closeProofProvider(server: http.Server): Promise<void> {
 }
 
 afterEach(() => {
-  testing.reset();
   resetGatewayTestState();
   vi.restoreAllMocks();
 });
@@ -94,6 +99,7 @@ describe("session delivery clock-jump integration", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       let providerServer: http.Server | undefined;
+      let deliveryId = "";
       const providerRequests: string[] = [];
 
       try {
@@ -146,7 +152,7 @@ describe("session delivery clock-jump integration", () => {
             route: { channel: "webchat", to: sessionKey, chatType: "direct" },
             inputProvenance: {
               kind: "inter_session",
-              sourceChannel: "webchat",
+              sourceChannel: "internal",
               sourceTool: "image_generate",
             },
             sourceReplyDeliveryMode: "automatic",
@@ -154,6 +160,7 @@ describe("session delivery clock-jump integration", () => {
           60_000,
         );
 
+        deliveryId = id;
         gateway = await startGatewayWithClient({
           cfg,
           configPath,
@@ -177,12 +184,15 @@ describe("session delivery clock-jump integration", () => {
         await scheduleSessionDelivery(id);
 
         await vi.waitFor(
-          async () => expect(await loadPendingSessionDeliveries()).toStrictEqual([]),
+          async () => {
+            expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+            // Queue settlement can precede the client's WebSocket event callback.
+            expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
+          },
           { timeout: 15_000, interval: 50 },
         );
         expect(providerRequests).toHaveLength(1);
         expect(providerRequests[0]).toContain("clock-jump proof marker");
-        expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
         expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
         expect(getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id)).toBe("completed");
       } finally {
@@ -193,6 +203,7 @@ describe("session delivery clock-jump integration", () => {
               await disconnectGatewayClient(gateway.client);
             } finally {
               await gateway.server.close({ reason: "session delivery clock-jump proof complete" });
+              await expect(scheduleSessionDelivery(deliveryId)).resolves.toBe(false);
             }
           }
         } finally {
@@ -209,6 +220,7 @@ describe("session delivery clock-jump integration", () => {
           }
         }
       }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
   );
 });

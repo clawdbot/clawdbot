@@ -7,12 +7,15 @@ import {
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { tableHasColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -97,4 +100,96 @@ describe("pending input additive schema", () => {
     drifted.close();
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_pending_inputs|schema/u);
   });
+
+  it.each(["open", "doctor", "first-use"] as const)(
+    "adds consumption to an existing same-version store through %s without changing accepted bytes or version markers",
+    async (path) => {
+      const options = {
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-input-column-") },
+      };
+      const scope = { ...options, sessionKey: "agent:main:column", sessionId: "column-session" };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const receipt = await stageSessionPendingInput(scope, {
+        runId: "column-run",
+        message: {
+          role: "user",
+          content: "Retain exact input",
+          timestamp: 1,
+          idempotencyKey: "column-run:user",
+        },
+        assertCurrent: () => {},
+      });
+      receipt!.finish("interrupted");
+      const filename = openOpenClawAgentDatabase(options).path;
+      closeOpenClawAgentDatabasesForTest();
+      const old = new DatabaseSync(filename);
+      old.exec("ALTER TABLE session_pending_inputs DROP COLUMN consumed_event_id");
+      const version = old.prepare("PRAGMA user_version").get();
+      const metadata = old.prepare("SELECT * FROM schema_meta").all();
+      const original = old.prepare("SELECT message_json FROM session_pending_inputs").get();
+      old.close();
+      expect(listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted", message: receipt!.message }],
+      });
+      if (path === "open") {
+        openOpenClawAgentDatabase(options);
+        closeOpenClawAgentDatabasesForTest();
+      } else {
+        const current = new DatabaseSync(filename);
+        if (path === "doctor") {
+          ensureOpenClawAgentDatabaseSchema(current, options);
+        } else {
+          ensureSessionPendingInputsSchema(current);
+        }
+        current.close();
+      }
+      const reopened = new DatabaseSync(filename, { readOnly: true });
+      try {
+        expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);
+        expect(reopened.prepare("SELECT * FROM schema_meta").all()).toEqual(metadata);
+        expect(reopened.prepare("SELECT message_json FROM session_pending_inputs").get()).toEqual(
+          original,
+        );
+        expect(
+          reopened.prepare("SELECT consumed_event_id FROM session_pending_inputs").get(),
+        ).toEqual({ consumed_event_id: null });
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retries first-use DDL after rollback on the same connection (existing table: %s)",
+    (existing) => {
+      const database = new DatabaseSync(":memory:");
+      try {
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL.replace("  consumed_event_id TEXT,\n", ""));
+        database.exec("PRAGMA user_version = 19");
+        if (!existing) {
+          database.exec("DROP TABLE session_pending_inputs");
+        }
+        const before = database.prepare("PRAGMA schema_version").get();
+        expect(() =>
+          runSqliteImmediateTransactionSync(database, () => {
+            ensureSessionPendingInputsSchema(database);
+            throw new Error("abort first use");
+          }),
+        ).toThrow("abort first use");
+        expect(database.prepare("PRAGMA schema_version").get()).toEqual(before);
+        expect(tableExists(database, "session_pending_inputs")).toBe(existing);
+        expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(false);
+        ensureSessionPendingInputsSchema(database);
+        expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(true);
+        const after = database.prepare("PRAGMA schema_version").get();
+        ensureSessionPendingInputsSchema(database);
+        expect(database.prepare("PRAGMA schema_version").get()).toEqual(after);
+        expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+      } finally {
+        database.close();
+      }
+    },
+  );
 });

@@ -1,10 +1,15 @@
 /** Resolves incomplete-turn payloads, continuation evidence, and run liveness. */
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
@@ -12,13 +17,15 @@ import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classificati
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
-import { hasAsyncActivity, hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
+import {
+  hasAsyncActivity,
+  hasAttemptTerminalState,
+  resolveCurrentAttemptAssistant,
+} from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
   hasOnlySilentAssistantReply,
-  isEmptyResponseAssistantTurn,
   isIncompleteTerminalAssistantTurn,
-  isReasoningOnlyAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
@@ -36,7 +43,7 @@ type SilentToolResultAttempt = Pick<
 
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
-  "lastAssistant" | "replayMetadata" | "terminal"
+  "currentAttemptAssistant" | "currentAttemptCompletedAssistant" | "replayMetadata" | "terminal"
 >;
 
 type TerminalAuthFailureContext = {
@@ -60,8 +67,6 @@ export function resolveIncompleteTurnPayloadText(params: {
   terminalAuthFailure?: TerminalAuthFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  // Prefer the current attempt's terminal message. The session fallback can
-  // still point at the pre-tool turn after a post-tool answer completes. (#80918)
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
@@ -95,15 +100,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+  if (
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
+    params.attempt.hasToolMediaBlockReply ||
+    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+  ) {
     return null;
   }
 
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return null;
-  }
-
-  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -112,16 +117,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const stopReason = assistant?.stopReason;
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
-  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
   if (
     !incompleteTerminalAssistant &&
-    !reasoningOnlyAssistant &&
+    !assistantState.reasoningOnly &&
     !thinkingOnlyTerminal &&
-    !emptyResponseAssistant &&
+    !assistantState.emptyResponse &&
     stopReason !== "error"
   ) {
     return null;
@@ -129,6 +129,9 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
+  }
+  if (assistant && isProviderRefusalAssistantError(assistant)) {
+    return formatUserFacingAssistantErrorText(assistant);
   }
   const authFailure = params.terminalAuthFailure;
   const reason = authFailure?.assistantProfileFailureReason;
@@ -166,8 +169,7 @@ export function shouldRetryMissingAssistantTurn(params: {
     Boolean(params.promptError) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
-    params.attempt.currentAttemptAssistant ||
-    params.attempt.lastAssistant ||
+    resolveCurrentAttemptAssistant(params.attempt) ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
@@ -355,7 +357,7 @@ export function resolveRunLivenessState(params: {
   if ((params.aborted || params.timedOut) && params.payloadCount === 0) {
     return "blocked";
   }
-  if (params.attempt.lastAssistant?.stopReason === "error") {
+  if (resolveCurrentAttemptAssistant(params.attempt)?.stopReason === "error") {
     return "blocked";
   }
   return "working";

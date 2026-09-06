@@ -114,12 +114,12 @@ export async function canFallbackToImplicitLocalGateway(params: {
 }
 
 /** Internal CLI facade for callers that need transport or auth policy overrides. */
-export async function callGatewayFromCliWithTransport(
+export async function callGatewayFromCliWithTransport<T = Record<string, unknown>>(
   method: string,
   opts: Parameters<GatewayRpcRuntimeModule["callGatewayFromCliRuntime"]>[1],
   params?: unknown,
   extra?: Parameters<GatewayRpcRuntimeModule["callGatewayFromCliRuntime"]>[3],
 ) {
   const runtime = await loadGatewayRpcRuntime();
-  return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
+  return await runtime.callGatewayFromCliRuntime<T>(method, opts, params, extra);
 }

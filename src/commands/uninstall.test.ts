@@ -13,6 +13,15 @@ import {
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
+const clackMocks = vi.hoisted(() => ({
+  cancel: vi.fn(),
+  confirm: vi.fn(),
+  isCancel: vi.fn(),
+  multiselect: vi.fn(),
+}));
+
+vi.mock("@clack/prompts", () => clackMocks);
+
 const { uninstallCommand } = await import("./uninstall.js");
 
 describe("uninstallCommand", () => {
@@ -21,6 +30,22 @@ describe("uninstallCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+    clackMocks.confirm.mockResolvedValue(true);
+    clackMocks.isCancel.mockReturnValue(false);
+    clackMocks.multiselect.mockImplementation(
+      async (options: { initialValues?: string[] }) => options.initialValues ?? [],
+    );
+  });
+
+  it("defaults bare interactive uninstall to gateway service only", async () => {
+    await uninstallCommand(runtime, { yes: true, dryRun: true });
+
+    expect(clackMocks.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValues: ["service"] }),
+    );
+    expect(cleanupCommandLogMessages(runtime)).toContain("[dry-run] remove gateway service");
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
   });
 
   it.each([

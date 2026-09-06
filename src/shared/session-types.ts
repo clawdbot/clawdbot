@@ -1,59 +1,20 @@
 import type {
-  GatewayAgentRuntime as ProtocolGatewayAgentRuntime,
+  AgentSummary,
+  ModelChoice,
   SessionCreatedActor,
   SessionPerson,
-  SessionPermissionMode,
   SessionsAssignOwnerParams,
-  WorkerExecutionMode,
 } from "../../packages/gateway-protocol/src/index.js";
 
-/** Agent identity fields returned by gateway session listing APIs. */
-type GatewayAgentIdentity = {
-  name?: string;
-  theme?: string;
-  emoji?: string;
-  avatar?: string;
-  avatarUrl?: string;
-};
-
-/** Model summary returned for an agent/session row. */
-type GatewayAgentModel = {
-  primary?: string;
-  fallbacks?: string[];
-};
-
 /** Runtime selection metadata for an agent row. */
-export type GatewayAgentRuntime = {
-  id: string;
-  fallback?: "openclaw" | "none";
-  cloudPlacementSupported?: boolean;
-  cloudPlacementExecutionMode?: WorkerExecutionMode;
-  devicePlacement?: ProtocolGatewayAgentRuntime["devicePlacement"];
-  devicePlacementSupported?: boolean;
-  source:
-    | "env"
-    | "agent"
-    | "defaults"
-    | "model"
-    | "provider"
-    | "implicit"
-    | "session"
-    | "session-key";
-};
+export type GatewayAgentRuntime = NonNullable<AgentSummary["agentRuntime"]>;
 
 /** Thinking-level option exposed to UI clients. */
-export type GatewayThinkingLevelOption = {
-  id: string;
-  label: string;
-};
+export type GatewayThinkingLevelOption = NonNullable<AgentSummary["thinkingLevels"]>[number];
 
-export type GatewayContextWindowOption = {
-  id: string;
-  label: string;
-  contextWindow: number;
-};
+export type GatewayContextWindowOption = NonNullable<ModelChoice["contextWindows"]>[number];
 
-export type GatewayAgentKind = "agent" | "system";
+export type GatewayAgentKind = NonNullable<AgentSummary["kind"]>;
 
 /** Assignable identity returned by the complete session-owner facet. */
 export type SessionOwnerFacetIdentity = SessionsAssignOwnerParams["owner"] &
@@ -63,21 +24,21 @@ export type SessionOwnerFacetIdentity = SessionsAssignOwnerParams["owner"] &
 export type SessionBoardFace = "chat" | "dashboard";
 
 /** Common agent row shape used by session list responses. */
-export type GatewayAgentRow = {
-  id: string;
-  kind?: GatewayAgentKind;
-  name?: string;
-  identity?: GatewayAgentIdentity;
-  workspace?: string;
-  workspaceGit?: boolean;
-  model?: GatewayAgentModel;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  /** Configured posture label only; never an authorization decision. */
-  defaultPermissionMode?: SessionPermissionMode;
-};
+export type GatewayAgentRow = Pick<
+  AgentSummary,
+  | "id"
+  | "kind"
+  | "name"
+  | "identity"
+  | "workspace"
+  | "workspaceGit"
+  | "model"
+  | "agentRuntime"
+  | "thinkingLevels"
+  | "thinkingOptions"
+  | "thinkingDefault"
+  | "defaultPermissionMode"
+>;
 
 /** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {

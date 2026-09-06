@@ -898,10 +898,47 @@ describe("noteMemorySearchHealth", () => {
       "openai",
       { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     ],
+    [
+      "treats store SecretRef remote apiKey as configured for explicit provider",
+      "openai",
+      { source: "store", provider: "default", id: "OPENAI_API_KEY" },
+    ],
   ])("%s", async (_name, provider, apiKey) => {
     await runMemorySearchHealth(provider, {}, { remote: { apiKey } });
     expect(note).not.toHaveBeenCalled();
     expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    ["gemini", "google", "GOOGLE_API_KEY"],
+    ["openai", "openai", "OPENAI_API_KEY"],
+  ])("%s provider credentials", (provider, authProvider, secretId) => {
+    it.each(["store", "absent", "marker"] as const)("checks a %s key", async (keyKind) => {
+      hasAnyAuthProfileStoreSource.mockReturnValue(false);
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [authProvider]: {
+              baseUrl: "https://embeddings.example.test/v1",
+              models: [],
+              apiKey:
+                keyKind === "store"
+                  ? { source: "store", provider: "default", id: secretId }
+                  : keyKind === "marker"
+                    ? secretId
+                    : undefined,
+            },
+          },
+        },
+      };
+      await runConfiguredMemorySearch(provider, config);
+      if (keyKind === "store") {
+        expect(note).not.toHaveBeenCalled();
+      } else {
+        expect(firstNoteMessage()).toContain("no API key was found");
+      }
+      expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

@@ -268,7 +268,7 @@ describe("worker environment service provision replay", () => {
         generation: expectedGeneration,
         environmentId,
       });
-      await run("/gateway/workspace");
+      await run({ kind: "local", path: "/gateway/workspace" });
     });
     const activationBarrier = vi.fn(async ({ activate }) => activate());
     const onActivated = vi.fn();
@@ -288,11 +288,13 @@ describe("worker environment service provision replay", () => {
       runActivationBarrier: activationBarrier,
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
+      resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       onActivated,
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(

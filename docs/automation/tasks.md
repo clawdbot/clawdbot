@@ -58,7 +58,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   </Tab>
   <Tab title="Cancel and notify">
     ```bash
-    # Cancel a running task (kills the child session)
+    # Cancel a running task through its execution owner
     openclaw tasks cancel <lookup>
 
     # Change notification policy for a task
@@ -159,6 +159,8 @@ result instead of misreporting the child execution as failed.
 Use `openclaw tasks list --status blocked` to find these tasks. They also remain
 in `--status succeeded` results because the underlying execution succeeded, and
 JSON output preserves the stored status plus the `blocked` terminal outcome.
+Blocked media-generation tasks retain bounded attachment references in the task
+result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
@@ -176,6 +178,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 **Direct delivery** - if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Discord, Slack, Telegram, etc.). Group and channel task completions are instead routed through the requester session so the parent agent can write the visible reply. For subagent completions, OpenClaw also preserves bound thread/topic routing when available and can fill a missing `to` / account from the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) before giving up on direct delivery.
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
+
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
 
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
@@ -235,7 +241,9 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks cancel <lookup>
     ```
 
-    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
+
+    Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. If a crash or restart removed the live owner, keep the Gateway running so its existing maintenance can reconcile the task as `lost`. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot establish Gateway liveness. See [task maintenance](/cli/tasks#maintenance).
 
   </Accordion>
   <Accordion title="tasks retry | dismiss">
@@ -284,6 +292,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">
@@ -337,6 +346,8 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying.
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
+
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
 
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 

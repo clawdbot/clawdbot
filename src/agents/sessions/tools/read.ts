@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -36,14 +35,27 @@ import {
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
   readToolOutputSchema,
 } from "./read-tool-contract.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import {
+  getTextOutput,
+  invalidArgText,
+  replaceTabs,
+  reuseTextComponent,
+  shortenPath,
+  str,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -182,14 +194,6 @@ function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string 
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
 }
 
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
-}
-
 function getOpenClawDocsClassification(
   absolutePath: string,
 ): CompactReadClassification | undefined {
@@ -243,7 +247,7 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveToCwd(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
 async function resolveReadToolInputPath(
@@ -388,7 +392,7 @@ export function createReadToolDefinition(
         path,
         offset,
         limit,
-        cursor,
+        cursor = 0,
         optional,
       }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
@@ -400,7 +404,7 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
-      if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+      if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
       return new Promise<{
@@ -515,14 +519,33 @@ export function createReadToolDefinition(
               const textContent = (
                 decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
               ).replaceAll("\r\n", "\n");
-              const allLines = textContent.split("\n");
-              if (allLines.at(-1) === "") {
-                allLines.pop();
-              }
-              const totalFileLines = allLines.length;
-              // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
               const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
+              const requestedLines =
+                limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
+              let selectedLines: string[] = [];
+              let totalFileLines = 0;
+              if (startLine === 0 && requestedLines === undefined) {
+                selectedLines = textContent.split("\n");
+                if (selectedLines.at(-1) === "") {
+                  selectedLines.pop();
+                }
+                totalFileLines = selectedLines.length;
+              } else {
+                // Count through EOF for continuation metadata, retaining only the requested range.
+                for (let start = 0; start < textContent.length;) {
+                  const newline = textContent.indexOf("\n", start);
+                  const end = newline === -1 ? textContent.length : newline;
+                  if (
+                    totalFileLines >= startLine &&
+                    (requestedLines === undefined || selectedLines.length < requestedLines)
+                  ) {
+                    selectedLines.push(textContent.slice(start, end));
+                  }
+                  totalFileLines += 1;
+                  start = end + 1;
+                }
+              }
               let outputText: string;
               if (totalFileLines === 0) {
                 outputText =
@@ -531,34 +554,21 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+              } else if (cursor > 0 && cursor >= selectedLines[0]!.length) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
                     : "";
-                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${allLines[startLine]!.length} characters).${nextLine}`;
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${selectedLines[0]!.length} characters).${nextLine}`;
               } else {
-                const firstLine = allLines[startLine]!;
-                if (
-                  cursor !== undefined &&
-                  cursor > 0 &&
-                  firstLine.codePointAt(cursor - 1)! > 0xffff
-                ) {
+                const firstLine = selectedLines[0]!;
+                if (cursor > 0 && firstLine.codePointAt(cursor - 1)! > 0xffff) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
                 }
-                const endLine =
-                  limit === undefined
-                    ? totalFileLines
-                    : Math.min(
-                        startLine + normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
-                        totalFileLines,
-                      );
-                const selectedLines = allLines.slice(startLine, endLine);
-                if (cursor !== undefined) {
-                  selectedLines[0] = firstLine.slice(cursor);
-                }
+                const endLine = startLine + selectedLines.length;
+                selectedLines[0] = firstLine.slice(cursor);
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
                 if (selectedLines.every((line) => line.length === 0)) {
                   const selectedLineCount = selectedLines.length;
@@ -594,6 +604,11 @@ export function createReadToolDefinition(
                   }
                 }
               }
+              if (selectedLines.length === 1 && truncated === undefined) {
+                // A singleton join can retain the decoded file. Copy only the bounded result,
+                // preserving UTF-16 code units from custom decoders, including lone surrogates.
+                outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
+              }
               content = [{ type: "text", text: outputText }];
             }
 
@@ -619,31 +634,25 @@ export function createReadToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const classification = !context.expanded
         ? getCompactReadClassification(args, context.cwd)
         : undefined;
-      text.setText(
-        classification
-          ? formatCompactReadCall(classification, args, theme)
-          : formatReadCall(args, theme),
-      );
-      return text;
+      const content = classification
+        ? formatCompactReadCall(classification, args, theme)
+        : formatReadCall(args, theme);
+      return reuseTextComponent(context.lastComponent, content);
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(
-        formatReadResult(
-          context.args,
-          result,
-          optionsLocal,
-          theme,
-          context.showImages,
-          context.cwd,
-          context.isError,
-        ),
+      const content = formatReadResult(
+        context.args,
+        result,
+        optionsLocal,
+        theme,
+        context.showImages,
+        context.cwd,
+        context.isError,
       );
-      return text;
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

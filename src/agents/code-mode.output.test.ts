@@ -23,6 +23,86 @@ import { jsonResult } from "./tools/common.js";
 const fakeTool = pluginToolWithExecute;
 afterEach(resetCodeModeTestState);
 describe("Code Mode output provenance", () => {
+  it("identifies unawaited catalog descriptions in output and final values", async () => {
+    const fixture = pluginTool("promise_fixture", "Describe a synthetic tool");
+    const result = await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness([fixture]),
+      code: `const handles = await catalog.search("promise_fixture");
+        const descriptions = handles.map((tool) => tool.describe());
+        text({ descriptions }); json({ descriptions });
+        const awaited = await Promise.all(descriptions);
+        return { descriptions, awaited, handles };`,
+    });
+    const diagnostic = expect.stringMatching(/Promise.*await.*Promise\.all/u);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        descriptions: [diagnostic],
+        awaited: [expect.objectContaining({ description: "Describe a synthetic tool" })],
+        handles: [expect.objectContaining({ callableName: "promise_fixture" })],
+      },
+      output: [
+        { type: "text", text: expect.stringMatching(/Promise.*await.*Promise\.all/u) },
+        { type: "json", value: { descriptions: [diagnostic] } },
+      ],
+    });
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses pending Promises without awaiting them or invoking plain thenables", async () => {
+    const result = await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness(),
+      code: `const pending = new Promise(() => {});
+        const plain = { label: "ordinary", then() { throw new Error("must not invoke"); } };
+        text(pending); json(pending); json(plain); text(plain);
+        return { nested: [{ pending }], plain };`,
+      overrides: { timeoutMs: 500 },
+    });
+    const diagnostic = expect.stringMatching(/Promise.*await.*Promise\.all/u);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { nested: [{ pending: diagnostic }], plain: { label: "ordinary" } },
+      output: [
+        { type: "text", text: diagnostic },
+        { type: "json", value: diagnostic },
+        { type: "json", value: { label: "ordinary" } },
+        { type: "text", text: '{"label":"ordinary"}' },
+      ],
+    });
+  });
+
+  it.each([
+    { name: "return escaped", surface: "return", character: String.fromCharCode(92) },
+    { name: "return ASCII", surface: "return", character: "x" },
+    { name: "text escaped", surface: "text", character: String.fromCharCode(92) },
+    { name: "text ASCII", surface: "text", character: "x" },
+  ])("keeps useful $name prefix", async ({ name, surface, character }) => {
+    const payload = "Regex source: " + character.repeat(70_000);
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+    const response = await h.tools[0]!.execute(`prefix-${name}`, {
+      code: `const payload = "Regex source: " + String.fromCharCode(${character.charCodeAt(0)}).repeat(70000); ${surface === "return" ? "return payload;" : "text(payload); return true;"}`,
+    });
+    const content = response.content[0];
+    if (content?.type !== "text") {
+      throw new Error("Expected the ordinary Code Mode text result");
+    }
+    const result = JSON.parse(content.text) as Record<string, unknown>;
+    expect(result).toEqual(resultDetails(response));
+    expect(result.status).toBe("completed");
+    expectCodeModeSharedBudget(result, 65_536);
+    const original = surface === "return" ? payload : [{ type: "text", text: payload }];
+    const marker = (surface === "return" ? result.value : (result.output as unknown[])[0]) as {
+      prefix: string;
+      omittedBytes: number;
+    };
+    expectOriginalCodeModeMarker(marker, original);
+    if (surface === "text") {
+      expect(result.value).toBe(true);
+    }
+    expect(marker.prefix).toContain("Regex source: ");
+  });
+
   it.each([
     {
       name: "original 1KiB",

@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Snapshot } from "quickjs-wasi";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -16,19 +17,12 @@ import type {
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  consumeToolEffectReceipt,
-  toolEffectStateProvesNoEffect,
-  type ToolEffectReceipt,
-} from "./tool-effect-receipt.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
-  operations: Map<string, "pending" | ToolEffectReceipt["state"]>;
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
@@ -44,7 +38,7 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
@@ -136,18 +130,7 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext) {
 }
 
 export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false, operations: new Map() };
-}
-
-/** Read the host-only side-effect classification for one Code Mode run. */
-export function isCodeModeBridgeRepairEligible(state: CodeModeBridgeDispatchState): boolean {
-  return (
-    state.started &&
-    state.operations.size > 0 &&
-    [...state.operations.values()].every(
-      (effect) => effect !== "pending" && toolEffectStateProvesNoEffect(effect),
-    )
-  );
+  return { started: false };
 }
 
 // One unreferenced timer owns parked snapshots even when no later exec or wait
@@ -354,22 +337,25 @@ function isPendingBridgeRequestReplaySafe(
   return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
-export function createPendingBridgeStates(params: {
-  pendingRequests: PendingBridgeRequest[];
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  parentToolCallId: string;
-  codeModeRunId: string;
-  remainingMs: number;
-  activeRunId?: string;
-  ctx: ToolSearchToolContext;
-  signal: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}): PendingBridgeState[] {
-  return params.pendingRequests.map((request) => {
+export function createPendingBridgeStates(
+  pendingRequests: PendingBridgeRequest[],
+  params: {
+    config: CodeModeConfig;
+    runtime: ToolSearchRuntime;
+    catalogProjection: CodeModeCatalogProjection;
+    namespaceRuntime: CodeModeNamespaceRuntime;
+    parentToolCallId: string;
+    codeModeRunId: string;
+    remainingMs: number;
+    activeRunId?: string;
+    ctx: ToolSearchToolContext;
+    signal: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+    bridgeDispatch: CodeModeBridgeDispatchState;
+  },
+): PendingBridgeState[] {
+  // Pending siblings retain dispatch context, never the original request batch.
+  return pendingRequests.map((request) => {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
@@ -381,15 +367,8 @@ export function createPendingBridgeStates(params: {
     if (params.signal.aborted) {
       onAbort();
     }
-    const tracksDispatch = request.method !== "sleep";
-    // Discovery is read-only; replay-safe actions such as agentSpawn may still mutate.
-    const recoverySafe =
-      ["search", "describe", "skillsList", "skillsRead"].includes(request.method) ||
-      (["nodes", "callValue"].includes(request.method) &&
-        isPendingBridgeRequestReplaySafe(request, params.runtime, params.catalogProjection));
-    if (tracksDispatch) {
+    if (request.method !== "sleep") {
       params.bridgeDispatch.started = true;
-      params.bridgeDispatch.operations.set(request.id, "pending");
     }
     const bridgeCall = runBridgeRequest({
       runtime: params.runtime,
@@ -404,30 +383,20 @@ export function createPendingBridgeStates(params: {
       signal,
       onUpdate: params.onUpdate,
     });
-    const completion = raceWithAbortSignal(bridgeCall, signal).catch(
-      (): SettledBridgeRequest => ({
-        id: request.id,
-        ok: false,
-        error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
-      }),
-    );
+    const completion = raceWithAbortSignal(bridgeCall, signal).catch((): SettledBridgeRequest => ({
+      id: request.id,
+      ok: false,
+      error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
+    }));
     const state: PendingBridgeState = {
       ...request,
       promise: completion.then((settled) => {
         params.signal.removeEventListener("abort", onAbort);
-        // The effect receipt owns classification; consume the predecessor marker
-        // so reusing this settled object cannot preserve stale no-start authority.
-        consumeTrustedToolNoStartError(settled);
-        const effectReceipt = consumeToolEffectReceipt(settled);
-        if (tracksDispatch) {
-          params.bridgeDispatch.operations.set(
-            request.id,
-            effectReceipt?.state ??
-              (recoverySafe ? (settled.ok ? "read_completed" : "failed_no_effect") : "uncertain"),
-          );
-        }
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
+        // Only the response is needed until guest replay; live calls keep their own request.
+        state.args = [];
+        state.cancel = undefined;
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {
@@ -455,7 +424,7 @@ export function storeSnapshotState(params: {
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -490,7 +459,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshotBytes: params.snapshotBytes,
+    snapshot: params.snapshot,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,

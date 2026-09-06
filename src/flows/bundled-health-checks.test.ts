@@ -12,7 +12,12 @@ import {
   registerBundledHealthChecks,
   resolveBundledHealthCheckPluginStateMode,
 } from "./bundled-health-checks.js";
-import { clearHealthChecksForTest, getHealthCheck } from "./health-check-registry.js";
+import { runDoctorLintChecks, selectUpdateReadinessChecks } from "./doctor-lint-flow.js";
+import {
+  clearHealthChecksForTest,
+  getHealthCheck,
+  listHealthChecks,
+} from "./health-check-registry.js";
 
 const STATE_DEFERRED_CHECK_ID = "memory-core/managed-local-embedding-setup";
 
@@ -21,18 +26,14 @@ const mocks = vi.hoisted(() => ({
     throw new Error("Unable to resolve bundled plugin public surface codex/api.js");
   }),
   inspectEmbeddingProviderSetup: vi.fn(),
-  loadBundledPluginManifestRegistry: vi.fn(
-    (): PluginManifestRegistry => ({
-      plugins: [],
-      diagnostics: [],
-    }),
-  ),
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(
-    (): PluginManifestRegistry => ({
-      plugins: [],
-      diagnostics: [],
-    }),
-  ),
+  loadBundledPluginManifestRegistry: vi.fn((): PluginManifestRegistry => ({
+    plugins: [],
+    diagnostics: [],
+  })),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn((): PluginManifestRegistry => ({
+    plugins: [],
+    diagnostics: [],
+  })),
   registerCuaDriverDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
@@ -105,6 +106,11 @@ describe("registerBundledHealthChecks", () => {
     {
       title: "isolates owner-declared checks included by --all",
       selection: { includeAllChecks: true },
+      expected: "isolated",
+    },
+    {
+      title: "isolates checks selected by the post-plugin update gate",
+      selection: { updateReadiness: "post-plugin" },
       expected: "isolated",
     },
     {
@@ -374,6 +380,79 @@ describe("registerBundledHealthChecks", () => {
       },
     },
   };
+
+  it("registers update readiness without loading unselected runtime health APIs", () => {
+    registerBundledHealthChecks({
+      cfg: {
+        ...codexConfig,
+        plugins: {
+          entries: { policy: { enabled: true }, "cua-computer": { enabled: true } },
+        },
+        cloudWorkers: { profiles: { aws: { provider: "crabbox" } } },
+      },
+      cwd: workspaceDir,
+      updateReadiness: "post-plugin",
+    });
+
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
+    expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
+    expect(mocks.loadBundledPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("retains owner identities and blocking findings across readiness registration", async () => {
+    const finding = {
+      checkId: STATE_DEFERRED_CHECK_ID,
+      severity: "error" as const,
+      message: "not ready",
+    };
+    const check = {
+      id: STATE_DEFERRED_CHECK_ID,
+      kind: "plugin" as const,
+      description: "Readiness owner",
+      defaultEnabled: false,
+      detect: vi.fn(async () => [finding]),
+    };
+    for (const updateReadiness of [undefined, "post-plugin", "post-plugin"] as const) {
+      mocks.registerMemoryCoreDoctorChecks.mockImplementationOnce((host) => {
+        if (host.getHealthCheck(check.id) !== check) {
+          host.registerHealthCheck(check);
+        }
+      });
+      registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir, updateReadiness });
+      expect(getHealthCheck(check.id)).toBe(check);
+    }
+    const callbacks = mocks.registerMemoryCoreDoctorChecks.mock.calls.map(
+      ([host]) => host.registerHealthCheck,
+    );
+    expect(new Set(callbacks).size).toBe(1);
+    const ctx = {
+      cfg: {},
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+    await expect(runDoctorLintChecks(ctx)).resolves.toMatchObject({ checksRun: 0, findings: [] });
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: selectUpdateReadinessChecks(listHealthChecks(), "post-plugin"),
+        includeAllChecks: true,
+      }),
+    ).resolves.toMatchObject({ checksRun: 1, findings: [finding] });
+  });
+
+  it("fails when the selected readiness owner cannot load its artifact", () => {
+    mocks.loadBundledPluginPublicArtifactModuleSync.mockImplementationOnce(() => {
+      throw new MissingPublicSurfaceError("selected readiness artifact unavailable");
+    });
+    expect(() =>
+      registerBundledHealthChecks({
+        cfg: codexConfig,
+        cwd: workspaceDir,
+        updateReadiness: "post-plugin",
+      }),
+    ).toThrow("selected readiness artifact unavailable");
+  });
 
   function codexRecord(
     origin: "bundled" | "global",

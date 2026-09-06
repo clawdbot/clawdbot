@@ -1,9 +1,11 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { formatUiError } from "./format-error.ts";
 
 const AUTH_REQUIRED_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_REQUIRED,
@@ -18,6 +20,7 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
   ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING,
@@ -34,7 +37,27 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
 
-type AuthHintKind = "required" | "failed";
+const PROXY_AUTH_REASONS = new Set<string>([
+  "trusted_proxy_no_request",
+  "trusted_proxy_untrusted_source",
+  "trusted_proxy_loopback_source",
+  "trusted_proxy_local_interface_check_failed",
+  "trusted_proxy_local_interface_source",
+  "trusted_proxy_user_missing",
+  "trusted_proxy_user_not_allowed",
+  "trusted_proxy_config_missing",
+  "trusted_proxy_no_proxies_configured",
+  "proxy_attribution_required",
+]);
+
+// Generic unauthorized codes need their proxy reason; retain only these fixed
+// producer values rather than arbitrary server details in the application snapshot.
+export function readConnectionAuthReason(details: unknown): string | null {
+  const reason = asNullableRecord(details)?.authReason;
+  return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
+}
+
+type AuthHintKind = "required" | "failed" | "trusted-proxy";
 
 type PairingHint =
   | {
@@ -84,6 +107,7 @@ export function resolveAuthHintKind(params: {
   connected: boolean;
   lastError: string | null;
   lastErrorCode?: string | null;
+  lastErrorAuthReason?: string | null;
   hasToken: boolean;
   hasPassword: boolean;
 }): AuthHintKind | null {
@@ -91,6 +115,14 @@ export function resolveAuthHintKind(params: {
     return null;
   }
   if (params.lastErrorCode) {
+    if (
+      params.lastErrorCode === ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED ||
+      (params.lastErrorCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED &&
+        typeof params.lastErrorAuthReason === "string" &&
+        PROXY_AUTH_REASONS.has(params.lastErrorAuthReason))
+    ) {
+      return "trusted-proxy";
+    }
     if (!AUTH_FAILURE_CODES.has(params.lastErrorCode)) {
       return null;
     }
@@ -117,4 +149,19 @@ export function shouldShowInsecureContextHint(
   }
   const lower = normalizeLowercaseStringOrEmpty(lastError);
   return lower.includes("secure context") || lower.includes("device identity required");
+}
+
+// Shared with offline presentation so no disconnected surface prints credentials.
+export function redactLoginFailureError(value: string): string {
+  const redacted = value
+    .replace(
+      /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
+      "$1[redacted-credential]",
+    )
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/-]+=*)/gi, "Bearer [redacted]")
+    .replace(
+      /(["']?(?:access|accessToken|deviceToken|password|refresh|refreshToken|token)["']?\s*[:=]\s*)["']?[^"',\s}]+/gi,
+      "$1[redacted]",
+    );
+  return formatUiError(redacted);
 }

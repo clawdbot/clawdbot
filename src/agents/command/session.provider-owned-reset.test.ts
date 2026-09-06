@@ -8,7 +8,11 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesCore: () =>
+  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+    const entry = hoisted.store[sessionKey];
+    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+  },
+  listSessionEntriesReadOnly: () =>
     Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,

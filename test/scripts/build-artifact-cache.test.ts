@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   acquireBuildArtifactLock,
   portableRelativePath,
@@ -11,15 +10,12 @@ import {
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-const require = createRequire(import.meta.url);
-const native = path.join(
-  path.dirname(require.resolve("@typescript/native-preview/package.json")),
-  "lib/tsgo.js",
-);
-function fixture(noEmit = false, outputRoot = "dist") {
-  const root = fs.realpathSync(roots.make("native-boundary-cache-"));
+function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
+  const root = fs.realpathSync.native(tempRoots.make("native-boundary-cache-"));
+  const native = materializeNativeCompiler(root);
   const write = (file: string, bytes: string) => {
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -38,6 +34,7 @@ function fixture(noEmit = false, outputRoot = "dist") {
         outDir: outputRoot,
         rootDir: ".",
         skipLibCheck: true,
+        types: [],
       },
     }),
   );
@@ -68,7 +65,7 @@ function fixture(noEmit = false, outputRoot = "dist") {
     before.signature(config, args, [], ownedOutputRoot);
     fs.rmSync(path.join(root, buildInfo), { force: true });
     const startedAt = Date.now();
-    const result = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    const result = spawnSync(native, args, { cwd: root, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const files = result.stdout
       .split("\n")
@@ -87,7 +84,7 @@ function fixture(noEmit = false, outputRoot = "dist") {
       run.startedAt,
       ownedOutputRoot,
     );
-  return { root, write, config, args, prepare, seal, outputRoot: ownedOutputRoot };
+  return { root, native, write, config, args, prepare, seal, outputRoot: ownedOutputRoot };
 }
 
 describe("native owner content records", () => {
@@ -96,11 +93,15 @@ describe("native owner content records", () => {
     const depth = 32;
     const nested = `namespace/${"nested/".repeat(depth)}`;
     f.write(`${nested}candidate.ts`, "export {};");
-    const originalRealpath = fs.realpathSync;
+    const originalRealpath = fs.realpathSync.native;
+    const namespaceRoot = path.join(f.root, "namespace");
     let resolutions = 0;
-    fs.realpathSync = new Proxy(originalRealpath, {
+    fs.realpathSync.native = new Proxy(originalRealpath, {
       apply(target, receiver, args) {
-        resolutions += 1;
+        const requested = String(args[0]);
+        if (requested === namespaceRoot || requested.startsWith(`${namespaceRoot}${path.sep}`)) {
+          resolutions += 1;
+        }
         return Reflect.apply(target, receiver, args);
       },
     });
@@ -110,7 +111,7 @@ describe("native owner content records", () => {
       first = snapshot.signature(f.config, f.args, []);
       expect(snapshot.signature(f.config, f.args, [])).toBe(first);
     } finally {
-      fs.realpathSync = originalRealpath;
+      fs.realpathSync.native = originalRealpath;
     }
     expect(resolutions).toBeLessThan(depth);
     f.write(`${nested}added.ts`, "export {};");
@@ -120,7 +121,7 @@ describe("native owner content records", () => {
   it("seals a cold producer reached through its own workspace package alias", () => {
     const f = fixture(false, "packages/sdk/dist");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
-    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
     fs.symlinkSync(".", path.join(f.root, "packages/sdk/self"), "dir");
 
@@ -155,7 +156,7 @@ describe("native owner content records", () => {
       "consumer.ts",
       'import { value } from "fixture-sdk/dist/nested/value.js"; const expected: 1 = value;',
     );
-    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
     const producer = f.prepare();
     const shared = new BoundaryInputSnapshot(f.root);
@@ -180,7 +181,7 @@ describe("native owner content records", () => {
     ];
     shared.signature(config, args, []);
     const startedAt = Date.now();
-    const compiled = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    const compiled = spawnSync(f.native, args, { cwd: f.root, encoding: "utf8" });
     expect(compiled.status, compiled.stdout + compiled.stderr).toBe(0);
     const record = new BoundaryInputSnapshot(f.root).record(
       config,
@@ -195,16 +196,59 @@ describe("native owner content records", () => {
     expect(matches()).toBe(true);
     f.write("packages/sdk/dist/nested/value.ts", 'export const value = "changed";');
     expect(matches()).toBe(false);
-    const changed = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    const changed = spawnSync(f.native, args, { cwd: f.root, encoding: "utf8" });
     expect(changed.status, changed.stdout + changed.stderr).toBe(1);
     expect(changed.stdout).toContain("TS2322");
   });
 
+  it("ignores pnpm store metadata while rejecting installed dependency drift", () => {
+    const f = fixture();
+    const manifest = (storeDir: string, prunedAt: string) =>
+      JSON.stringify({ layoutVersion: 5, nodeLinker: "hoisted", prunedAt, storeDir });
+    f.write(
+      "node_modules/.modules.yaml",
+      manifest("/workspace/.cache/openclaw-pnpm-store/v11", "producer"),
+    );
+    f.write(
+      "node_modules/fixture-package/package.json",
+      '{"name":"fixture-package","type":"module","exports":"./value.js","types":"./value.d.ts"}',
+    );
+    f.write("node_modules/fixture-package/value.js", "export const value = 1;");
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 1;");
+    f.write("src/api.ts", 'export { value } from "fixture-package";');
+    const record = f.seal(f.prepare());
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+        f.outputRoot,
+      );
+
+    expect(matches()).toBe(true);
+    f.write(
+      "node_modules/.modules.yaml",
+      manifest("/home/runner/.local/share/pnpm/store/v11", "consumer"),
+    );
+    expect(matches()).toBe(true);
+
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 2;");
+    expect(matches()).toBe(false);
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 1;");
+    expect(matches()).toBe(true);
+    f.write("node_modules/fixture-package/value.ts", "export const value = 3;");
+    expect(matches()).toBe(false);
+  });
+
   it.each(["node_modules", "package", "source"])(
-    "invalidates new resolution candidates behind linked %s directories",
+    "invalidates new resolution candidates behind checkout-local linked %s directories",
     (layout) => {
       const f = fixture(true);
-      const dependency = fs.realpathSync(roots.make("linked-boundary-dependency-"));
+      const dependency = path.join(f.root, "fixture-dependencies");
+      if (layout === "node_modules") {
+        fs.renameSync(path.join(f.root, "node_modules"), dependency);
+      }
       const packageRoot = path.join(dependency, "fixture-package");
       const moduleRoot = layout === "source" ? packageRoot : path.join(packageRoot, "dist");
       fs.mkdirSync(moduleRoot, { recursive: true });
@@ -244,7 +288,7 @@ describe("native owner content records", () => {
       expect(matches()).toBe(true);
       fs.writeFileSync(path.join(moduleRoot, "value.ts"), 'export const value = "changed";');
       const staleHit = matches();
-      const result = spawnSync(process.execPath, [native, ...f.args], { encoding: "utf8" });
+      const result = spawnSync(f.native, f.args, { cwd: f.root, encoding: "utf8" });
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout).toContain("TS2322");
       expect(result.stdout).toContain("Type '\"changed\"' is not assignable to type '1'");
@@ -254,7 +298,8 @@ describe("native owner content records", () => {
 
   it.each(["file", "directory"])("tracks dangling link %s existence and link identity", (kind) => {
     const f = fixture(true);
-    const dependency = fs.realpathSync(roots.make("dangling-boundary-dependency-"));
+    const dependency = path.join(f.root, "fixture-dependencies");
+    fs.mkdirSync(dependency);
     const target = path.join(dependency, "missing");
     const link = path.join(f.root, "missing");
     fs.symlinkSync(target, link, kind === "directory" ? "dir" : "file");
@@ -282,7 +327,7 @@ describe("native owner content records", () => {
 
   it("ignores tool scratch churn under installed roots", () => {
     const f = fixture(true);
-    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
     f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
@@ -301,6 +346,105 @@ describe("native owner content records", () => {
     f.write("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js", "export const value = 1;");
     expect(matches()).toBe(false);
   });
+
+  it("ignores native PR checkout churn while retaining aliased resolution candidates", () => {
+    const f = fixture(true);
+    const dependency = ".worktrees/pr-source/package";
+    f.write(`${dependency}/package.json`, '{"type":"module"}');
+    f.write(`${dependency}/value.d.ts`, "export declare const value: 1;");
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
+    fs.symlinkSync(`../${dependency}`, path.join(f.root, "node_modules/fixture-package"), "dir");
+    f.write(
+      "src/api.ts",
+      'import { value } from "fixture-package/value.js"; const expected: 1 = value;',
+    );
+    const run = f.prepare();
+    f.write(".worktrees/pr-unrelated/src/new.ts", "export const unrelated = 1;");
+    const record = f.seal(run);
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+      );
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, ".worktrees/pr-unrelated"), { recursive: true });
+    expect(matches()).toBe(true);
+    f.write("nested/.worktrees/candidate.ts", "export {};");
+    expect(matches()).toBe(false);
+    fs.rmSync(path.join(f.root, "nested/.worktrees"), { recursive: true });
+    expect(matches()).toBe(true);
+    f.write(`${dependency}/value.ts`, 'export const value = "changed";');
+    expect(matches()).toBe(false);
+    const compiled = spawnSync(f.native, f.args, { cwd: f.root, encoding: "utf8" });
+    expect(compiled.status, compiled.stdout + compiled.stderr).toBe(1);
+    expect(compiled.stdout).toContain("TS2322");
+  });
+
+  it.each([
+    ["CI helper", ".ci-harness", "cache/metadata-v1.3/registry.example/package.json"],
+    [
+      "pnpm store",
+      ".cache/openclaw-pnpm-store",
+      "cache/metadata-v1.3/registry.example/package.json",
+    ],
+    ["Vitest cache", ".cache/vitest", "default/_metadata.json"],
+  ])(
+    "ignores root %s churn while retaining explicit, installed, aliased, and nested inputs",
+    (_, ignoredRoot, metadataFile) => {
+      const f = fixture(true);
+      const declaredInput = `${ignoredRoot}/declared/value.ts`;
+      const installedSource = `${ignoredRoot}/objects/installed.d.ts`;
+      const installedInput = "node_modules/installed/value.d.ts";
+      const aliasedSource = `${ignoredRoot}/links/fixture-package/value.d.ts`;
+      const aliasedInput = "node_modules/fixture-package/value.d.ts";
+      f.write(declaredInput, "export const value = 1;");
+      f.write(installedSource, "export declare const installed: 1;");
+      f.write(aliasedSource, "export declare const aliased: 1;");
+      fs.mkdirSync(path.join(f.root, "node_modules/installed"), { recursive: true });
+      fs.linkSync(path.join(f.root, installedSource), path.join(f.root, installedInput));
+      fs.symlinkSync(
+        `../${ignoredRoot}/links/fixture-package`,
+        path.join(f.root, "node_modules/fixture-package"),
+        "dir",
+      );
+      const signature = () =>
+        new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [
+          declaredInput,
+          installedInput,
+          aliasedInput,
+        ]);
+      const first = signature();
+
+      f.write(`${ignoredRoot}/${metadataFile}`, "{}");
+      expect(signature()).toBe(first);
+
+      f.write(declaredInput, "export const value = 2;");
+      expect(signature()).not.toBe(first);
+      f.write(declaredInput, "export const value = 1;");
+      expect(signature()).toBe(first);
+
+      f.write(installedInput, "export declare const installed: 2;");
+      expect(signature()).not.toBe(first);
+      f.write(installedInput, "export declare const installed: 1;");
+      expect(signature()).toBe(first);
+
+      f.write(aliasedSource, "export declare const aliased: 2;");
+      expect(signature()).not.toBe(first);
+      f.write(aliasedSource, "export declare const aliased: 1;");
+      expect(signature()).toBe(first);
+
+      const adjacentRoot = `${ignoredRoot}-other`;
+      f.write(`${adjacentRoot}/candidate.ts`, "export {};");
+      expect(signature()).not.toBe(first);
+      fs.rmSync(path.join(f.root, adjacentRoot), { recursive: true });
+      expect(signature()).toBe(first);
+
+      f.write(`nested/${ignoredRoot}/candidate.ts`, "export {};");
+      expect(signature()).not.toBe(first);
+    },
+  );
 
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);
@@ -328,7 +472,7 @@ describe("native owner content records", () => {
     const before = new BoundaryInputSnapshot(f.root);
     before.signature(config, args, []);
     const startedAt = Date.now();
-    const result = spawnSync(process.execPath, [native, ...args], { encoding: "utf8" });
+    const result = spawnSync(f.native, args, { cwd: f.root, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const consumer = new BoundaryInputSnapshot(f.root).record(
       config,
@@ -379,73 +523,131 @@ describe("native owner content records", () => {
     },
   );
 
-  it.each([
-    "addition",
-    "deletion",
-    "rename",
-    "higher-priority module",
-    "local package scope",
-    "config",
-    "extends",
-    "lockfile",
-    "generator",
-    "missing output",
-    "tampered output",
-    "orphan output",
-  ])("rejects %s against a real native record", (mutation) => {
-    const f = fixture();
-    f.write("scripts/run-tsgo.mts", "export {};");
-    const record = f.seal(f.prepare());
-    switch (mutation) {
-      case "addition":
-        f.write("src/added.ts", "export const added = 1;");
-        break;
-      case "deletion":
-        fs.rmSync(path.join(f.root, "nested/value.js"));
-        break;
-      case "rename":
-        fs.renameSync(path.join(f.root, "nested/value.js"), path.join(f.root, "nested/renamed.js"));
-        break;
-      case "higher-priority module":
-        f.write("nested/value.ts", "export const value = 'new resolution';");
-        break;
-      case "local package scope":
-        f.write("nested/package.json", '{"type":"commonjs"}');
-        break;
-      case "config":
-        f.write(
-          "tsconfig.json",
-          '{"extends":"./base.json","include":["src/*.ts"],"compilerOptions":{"strict":true}}',
+  describe("native record invalidation", () => {
+    const invalidationRoots = useAutoCleanupTempDirTracker(afterAll);
+    let f: ReturnType<typeof fixture>;
+    let record: ReturnType<ReturnType<typeof fixture>["seal"]>;
+    let baseline: string;
+
+    beforeAll(() => {
+      f = fixture(false, "dist", invalidationRoots);
+      f.write("scripts/run-tsgo.mts", "export {};");
+      f.write("scripts/lib/local-check-runtime.mts", "export const policy = 1;");
+      record = f.seal(f.prepare());
+      baseline = invalidationRoots.make("native-boundary-pristine-");
+      fs.cpSync(f.root, baseline, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+    });
+
+    it.each([
+      "addition",
+      "deletion",
+      "rename",
+      "higher-priority module",
+      "local package scope",
+      "config",
+      "extends",
+      "lockfile",
+      "generator",
+      "compiler policy",
+      "missing output",
+      "tampered output",
+      "orphan output",
+    ])("rejects %s against a real native record", (mutation) => {
+      // Restore the same native generation before each independent invalidation.
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.cpSync(baseline, f.root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+      const matches = () =>
+        new BoundaryInputSnapshot(f.root).matches(
+          record,
+          f.config,
+          f.args,
+          ["dist/src/api.d.ts"],
+          "dist",
         );
-        break;
-      case "extends":
-        f.write("base.json", '{"compilerOptions":{"target":"es2022"}}');
-        break;
-      case "lockfile":
-        f.write("pnpm-lock.yaml", "changed lock");
-        break;
-      case "generator":
-        f.write("scripts/run-tsgo.mts", "export const changed = true;");
-        break;
-      case "missing output":
-        fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
-        break;
-      case "tampered output":
-        f.write("dist/nested/value.d.ts", "truncated");
-        break;
-      case "orphan output":
-        f.write("dist/nested/orphan.d.ts", "export {};");
-        break;
-    }
-    expect(
+      expect(matches(), "pristine native generation").toBe(true);
+      switch (mutation) {
+        case "addition":
+          f.write("src/added.ts", "export const added = 1;");
+          break;
+        case "deletion":
+          fs.rmSync(path.join(f.root, "nested/value.js"));
+          break;
+        case "rename":
+          fs.renameSync(
+            path.join(f.root, "nested/value.js"),
+            path.join(f.root, "nested/renamed.js"),
+          );
+          break;
+        case "higher-priority module":
+          f.write("nested/value.ts", "export const value = 'new resolution';");
+          break;
+        case "local package scope":
+          f.write("nested/package.json", '{"type":"commonjs"}');
+          break;
+        case "config":
+          f.write(
+            "tsconfig.json",
+            '{"extends":"./base.json","include":["src/*.ts"],"compilerOptions":{"strict":true}}',
+          );
+          break;
+        case "extends":
+          f.write("base.json", '{"compilerOptions":{"target":"es2022"}}');
+          break;
+        case "lockfile":
+          f.write("pnpm-lock.yaml", "changed lock");
+          break;
+        case "generator":
+          f.write("scripts/run-tsgo.mts", "export const changed = true;");
+          break;
+        case "compiler policy":
+          f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
+          break;
+        case "missing output":
+          fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
+          break;
+        case "tampered output":
+          f.write("dist/nested/value.d.ts", "truncated");
+          break;
+        case "orphan output":
+          f.write("dist/nested/orphan.d.ts", "export {};");
+          break;
+      }
+      expect(matches()).toBe(false);
+    });
+  });
+
+  it("rejects a same-byte external file link in otherwise warm native membership", () => {
+    const f = fixture(true);
+    const declaration = ".artifacts/declared/value.d.ts";
+    f.write(declaration, "export interface Value { value: 1 }");
+    f.write("src/api.ts", 'export type { Value } from "../.artifacts/declared/value.js";');
+    const record = f.seal(f.prepare());
+    const matches = () =>
       new BoundaryInputSnapshot(f.root).matches(
         record,
         f.config,
         f.args,
-        ["dist/src/api.d.ts"],
-        "dist",
-      ),
-    ).toBe(false);
+        Object.keys(record.outputs),
+      );
+    expect(record.inputs).toContain(declaration);
+    expect(matches()).toBe(true);
+    const external = path.join(fs.realpathSync(roots.make("external-declaration-")), "value.d.ts");
+    fs.copyFileSync(path.join(f.root, declaration), external);
+    fs.unlinkSync(path.join(f.root, declaration));
+    // This consumed path is outside topology discovery, so byte equality alone
+    // would accept the old receipt after the file starts resolving elsewhere.
+    fs.symlinkSync(external, path.join(f.root, declaration), "file");
+    expect(matches()).toBe(false);
+  });
+
+  it("rejects an inherited config outside the checkout before compilation", () => {
+    const f = fixture(true);
+    const external = path.join(fs.realpathSync(roots.make("external-config-")), "base.json");
+    fs.copyFileSync(path.join(f.root, "base.json"), external);
+    f.write("tsconfig.json", JSON.stringify({ extends: external, include: ["src/*.ts"] }));
+    expect(() => new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [])).toThrow(
+      "Invalid boundary config",
+    );
   });
 
   it.each(["nested/value.js", "package.json", "base.json", "pnpm-lock.yaml"])(

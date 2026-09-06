@@ -12,7 +12,7 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
 function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-  return last ? normalizeCodexThreadTokenUsage(last) : undefined;
+  return last ? normalizeCodexResponseTokenUsage(last) : undefined;
 }
 
 export function readCodexThreadContextSnapshot(params: JsonObject): {
@@ -21,7 +21,6 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   cacheWriteInputTokens?: number;
   inputTokens?: number;
   modelContextWindow?: number;
-  outputTokens?: number;
   promptTokens?: number;
   reasoningOutputTokens?: number;
 } {
@@ -35,7 +34,6 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   const inputTokens = last ? readTokenCount(last, "inputTokens") : undefined;
   const cachedInputTokens = last ? readTokenCount(last, "cachedInputTokens") : undefined;
   const cacheWriteInputTokens = last ? readTokenCount(last, "cacheWriteInputTokens") : undefined;
-  const outputTokens = last ? readTokenCount(last, "outputTokens") : undefined;
   const reasoningOutputTokens = last ? readTokenCount(last, "reasoningOutputTokens") : undefined;
   return {
     ...(activeContextTokens !== undefined ? { activeContextTokens } : {}),
@@ -43,38 +41,12 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
     ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
-    ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(inputTokens !== undefined ? { promptTokens: inputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
   };
 }
 
-export function projectCodexThreadUsageUpdate(
-  params: JsonObject,
-  currentUsage: ReturnType<typeof normalizeUsage>,
-  applyUsage: (usage: ReturnType<typeof normalizeUsage>) => void,
-  emitContext: (context: ReturnType<typeof readCodexThreadContextSnapshot>) => void,
-): void {
-  applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
-  const context = readCodexThreadContextSnapshot(params);
-  if (Object.keys(context).length > 0) {
-    emitContext(context);
-  }
-}
-
-export function normalizeCodexThreadTokenUsage(
-  record: JsonObject,
-): ReturnType<typeof normalizeUsage> {
-  return normalizeCodexTokenUsageBreakdown(record);
-}
-
-export function normalizeCodexResponseTokenUsage(
-  record: JsonObject,
-): ReturnType<typeof normalizeUsage> {
-  return normalizeCodexTokenUsageBreakdown(record);
-}
-
-function normalizeCodexTokenUsageBreakdown(record: JsonObject): ReturnType<typeof normalizeUsage> {
+function normalizeCodexResponseTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
   const totalTokens = readTokenCount(record, "totalTokens");
@@ -117,27 +89,63 @@ function normalizeCodexTokenUsageBreakdown(record: JsonObject): ReturnType<typeo
   };
 }
 
-export class CodexResponseCompletionProjection {
+export class CodexUsageProjection {
   // Replayed notifications keep one upstream response equal to one model iteration.
   private readonly responseIds = new Set<string>();
-  usage: ReturnType<typeof normalizeUsage>;
+  private responseUsage: ReturnType<typeof normalizeUsage>;
+  private threadUsage: ReturnType<typeof normalizeUsage>;
+  private contextUsage: NonNullable<ReturnType<typeof normalizeUsage>>["contextUsage"];
+
+  get usage(): ReturnType<typeof normalizeUsage> {
+    const usage = this.responseUsage ?? this.threadUsage;
+    return usage ? { ...usage, contextUsage: this.contextUsage } : undefined;
+  }
 
   get modelIterations(): number {
     return this.responseIds.size;
   }
 
-  clear(): void {
-    this.usage = undefined;
+  invalidateContext(): void {
+    this.contextUsage = { state: "unavailable" };
   }
 
-  record(params: JsonObject): void {
-    const responseId = readString(params, "responseId");
-    if (responseId) {
-      this.responseIds.add(responseId);
+  recordThread(params: JsonObject): ReturnType<typeof readCodexThreadContextSnapshot> {
+    const usage = readCodexThreadTokenUsage(params);
+    this.threadUsage = usage ?? this.threadUsage;
+    if (!this.responseUsage && usage) {
+      this.contextUsage = usage.contextUsage;
     }
-    const usage = isJsonObject(params.usage) ? params.usage : undefined;
-    // Every provider completion replaces the prior response snapshot. A final
-    // response with missing or malformed usage must leave freshness unknown.
-    this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+    return readCodexThreadContextSnapshot(params);
+  }
+
+  record(params: JsonObject, reportOutputTokens?: (outputTokens: number) => void): void {
+    const responseId = readString(params, "responseId");
+    if (!responseId || this.responseIds.has(responseId)) {
+      return;
+    }
+    this.responseIds.add(responseId);
+    const usage = isJsonObject(params.usage)
+      ? normalizeCodexResponseTokenUsage(params.usage)
+      : undefined;
+    // Billing sums completed calls; context belongs only to the latest call.
+    // Missing usage or a retry invalidates context without erasing paid work.
+    this.contextUsage = usage?.contextUsage ?? { state: "unavailable" };
+    this.responseUsage ??= {};
+    for (const field of [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "reasoningTokens",
+      "total",
+    ] as const) {
+      if (usage?.[field] !== undefined) {
+        this.responseUsage[field] = (this.responseUsage[field] ?? 0) + usage[field];
+      }
+    }
+    const outputTokens = usage?.output;
+    if (outputTokens !== undefined) {
+      reportOutputTokens?.(outputTokens);
+    }
   }
 }

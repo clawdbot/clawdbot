@@ -11,6 +11,11 @@ import type {
 } from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
+import {
+  buildManifestModelProviderConfig,
+  buildSingleProviderApiKeyCatalog,
+  readManifestProviderDefaultModelRef,
+} from "../plugins/provider-catalog.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
@@ -25,21 +30,30 @@ import {
   isRecordWithoutThrowing,
   readRecordValue,
 } from "../shared/safe-record.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "./lazy-runtime.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
-import {
-  buildOpenAICompatibleProviderCatalog,
-  type OpenAICompatibleModelDiscoveryOptions,
-} from "./provider-catalog-live-runtime.js";
-import {
-  buildManifestModelProviderConfig,
-  buildSingleProviderApiKeyCatalog,
-  readManifestProviderDefaultModelRef,
-} from "./provider-catalog-shared.js";
+import type { OpenAICompatibleModelDiscoveryOptions } from "./provider-catalog-live-runtime.js";
+
+// Registration needs static metadata; live discovery loads only when its catalog hook runs.
+const liveCatalogRuntime = createLazyRuntimeModule(
+  () => import("./provider-catalog-live-runtime.js"),
+);
+const buildOpenAICompatibleProviderCatalog = createLazyRuntimeMethod(
+  liveCatalogRuntime,
+  (runtime) => runtime.buildOpenAICompatibleProviderCatalog,
+);
+const runLiveProviderCatalog = createLazyRuntimeMethod(
+  liveCatalogRuntime,
+  (runtime) => runtime.runLiveProviderCatalog,
+);
+
+// Auth descriptors are safe to construct before the lazy credential runtime is needed.
+export { createProviderApiKeyAuthMethod };
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
@@ -120,6 +134,7 @@ export type SingleProviderPluginCatalogOptions =
        * Discovers text/chat models from the provider's OpenAI-compatible model-list endpoint.
        */
       liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
+      discoveryMode?: "strict";
       run?: never;
       order?: never;
       staticRun?: never;
@@ -141,6 +156,7 @@ export type SingleProviderPluginCatalogOptions =
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
       liveModelDiscovery?: never;
+      discoveryMode?: never;
     };
 
 /**
@@ -450,27 +466,29 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               ) {
                 return Promise.resolve(null);
               }
-              return provider.catalog.liveModelDiscovery
-                ? buildOpenAICompatibleProviderCatalog({
-                    ctx,
-                    providerId,
-                    providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                    ...(provider.catalog.liveModelDiscovery === true
-                      ? {}
-                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
-                  })
-                : buildSingleProviderApiKeyCatalog({
-                    ctx,
-                    providerId,
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                  });
+              if (provider.catalog.liveModelDiscovery) {
+                return buildOpenAICompatibleProviderCatalog({
+                  ctx,
+                  providerId,
+                  providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
+                  buildProvider,
+                  discoveryMode: provider.catalog.discoveryMode,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                  ...(provider.catalog.liveModelDiscovery === true
+                    ? {}
+                    : { modelDiscovery: provider.catalog.liveModelDiscovery }),
+                });
+              }
+              const run = () =>
+                buildSingleProviderApiKeyCatalog({
+                  ctx,
+                  providerId,
+                  buildProvider,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                });
+              return provider.catalog.discoveryMode === "strict"
+                ? runLiveProviderCatalog({ providerId, run })
+                : run();
             },
           };
         }

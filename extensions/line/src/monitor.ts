@@ -1,5 +1,5 @@
 // Line plugin module implements monitor behavior.
-import type { webhook } from "@line/bot-sdk";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -14,11 +14,9 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  isRequestBodyLimitError,
   normalizePluginHttpPath,
   normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
-  requestBodyErrorToText,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -42,7 +40,11 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import {
+  createLineNodeWebhookHandler,
+  readLineWebhookRequestBody,
+  rejectLineWebhookRequest,
+} from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -61,7 +63,7 @@ interface MonitorLineProviderOptions {
 
 interface LineProviderMonitor {
   account: ResolvedLineAccount;
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
+  handleWebhook: ReturnType<typeof createLineBot>["handleWebhook"];
   stop: () => Promise<void>;
 }
 
@@ -225,6 +227,11 @@ export async function monitorLineProvider(
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
+              // Block replies are paced by the agent's own humanDelay; nothing else
+              // reads it, so a turn that never forwards it silently paces at zero.
+              dispatcherOptions: {
+                humanDelay: resolveHumanDelayConfig(turnConfig, route.agentId),
+              },
               ...(replyOptions ? { replyOptions } : {}),
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,
@@ -412,24 +419,16 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            await match.target.bot.handleWebhook(body);
-            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
-            res.setHeader("x-openclaw-delivery-accepted", "durable");
+            // Only the admission owner can distinguish queued events from ignored standby deliveries.
+            if ((await match.target.bot.handleWebhook(body)) === "durable") {
+              res.setHeader("x-openclaw-delivery-accepted", "durable");
+            }
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
         } catch (err) {
-          if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-            res.statusCode = 413;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Payload too large" }));
-            return;
-          }
-          if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-            res.statusCode = 408;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+          if (await rejectLineWebhookRequest(req, res, err)) {
             return;
           }
           runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));

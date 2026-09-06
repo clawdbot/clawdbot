@@ -8,6 +8,11 @@
   "contracts": {
     "usageProviders": ["venice"]
   },
+  "modelPricing": {
+    "providers": {
+      "venice": { "venice": { "provider": "venice" } }
+    }
+  },
   "providerAuthChoices": [
     {
       "provider": "venice",
@@ -39,6 +44,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "venice": "venice"
+    },
     "providers": {
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",

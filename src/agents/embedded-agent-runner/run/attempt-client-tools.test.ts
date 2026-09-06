@@ -1,13 +1,29 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../../../infra/embedded-plugin-approval-broker.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
-import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
@@ -78,6 +94,7 @@ function prepare(input: {
   effectiveTools?: ReturnType<typeof createStubTool>[];
   uncompactedEffectiveTools?: ReturnType<typeof createStubTool>[];
   clientTools?: ReturnType<typeof clientTool>[];
+  getToolAbortSignal?: () => AbortSignal;
 }) {
   return prepareEmbeddedAttemptClientTools({
     attempt: {
@@ -97,31 +114,134 @@ function prepare(input: {
     toolSearchRuntimeConfig: input.toolSearchRuntimeConfig,
     uncompactedEffectiveTools: input.uncompactedEffectiveTools ?? [],
     clientTools: input.clientTools ?? [clientTool("client_probe")],
+    getToolAbortSignal: input.getToolAbortSignal,
   } as unknown as Parameters<typeof prepareEmbeddedAttemptClientTools>[0]);
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
-  it("records core read entitlement without plugin or channel shadows", () => {
-    const coreRead = createStubTool("read");
-    const pluginRead = createStubTool("read");
-    const channelRead = createStubTool("read");
-    const catalogRef = createToolSearchCatalogRef();
-    setPluginToolMeta(pluginRead, { pluginId: "example-plugin", optional: false });
-    setChannelAgentToolMeta(channelRead as never, { channelId: "example-channel" });
+  it("keeps authoritative client slots in source order across delayed hooks", async () => {
+    const previousRegistry = getGlobalPluginRegistry();
+    const firstHook = createDeferredCore();
+    const pending: Promise<unknown>[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["first_tool"],
+          handler: async () => {
+            await firstHook.promise;
+          },
+        },
+      ]),
+    );
+    try {
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+        clientTools: [clientTool("first_tool"), clientTool("second_tool")],
+      });
+      const tools = prepared.clientToolDefs.map((definition) => wrapToolDefinition(definition));
+      const firstTool = expectDefined(tools[0], "first client tool");
+      const secondTool = expectDefined(tools[1], "second client tool");
+      const first = firstTool.execute("first-call", { value: 1 });
+      pending.push(Promise.allSettled([first]));
+      const second = secondTool.execute("second-call", { value: 2 });
+      pending.push(Promise.allSettled([second]));
+      await withTestTimeout(second, 2_000, "second client tool did not finish");
+      expect(prepared.clientToolCallSlots).toEqual([
+        { toolCallId: "first-call", name: "first_tool", completed: false },
+        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+      ]);
+      firstHook.resolve();
+      await withTestTimeout(first, 2_000, "first client tool did not finish");
+      expect(prepared.clientToolCallSlots).toEqual([
+        { toolCallId: "first-call", name: "first_tool", completed: true, params: { value: 1 } },
+        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+      ]);
+    } finally {
+      firstHook.resolve();
+      try {
+        await withTestTimeout(Promise.all(pending), 2_000, "client cleanup did not settle");
+      } finally {
+        resetGlobalHookRunner();
+        if (previousRegistry) {
+          initializeGlobalHookRunner(previousRegistry);
+        }
+      }
+    }
+  }, 10_000);
 
-    expect(
-      [coreRead, pluginRead, channelRead].map(
-        (tool) =>
-          prepare({
-            codeModeControlsEnabledForRun: false,
-            attemptConfig: CATALOGS_DISABLED_CONFIG,
-            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-            catalogRef,
-            uncompactedEffectiveTools: [tool],
-          }).coreReadAuthorized,
-      ),
-    ).toEqual([true, false, false]);
-  });
+  it.each(["execute", "prepare"] as const)(
+    "removes an adapted MCP tool's pending approval when its permission generation ends during %s",
+    async (executionPath) => {
+      const previousMode = isEmbeddedMode();
+      const previousBroker = getEmbeddedPluginApprovalBroker();
+      const previousRegistry = getGlobalPluginRegistry();
+      const broker = new EmbeddedPluginApprovalBroker();
+      const requested = createDeferredCore();
+      broker.subscribe((event) => {
+        if (event.event === "plugin.approval.requested") {
+          requested.resolve();
+        }
+      });
+      setEmbeddedMode(true);
+      setEmbeddedPluginApprovalBroker(broker);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_tool_call",
+            handler: () => ({
+              requireApproval: { title: "MCP write", description: "Approve remote mutation" },
+            }),
+          },
+        ]),
+      );
+      const generation = new AbortController();
+      const execute = vi.fn(async () => jsonResult({ changed: true }));
+      const mcpTool = wrapToolWithAbortSignal(
+        { ...createStubTool("mcp_write"), execute },
+        generation.signal,
+      );
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+        effectiveTools: [mcpTool],
+        uncompactedEffectiveTools: [mcpTool],
+        clientTools: [],
+        getToolAbortSignal: () => generation.signal,
+      });
+      const tool = wrapToolDefinition(prepared.allCustomTools[0]!);
+      const execution =
+        executionPath === "execute"
+          ? tool.execute(`generation-${executionPath}`, {})
+          : getInternalToolExecutionPreparer(tool)!({
+              toolCallId: `generation-${executionPath}`,
+              args: {},
+            });
+      const settled = Promise.allSettled([execution]);
+      try {
+        await requested.promise;
+        expect(broker.listPending()).toHaveLength(1);
+        generation.abort(new Error("Permission change"));
+        expect(broker.listPending()).toHaveLength(0);
+        await settled;
+        expect(execute).not.toHaveBeenCalled();
+      } finally {
+        broker.stop();
+        await settled;
+        setEmbeddedPluginApprovalBroker(previousBroker);
+        setEmbeddedMode(previousMode);
+        resetGlobalHookRunner();
+        if (previousRegistry) {
+          initializeGlobalHookRunner(previousRegistry);
+        }
+      }
+    },
+  );
 
   it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
     const catalogRef = createToolSearchCatalogRef();

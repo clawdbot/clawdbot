@@ -17,6 +17,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
+  captureAgentToolExecutionBudget,
   copyAgentToolSourceExecutionGuard,
   runAgentToolSourceExecutionGuard,
 } from "./agent-tool-source-execution-guard.js";
@@ -29,13 +30,13 @@ import {
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
   resolveToolErrorDiagnostic,
   resolveToolResultTerminalDiagnostic,
-  resolveToolTerminalPresentation,
   summarizeToolParams,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
@@ -83,7 +84,10 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -218,8 +222,7 @@ export function recordAdjustedParamsForToolCall(
   if (!cloneResult.ok) {
     return;
   }
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
@@ -287,10 +290,6 @@ export function buildBlockedToolResult(params: {
   return result;
 }
 
-// Build the private (trusted-listener-only) tool content payload for a tool
-// execution diagnostic event. Raw args/results never ride the public event bus;
-// consumers (e.g. diagnostics-otel) bound and redact before export.
-
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -301,6 +300,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const admitExecution = captureAgentToolExecutionBudget();
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const hookOptions: BeforeToolCallDiagnosticOptions = {
     ...options,
@@ -526,7 +526,9 @@ export function wrapToolWithBeforeToolCallHook(
       }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
+      signal?.throwIfAborted();
       runAgentToolSourceExecutionGuard(tool);
+      admitExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -554,10 +556,12 @@ export function wrapToolWithBeforeToolCallHook(
             : error;
         }
         const durationMs = Date.now() - startedAt;
-        const terminalPresentation = resolveToolTerminalPresentation({
+        const preparedTerminalPresentation = prepareToolTerminalPresentation({
+          ctx,
           tool,
           toolParams: executeParams,
-          result,
+          toolCallId,
+          toolCallOrdinal,
         });
         await recordLoopOutcome({
           ctx,
@@ -567,15 +571,12 @@ export function wrapToolWithBeforeToolCallHook(
           result,
           resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
-          terminalPresentation,
+          terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });
-        rememberPendingTerminalPresentation({
-          ctx,
-          tool,
-          toolParams: executeParams,
-          toolCallId,
-          toolCallOrdinal,
-        });
+        // A harness abort can settle before a cancellation-ignoring source returns.
+        if (!signal?.aborted) {
+          rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -599,11 +600,10 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          const terminalEvent = resolveToolResultTerminalDiagnostic(result, durationMs);
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...terminalEvent,
+              ...resolveToolResultTerminalDiagnostic(result, durationMs),
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,
@@ -612,7 +612,8 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
+        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
@@ -689,21 +690,11 @@ export function wrapToolWithBeforeToolCallHook(
     }
   };
   copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
-  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
-    value: true,
-    enumerable: true,
-  });
-  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: hookOptions,
-    enumerable: false,
-  });
-  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {
-    value: tool,
-    enumerable: false,
-  });
-  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
-    value: ctx,
-    enumerable: false,
+  Object.defineProperties(wrappedTool, {
+    [BEFORE_TOOL_CALL_WRAPPED]: { value: true, enumerable: true },
+    [BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS]: { value: hookOptions, enumerable: false },
+    [BEFORE_TOOL_CALL_SOURCE_TOOL]: { value: tool, enumerable: false },
+    [BEFORE_TOOL_CALL_HOOK_CONTEXT]: { value: ctx, enumerable: false },
   });
   return wrappedTool;
 }

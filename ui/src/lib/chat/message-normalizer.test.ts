@@ -22,7 +22,7 @@ describe("message-normalizer", () => {
       },
     );
 
-    it.each([undefined, null, "raw string", 42, true])(
+    it.each([undefined, null, "raw string", 42, true, []])(
       "tool-message predicates return false for %o without throwing",
       (input) => {
         expect(() => isToolResultMessage(input)).not.toThrow();
@@ -31,6 +31,30 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each(["toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "toolName", "tool_name"])(
+      "classifies only string-valued %s as a standalone tool message",
+      (field) => {
+        for (const value of ["call-1", "", null, 7, false]) {
+          const message = { role: "assistant", [field]: value, content: [null, { text: 7 }] };
+          expect(isStandaloneToolMessageForDisplay(message)).toBe(typeof value === "string");
+          expect(isToolResultMessage(message)).toBe(false);
+        }
+      },
+    );
+
+    it.each([
+      ["toolResult", true, true],
+      ["TOOL_RESULT", true, true],
+      ["function", false, true],
+      ["tool", false, true],
+      [" toolResult ", false, false],
+      [7, false, false],
+    ])("classifies tool role %j independently of content", (role, result, standalone) => {
+      const message = { role, content: [null, { text: 7 }] };
+      expect(isToolResultMessage(message)).toBe(result);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(standalone);
+    });
 
     it.each([undefined, null, "malformed block", 42, true, []])(
       "preserves valid assistant text after the malformed content block %o",
@@ -83,18 +107,21 @@ describe("message-normalizer", () => {
       expect(result.audioAsVoice).toBeUndefined();
     });
 
-    it("normalizes message with array content", () => {
-      const result = normalizeMessage({
+    it("normalizes mixed text, thinking, and tool content", () => {
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
           { type: "tool_use", name: "bash", args: { command: "ls" } },
+          { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
-      expect(result.content).toHaveLength(2);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
+      expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",
         text: "Here is the result",
@@ -107,6 +134,7 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+      expect(result.content[2]).toEqual({ type: "thinking", thinking: "Checking the result." });
     });
 
     it("normalizes persisted Responses text blocks as renderable text", () => {
@@ -331,6 +359,46 @@ describe("message-normalizer", () => {
       });
     });
 
+    it.each([
+      { viewId: "cv_widget", url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+      { url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+    ])("keeps the canonical Canvas block instead of its shortcode copy: %j", (identity) => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              ...identity,
+              sandbox: "strict",
+              boardWidgetName: "saved-widget",
+            },
+            rawText: "original tool result",
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Ready." },
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            ...identity,
+            sandbox: "strict",
+            boardWidgetName: "saved-widget",
+          },
+          rawText: "original tool result",
+        },
+      ]);
+    });
+
     it("drops invalid canvas dashboard identity from history", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -495,6 +563,84 @@ describe("message-normalizer", () => {
         },
       ]);
     });
+
+    it.each(["audioAsVoice", "replyToCurrent"])(
+      "ignores the entire delivery record when %s has an invalid flag",
+      (field) => {
+        for (const value of [false, null, 0, "true"]) {
+          const result = normalizeMessage({
+            role: "assistant",
+            content: "The answer remains visible.",
+            openclawDelivery: {
+              audioAsVoice: true,
+              replyToCurrent: true,
+              replyToId: "target",
+              [field]: value,
+            },
+          });
+          expect(result.content).toEqual([{ type: "text", text: "The answer remains visible." }]);
+          expect(result).not.toHaveProperty("audioAsVoice");
+          expect(result).not.toHaveProperty("replyTarget");
+        }
+      },
+    );
+
+    it.each([Number.NaN, Infinity, -Infinity])(
+      "omits non-finite canvas and media dimensions: %s",
+      (value) => {
+        const result = normalizeMessage({
+          role: "assistant",
+          content: [
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                render: "url",
+                url: "/canvas/one",
+                preferredHeight: value,
+              },
+            },
+            {
+              type: "video",
+              url: "/media/clip",
+              sizeBytes: value,
+              durationMs: value,
+              width: value,
+              height: value,
+            },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
+          ],
+        });
+        expect(result.content).toEqual([
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/canvas/one",
+            },
+            rawText: null,
+          },
+          { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
+        ]);
+      },
+    );
 
     it("marks media-only audio attachments as voice notes from delivery facts", () => {
       const result = normalizeMessage({

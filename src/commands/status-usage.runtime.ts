@@ -108,8 +108,3 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   });
   return mergeUsageSummaries(usage, codexUsage);
 }
-
-/** Exposes the lazily loaded provider-usage module for callers that need its helpers. */
-export async function loadStatusProviderUsageModule() {
-  return await providerUsageLoader.load();
-}

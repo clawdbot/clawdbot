@@ -25,6 +25,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import {
   createDispatcher,
+  diagnosticMocks,
   emptyConfig,
   hookMocks,
   messageAuditMocks,
@@ -256,12 +257,14 @@ describe("dispatchReplyFromConfig", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async (ctx) => {
-        markCommandSessionMetadataChanged({ ctx, sessionKey });
+        markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
         return { text: "goal updated" };
       },
     });
 
-    expect(result.sessionMetadataChanges).toEqual([{ sessionKey, reason: "command-metadata" }]);
+    expect(result.sessionMetadataChanges).toEqual([
+      { sessionKey, agentId: "main", reason: "command-metadata" },
+    ]);
   });
 
   it("notifies session metadata changes before later dispatch errors", async () => {
@@ -283,14 +286,14 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher,
         onSessionMetadataChanges,
         replyResolver: async (ctx) => {
-          markCommandSessionMetadataChanged({ ctx, sessionKey });
+          markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
           return { text: "goal updated" };
         },
       }),
     ).rejects.toThrow("delivery failed");
 
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
-      { sessionKey, reason: "command-metadata" },
+      { sessionKey, agentId: "main", reason: "command-metadata" },
     ]);
   });
 
@@ -613,7 +616,7 @@ describe("dispatchReplyFromConfig", () => {
           sessionId: "new-session",
           storePath: "/tmp/rotated-sessions.json",
         });
-        return { text: "✅ New session started." };
+        return { text: "✅ New session started.", isStatusNotice: true };
       },
     });
     await settleReplyDispatcher({ dispatcher });
@@ -1732,7 +1735,7 @@ describe("dispatchReplyFromConfig", () => {
     recoveryOperation?.complete();
   });
 
-  it("rejects a stale turn without clearing the operation for the rotated session", async () => {
+  it("refreshes a stale visible turn after session rotation without clearing the new owner", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691297";
     // Terminal store snapshot still reports the failed lifecycle's session id.
@@ -1754,6 +1757,7 @@ describe("dispatchReplyFromConfig", () => {
     // `terminalRecovery`, so only the session-id guard can stop the force-clear.
     let freshOperation: ReturnType<typeof createReplyOperation> | undefined;
     let signalFreshRegistered: () => void = () => {};
+    let fastAbortCalls = 0;
     const freshRegistered = new Promise<void>((resolve) => {
       signalFreshRegistered = resolve;
     });
@@ -1769,9 +1773,17 @@ describe("dispatchReplyFromConfig", () => {
         To: "telegram:-1003774691297",
         BodyForAgent: "@openclaw recover",
       }),
-      cfg: automaticGroupReplyConfig,
+      cfg: { ...automaticGroupReplyConfig, diagnostics: { enabled: true } },
       dispatcher,
       fastAbortResolver: async () => {
+        fastAbortCalls += 1;
+        if (fastAbortCalls > 1) {
+          return { handled: false, aborted: false };
+        }
+        sessionStoreMocks.currentEntry = {
+          sessionId: "fresh-rotated-session",
+          updatedAt: Date.now(),
+        };
         freshOperation = createReplyOperation({
           sessionKey,
           sessionId: "fresh-rotated-session",
@@ -1784,6 +1796,7 @@ describe("dispatchReplyFromConfig", () => {
       formatAbortReplyTextResolver: () => "aborted",
       replyResolver,
     });
+    void turn.catch(() => {});
 
     // Let the visible turn run its admission/force-clear path. With the bug it
     // would force-fail the rotated op here, mistaking a valid in-flight reply for
@@ -1793,16 +1806,84 @@ describe("dispatchReplyFromConfig", () => {
       setTimeout(resolve, 100);
     });
 
-    // The session-id guard keeps the rotated op untouched while the stale turn
-    // is invalidated instead of later crossing the reset boundary.
+    // The session-id guard keeps the rotated op untouched while this turn
+    // refreshes its snapshot instead of crossing the reset boundary with stale state.
     expect(freshOperation).toBeDefined();
     expect(freshOperation?.result).toBeNull();
     expect(replyRunRegistry.get(sessionKey)).toBe(freshOperation);
     expect(replyResolver).not.toHaveBeenCalled();
 
     freshOperation?.complete();
-    await expect(turn).rejects.toThrow(/changed while starting work/i);
-    expect(replyResolver).not.toHaveBeenCalled();
+    await expect(turn).resolves.toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(fastAbortCalls).toBe(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "visible recovery reply" });
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    expect(messageAuditEvents()).toEqual([
+      expect.objectContaining({ status: "succeeded", outcome: "completed" }),
+    ]);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledOnce();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed" }),
+    );
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(2);
+    expect(diagnosticMocks.logSessionStateChange.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          sessionId: "failed-session-rotated",
+          state: "processing",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "failed-session-rotated",
+          state: "idle",
+          reason: "session_refresh",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "fresh-rotated-session",
+          state: "processing",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          sessionId: "fresh-rotated-session",
+          state: "idle",
+          reason: "message_completed",
+        }),
+      ],
+    ]);
+
+    const followingDispatcher = createDispatcher();
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          ChatType: "group",
+          SessionKey: sessionKey,
+          MessageSid: "following-visible-after-rotation",
+          To: "telegram:-1003774691297",
+          BodyForAgent: "@openclaw following message",
+        }),
+        cfg: automaticGroupReplyConfig,
+        dispatcher: followingDispatcher,
+        replyResolver,
+      }),
+    ).resolves.toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+    expect(followingDispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "visible recovery reply",
+    });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
   });
 

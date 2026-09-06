@@ -115,16 +115,35 @@ describe("sender label opaque-id stripping", () => {
     ).toEqual({ id: "shared-id", name: "Person" });
   });
 
-  it("strips a baked UUID suffix without inventing profile identity", () => {
+  it.each([
+    {
+      behavior: "strips a baked UUID suffix without inventing profile identity",
+      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      expectedLabel: "steipete",
+    },
+    {
+      behavior: "keeps human-meaningful parenthesized suffixes",
+      senderLabel: "Peter (+436641234567)",
+      expectedLabel: "Peter (+436641234567)",
+    },
+    {
+      behavior: "keeps a label that is only a UUID rather than emptying it",
+      senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      expectedLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
+    },
+    {
+      behavior: "keeps a bare-UUID legacy label as display only",
+      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      expectedLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+    },
+  ])("$behavior", ({ senderLabel, expectedLabel }) => {
     const normalized = normalizeMessage({
       role: "user",
       content: "hi",
-      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
+      senderLabel,
     });
-    expect(normalized.senderLabel).toBe("steipete");
-    expect(normalized.sender).toEqual({
-      name: "steipete",
-    });
+    expect(normalized.senderLabel).toBe(expectedLabel);
+    expect(normalized.sender).toEqual({ name: expectedLabel });
   });
 
   it("prefers durable metadata identity over the legacy label identity", () => {
@@ -136,35 +155,5 @@ describe("sender label opaque-id stripping", () => {
     });
     expect(normalized.sender).toEqual({ id: "meta-profile", name: "Meta Name" });
     expect(normalized.senderLabel).toBe("steipete");
-  });
-
-  it("keeps human-meaningful parenthesized suffixes", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hi",
-        senderLabel: "Peter (+436641234567)",
-      }).senderLabel,
-    ).toBe("Peter (+436641234567)");
-  });
-
-  it("keeps a label that is only a UUID rather than emptying it", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hi",
-        senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
-      }).senderLabel,
-    ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
-  });
-
-  it("keeps a bare-UUID legacy label as display only", () => {
-    const normalized = normalizeMessage({
-      role: "user",
-      content: "hi",
-      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-    });
-    expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
-    expect(normalized.sender).toEqual({ name: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

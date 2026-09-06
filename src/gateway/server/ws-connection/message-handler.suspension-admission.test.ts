@@ -9,6 +9,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { GatewayConnectionWork } from "../../server-connection-work.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -56,19 +58,23 @@ function createLogger() {
   };
 }
 
+const cleanups: Array<() => Promise<void>> = [];
+
 function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boolean } = {}) {
+  const connectionWork = new GatewayConnectionWork();
   let onMessage: ((data: string) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let client: unknown = null;
+  let closed = false;
   const socketSend = vi.fn((_payload: string, callback?: (error?: Error) => void) => {
-    if (params.deferSocketSend) {
+    if (params.deferSocketSend && !closed) {
       finishSocketSend = () => callback?.();
       return;
     }
     callback?.();
   });
   const socket = {
-    _receiver: {},
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     send: socketSend,
     on: vi.fn((event: string, handler: (data: string) => void) => {
       if (event === "message") {
@@ -77,7 +83,15 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
       return socket;
     }),
   } as unknown as WebSocket;
-  const close = vi.fn();
+  const close = vi.fn(() => {
+    closed = true;
+    finishSocketSend?.();
+  });
+  cleanups.push(async () => {
+    close();
+    connectionWork.beginClose();
+    await connectionWork.drain();
+  });
   const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   const setCloseCause = vi.fn();
   const setClient = vi.fn((next: unknown) => {
@@ -87,6 +101,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
 
   attachGatewayWsMessageHandler({
     socket,
+    connectionWork,
     bootId: "suspension-admission-test-boot",
     upgradeReq: {
       headers: { host: "127.0.0.1:19001" },
@@ -116,7 +131,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     send,
     close,
-    isClosed: vi.fn(() => false),
+    isClosed: () => closed,
     clearHandshakeTimer: vi.fn(),
     getClient: () => client as never,
     setClient: setClient as never,
@@ -232,7 +247,12 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(resetGatewayWorkAdmission);
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+  resetGatewayWorkAdmission();
+});
 
 describe("WebSocket connect suspension admission", () => {
   it("rejects a validated connect while suspension is preparing before session mutations", async () => {
@@ -286,6 +306,8 @@ describe("WebSocket connect suspension admission", () => {
       });
       expect(harness.client).not.toBeNull();
       expect(harness.close).not.toHaveBeenCalled();
+      const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}");
+      expect(response.payload.snapshot.suspension).toEqual({ phase });
       suspension?.release();
     },
   );

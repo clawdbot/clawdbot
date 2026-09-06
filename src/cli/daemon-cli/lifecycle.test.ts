@@ -1,5 +1,6 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   expectRestartError,
@@ -22,13 +23,12 @@ const service = {
   restart: vi.fn(),
   stop: vi.fn(),
 };
-const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 
-const runServiceStart = vi.fn();
-const runServiceRestart = vi.fn();
-const runServiceStop = vi.fn();
-const waitForGatewayHealthyListener = vi.fn();
-const waitForGatewayHealthyRestart = vi.fn();
+const runServiceStart = vi.fn(),
+  runServiceRestart = vi.fn(),
+  runServiceStop = vi.fn();
+const waitForGatewayHealthyListener = vi.fn(),
+  waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -96,11 +96,6 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: () => isDefaultInstallIdentity(),
-  resolveNativeServiceProfileConflict: () => null,
-}));
-
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
@@ -141,10 +136,10 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: () => restartSystemdService(),
   stopSystemdService: () => stopSystemdService(),
 }));
-
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
@@ -170,7 +165,8 @@ vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({ resolveGatewaySe
 
 vi.mock("../../infra/ports-probe.js", () => ({ probePortUsage }));
 
-vi.mock("./restart-health.js", () => ({
+vi.mock("./restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyListener,
@@ -193,6 +189,12 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonStop: typeof import("./lifecycle.js").runDaemonStop;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
+  function failRestartCheck(message: string, hints?: string[]) {
+    const err = new Error(message) as Error & { hints?: string[] };
+    err.hints = hints;
+    throw err;
+  }
+
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
   }: {
@@ -200,15 +202,14 @@ describe("runDaemonRestart health checks", () => {
   } = {}) {
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         if (runPostRestartCheck) {
           await params.postRestartCheck?.({
+            activationAccepted,
             json: Boolean(params.opts?.json),
             stdout: process.stdout,
             warnings: [],
-            fail: (message: string) => {
-              throw new Error(message);
-            },
+            fail: failRestartCheck,
           });
         }
         return true;
@@ -275,7 +276,7 @@ describe("runDaemonRestart health checks", () => {
     createGatewayLifecycleMutationAudit.mockClear();
     resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
     probePortUsage.mockReset().mockResolvedValue("free");
-    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
+    mockSystemAccountHome();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -292,16 +293,12 @@ describe("runDaemonRestart health checks", () => {
     stopSystemdService.mockReset().mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
-      const fail = (message: string, hints?: string[]) => {
-        const err = new Error(message) as Error & { hints?: string[] };
-        err.hints = hints;
-        throw err;
-      };
       await params.postRestartCheck?.({
+        activationAccepted: true,
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
         warnings: [],
-        fail,
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -380,7 +377,7 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonRestart({ json: true });
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
       /non-default state dir/,
     );
@@ -440,12 +437,11 @@ describe("runDaemonRestart health checks", () => {
         issues: [{ code: "port-mismatch", message: "service port is stale" }],
       });
       await params.postRestartCheck?.({
+        activationAccepted: false,
         json: true,
         stdout: process.stdout,
         warnings: [],
-        fail: (message: string) => {
-          throw new Error(message);
-        },
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -810,7 +806,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals a single unmanaged gateway process on restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
@@ -834,7 +830,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("rejects denied Darwin recovery when no unmanaged listener exists", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     mockUnmanagedRestart();
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(/non-default state dir/);
@@ -986,14 +982,13 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         await params.postRestartCheck?.({
+          activationAccepted,
           json: Boolean(params.opts?.json),
           stdout: process.stdout,
           warnings: [],
-          fail: (message: string) => {
-            throw new Error(message);
-          },
+          fail: failRestartCheck,
         });
         return true;
       },
@@ -1009,7 +1004,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
 

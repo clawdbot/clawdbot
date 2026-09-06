@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { buildFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
+import { validateFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
 import {
   affectedActiveRunIds,
   buildReleaseExecutionPlan,
@@ -28,10 +28,12 @@ import {
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseChildRunProvenance,
+  validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -65,14 +67,6 @@ function positiveInteger(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return normalized;
-}
-
-function requiredBoolean(value, label) {
-  const normalized = requiredString(value, label);
-  if (normalized !== "true" && normalized !== "false") {
-    throw new Error(`${label} must be true or false`);
-  }
-  return normalized === "true";
 }
 
 async function abortableSleep(milliseconds, signal) {
@@ -351,7 +345,12 @@ export function hydrateReusedPlan(plan, evidence) {
       ...child,
       displayTitle: reused.displayTitle,
       result: "success",
-      runAttempt: reused.runAttempt,
+      // Reuse keeps the dispatch origin, so a human rerun still composes earlier jobs.
+      // Verified manifests predating childEvidence only carry the effective attempt.
+      runAttempt:
+        evidence.manifest.childEvidence === undefined
+          ? reused.runAttempt
+          : evidence.manifest.childEvidence[child.key].plannedRunAttempt,
       runId: reused.runId,
       url: reused.url,
       workflowRef: reused.headBranch,
@@ -372,53 +371,40 @@ function changedPathsValue(value) {
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJson);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJson(entry)]),
-    );
-  }
-  return value;
-}
-
-async function validateReuse(plan, planInputs, signal) {
-  if (!(planInputs.evidenceReuse === true || planInputs.evidenceReuse === "true")) {
+async function validateReuse(executionPlan, signal) {
+  const { children: plan, evidenceReuse, trustedWorkflow } = executionPlan;
+  if (!evidenceReuse.requested) {
     return { blockers: [], children: plan, errors: [] };
   }
   try {
     const args = [
       RELEASE_SUMMARY_PATH,
       "--validate-run",
-      requiredString(planInputs.evidenceRunId, "evidence selected run ID"),
+      requiredString(evidenceReuse.selectedRunId, "evidence selected run ID"),
       "--repo",
       requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
       "--trusted-workflow-ref",
-      requiredString(planInputs.trustedWorkflow?.ref, "trusted workflow ref"),
+      requiredString(trustedWorkflow?.ref, "trusted workflow ref"),
       "--trusted-workflow-full-ref",
-      requiredString(planInputs.trustedWorkflow?.fullRef, "trusted workflow full ref"),
+      requiredString(trustedWorkflow?.fullRef, "trusted workflow full ref"),
       "--trusted-workflow-sha",
-      requiredString(planInputs.trustedWorkflow?.sha, "trusted workflow SHA"),
+      requiredString(trustedWorkflow?.sha, "trusted workflow SHA"),
       "--verifier-source-sha",
-      requiredString(planInputs.workflowSha, "workflow SHA"),
+      requiredString(executionPlan.workflowSha, "workflow SHA"),
       "--verifier-source-file",
       RELEASE_SUMMARY_PATH,
       "--expected-target-sha",
       requiredString(process.env.TARGET_SHA, "target SHA"),
       "--expected-evidence-policy",
-      requiredString(planInputs.evidencePolicy, "evidence policy"),
+      requiredString(evidenceReuse.policy, "evidence policy"),
       "--expected-evidence-sha",
-      requiredString(planInputs.evidenceSha, "evidence SHA"),
+      requiredString(evidenceReuse.evidenceSha, "evidence SHA"),
       "--expected-root-run-id",
-      requiredString(planInputs.evidenceRootRunId, "evidence root run ID"),
+      requiredString(evidenceReuse.rootRunId, "evidence root run ID"),
       "--expected-selected-run-id",
-      requiredString(planInputs.evidenceRunId, "evidence selected run ID"),
+      requiredString(evidenceReuse.selectedRunId, "evidence selected run ID"),
       "--expected-changed-paths-json",
-      JSON.stringify(changedPathsValue(planInputs.evidenceChangedPaths)),
+      JSON.stringify(changedPathsValue(evidenceReuse.changedPaths)),
       "--json",
     ];
     const result = await execFileAsync(process.execPath, args, {
@@ -439,12 +425,13 @@ async function validateReuse(plan, planInputs, signal) {
     ) {
       throw new Error("reused release evidence no longer matches the requested validation");
     }
-    validateReleaseTelegramWaiverBinding(planInputs, evidence.manifest.validationInputs);
+    validateReleaseTelegramWaiverBinding(executionPlan, evidence.manifest.validationInputs);
+    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
     return {
       blockers: [],
       children: hydrateReusedPlan(plan, evidence),
       errors: [],
-      sourceManifest: canonicalJson(evidence.manifest),
+      sourceManifest: sortJsonValueKeys(evidence.manifest),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -452,8 +439,8 @@ async function validateReuse(plan, planInputs, signal) {
       child: "<evidence>",
       kind: API_ERROR_PATTERN.test(message) ? "api_error" : "reused_evidence_invalid",
       message,
-      runId: stringValue(planInputs.evidenceRunId),
-      url: stringValue(planInputs.evidenceRunUrl),
+      runId: stringValue(evidenceReuse.selectedRunId),
+      url: stringValue(evidenceReuse.runUrl),
     };
     return API_ERROR_PATTERN.test(message)
       ? { blockers: [], children: plan, errors: [entry] }
@@ -564,6 +551,7 @@ function verifyMode() {
 
 function planExpected() {
   return {
+    coveragePolicy: process.env.COVERAGE_POLICY || undefined,
     telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
@@ -577,29 +565,13 @@ function planExpected() {
 }
 
 function candidateRequestFromInputs(planInputs) {
-  return buildFullReleaseCandidateRequest(planInputs.candidateRequestInput);
+  return validateFullReleaseCandidateRequest(planInputs.candidateRequestInput);
 }
 
 function candidateRequestFromEnvironment() {
-  return buildFullReleaseCandidateRequest({
-    repository: process.env.GITHUB_REPOSITORY,
-    targetSha: process.env.TARGET_SHA,
-    toolingSha: process.env.GITHUB_SHA,
-    releaseProfile: process.env.RELEASE_PROFILE,
-    releaseSoak: requiredBoolean(process.env.CANDIDATE_RELEASE_SOAK, "candidate release soak"),
-    upgradeSurvivorBaseline: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINE,
-    upgradeSurvivorBaselines: process.env.CANDIDATE_UPGRADE_SURVIVOR_BASELINES,
-    upgradeSurvivorScenarios: process.env.CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS,
-    allowFrozenTargetScenarioOmissions: requiredBoolean(
-      process.env.CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
-      "candidate frozen-target policy",
-    ),
-    allowUnreleasedChangelog: requiredBoolean(
-      process.env.CANDIDATE_ALLOW_UNRELEASED_CHANGELOG,
-      "candidate changelog policy",
-    ),
-    sharedImagePolicy: process.env.CANDIDATE_SHARED_IMAGE_POLICY,
-  });
+  return validateFullReleaseCandidateRequest(
+    JSON.parse(requiredString(process.env.CANDIDATE_REQUEST_JSON, "candidate request JSON")),
+  );
 }
 
 function evidenceReuseFromInputs(planInputs, sourceManifest = {}) {
@@ -684,6 +656,7 @@ async function planMode() {
   let plan = buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion,
     candidate,
+    coveragePolicy: planInputs.coveragePolicy,
     children: built.children,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
@@ -703,6 +676,7 @@ async function planMode() {
       attemptEvidenceVersion,
       blockers: plan.blockers,
       candidate: plan.candidate,
+      coveragePolicy: plan.coveragePolicy,
       children: plan.children,
       errors: [
         ...plan.errors,
@@ -732,7 +706,7 @@ async function planMode() {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  const reuse = await validateReuse(built.children, planInputs, abortController.signal);
+  const reuse = await validateReuse(plan, abortController.signal);
   if (finished) {
     return;
   }
@@ -740,6 +714,7 @@ async function planMode() {
     attemptEvidenceVersion,
     blockers: reuse.blockers,
     candidate,
+    coveragePolicy: planInputs.coveragePolicy,
     children: reuse.children,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
@@ -849,21 +824,7 @@ async function collectMode(mode) {
   process.once("SIGTERM", stop);
 
   if (mode === "decision" && executionPlan.evidenceReuse.requested) {
-    decisionReuse = await validateReuse(
-      plan,
-      {
-        evidenceChangedPaths: executionPlan.evidenceReuse.changedPaths,
-        evidencePolicy: executionPlan.evidenceReuse.policy,
-        evidenceReuse: true,
-        evidenceRunId: executionPlan.evidenceReuse.selectedRunId,
-        evidenceRootRunId: executionPlan.evidenceReuse.rootRunId,
-        evidenceRunUrl: executionPlan.evidenceReuse.runUrl,
-        evidenceSha: executionPlan.evidenceReuse.evidenceSha,
-        trustedWorkflow: executionPlan.trustedWorkflow,
-        workflowSha: executionPlan.workflowSha,
-      },
-      abortController.signal,
-    );
+    decisionReuse = await validateReuse(executionPlan, abortController.signal);
     const exactPlan = JSON.stringify(
       plan.map(({ key, runAttempt, runId }) => ({ key, runAttempt, runId })),
     );
@@ -886,8 +847,8 @@ async function collectMode(mode) {
       };
     }
     if (
-      JSON.stringify(canonicalJson(decisionReuse.sourceManifest)) !==
-      JSON.stringify(canonicalJson(executionPlan.evidenceReuse.sourceManifest))
+      JSON.stringify(sortJsonValueKeys(decisionReuse.sourceManifest)) !==
+      JSON.stringify(sortJsonValueKeys(executionPlan.evidenceReuse.sourceManifest))
     ) {
       decisionReuse = {
         ...decisionReuse,
@@ -1048,6 +1009,7 @@ async function validateManifestMode() {
     workflowSha: executionPlan.workflowSha,
   });
   validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
+  validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
       child.key,
@@ -1093,18 +1055,19 @@ async function validateManifestMode() {
     manifest.targetSha !== executionPlan.targetSha ||
     manifest.releaseProfile !== executionPlan.releaseProfile ||
     manifest.rerunGroup !== executionPlan.rerunGroup ||
-    JSON.stringify(canonicalJson(manifest.childRunIds)) !==
-      JSON.stringify(canonicalJson(expectedChildRunIds)) ||
-    JSON.stringify(canonicalJson(manifest.evidenceReuse)) !==
-      JSON.stringify(canonicalJson(expectedEvidenceReuse)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.childRunIds)) !==
+      JSON.stringify(sortJsonValueKeys(expectedChildRunIds)) ||
+    JSON.stringify(sortJsonValueKeys(manifest.evidenceReuse)) !==
+      JSON.stringify(sortJsonValueKeys(expectedEvidenceReuse)) ||
     (executionPlan.attemptEvidenceVersion !== undefined &&
-      JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
-        JSON.stringify(canonicalJson(expectedChildEvidence))) ||
+      JSON.stringify(sortJsonValueKeys(rawManifest.childEvidence)) !==
+        JSON.stringify(sortJsonValueKeys(expectedChildEvidence))) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
     Number(rawManifest.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
+  rawManifest.advisoryJobs = manifest.advisoryJobs;
   writeArtifact(manifestPath, rawManifest);
 }
 

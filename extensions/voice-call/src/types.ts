@@ -16,45 +16,9 @@ export type ProviderName = z.infer<typeof ProviderNameSchema>;
 /** Internal call identifier (UUID) */
 export type CallId = string;
 
-/** Provider-specific call identifier */
-type ProviderCallId = string;
-
 // -----------------------------------------------------------------------------
 // Call Lifecycle States
 // -----------------------------------------------------------------------------
-
-const CallStateSchema = z.enum([
-  // Non-terminal states
-  "initiated",
-  "ringing",
-  "answered",
-  "active",
-  "speaking",
-  "listening",
-  // Terminal states
-  "completed",
-  "hangup-user",
-  "hangup-bot",
-  "timeout",
-  "error",
-  "failed",
-  "no-answer",
-  "busy",
-  "voicemail",
-]);
-export type CallState = z.infer<typeof CallStateSchema>;
-
-export const TerminalStates = new Set<CallState>([
-  "completed",
-  "hangup-user",
-  "hangup-bot",
-  "timeout",
-  "error",
-  "failed",
-  "no-answer",
-  "busy",
-  "voicemail",
-]);
 
 const EndReasonSchema = z.enum([
   "completed",
@@ -69,71 +33,54 @@ const EndReasonSchema = z.enum([
 ]);
 export type EndReason = z.infer<typeof EndReasonSchema>;
 
+const CallStateSchema = z.enum([
+  "initiated",
+  "ringing",
+  "answered",
+  "active",
+  "speaking",
+  "listening",
+  ...EndReasonSchema.options,
+]);
+export type CallState = z.infer<typeof CallStateSchema>;
+
+export const TerminalStates = new Set<CallState>(EndReasonSchema.options);
+
 // -----------------------------------------------------------------------------
 // Normalized Call Events
 // -----------------------------------------------------------------------------
 
-const BaseEventSchema = z.object({
-  id: z.string(),
+export type NormalizedEvent = {
+  id: string;
   // Stable provider-derived key for idempotency/replay dedupe.
-  dedupeKey: z.string().optional(),
-  callId: z.string(),
-  providerCallId: z.string().optional(),
-  timestamp: z.number(),
+  dedupeKey?: string | undefined;
+  callId: string;
+  providerCallId?: string | undefined;
+  timestamp: number;
   // Optional per-turn nonce for speech events (Twilio <Gather> replay hardening).
-  turnToken: z.string().optional(),
+  turnToken?: string | undefined;
   // Optional fields for inbound call detection
-  direction: z.enum(["inbound", "outbound"]).optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-});
-
-const NormalizedEventSchema = z.discriminatedUnion("type", [
-  BaseEventSchema.extend({
-    type: z.literal("call.initiated"),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.ringing"),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.answered"),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.active"),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.speaking"),
-    text: z.string(),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.assistant-speech"),
-    transcript: z.string(),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.speech"),
-    transcript: z.string(),
-    isFinal: z.boolean(),
-    confidence: z.number().min(0).max(1).optional(),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.silence"),
-    durationMs: z.number(),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.dtmf"),
-    digits: z.string(),
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.ended"),
-    reason: EndReasonSchema,
-  }),
-  BaseEventSchema.extend({
-    type: z.literal("call.error"),
-    error: z.string(),
-    retryable: z.boolean().optional(),
-  }),
-]);
-export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
+  direction?: "inbound" | "outbound" | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
+} & (
+  | { type: "call.initiated" }
+  | { type: "call.ringing" }
+  | { type: "call.answered" }
+  | { type: "call.active" }
+  | { type: "call.speaking"; text: string }
+  | { type: "call.assistant-speech"; transcript: string }
+  | {
+      type: "call.speech";
+      transcript: string;
+      isFinal: boolean;
+      confidence?: number | undefined;
+    }
+  | { type: "call.silence"; durationMs: number }
+  | { type: "call.dtmf"; digits: string }
+  | { type: "call.ended"; reason: EndReason }
+  | { type: "call.error"; error: string; retryable?: boolean | undefined }
+);
 
 // -----------------------------------------------------------------------------
 // Call Direction
@@ -236,19 +183,20 @@ export type InitiateCallInput = {
 };
 
 export type InitiateCallResult = {
-  providerCallId: ProviderCallId;
+  providerCallId: string;
   status: "initiated" | "queued";
 };
 
-export type HangupCallInput = {
+type CallControlInput = {
   callId: CallId;
-  providerCallId: ProviderCallId;
+  providerCallId: string;
+};
+
+export type HangupCallInput = CallControlInput & {
   reason: EndReason;
 };
 
-export type AnswerCallInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
+export type AnswerCallInput = CallControlInput & {
   /**
    * Optional `wss://` URL the carrier should open for bidirectional Media
    * Streaming on answer. Used by carriers (e.g. Telnyx) that attach
@@ -260,9 +208,7 @@ export type AnswerCallInput = {
   streamAuthToken?: string;
 };
 
-export type PlayTtsInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
+export type PlayTtsInput = CallControlInput & {
   text: string;
   voice?: string;
   locale?: string;
@@ -270,32 +216,23 @@ export type PlayTtsInput = {
   listenAfterPlayback?: boolean;
 };
 
-export type SendDtmfInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
+export type SendDtmfInput = CallControlInput & {
   digits: string;
 };
 
-export type StartListeningInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
+export type StartListeningInput = CallControlInput & {
   language?: string;
   /** Optional per-turn nonce for provider callbacks (replay hardening). */
   turnToken?: string;
 };
 
-export type StopListeningInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
-};
+export type StopListeningInput = CallControlInput;
 
 // -----------------------------------------------------------------------------
 // Call Status Verification (used on restart to verify persisted calls)
 // -----------------------------------------------------------------------------
 
-export type GetCallStatusInput = {
-  providerCallId: ProviderCallId;
-};
+export type GetCallStatusInput = Pick<CallControlInput, "providerCallId">;
 
 export type GetCallStatusResult = {
   /** Provider-specific status string (e.g. "completed", "in-progress") */

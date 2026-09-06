@@ -20,6 +20,7 @@ export type BoardProvider = {
   readonly canGrant: boolean;
   readonly canPinWidgets: boolean;
   readonly canPinMcpApps: boolean;
+  readonly hasLoadedSnapshot: boolean;
   readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   applyOps(ops: BoardOp[]): Promise<void>;

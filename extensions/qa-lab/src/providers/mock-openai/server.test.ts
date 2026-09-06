@@ -42,6 +42,8 @@ const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
 const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
   "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT =
+  "Empty response after write exhaustion QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `WRITE-EXHAUSTED-OK`.";
 const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
   "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
@@ -1074,10 +1076,11 @@ describe("qa mock openai server", () => {
     expect(visibleEvents.map((event) => event.type)).toEqual([
       "response.created",
       "response.output_item.added",
+      "response.content_part.added",
       "response.output_text.delta",
       "response.failed",
     ]);
-    expect(visibleEvents[2]).toMatchObject({
+    expect(visibleEvents[3]).toMatchObject({
       type: "response.output_text.delta",
       delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
     });
@@ -1223,6 +1226,7 @@ describe("qa mock openai server", () => {
         makeUserInput(stalePrompt),
         makeToolOutputWithCallId("call_stale_slack_progress", ""),
         makeUserInput(currentEnvelope),
+        exec,
         makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), ""),
       ],
     });
@@ -3449,7 +3453,7 @@ Update and merge these partial structured summaries.`,
           ),
         ],
       });
-      expect(outputText(parent)).toBe("NO_REPLY");
+      expect(outputText(parent)).toBe("Worker started.");
     };
 
     const firstChildResponse = startChild("qa-terminal-child-1", firstChildSessionKey);
@@ -3517,6 +3521,29 @@ Update and merge these partial structured summaries.`,
       ],
     });
     expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
+  });
+
+  it("returns explicit empty output for the intentional non-delivery worker", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent terminal reply QA worker: empty. Return no assistant output after the write.";
+    await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [makeUserInput(prompt)],
+    });
+    const writeRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "intentional empty terminal write request",
+    );
+
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(String(writeRequest.plannedToolCallId), "Wrote 40 bytes"),
+      ],
+    });
+    expect(outputText(payload)).toBe("");
   });
 
   it("represents an empty terminal reply intentionally in the resumed parent turn", async () => {
@@ -3654,7 +3681,7 @@ Update and merge these partial structured summaries.`,
   });
 
   it.each(["visible", "silent", "fallback", "restart", "empty"])(
-    "ends the %s parent turn before direct terminal delivery",
+    "acknowledges the %s worker before direct terminal delivery",
     async (terminalCase) => {
       const server = await startMockServer();
       const prompt = `Subagent terminal reply QA check: ${terminalCase}.`;
@@ -3670,9 +3697,28 @@ Update and merge these partial structured summaries.`,
       });
 
       expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(payload)).toBe("NO_REPLY");
+      expect(outputText(payload)).toBe("Worker started.");
     },
   );
+
+  it("acknowledges the empty worker before its intentional non-delivery", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput(
+          "Subagent terminal reply QA check: empty. Reply to the requester after spawning.",
+        ),
+        makeToolOutputWithCallId(
+          "call_mock_sessions_spawn_1",
+          JSON.stringify({ status: "accepted", runId: "run-empty" }),
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(payload)).toBe("QA-SUBAGENT-EMPTY-PARENT-ACK");
+  });
 
   it.each([
     ["visible", "NO_REPLY"],
@@ -5869,10 +5915,11 @@ Update and merge these partial structured summaries.`,
       "response.created",
       "response.output_item.added",
       "response.custom_tool_call_input.delta",
+      "response.custom_tool_call_input.done",
       "response.output_item.done",
       "response.completed",
     ]);
-    const [created, added, delta, done, completed] = events;
+    const [created, added, delta, inputDone, done, completed] = events;
     expect(created?.response?.id).toBe(completed?.response?.id);
     expect(added?.item).toMatchObject({
       type: "custom_tool_call",
@@ -5889,6 +5936,7 @@ Update and merge these partial structured summaries.`,
     expect(delta?.item_id).toBe(done?.item?.id);
     expect(delta?.call_id).toBe(done?.item?.call_id);
     expect(delta?.delta).toBe(done?.item?.input);
+    expect(inputDone).toMatchObject({ item_id: done?.item?.id, input: done?.item?.input });
     expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
     expect(completed?.response?.output).toEqual([done?.item]);
     for (const item of [added?.item, done?.item, completed?.response?.output?.[0]]) {
@@ -6550,24 +6598,29 @@ Update and merge these partial structured summaries.`,
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.added",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {
         type: "response.completed",
         response: {
           id: "response_mock",
+          object: "response",
           status: "completed",
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
@@ -8328,6 +8381,33 @@ Update and merge these partial structured summaries.`,
       expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
     },
   );
+
+  it("keeps settled write finalization empty for host fallback coverage", async () => {
+    const server = await startMockServer();
+    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+
+    const toolOutput = {
+      type: "function_call_output" as const,
+      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    };
+    for (const includeFinalizationPrompt of [false, true, true]) {
+      const payload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
+          ...(includeFinalizationPrompt
+            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
+            : []),
+          toolOutput,
+        ],
+      });
+      expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
+    }
+  });
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();

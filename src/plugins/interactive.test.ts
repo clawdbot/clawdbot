@@ -6,7 +6,6 @@ import type {
   SlackInteractiveHandlerContext,
   TelegramInteractiveHandlerContext,
 } from "./interactive-contract.test-helpers.js";
-import { registerRegistryPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   clearPluginInteractiveHandlers,
   createChannelInteractiveDispatcher,
@@ -579,7 +578,7 @@ describe("plugin interactive handlers", () => {
       },
     ];
     expect(
-      registerRegistryPluginInteractiveHandler(
+      registerPluginInteractiveHandler(
         "openclaw-code-agent",
         {
           channel: "telegram",

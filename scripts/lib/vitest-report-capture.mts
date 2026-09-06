@@ -6,6 +6,7 @@ import type { Reporter, TestModule, TestProject, TestSpecification, Vitest } fro
 function projectIdentity(project: TestProject) {
   return {
     name: project.name,
+    namePrefix: project.namePrefix,
     root: project.config.root,
     config: project.vite.config.configFile,
     pool: project.config.pool,
@@ -51,7 +52,7 @@ export type VitestReportCapture = {
   processTimedOut: boolean;
   passWithNoTests: boolean;
   ignoreUnhandledErrors: boolean;
-  ended?: { reason: string; unhandledErrors: number; failedModules: number };
+  ended?: { reason: string; unhandledErrors: number; failedModules: number; suiteErrors: number };
 };
 
 const sorted = (values: unknown[]) => values.map((value) => JSON.stringify(value)).toSorted();
@@ -79,11 +80,19 @@ export default class VitestReportCaptureReporter implements Reporter {
         );
       }
     }
-    const projects = ctx.projects.map(projectIdentity);
+    // Wholly empty blob replay uses the merge config's default project only as a host.
+    const loadedProjects =
+      this.expected.length && this.expected.every((capture) => capture.projects.length === 0)
+        ? []
+        : ctx.projects;
+    const projects = loadedProjects.map(projectIdentity);
     assert(
       projects.every(
         (project, index) =>
-          project.name && project.config && !ctx.projects[index]!.isBrowserEnabled(),
+          project.name &&
+          typeof project.namePrefix === "string" &&
+          project.config &&
+          !loadedProjects[index]!.isBrowserEnabled(),
       ),
       "Multi-invocation JSON requires named file-based Node projects; run inline/browser configurations separately.",
     );
@@ -132,11 +141,19 @@ export default class VitestReportCaptureReporter implements Reporter {
   }
 
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
+    // Match native BlobReporter: empty runs have no module owners to replay.
+    this.capture.projects = [...new Set(modules.map((module) => module.project))].map(
+      projectIdentity,
+    );
     this.capture.modules = modules.map((module) => moduleIdentity(module.toTestSpecification()));
     this.capture.ended = {
       reason,
       unhandledErrors: errors.length,
       failedModules: modules.filter((module) => !module.ok()).length,
+      // Native JSON keeps only the first file error and omits nested suite errors.
+      suiteErrors: modules
+        .flatMap((module) => [module, ...module.children.allSuites()])
+        .reduce((count, suite) => count + suite.errors().length, 0),
     };
     this.writeCapture();
   }

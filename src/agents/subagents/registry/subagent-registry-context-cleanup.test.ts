@@ -1,14 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import {
   resetSubagentRegistryRuntimeLoadersForTests,
   setSubagentRegistryDepsForTest,
+  subagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 
 describe("subagent registry context cleanup", () => {
   afterEach(() => {
     setSubagentRegistryDepsForTest();
     resetSubagentRegistryRuntimeLoadersForTests();
+  });
+
+  it("completes ended-hook cleanup when the plugin runtime loader rejects", async () => {
+    const error = new Error("plugin runtime import failed");
+    setSubagentRegistryDepsForTest({
+      getRuntimeConfig: () => ({}),
+      loadAgentRuntimePluginRegistryHandle: () => {
+        throw error;
+      },
+    });
+    const warn = vi.fn();
+    const persist = vi.fn();
+    const cleanup = createSubagentRegistryContextCleanup({
+      deps: () => subagentRegistryDeps,
+      persist,
+      warn,
+    });
+    const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
+
+    await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
+      phase: "plugin-runtime",
+      err: error,
+    });
+    expect(entry.endedHookEmittedAt).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("rechecks lifecycle ownership after resolving the context engine", async () => {

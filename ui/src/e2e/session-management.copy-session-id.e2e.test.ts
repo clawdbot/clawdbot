@@ -1,11 +1,13 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
   createSessionManagementE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
+  openSessionMenuSubmenu,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -16,11 +18,7 @@ const sessionId = "93be7617-9d1e-4091-aa0f-33332aff3321";
 
 suite.define(() => {
   it("copies the session ID from the session menu", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
       origin: new URL(suite.server.baseUrl).origin,
     });
@@ -50,9 +48,10 @@ suite.define(() => {
       await row.getByRole("button", { name: "Open session menu: Copy session ID proof" }).click();
 
       const menuHost = page.locator("openclaw-session-menu");
-      const copyItem = menuHost.getByRole("menuitem", { name: "Copy session ID" });
+      await openSessionMenuSubmenu(page, "Copy");
+      const copyItem = menuHost.getByRole("menuitem", { name: "Session ID", exact: true });
       await expect.poll(() => copyItem.count()).toBe(1);
-      await captureUiProof(page, "copy-session-id-menu.png");
+      await captureUiProof(suite, page, "copy-session-id-menu.png");
 
       await activateSelfRemovingControl(copyItem);
 

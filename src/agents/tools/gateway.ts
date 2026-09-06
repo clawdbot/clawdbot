@@ -28,7 +28,10 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { getOperatorApprovalRuntimeToken } from "../../gateway/operator-approval-runtime-token.js";
-import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunApprovalAuthority,
+  getActiveAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -358,6 +361,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
   required?: boolean;
+  signal?: AbortSignal;
 }): Promise<string | undefined> {
   const optionalLocalIdentity = OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(params.method);
   if (
@@ -421,9 +425,19 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
     try {
+      // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
+      const approvalSignals =
+        params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+          ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
+          : undefined;
+      const approvalAuthority =
+        activeAuthority && approvalSignals?.length
+          ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
+          : undefined;
       return await mintAgentRuntimeIdentityToken({
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
+        approvalAuthority,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
         ...(lineageHandoff
           ? { executionLineageHandoffId: lineageHandoff.id }
@@ -590,8 +604,16 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
+    dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
   },
 ) {
+  const dispatchAuthority = extra?.dispatchAuthority;
+  if (
+    dispatchAuthority &&
+    (dispatchAuthority.version !== 2 || typeof dispatchAuthority.assertCurrent !== "function")
+  ) {
+    throw new Error("Gateway dispatch authority requires version 2 and a synchronous assertion");
+  }
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
@@ -608,6 +630,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
     required: extra?.requireAgentRuntimeIdentity,
+    signal: extra?.signal,
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
@@ -623,6 +646,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
     expectFinal: extra?.expectFinal,
+    assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

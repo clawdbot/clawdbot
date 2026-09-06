@@ -1,4 +1,5 @@
-type DesktopDisconnectDetail = {
+export type DesktopDisconnectDetail = {
+  clean: boolean;
   code?: number;
   reason?: string;
 };
@@ -12,6 +13,7 @@ type DesktopConnectOptions = {
   background?: string;
   credentials?: { username?: string; password?: string };
   gatewayUrl?: string;
+  isCurrent: () => boolean;
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
   onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
@@ -23,15 +25,17 @@ type DesktopConnectOptions = {
 
 export type DesktopConnectionHandle = {
   disconnect(): void;
-  sendBackspace?(): void;
-  sendKeyboardEvent?(event: KeyboardEvent): void;
-  sendText?(text: string): void;
-  setScaleViewport?(enabled: boolean): void;
+  disableInput(): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {
   background: string;
   disconnect(): void;
+  sendKey(keysym: number, code: string | null, down?: boolean): void;
   scaleViewport: boolean;
   viewOnly: boolean;
 };
@@ -82,8 +86,12 @@ export class DesktopClient {
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
     const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    // The socket claims control before RFB authentication; canceled lazy loads must not open it.
+    if (!options.isCurrent()) {
+      throw new DOMException("Desktop connection is no longer current", "AbortError");
+    }
     const socket = this.createWebSocket(wsUrl);
-    let closeDetail: DesktopDisconnectDetail = {};
+    let closeDetail: Pick<CloseEvent, "code" | "reason"> | undefined;
     socket.addEventListener("close", (event) => {
       closeDetail = { code: event.code, reason: event.reason };
     });
@@ -95,8 +103,15 @@ export class DesktopClient {
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = options.scaleViewport ?? true;
+    let retired = false;
     rfb.addEventListener("connect", () => options.onConnect?.());
-    rfb.addEventListener("disconnect", () => options.onDisconnect?.(closeDetail));
+    rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
+      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
+      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
+      options.onDisconnect?.({ ...closeDetail, clean });
+    });
     rfb.addEventListener("securityfailure", (event) => {
       const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
       options.onSecurityFailure?.(detail);
@@ -122,7 +137,15 @@ export class DesktopClient {
         cancelable: true,
       });
     return {
-      disconnect: () => rfb.disconnect(),
+      disconnect: () => {
+        if (!retired) {
+          retired = true;
+          rfb.disconnect();
+        }
+      },
+      disableInput: () => {
+        rfb.viewOnly = true;
+      },
       setScaleViewport: (enabled) => {
         rfb.scaleViewport = enabled;
       },
@@ -130,11 +153,18 @@ export class DesktopClient {
       sendText: (text) => {
         // Mobile IMEs can omit keydown/keyup. "Unidentified" asks noVNC's
         // keyboard owner to translate each inserted character and emit a
-        // balanced press/release, matching its built-in mobile UI fallback.
-        for (let index = 0; index < text.length; index += 1) {
+        // balanced press/release. Line breaks need Enter rather than Unicode LF.
+        const normalizedText = text.replace(/\r\n?/g, "\n");
+        for (const character of normalizedText) {
+          // noVNC 1.7's DOM key translator only accepts BMP characters. Its
+          // public RFB sender supports the full Unicode scalar keysym directly.
+          if (character.length === 2) {
+            rfb.sendKey(0x01000000 | character.codePointAt(0)!, null);
+            continue;
+          }
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: text.charAt(index),
+              key: character === "\n" ? "Enter" : character,
               code: "Unidentified",
               bubbles: true,
               cancelable: true,
@@ -142,18 +172,7 @@ export class DesktopClient {
           );
         }
       },
-      sendBackspace: () => {
-        for (const type of ["keydown", "keyup"]) {
-          dispatchKeyboardEvent(
-            new KeyboardEvent(type, {
-              key: "Backspace",
-              code: "Backspace",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
-        }
-      },
+      sendBackspace: () => rfb.sendKey(0xff08, "Backspace"),
     };
   }
 }

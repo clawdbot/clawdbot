@@ -191,7 +191,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     ).toEqual(["@openclaw/demo-plugin"]);
   });
 
-  it("collects exact release dependencies that must match npm latest", () => {
+  it("collects release dependencies for advisory npm latest checks", () => {
     const repoDir = createTempPluginRepo({
       requiredLatestDependencyVersion: "1.2.3",
     });
@@ -536,82 +536,57 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(packageNames.toSorted());
   });
 
-  it("rejects stale required dependencies before querying ClawHub", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-
-    await expect(
-      collectPluginClawHubReleasePlan({
-        rootDir: repoDir,
-        selection: ["@openclaw/demo-plugin"],
-        resolveLatestVersion: () => "1.2.4",
-        fetchImpl: async () => {
-          throw new Error("ClawHub should not be queried for a stale dependency.");
+  it.each(["matching", "stale", "unavailable"])(
+    "keeps ClawHub candidates when npm latest is %s",
+    async (scenario) => {
+      const repoDir = createTempPluginRepo({
+        requiredLatestDependencyVersion: "1.2.3",
+      });
+      const { fetchImpl } = createClawHubPlanFetch({
+        packages: {
+          "@openclaw/demo-plugin": {
+            status: 200,
+          },
         },
-      }),
-    ).rejects.toThrow(
-      '@openclaw/demo-plugin@2026.4.1: demo-runtime must match npm latest for release; found "1.2.3", latest is "1.2.4".',
-    );
-  });
-
-  it("accepts required dependencies matching npm latest", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-    const { fetchImpl } = createClawHubPlanFetch({
-      packages: {
-        "@openclaw/demo-plugin": {
-          status: 200,
-        },
-      },
-      trustedPublishers: {
-        "@openclaw/demo-plugin": {
-          status: 200,
-          body: {
-            trustedPublisher: {
-              repository: "openclaw/openclaw",
-              workflowFilename: "plugin-clawhub-release.yml",
+        trustedPublishers: {
+          "@openclaw/demo-plugin": {
+            status: 200,
+            body: {
+              trustedPublisher: {
+                repository: "openclaw/openclaw",
+                workflowFilename: "plugin-clawhub-release.yml",
+              },
             },
           },
         },
-      },
-      versions: {
-        "@openclaw/demo-plugin@2026.4.1": 404,
-      },
-    });
+        versions: {
+          "@openclaw/demo-plugin@2026.4.1": 404,
+        },
+      });
 
-    const plan = await collectPluginClawHubReleasePlan({
-      rootDir: repoDir,
-      selection: ["@openclaw/demo-plugin"],
-      resolveLatestVersion: () => "1.2.3",
-      fetchImpl,
-      registryBaseUrl: "https://clawhub.ai",
-    });
-
-    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
-  });
-
-  it("fails closed when npm latest cannot be resolved", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-
-    await expect(
-      collectPluginClawHubReleasePlan({
+      const plan = await collectPluginClawHubReleasePlan({
         rootDir: repoDir,
         selection: ["@openclaw/demo-plugin"],
         resolveLatestVersion: () => {
-          throw new Error("registry unavailable");
+          if (scenario === "unavailable") {
+            throw new Error("registry unavailable");
+          }
+          return scenario === "matching" ? "1.2.3" : "1.2.4";
         },
-        fetchImpl: async () => {
-          throw new Error("ClawHub should not be queried when npm latest is unavailable.");
-        },
-      }),
-    ).rejects.toThrow(
-      "@openclaw/demo-plugin@2026.4.1: could not resolve npm latest for demo-runtime: registry unavailable",
-    );
-  });
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+      });
+
+      expect(plan.warnings).toHaveLength(scenario === "matching" ? 0 : 1);
+      if (scenario !== "matching") {
+        expect(plan.warnings[0]).toContain("demo-runtime");
+        expect(plan.warnings[0]).toContain('"1.2.3"');
+      }
+      expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual([
+        "@openclaw/demo-plugin",
+      ]);
+    },
+  );
 
   it("keeps existing trusted packages with missing versions as normal candidates", async () => {
     const repoDir = createTempPluginRepo();
@@ -1290,6 +1265,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
   it("emits a dispatch plan that keeps release bytes separate from protected tooling", async () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two", "demo-three"],
+      requiredLatestDependencyVersion: "1.2.3",
     });
     const { fetchImpl } = createClawHubPlanFetch({
       packages: {
@@ -1334,6 +1310,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       },
     });
 
+    const binDir = join(repoDir, "bin");
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, "npm"), "#!/bin/sh\nprintf '\"1.2.4\"\\n'\n", { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
         bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
@@ -1352,8 +1333,20 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         fetchImpl,
         registryBaseUrl: "https://clawhub.ai",
       },
-    );
+    ).finally(() => {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+    });
 
+    expect(plan.warnings).toEqual(
+      ["demo-plugin", "demo-three", "demo-two"].map(
+        (id) =>
+          `@openclaw/${id}@2026.4.1: demo-runtime pinned "1.2.3", npm latest is "1.2.4". Freshness is advisory; retain the release-validated pin.`,
+      ),
+    );
     expect(plan.clawHubWorkflowRef).toBe(`release-publish/${"d".repeat(12)}-12345`);
     expect(plan.bootstrapWorkflowSha).toBe("d".repeat(40));
     expect(plan.releasePublishBranch).toBe("main");
@@ -1548,55 +1541,41 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 });
 
 describe("runPluginClawHubReleaseCheck", () => {
-  it("rejects stale required dependencies", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-
-    await expect(
-      runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
-        rootDir: repoDir,
-        resolveLatestVersion: () => "1.2.4",
-      }),
-    ).rejects.toThrow(
-      '@openclaw/demo-plugin@2026.4.1: demo-runtime must match npm latest for release; found "1.2.3", latest is "1.2.4".',
-    );
-  });
-
-  it("accepts required dependencies matching npm latest", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    try {
-      await expect(
-        runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
-          rootDir: repoDir,
-          resolveLatestVersion: () => "1.2.3",
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
-
-  it("fails closed when npm latest cannot be resolved", async () => {
-    const repoDir = createTempPluginRepo({
-      requiredLatestDependencyVersion: "1.2.3",
-    });
-
-    await expect(
-      runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
-        rootDir: repoDir,
-        resolveLatestVersion: () => {
-          throw new Error("registry unavailable");
-        },
-      }),
-    ).rejects.toThrow(
-      "@openclaw/demo-plugin@2026.4.1: could not resolve npm latest for demo-runtime: registry unavailable",
-    );
-  });
+  it.each(["matching", "stale", "unavailable"])(
+    "passes with npm latest %s and reports any advisory",
+    async (scenario) => {
+      const repoDir = createTempPluginRepo({ requiredLatestDependencyVersion: "1.2.3" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await expect(
+          runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
+            rootDir: repoDir,
+            resolveLatestVersion: () => {
+              if (scenario === "unavailable") {
+                throw new Error("registry unavailable");
+              }
+              return scenario === "matching" ? "1.2.3" : "1.2.4";
+            },
+          }),
+        ).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledTimes(scenario === "matching" ? 0 : 1);
+        if (scenario !== "matching") {
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("@openclaw/demo-plugin@2026.4.1:"),
+          );
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("demo-runtime"));
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining('"1.2.3"'));
+        }
+        expect(log).toHaveBeenCalledWith(
+          "plugin-clawhub-release-check: publishable plugin metadata looks OK.",
+        );
+      } finally {
+        warn.mockRestore();
+        log.mockRestore();
+      }
+    },
+  );
 });
 
 describe("buildOpenClawReleaseClawHubRuntimeState", () => {
@@ -1684,10 +1663,10 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 
     expect(state.verifierArgs).toEqual(["--skip-clawhub"]);
     expect(state.proofLines.normal).toBe(
-      "- plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/111",
+      "- plugin ClawHub publish: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/111",
     );
     expect(state.proofLines.bootstrap).toBe(
-      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+      "- plugin ClawHub bootstrap: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/222",
     );
   });
 });
@@ -1823,9 +1802,7 @@ exit 0
     const invocations = readFileSync(markerPath, "utf8");
     const resolvedRepoDir = realpathSync(repoDir);
     expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
-    expect(invocations).toContain(
-      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
-    );
+    expect(invocations).toContain("package pack .");
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");

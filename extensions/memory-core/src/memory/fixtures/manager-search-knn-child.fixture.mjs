@@ -16,8 +16,14 @@ process.stdin.once("end", () => {
     process.stdout.write(Buffer.alloc(2 * 1024 * 1024 + 1024, 120));
     return;
   }
+  if (input.databasePath === "fixture:oversized-stderr") {
+    process.stderr.write(Buffer.alloc(64 * 1024 + 1024, 120));
+    return;
+  }
   if (input.databasePath === "fixture:early-exit") {
-    process.exit(7);
+    // Flush pipe output before exiting so the test cannot lose its own diagnostic.
+    process.stderr.write("fixture KNN failure\n", () => process.exit(7));
+    return;
   }
   process.stderr.write("ready\n");
   const deadline = performance.now() + Math.max(0, Number(input.request?.limit ?? 0));

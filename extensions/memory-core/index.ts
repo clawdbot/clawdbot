@@ -16,6 +16,7 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import "./src/memory/background-context.js";
 import {
   buildMemoryPromptSection,
   MEMORY_GET_TOOL_CONTRACT,

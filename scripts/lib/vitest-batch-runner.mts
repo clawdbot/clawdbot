@@ -1,8 +1,11 @@
-// Runs grouped Vitest batches through the repo pnpm wrapper.
+// Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
+import type { TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
+import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 
@@ -10,6 +13,8 @@ export type VitestBatchRunParams = {
   args: string[];
   config: string;
   env?: NodeJS.ProcessEnv;
+  // Owner-generated report configs retain their validated original selection.
+  homeMode?: TestHomeSelection;
   targets: string[];
   onComplete?: (outcome: VitestReportOutcome) => void;
 };
@@ -23,25 +28,34 @@ const repoRoot = path.resolve(scriptDir, "../..");
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    let forwardedSignal: NodeJS.Signals | undefined;
-    const { child, completion } = spawnOwnedVitestProcess(
-      createPnpmRunnerSpawnSpec({
-        cwd: repoRoot,
-        env: params.env,
-        pnpmArgs: buildVitestBatchPnpmArgs(params),
-        stdio: "inherit",
-      }),
-    );
-    const teardownChildCleanup = installVitestProcessGroupCleanup({
+    // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
+    const { child, completion } = spawnOwnedVitestProcess({
+      homeMode:
+        params.homeMode ??
+        resolveVitestHomeSelection(["--config", params.config, ...params.args, ...params.targets], {
+          cwd: repoRoot,
+          env: params.env,
+        }),
+      command: process.execPath,
+      args: [
+        ...resolveVitestNodeArgs(params.env),
+        resolveVitestCliEntry({ env: params.env }),
+        "run",
+        "--config",
+        params.config,
+        ...params.args,
+        ...params.targets,
+      ],
+      options: { cwd: repoRoot, env: params.env, stdio: "inherit" },
+    });
+    const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
-      onSignal(signal: NodeJS.Signals) {
-        forwardedSignal ??= signal;
-      },
     });
-    completion.finally(teardownChildCleanup).then((result) => {
+    completion.finally(cleanup.teardown).then((result) => {
       const { code, signal } = result;
+      const forwardedSignal = cleanup.getForwardedSignal();
       if (params.onComplete) {
         const outcome = { code: code ?? 1, signal: forwardedSignal ?? signal };
         params.onComplete(outcome);
@@ -59,13 +73,6 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       resolve(code ?? 1);
     }, reject);
   });
-}
-
-/**
- * Builds pnpm arguments for a Vitest batch run.
- */
-export function buildVitestBatchPnpmArgs(params: VitestBatchRunParams): string[] {
-  return ["exec", "vitest", "run", "--config", params.config, ...params.args, ...params.targets];
 }
 
 /**

@@ -1,7 +1,14 @@
 // QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeQaHttpServer } from "../../bus-server.js";
+import { format as formatUrl } from "node:url";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  closeQaHttpServer,
+  dispatchQaHttpRequest,
+  writeQaRequestBodyLimitError,
+} from "../../bus-server.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
@@ -15,6 +22,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
@@ -39,13 +47,13 @@ import {
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
-  QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
@@ -72,6 +80,9 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
+  QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -107,13 +118,9 @@ import {
   MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
-  writeOpenAiMalformedJsonError,
   transcriptionTextForAudioRequest,
   writeSse,
   isRemoteCompactionV2Request,
-  buildRemoteCompactionV2Events,
-  writeSseWithPreviewPause,
-  writeAnthropicSse,
   countApproxTokens,
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
@@ -140,6 +147,7 @@ import {
   resolveHeartbeatPromptReply,
 } from "./mock-openai-directives.js";
 import {
+  buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -149,6 +157,7 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildStreamingFinalAnswerEvents,
   buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
@@ -157,6 +166,8 @@ import {
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputValue,
@@ -166,7 +177,7 @@ import {
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   extractSlackMpimRetainedBotNonce,
-  extractAllUserTexts,
+  extractUserTurnTexts,
   extractInstructionsText,
   extractAllRequestTexts,
   buildWhatsAppPendingHistoryReply,
@@ -193,6 +204,13 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const MOCK_HTTP_POST_ROUTES = new Map([
+  ["/v1/images/generations", "OpenAI Images"],
+  ["/v1/audio/transcriptions", "OpenAI Audio"],
+  ["/v1/embeddings", "OpenAI Embeddings"],
+  ["/v1/responses", "OpenAI Responses"],
+  ["/v1/messages", "Anthropic Messages"],
+]);
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
@@ -491,6 +509,122 @@ function parseToolCallArguments(toolCall: ResponsesInputItem) {
   } catch {
     return null;
   }
+}
+
+function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
+  const text = extractToolOutput(input);
+  // Provider wires carry content, not process details; JSON stdout remains data.
+  const sessionId = !isPoll
+    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
+        text,
+      )?.[1]
+    : undefined;
+  const running =
+    Boolean(sessionId) ||
+    (isPoll &&
+      /\n\n(?:Process still running\.|No new output for [^;\n]+; this session may be waiting for input\. Use process write, send-keys, submit, or paste to provide input\.)$/u.test(
+        text,
+      ));
+  // Final footers own lifecycle: Node exec joins with one newline; other owners append two.
+  // Timeout guidance is one line, so earlier stdout cannot swallow a later real footer.
+  const exitPattern = isPoll
+    ? /(?:^|\n\n)Process exited with (code -?\d+|signal \S+|unknown exit code)\.(\n\nThe command was terminated,[^\n]*)?$/u
+    : /^Node: [^\n]+\n/u.test(text)
+      ? /(?:^|\n)\(Command exited with (code -?\d+)\)$/u
+      : /(?:^|\n\n)\(Command exited with (code -?\d+)\)$/u;
+  const exit = exitPattern.exec(text);
+  // Bind the command inside the matcher so warning text cannot hide a later native notice.
+  const commandPattern = escapeRegExp(command);
+  const approval = new RegExp(
+    String.raw`(?:^|\n\n)Approval required \(id (?<approvalSlug>[^,\n]+), full [^\n]+\)\.\nHost: (?:gateway|node)\n(?:Node: [^\n]+\n)?CWD: [^\n]+\nCommand:\n(?<fence>\x60{3,})sh\n${commandPattern}\n\k<fence>\nMode: foreground \(interactive approvals available\)\.\n(?:Background mode [^\n]+\n)?Reply with: \/approve \k<approvalSlug> (?<decisions>allow-once(?:\|allow-always)?\|deny)\n(?<unavailable>Allow Always is unavailable for this command\.\n)?If the short code is ambiguous, use the full id in \/approve\.$`,
+    "u",
+  ).exec(text)?.groups;
+  const fence = approval?.fence;
+  // Require the formatter's canonical fence and decision guidance so malformed quoted notices stay stdout.
+  const pendingApproval =
+    fence &&
+    !command.includes(fence) &&
+    (fence.length === 3 || command.includes(fence.slice(1))) &&
+    Boolean(approval?.decisions?.includes("allow-always")) !== Boolean(approval?.unavailable);
+  const unknownNotice = new RegExp(
+    String.raw`(?:^|\n\n)Node command outcome is unknown for [^\n]+\.\nThe command may have executed\. Do not rerun it automatically\.\n\nCommand:\n${commandPattern}\n\nDetails: `,
+    "u",
+  ).test(text);
+  let state: "running" | "completed" | "failed" | "unconfirmed";
+  if (
+    !isPoll &&
+    (pendingApproval ||
+      /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
+        text,
+      ) ||
+      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
+        text,
+      ) ||
+      unknownNotice)
+  ) {
+    // Complete notices own lifecycle state; an unknown result's Details tail is only diagnostic text.
+    state = "unconfirmed";
+  } else if (extractToolOutputStructuredError(input) === true) {
+    // A poll error without terminal evidence cannot establish that the command failed.
+    state = running || (isPoll && !exit) ? "unconfirmed" : "failed";
+  } else if (running) {
+    state = "running";
+  } else if (exit) {
+    state = exit[2] !== undefined || exit[1] !== "code 0" ? "failed" : "completed";
+  } else {
+    // Foreground success can be empty; a poll needs an explicit terminal result.
+    state = isPoll ? "unconfirmed" : "completed";
+  }
+  return { state, sessionId };
+}
+
+function readProgressCommand(input: ResponsesInputItem[], command: string) {
+  let current: ReturnType<typeof readProgressCommandOutput> | undefined;
+  let sessionId: string | undefined;
+  let pendingCall: ResponsesInputItem | undefined;
+  // Walk the whole turn so a valid exec or poll cannot hide an earlier foreign call.
+  for (const item of input) {
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      const args = parseToolCallArguments(item);
+      if (
+        pendingCall ||
+        typeof item.call_id !== "string" ||
+        item.call_id.length === 0 ||
+        (current
+          ? current.state !== "running" ||
+            !sessionId ||
+            item.name !== "process" ||
+            args?.action !== "poll" ||
+            args.sessionId !== sessionId
+          : item.type !== "function_call" || item.name !== "exec" || args?.command !== command)
+      ) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      pendingCall = item;
+    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+      if (!pendingCall || item.call_id !== pendingCall.call_id) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      const isPoll = current !== undefined;
+      current = readProgressCommandOutput([item], command, isPoll);
+      if (!isPoll) {
+        sessionId = current.sessionId;
+      }
+      pendingCall = undefined;
+    }
+  }
+  if (!current) {
+    return {
+      error: pendingCall ? "BUG-TOOL-PROGRESS-RESULT-MISSING" : "BUG-TOOL-PROGRESS-CALL-MISMATCH",
+    };
+  }
+  if (pendingCall || current.state === "unconfirmed") {
+    return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
+  }
+  if (current.state === "running") {
+    return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
+  }
+  return { failed: current.state === "failed" };
 }
 
 function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
@@ -855,6 +989,29 @@ async function buildResponsesPayload(
   })();
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
+  const pendingCommandProgress = (
+    progressInput: ResponsesInputItem[],
+    command: string,
+    expectedOutcome: "success" | "failure" | "either" = "success",
+  ) => {
+    const progress = readProgressCommand(progressInput, command);
+    if (progress.error) {
+      return buildAssistantEvents(progress.error);
+    }
+    if (progress.sessionId) {
+      return buildToolCallEventsWithArgs("process", {
+        action: "poll",
+        sessionId: progress.sessionId,
+        timeout: 30_000,
+      });
+    }
+    if (expectedOutcome === "failure" && !progress.failed) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    return progress.failed && expectedOutcome === "success"
+      ? buildAssistantEvents("BUG-TOOL-FAILED")
+      : null;
+  };
   const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
@@ -1019,7 +1176,7 @@ async function buildResponsesPayload(
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const allUserTexts = extractAllUserTexts(input);
+  const allUserTexts = extractUserTurnTexts(input);
   const allUserText = allUserTexts.join("\n");
   const scenarioFamilyPrompt = extractLatestScenarioFamilyPrompt(allUserTexts) || prompt;
   const scenarioFamilyReplyDirective =
@@ -1056,27 +1213,15 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveEmptyResponseSideEffectExhaustion =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
     hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
-  const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  // Progress scenarios share full session transcripts. Scope completion to
-  // the selected prompt so an older turn's tool output cannot finish this one.
-  const toolProgressToolOutput = toolProgressTurn
-    ? extractToolOutput(input.slice(toolProgressTurn.index))
-    : "";
-  const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
-  const buildToolProgressReadEvents = () => {
-    return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(scenarioFamilyPrompt),
-    });
-  };
-  const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
-  };
   const slackProgressTurn = extractLastMatchingUserTurn(
     input,
     QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
@@ -1084,9 +1229,7 @@ async function buildResponsesPayload(
   const slackProgressDirectives = slackProgressTurn
     ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
     : null;
-  const hasSlackProgressToolOutput = slackProgressTurn
-    ? hasToolOutput(input.slice(slackProgressTurn.index))
-    : false;
+  const slackProgressInput = slackProgressTurn ? input.slice(slackProgressTurn.index) : [];
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -1312,13 +1455,15 @@ async function buildResponsesPayload(
         content: "empty terminal QA side effect completed\n",
       });
     }
-    return buildAssistantEvents(
-      [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n"),
-    );
+    return QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE.test(allInputText)
+      ? buildAssistantEvents("")
+      : buildAssistantEvents(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        );
   }
   if (terminalWorkerCase === "fallback") {
     return buildAssistantEvents(
@@ -1335,17 +1480,28 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase) {
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      const task =
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+          ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
+          : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        task,
         label: `qa-terminal-${terminalCompletionCase}`,
         thread: false,
         mode: "run",
       });
     }
     if (hasCompletedToolOutput) {
-      // End the requester turn before the delayed worker settles. The terminal
-      // result must therefore use the runtime's direct channel fallback.
-      return buildAssistantEvents("NO_REPLY");
+      // A visible acknowledgment ends the requester turn; NO_REPLY keeps a
+      // delegated visible turn alive and hands completion to requester settlement.
+      if (
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+      ) {
+        return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
+      }
+      return buildAssistantEvents("Worker started.");
     }
   }
   // Protected completion context is excluded from the current user prompt;
@@ -1374,17 +1530,20 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
-    }
+  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
+    }
+    if (isActiveEmptyResponseSideEffectExhaustion) {
+      return buildAssistantEvents("");
+    }
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
     }
     return buildAssistantEvents("");
   }
@@ -1492,25 +1651,11 @@ async function buildResponsesPayload(
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final_three_chunk",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText();
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
   }
   if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText({
@@ -1519,14 +1664,7 @@ async function buildResponsesPayload(
       segmentCount: 64,
       startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_whatsapp_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
   }
   const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
@@ -1624,48 +1762,37 @@ async function buildResponsesPayload(
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
-        text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_quiet_stream",
+      QA_TELEGRAM_STREAM_SINGLE_MARKER,
+    );
   }
   if (
     QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
     scenarioFamilyReplyDirective
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_final_only_marker_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_final_only_marker_stream",
+      scenarioFamilyReplyDirective,
+      "QA streaming preview in progress",
+    );
   }
   if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_quiet_stream", scenarioFamilyReplyDirective);
   }
   if (slackProgressDirectives) {
-    if (hasSlackProgressToolOutput) {
-      return buildAssistantEvents([
-        {
-          id: "msg_mock_slack_progress_final",
-          phase: "final_answer",
-          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
-          text: slackProgressDirectives.finalMarker,
-        },
-      ]);
+    if (hasToolOutput(slackProgressInput)) {
+      const pending = pendingCommandProgress(
+        slackProgressInput,
+        slackProgressDirectives.execCommand,
+      );
+      if (pending) {
+        return pending;
+      }
+      return buildStreamingFinalAnswerEvents(
+        "msg_mock_slack_progress_final",
+        slackProgressDirectives.finalMarker,
+      );
     }
     if (hasDeclaredTool(body, "exec")) {
       return buildAssistantThenToolCallEvents(
@@ -1680,28 +1807,45 @@ async function buildResponsesPayload(
       );
     }
   }
-  const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput) ??
-    scenarioFamilyReplyDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(
-        hasToolErrorOutput(toolProgressToolJson, toolProgressToolOutput)
-          ? toolProgressReplyDirective
-          : "BUG-TOOL-DID-NOT-FAIL",
+  const toolProgress = QA_TOOL_PROGRESS_PROMPT_RE.exec(scenarioFamilyPrompt);
+  if (toolProgress) {
+    const expectsError = Boolean(toolProgress[1]);
+    const turn = extractLastMatchingUserTurn(input, QA_TOOL_PROGRESS_PROMPT_RE);
+    // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
+    const progressInput = turn ? input.slice(turn.index) : [];
+    const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
+    if (!hasToolOutput(progressInput)) {
+      return buildToolCallEventsWithArgs(
+        command ? "exec" : "read",
+        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
       );
     }
-  }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
+    if (command) {
+      const pending = pendingCommandProgress(
+        progressInput,
+        command,
+        /command fails/iu.test(scenarioFamilyPrompt)
+          ? "failure"
+          : /completes or fails/iu.test(scenarioFamilyPrompt)
+            ? "either"
+            : "success",
+      );
+      if (pending) {
+        return pending;
+      }
     }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(toolProgressReplyDirective);
+    const output = extractToolOutput(progressInput);
+    const reply =
+      extractExactReplyDirective(output) ??
+      extractExactMarkerDirective(output) ??
+      scenarioFamilyReplyDirective;
+    if (reply) {
+      // A successful CodeMode runner can still return a failed capability result.
+      const structuredError = extractToolOutputStructuredError(progressInput);
+      const failed =
+        (hasCodeModeControlOutput ? structuredError || undefined : structuredError) ??
+        hasToolErrorOutput(parseToolOutputJson(output), output);
+      return buildAssistantEvents(expectsError && !failed ? "BUG-TOOL-DID-NOT-FAIL" : reply);
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
@@ -1719,14 +1863,7 @@ async function buildResponsesPayload(
         },
       );
     }
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_block_2",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(blockStreamingMarkers.second),
-        text: blockStreamingMarkers.second,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_block_2", blockStreamingMarkers.second);
   }
   if (isStrandedFinalRetryFailureRequest(allInputText)) {
     return buildAssistantEvents(buildStrandedFinalRetryFailureText());
@@ -2384,17 +2521,47 @@ async function buildResponsesPayload(
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    return buildAssistantEvents(buildAssistantText(input, body));
+  }
+  const forkCompletion = readForkedContextCompletion(input);
   if (
-    canCallSessionsSpawn &&
-    /forked subagent context qa check/i.test(prompt) &&
-    !hasCompletedToolOutput
+    /forked subagent context qa check/i.test(splitMockConversationContext(prompt).current) ||
+    forkCompletion
   ) {
-    return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Report the visible code from the requester transcript.",
-      label: "qa-fork-context",
-      mode: "run",
-      context: "fork",
-    });
+    if (forkCompletion) {
+      // Completion must be delivered by the parent, not synthesized from its
+      // kickoff or spawn receipt. Never replay the inherited spawn instruction.
+      if (completedToolName === "message") {
+        return buildAssistantEvents("NO_REPLY");
+      }
+      return hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode
+        ? buildToolCallEventsWithArgs("message", {
+            action: "send",
+            message: forkCompletion,
+            final: true,
+          })
+        : buildAssistantEvents(forkCompletion);
+    }
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Report the visible code from the requester transcript.",
+        label: "qa-fork-context",
+        mode: "run",
+        context: "fork",
+      });
+    }
+    if (
+      hasCompletedToolOutput &&
+      canCallSessionsYield &&
+      !hasToolErrorOutput(toolJson, toolOutput)
+    ) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the forked child to recover the visible code.",
+      });
+    }
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -2759,20 +2926,28 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(repeatedRequestRecovery
+      // Stall one request; later failures let the normal retry budget settle the turn.
+      ...(repeatedRequestRecovery &&
+      scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
         ? {
             responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
                 ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
                 : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
           }
         : {}),
     };
   };
-  const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
-    dispatchProvider({ ...request, route: "responses" });
+  const dispatchResponses = async (request: Omit<QaMockProviderDispatchRequest, "route">) => {
+    const dispatched = await dispatchProvider({ ...request, route: "responses" });
+    const created = dispatched.events[0];
+    if (created?.type === "response.created") {
+      created.response.model = typeof request.body.model === "string" ? request.body.model : "";
+    }
+    return dispatched;
+  };
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
         writeJson(res, 200, { ok: true, status: "live" });
@@ -2841,13 +3016,36 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, imageGenerationRequests);
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Images");
-          return;
+      const requestLabel = req.method === "POST" && MOCK_HTTP_POST_ROUTES.get(url.pathname);
+      if (!requestLabel) {
+        writeJson(res, 404, { error: "not found" });
+        return;
+      }
+      let raw: string;
+      try {
+        raw = await readBody(req);
+      } catch (error) {
+        if (!(await writeQaRequestBodyLimitError(req, res, error))) {
+          throw error;
         }
+        return;
+      }
+      if (url.pathname === "/v1/audio/transcriptions") {
+        writeJson(res, 200, { text: transcriptionTextForAudioRequest(raw) });
+        return;
+      }
+      const body = parseJsonObjectBody(raw);
+      if (!body) {
+        writeJson(res, 400, {
+          ...(url.pathname === "/v1/messages" ? { type: "error" } : {}),
+          error: {
+            type: "invalid_request_error",
+            message: `Malformed JSON body for ${requestLabel} request.`,
+          },
+        });
+        return;
+      }
+      if (url.pathname === "/v1/images/generations") {
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -2862,20 +3060,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
-        const raw = await readBody(req);
-        writeJson(res, 200, {
-          text: transcriptionTextForAudioRequest(raw),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
-          return;
-        }
+      if (url.pathname === "/v1/embeddings") {
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -2895,13 +3080,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/responses") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Responses");
-          return;
-        }
+      if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw });
         if (dispatched.failure) {
           writeJson(res, dispatched.failure.status, {
@@ -2917,7 +3096,7 @@ export async function startQaMockOpenAiServer(params?: {
         if (dispatched.responsePauseMs !== undefined) {
           await sleep(dispatched.responsePauseMs);
         }
-        if (body.stream === false) {
+        if (body.stream !== true) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
             writeJson(res, 500, { error: "mock completion failed" });
@@ -2927,60 +3106,30 @@ export async function startQaMockOpenAiServer(params?: {
           dispatched.onResponseSent?.();
           return;
         }
-        if (dispatched.previewPauseMs !== undefined) {
-          await writeSseWithPreviewPause(res, events, dispatched.previewPauseMs);
-        } else {
-          writeSse(res, events);
-        }
+        await writeSse(res, events, "responses", dispatched.previewPauseMs);
         dispatched.onResponseSent?.();
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/messages") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
-        if (!body) {
-          writeJson(res, 400, {
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: "Malformed JSON body for Anthropic Messages request.",
-            },
-          });
-          return;
-        }
-        const dispatched = await dispatchProvider({
-          route: "anthropic-messages",
-          body: body as Record<string, unknown>,
-          raw,
-        });
-        const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
-        if (dispatched.failure?.presentation !== "anthropic-thinking") {
-          if (dispatched.failure) {
-            writeJson(res, dispatched.failure.status, responseBody);
-            return;
-          }
-        }
-        if (body.stream === true) {
-          writeAnthropicSse(res, streamEvents);
-          dispatched.onResponseSent?.();
-          return;
-        }
-        writeJson(res, dispatched.failure?.status ?? 200, responseBody);
-        dispatched.onResponseSent?.();
+      const dispatched = await dispatchProvider({ route: "anthropic-messages", body, raw });
+      const { status, responseBody, streamEvents } = buildMessagesPayload(dispatched);
+      if (!streamEvents) {
+        writeJson(res, status, responseBody);
         return;
       }
-      writeJson(res, 404, { error: "not found" });
-    })();
+      if (body.stream === true) {
+        await writeSse(res, streamEvents, "anthropic");
+      } else {
+        writeJson(res, status, responseBody);
+      }
+      dispatched.onResponseSent?.();
+    });
   });
   const responsesWebSocket = attachQaMockResponsesWebSocketServer({
     server,
     dispatch: dispatchResponses,
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, host, () => resolve());
-  });
+  await once(server.listen(params?.port ?? 0, host), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -2988,7 +3137,7 @@ export async function startQaMockOpenAiServer(params?: {
   }
 
   return {
-    baseUrl: `http://${host}:${address.port}`,
+    baseUrl: formatUrl({ protocol: "http", hostname: host, port: address.port }),
     async stop() {
       await responsesWebSocket.close();
       await closeQaHttpServer(server);

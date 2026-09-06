@@ -7,7 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, format as formatUrl } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
@@ -127,7 +127,8 @@ export function resolveAdvertisedBaseUrl(params: {
     typeof params.advertisePort === "number" && Number.isFinite(params.advertisePort)
       ? params.advertisePort
       : params.bindPort;
-  return `http://${advertisedHost}:${advertisedPort}`;
+  // Keep explicit zero ports: url.format drops numeric zero.
+  return formatUrl({ protocol: "http", hostname: advertisedHost, port: String(advertisedPort) });
 }
 
 export function isControlUiProxyPath(pathname: string) {

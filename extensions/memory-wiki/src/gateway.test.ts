@@ -917,6 +917,30 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
+  it("rejects an invalid wiki.apply operation before source sync or mutation", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const message = 'wiki mutation op must be one of "create_synthesis", "update_metadata"';
+    vi.mocked(normalizeMemoryWikiMutationInput).mockImplementationOnce(() => {
+      throw new Error(message);
+    });
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.apply");
+    if (!handler) {
+      throw new Error("wiki.apply handler missing");
+    }
+    const respond = vi.fn();
+    const params = { op: "update", lookup: "entity.alpha", status: "review" };
+
+    await handler({ params, respond });
+
+    expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+    expect(applyMemoryWikiMutation).not.toHaveBeenCalled();
+    expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
+  });
+
   it("applies wiki mutations over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
@@ -940,6 +964,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
     expect(applyMemoryWikiMutation).toHaveBeenCalledWith({
       config,
       mutation: {

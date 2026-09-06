@@ -1,7 +1,6 @@
 /** CLI commands for listing, inspecting, and cancelling TaskFlow records. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -10,6 +9,7 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { truncateUtf16WithEllipsis as truncate } from "../shared/text-truncate.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
@@ -37,16 +37,6 @@ const CTRL_PAD = 20;
 
 function formatFlowLookupMiss(lookup: string): string {
   return `TaskFlow not found: ${sanitizeTerminalText(lookup)}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
-}
-
-function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function safeFlowDisplayText(value: string | undefined, maxChars?: number): string {

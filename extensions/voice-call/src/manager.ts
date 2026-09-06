@@ -16,7 +16,7 @@ import {
   type SpeakOptions,
 } from "./manager/outbound.js";
 import {
-  findCallMatchesInStore,
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -481,10 +481,7 @@ export class CallManager {
     if (active) {
       return active;
     }
-    const persisted = await findCallMatchesInStore(this.storePath, callId);
-    // Active indexes are canonical for live calls and keep provider-id status
-    // lookups off the retained-store path. Persisted ids are fallback-only.
-    return persisted.byCallId ?? persisted.byProviderCallId;
+    return findCallInStore(this.storePath, callId);
   }
 
   /**

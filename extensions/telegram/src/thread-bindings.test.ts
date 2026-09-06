@@ -513,6 +513,67 @@ describe("telegram thread bindings", () => {
     });
   });
 
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      const manager = createTelegramThreadBindingManager({
+        accountId: "replacement-owner",
+        persist: true,
+        enableSweeper: false,
+      });
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: "telegram",
+        accountId: manager.accountId,
+        conversationId: "replacement-thread",
+      };
+      const originalTarget = "plugin-binding:owner-plugin:original";
+      const metadata = {
+        pluginBindingOwner: "plugin",
+        pluginId: "owner-plugin",
+        pluginRoot: "/plugins/owner-plugin",
+        agentId: "previous-agent",
+        boundBy: "previous-user",
+        idleTimeoutMs: 90_000,
+        opaque: { runtimeId: "original" },
+      };
+      await service.bind({
+        targetSessionKey: originalTarget,
+        targetKind: "session",
+        conversation,
+        metadata,
+      });
+      const targetSessionKey = replace ? "agent:main:subagent:replacement" : originalTarget;
+
+      await service.bind({
+        targetSessionKey,
+        targetKind: replace ? "subagent" : "session",
+        conversation,
+        metadata: { label: "updated" },
+      });
+      manager.stop();
+      createTelegramThreadBindingManager({
+        accountId: manager.accountId,
+        persist: true,
+        enableSweeper: false,
+      });
+
+      const binding = service.resolveByConversation(conversation);
+      expect(binding?.targetSessionKey).toBe(targetSessionKey);
+      expect(binding?.metadata).toMatchObject({ label: "updated", idleTimeoutMs: 90_000 });
+      for (const key of [
+        "pluginBindingOwner",
+        "pluginId",
+        "pluginRoot",
+        "agentId",
+        "boundBy",
+        "opaque",
+      ] as const) {
+        expect(binding?.metadata?.[key]).toEqual(replace ? undefined : metadata[key]);
+      }
+    },
+  );
+
   it("starts with empty bindings when the plugin-state store cannot be read", () => {
     installThreadBindingStore({
       ...threadBindingStore,

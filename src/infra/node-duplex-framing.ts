@@ -167,7 +167,9 @@ export function createNodeDuplexEndpoint(options: {
               message: messageId,
               index,
               last: index === fragments - 1,
-              data: Buffer.from(fragment).toString("base64"),
+              data: Buffer.from(fragment.buffer, fragment.byteOffset, fragment.byteLength).toString(
+                "base64",
+              ),
             }),
           );
           assertOpen();

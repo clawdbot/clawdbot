@@ -20,29 +20,12 @@ import {
  */
 export function projectSessionTree(params: {
   roots: readonly GatewaySessionRow[];
-  agentRows: readonly GatewaySessionRow[];
-  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
   knownSessionAttention: readonly SidebarKnownSessionAttention[];
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
-  const {
-    roots,
-    agentRows,
-    childRowsByParent,
-    loadingChildKeys,
-    knownSessionAttention,
-    toSidebarSession,
-  } = params;
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  for (const rows of Object.values(childRowsByParent)) {
-    for (const row of rows) {
-      rowsByKey.set(row.key, row);
-    }
-  }
-  for (const row of agentRows) {
-    rowsByKey.set(row.key, row);
-  }
+  const { roots, rowsByKey, loadingChildKeys, knownSessionAttention, toSidebarSession } = params;
   const childKeysByParent = new Map<string, string[]>();
   const hasExplicitCategory = (row: GatewaySessionRow | undefined) =>
     typeof row?.category === "string" && row.category.trim().length > 0;

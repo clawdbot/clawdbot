@@ -1,6 +1,7 @@
 // Feishu plugin module implements reactions behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 
 type FeishuReaction = {
@@ -16,12 +17,6 @@ function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
   return createFeishuClient(account);
-}
-
-function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string }, action: string) {
-  if (response.code !== 0) {
-    throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
-  }
 }
 
 /**
@@ -51,7 +46,7 @@ export async function addReactionFeishu(params: {
     data?: { reaction_id?: string };
   };
 
-  assertFeishuReactionApiSuccess(response, "add reaction");
+  assertFeishuApiSuccess(response, "Feishu add reaction failed");
 
   const reactionId = response.data?.reaction_id;
   if (!reactionId) {
@@ -80,7 +75,7 @@ export async function removeReactionFeishu(params: {
     },
   })) as { code?: number; msg?: string };
 
-  assertFeishuReactionApiSuccess(response, "remove reaction");
+  assertFeishuApiSuccess(response, "Feishu remove reaction failed");
 }
 
 /**
@@ -125,7 +120,7 @@ export async function listReactionsFeishu(params: {
       };
     };
 
-    assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuApiSuccess(response, "Feishu list reactions failed");
 
     for (const item of response.data?.items ?? []) {
       reactions.push({
