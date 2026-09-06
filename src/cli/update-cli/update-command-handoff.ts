@@ -35,6 +35,9 @@ function parsePositivePid(value: unknown): number | null {
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
 
+const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
+  "Run this command from a shell outside the gateway service.";
+
 export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
@@ -50,17 +53,29 @@ export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   // because the stop would kill the caller and nothing restarts the gateway.
   return `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
 Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
-Run this command from a shell outside the gateway service.`;
+${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`;
 }
 
 const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
+const UPDATE_CHAT_HANDOFF_GUIDANCE =
+  "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.";
+
+function appendUpdateChatHandoffGuidance(blockMessage: string): string {
+  return blockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
+    ? blockMessage
+    : `${blockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+}
 
 /** Update-specific follow-up for an ancestry block: the chat path hands off to the managed helper. */
 export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
   if (!blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
     return blockMessage;
   }
-  return `${blockMessage}\nFrom chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.`;
+  const updateBlockMessage = blockMessage
+    .split("\n")
+    .filter((line) => line !== GATEWAY_ANCESTRY_SHELL_GUIDANCE)
+    .join("\n");
+  return appendUpdateChatHandoffGuidance(updateBlockMessage);
 }
 
 export async function handoffUpdateFromGateway(params: {

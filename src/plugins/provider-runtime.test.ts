@@ -1038,6 +1038,89 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["config", "default"] as const)(
+    "uses refreshed same-id metadata after %s runtime invalidation",
+    async (cacheOwner) => {
+      const config: OpenClawConfig | undefined = cacheOwner === "config" ? {} : undefined;
+      setActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        "metadata-owner",
+        "default",
+        "/tmp/work",
+      );
+      const metadata = (source: string) =>
+        createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "same-provider-owner",
+                providers: [DEMO_PROVIDER_ID],
+                channels: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "config",
+                rootDir: `/plugins/${source}`,
+                source: `/plugins/${source}/index.js`,
+                manifestPath: `/plugins/${source}/openclaw.plugin.json`,
+              },
+            ],
+            diagnostics: [],
+          },
+        });
+      const firstMetadata = metadata("first");
+      const currentMetadata = metadata("current");
+      const provider = (owner: string): ProviderPlugin => ({
+        id: DEMO_PROVIDER_ID,
+        label: owner,
+        auth: [],
+        resolveAuthProfileId: (context) => `${owner}/${context.preferredProfileId}`,
+      });
+      const firstProvider = provider("first");
+      const currentProvider = provider("current");
+      resolvePluginProvidersMock.mockImplementation((params) =>
+        params.pluginMetadataSnapshot === firstMetadata ? [firstProvider] : [currentProvider],
+      );
+      const context = {
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        preferredProfileId: "first-profile",
+        profileOrder: [],
+        authStore: { version: 1 as const, profiles: {} },
+      };
+      const first = resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config,
+        pluginMetadataSnapshot: firstMetadata,
+      });
+      expect(first?.resolveAuthProfileId?.(context)).toBe("first/first-profile");
+      const { invalidatePluginRuntimeDiscoveryAfterConfigMutation } =
+        await import("./registry-refresh.js");
+      const warnings: string[] = [];
+      await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+        logger: { warn: (message) => warnings.push(message) },
+      });
+      expect(warnings).toEqual([]);
+      const current = resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config,
+        pluginMetadataSnapshot: currentMetadata,
+      });
+      expect(
+        current?.resolveAuthProfileId?.({ ...context, preferredProfileId: "current-profile" }),
+      ).toBe("current/current-profile");
+      // The already-prepared handle owns its selected plugin, while credential inputs stay per-call.
+      expect(
+        resolveProviderAuthProfileId({
+          provider: DEMO_PROVIDER_ID,
+          runtimeHandle: { provider: DEMO_PROVIDER_ID, plugin: first },
+          context: { ...context, preferredProfileId: "current-profile" },
+        }),
+      ).toBe("first/current-profile");
+    },
+  );
+
   it("does not reuse runtime provider cache entries across env-resolved plugin roots", () => {
     const firstProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,

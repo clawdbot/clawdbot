@@ -32,10 +32,11 @@ export async function prepareProviderCatalogRun(
   params: Parameters<typeof runProviderCatalog>[0] & {
     agentDir: string;
     authStore: AuthProfileStore;
+    isActive: () => boolean;
     timeoutMs?: number | null;
   },
 ): Promise<Parameters<typeof runProviderCatalog>[0] & { timeoutMs?: number | null }> {
-  const { authStore, ...catalogParams } = params;
+  const { authStore, isActive, ...catalogParams } = params;
   if (
     !params.provider.auth.some((method) => method.kind === "oauth") ||
     (params.providerIds !== undefined &&
@@ -57,6 +58,7 @@ export async function prepareProviderCatalogRun(
         authStore,
         provider: params.provider.id,
         resolveProviderAuth: params.resolveProviderAuth,
+        isActive,
       },
       params.config,
     ),

@@ -2,6 +2,10 @@
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  isCoreCodingSurfaceToolName,
+  listCoreToolFactoryDescriptors,
+} from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
@@ -23,7 +27,11 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
-const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+const NATIVE_TOOL_EXCLUDE = new Set(
+  listCoreToolFactoryDescriptors()
+    .map(({ name }) => name)
+    .filter(isCoreCodingSurfaceToolName),
+);
 
 type CachedScopedTools = {
   agentId: string | undefined;

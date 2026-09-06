@@ -21,7 +21,7 @@ import {
   type ExactPathSpecificity,
 } from "./manager-search.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import { applyProjectRanking } from "./project-ranking.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -169,17 +169,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
   }
 
-  private rankKeywordOnlyResults(
-    results: KeywordSearchHit[],
-    preferExactBody = true,
-  ): KeywordSearchHit[] {
-    return results
-      .toSorted((left, right) => compareKeywordSearchHits(left, right, preferExactBody))
-      .map((entry) =>
-        entry.exactPathSpecificity > 0 ? Object.assign(entry, { score: 1 }) : entry,
-      );
-  }
-
   protected async finalizeKeywordOnlyResults(params: {
     results: KeywordSearchHit[];
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
@@ -203,10 +192,16 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       workspaceDir: this.workspaceDir,
       sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
     });
-    const ranked = applyProjectRanking(
-      this.rankKeywordOnlyResults(applyImportanceMultiplier(decayed), !appliesTemporalDecay),
-      params.activeProjectKeys,
-    );
+    // Preserve specificity and adjusted body relevance before normalizing exact public scores.
+    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), params.activeProjectKeys)
+      .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
+      .map((entry) =>
+        entry.exactPathSpecificity > 0
+          ? Object.assign(entry, {
+              score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+            })
+          : entry,
+      );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
     );

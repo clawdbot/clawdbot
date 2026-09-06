@@ -25,8 +25,14 @@ import { parseMcpCommand } from "./mcp-commands.js";
 
 const MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner route for MCP configuration. Run /mcp show from an owner DM so sensitive server details are not posted in this chat.";
-const MCP_SHOW_PRIVATE_ROUTE_ACK =
-  "MCP server configuration is sensitive. I sent the details to the owner privately.";
+const MCP_SHOW_PRIVATE_ROUTE_REPLIES = {
+  delivered: "MCP server configuration is sensitive. I sent the details to the owner privately.",
+  pending:
+    "MCP server configuration is sensitive. Private delivery is pending; I can't confirm receipt yet.",
+  suppressed:
+    "MCP server configuration is sensitive. Private delivery was suppressed; no details were sent.",
+  failed: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE,
+};
 
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
@@ -110,18 +116,12 @@ async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, n
     return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
   }
   const privateReply = await buildMcpShowReply(name);
-  for (const target of targets) {
-    if (
-      await deliverPrivateCommandReply({
-        commandParams: params,
-        targets: [target],
-        reply: privateReply,
-      })
-    ) {
-      return commandReply(MCP_SHOW_PRIVATE_ROUTE_ACK);
-    }
-  }
-  return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
+  const outcome = await deliverPrivateCommandReply({
+    commandParams: params,
+    targets,
+    reply: privateReply,
+  });
+  return commandReply(MCP_SHOW_PRIVATE_ROUTE_REPLIES[outcome]);
 }
 
 /** Command handler for /mcp show/set/unset operations. */

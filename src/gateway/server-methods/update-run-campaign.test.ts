@@ -139,13 +139,19 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
-vi.mock("../../infra/update-post-core-finalize.js", () => ({
-  foldPostCoreFinalizeIntoResult: (result: UpdateRunResult) => result,
-  runPostCoreFinalizeAfterGatewayUpdate: async () => ({
-    status: "skipped" as const,
-    reason: "not-git-update",
-  }),
-}));
+vi.mock("../../infra/update-post-core-finalize.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-post-core-finalize.js")>(
+    "../../infra/update-post-core-finalize.js",
+  );
+  return {
+    ...actual,
+    foldPostCoreFinalizeIntoResult: (result: UpdateRunResult) => result,
+    runPostCoreFinalizeAfterGatewayUpdate: async () => ({
+      status: "skipped" as const,
+      reason: "not-git-update",
+    }),
+  };
+});
 
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,

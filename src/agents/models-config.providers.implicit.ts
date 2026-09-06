@@ -369,6 +369,7 @@ async function runProviderCatalogWithTimeout(
   let active = true;
   const catalogParams = {
     ...params,
+    isActive: () => active,
     reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
       if (active) {
         params.reportCatalogOutcome?.(outcome);
@@ -390,6 +391,7 @@ async function runProviderCatalogWithTimeout(
       catalogRun,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          active = false;
           reject(timeoutError);
         }, timeoutMs);
         timer.unref?.();

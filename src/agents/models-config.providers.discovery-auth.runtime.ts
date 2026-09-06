@@ -102,17 +102,21 @@ export async function prepareProviderCatalogOAuthAuth(
     authStore,
     provider,
     resolveProviderAuth,
+    isActive,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
     provider: string;
     resolveProviderAuth: ProviderAuthResolver;
+    isActive: () => boolean;
   },
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
   let preparedProfile: { profileId: string; apiKey: string } | undefined;
-  while (true) {
+  // Let an admitted refresh finish persisting its rotation, but do not start
+  // another candidate after the catalog owner closes preparation admission.
+  while (isActive()) {
     let auth: ReturnType<ProviderAuthResolver>;
     try {
       auth = resolveProviderAuth(provider, { excludeProfileIds: failedProfileIds });

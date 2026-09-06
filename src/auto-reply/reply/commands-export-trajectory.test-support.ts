@@ -78,6 +78,7 @@ function mockCommandBoundaries(
   options: {
     privateTargets?: Awaited<ReturnType<typeof resolvePrivateCommandRouteTargets>>;
     result?: { content?: Array<{ type: string; text?: string }>; details?: ExecToolDetails };
+    deliveryOutcome?: Awaited<ReturnType<typeof deliverPrivateCommandReply>>;
   } = {},
 ) {
   const execCalls: Array<{ defaults: unknown; params: unknown }> = [];
@@ -107,7 +108,7 @@ function mockCommandBoundaries(
   commandMocks.resolvePrivateCommandRouteTargets.mockResolvedValue(options.privateTargets ?? []);
   commandMocks.deliverPrivateCommandReply.mockImplementation(async ({ targets, reply }) => {
     privateReplies.push({ targets, text: reply.text });
-    return true;
+    return options.deliveryOutcome ?? "delivered";
   });
   return { execCalls, privateReplies };
 }
@@ -299,52 +300,72 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCalls).toHaveLength(0);
   });
 
-  it("routes group trajectory export approval privately", async () => {
-    const { execCalls, privateReplies } = mockCommandBoundaries({
-      privateTargets: [
+  it.each([
+    {
+      outcome: "delivered",
+      acknowledgement: "I sent the trajectory export details to the owner privately",
+    },
+    {
+      outcome: "pending",
+      acknowledgement:
+        "Private delivery of the export request is pending; I can't confirm receipt yet",
+    },
+    {
+      outcome: "suppressed",
+      acknowledgement: "Private delivery of the export request was suppressed",
+    },
+    { outcome: "failed", acknowledgement: "Run /export-trajectory from an owner DM" },
+  ] as const)(
+    "keeps $outcome trajectory export requests private",
+    async ({ outcome, acknowledgement }) => {
+      const { execCalls, privateReplies } = mockCommandBoundaries({
+        deliveryOutcome: outcome,
+        privateTargets: [
+          { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+          { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+        ],
+      });
+      const params = makeParams();
+      params.isGroup = true;
+      params.command.to = "group-1";
+      params.ctx.OriginatingTo = "origin-group";
+      params.ctx.MessageThreadId = 42;
+
+      const reply = await buildExportTrajectoryCommandReply(params);
+
+      expect(reply.text).toContain(acknowledgement);
+      expect(reply.text).not.toContain(params.workspaceDir);
+      expect(reply.text).not.toContain("traj-approval");
+      expect(reply.text).not.toContain("--request-json-base64");
+      expect(reply.text).not.toContain("agent:target:session");
+      const route = commandMocks.resolvePrivateCommandRouteTargets.mock.calls[0]?.[0];
+      expect(route?.request).toMatchObject({
+        approvalKind: "exec",
+        id: "trajectory-export-private-route",
+        request: {
+          agentId: "target",
+          sessionKey: "agent:target:session",
+          turnSourceChannel: "quietchat",
+          turnSourceTo: "origin-group",
+          turnSourceAccountId: "account-1",
+          turnSourceThreadId: "42",
+          commandArgv: expect.arrayContaining(["sessions", "export-trajectory", "--json"]),
+        },
+      });
+      expect(privateReplies).toHaveLength(1);
+      expect(privateReplies[0]?.targets).toEqual([
         { channel: "telegram", to: "owner-dm", accountId: "account-1" },
-        { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
-      ],
-    });
-    const params = makeParams();
-    params.isGroup = true;
-    params.command.to = "group-1";
-    params.ctx.OriginatingTo = "origin-group";
-    params.ctx.MessageThreadId = 42;
-
-    const reply = await buildExportTrajectoryCommandReply(params);
-
-    expect(reply.text).toBe(
-      "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.",
-    );
-    expect(reply.text).not.toContain("agent:target:session");
-    const route = commandMocks.resolvePrivateCommandRouteTargets.mock.calls[0]?.[0];
-    expect(route?.request).toMatchObject({
-      approvalKind: "exec",
-      id: "trajectory-export-private-route",
-      request: {
-        agentId: "target",
-        sessionKey: "agent:target:session",
-        turnSourceChannel: "quietchat",
-        turnSourceTo: "origin-group",
-        turnSourceAccountId: "account-1",
-        turnSourceThreadId: "42",
-        commandArgv: expect.arrayContaining(["sessions", "export-trajectory", "--json"]),
-      },
-    });
-    expect(privateReplies).toHaveLength(1);
-    expect(privateReplies[0]?.targets).toEqual([
-      { channel: "telegram", to: "owner-dm", accountId: "account-1" },
-    ]);
-    expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
-    expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
-    expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
-    expect(execCalls).toHaveLength(1);
-    const execCall = execCallRecord(execCalls);
-    expect(execCall.defaults.messageProvider).toBe("telegram");
-    expect(execCall.defaults.currentChannelId).toBe("owner-dm");
-    expect(execCall.defaults.accountId).toBe("account-1");
-  });
+      ]);
+      expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
+      expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
+      expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
+      expect(execCalls).toHaveLength(1);
+      const execCall = execCallRecord(execCalls);
+      expect(execCall.defaults.messageProvider).toBe("telegram");
+      expect(execCall.defaults.currentChannelId).toBe("owner-dm");
+      expect(execCall.defaults.accountId).toBe("account-1");
+    },
+  );
 
   it("fails closed in groups when no private owner route is available", async () => {
     const { execCalls, privateReplies } = mockCommandBoundaries();

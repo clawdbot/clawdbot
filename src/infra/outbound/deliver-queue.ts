@@ -62,9 +62,22 @@ export async function runOutboundDelivery(
 export async function runOutboundDeliveryInternal(
   input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runWithQuestionChannelDeliveries(input.payloads.map(readAskUserQuestionId), () =>
-    runOutboundDeliveryWithIntent(input),
-  );
+  const owner =
+    input.deliveryQueueOwner ??
+    (input.deliveryQueueId
+      ? createQueuedDeliveryOwner({
+          queueId: input.deliveryQueueId,
+          stateDir: input.deliveryQueueStateDir,
+          expectedPlatformSendAttemptId: input.deliveryProducerClaimId,
+        })
+      : undefined);
+  try {
+    return await runWithQuestionChannelDeliveries(input.payloads.map(readAskUserQuestionId), () =>
+      runOutboundDeliveryWithIntent({ ...input, deliveryQueueOwner: owner }),
+    );
+  } catch (error) {
+    throw owner ? owner.project(error) : error;
+  }
 }
 
 async function runOutboundDeliveryWithIntent(
@@ -132,6 +145,9 @@ async function deliverWithProducerLease(
         renew: async () =>
           await renewDeliveryPlatformSendLease(platformQueueId, stateDir, producerClaimId),
       });
+      if (params.deliveryQueueOwner) {
+        params.deliveryQueueOwner.signal = lease.signal;
+      }
       const abortSignal = params.abortSignal
         ? AbortSignal.any([params.abortSignal, lease.signal])
         : lease.signal;
@@ -330,98 +346,106 @@ async function runOutboundDeliveryWithQueue(
         });
 
   const queueId = queued?.id ?? null;
-  if (queued?.created && stablePreparationOwner) {
-    stablePreparationOwner.markPublished();
-  }
-  if (queueId && params.deliveryCompletion) {
-    const completion = await markDurableDeliveryQueued(
-      params.deliveryCompletion,
-      queueId,
-      queued?.created ? "prepared" : undefined,
-    );
-    if (completion.state !== "queued") {
-      await createQueuedDeliveryOwner({
-        queueId,
-        expectedPlatformSendAttemptId: queued?.producerClaimId,
-      }).ack({ suppressCompletionReceipt: true });
-      return [];
+  const queueOwner = queueId
+    ? createQueuedDeliveryOwner({ queueId, expectedPlatformSendAttemptId: queued?.producerClaimId })
+    : params.deliveryQueueOwner;
+  deliveryParams.deliveryQueueOwner = queueOwner;
+  try {
+    if (queued?.created && stablePreparationOwner) {
+      stablePreparationOwner.markPublished();
     }
-  }
-  if (queueId) {
-    emitOutboundAuditLifecycle({
-      context: deliveryParams,
-      outcome: "queued",
-      queueId,
-      startedAt: auditStartedAt,
-    });
-  }
-  if (queueId) {
-    params.onDeliveryIntent?.({
-      id: queueId,
-      channel,
-      to,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-      queuePolicy,
-    });
-  }
+    if (queueId && queueOwner && params.deliveryCompletion) {
+      const completion = await markDurableDeliveryQueued(
+        params.deliveryCompletion,
+        queueId,
+        queued?.created ? "prepared" : undefined,
+      );
+      if (completion.state !== "queued") {
+        await queueOwner.ack({ suppressCompletionReceipt: true });
+        return [];
+      }
+    }
+    if (queueId) {
+      emitOutboundAuditLifecycle({
+        context: deliveryParams,
+        outcome: "queued",
+        queueId,
+        startedAt: auditStartedAt,
+      });
+    }
+    if (queueId) {
+      params.onDeliveryIntent?.({
+        id: queueId,
+        channel,
+        to,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        queuePolicy,
+      });
+    }
 
-  if (!queueId) {
-    return await deliverWithProducerLease(
-      deliveryParams,
-      null,
-      auditStartedAt,
-      params.deliveryProducerClaimId,
-      existingStableDelivery || params.deliveryQueueId !== undefined ? "unbound" : "captured",
-    );
-  }
-
-  if (!queued?.created && !params.reusePendingDeliveryIntent) {
-    throw new Error(`Stable delivery intent is already queued: ${queueId}`);
-  }
-  const deliverClaimedIntent = async (): Promise<OutboundDeliveryResult[]> => {
-    const producerClaimId =
-      queued?.producerClaimId ??
-      (params.reusePendingDeliveryIntent
-        ? await claimReusableDeliveryPlatformSendAttempt(queueId)
-        : undefined);
-    if (!producerClaimId) {
-      throw new Error(
-        queued?.created
-          ? `Delivery platform claim was lost: ${queueId}`
-          : `Stable delivery intent is already queued: ${queueId}`,
+    if (!queueId) {
+      return await deliverWithProducerLease(
+        deliveryParams,
+        null,
+        auditStartedAt,
+        params.deliveryProducerClaimId,
+        existingStableDelivery || params.deliveryQueueId !== undefined ? "unbound" : "captured",
       );
     }
-    let claimedDeliveryParams: DeliverOutboundPayloadsParams = {
-      ...deliveryParams,
-      deliveryProducerLeaseRequired: true,
-    };
-    if (queued?.created !== true) {
-      const queuedEntry = await loadPendingDelivery(queueId);
-      if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
-        throw new Error(`Delivery platform claim was lost: ${queueId}`);
+
+    if (!queued?.created && !params.reusePendingDeliveryIntent) {
+      throw new Error(`Stable delivery intent is already queued: ${queueId}`);
+    }
+    const deliverClaimedIntent = async (): Promise<OutboundDeliveryResult[]> => {
+      const producerClaimId =
+        queued?.producerClaimId ??
+        (params.reusePendingDeliveryIntent
+          ? await claimReusableDeliveryPlatformSendAttempt(queueId)
+          : undefined);
+      if (!producerClaimId) {
+        throw new Error(
+          queued?.created
+            ? `Delivery platform claim was lost: ${queueId}`
+            : `Stable delivery intent is already queued: ${queueId}`,
+        );
       }
-      claimedDeliveryParams = {
-        ...restoreQueuedDeliveryCustody(deliveryParams, queuedEntry),
+      if (queueOwner) {
+        queueOwner.claimId = producerClaimId;
+      }
+      let claimedDeliveryParams: DeliverOutboundPayloadsParams = {
+        ...deliveryParams,
         deliveryProducerLeaseRequired: true,
       };
+      if (queued?.created !== true) {
+        const queuedEntry = await loadPendingDelivery(queueId);
+        if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
+          throw new Error(`Delivery platform claim was lost: ${queueId}`);
+        }
+        claimedDeliveryParams = {
+          ...restoreQueuedDeliveryCustody(deliveryParams, queuedEntry),
+          deliveryProducerLeaseRequired: true,
+        };
+      }
+      return deliverWithProducerLease(
+        claimedDeliveryParams,
+        queueId,
+        auditStartedAt,
+        producerClaimId,
+        queued?.created === true ? "captured" : "unbound",
+      );
+    };
+    if (stableIntentClaimHeld) {
+      return await deliverClaimedIntent();
     }
-    return deliverWithProducerLease(
-      claimedDeliveryParams,
-      queueId,
-      auditStartedAt,
-      producerClaimId,
-      queued?.created === true ? "captured" : "unbound",
-    );
-  };
-  if (stableIntentClaimHeld) {
-    return await deliverClaimedIntent();
+    const claimResult = await withActiveDeliveryClaim(queueId, deliverClaimedIntent);
+    if (claimResult.status === "claimed") {
+      return claimResult.value;
+    }
+    if (params.reusePendingDeliveryIntent) {
+      return [];
+    }
+    throw new Error(`Delivery intent is already claimed: ${queueId}`);
+  } catch (error) {
+    throw queueOwner ? queueOwner.project(error) : error;
   }
-  const claimResult = await withActiveDeliveryClaim(queueId, deliverClaimedIntent);
-  if (claimResult.status === "claimed") {
-    return claimResult.value;
-  }
-  if (params.reusePendingDeliveryIntent) {
-    return [];
-  }
-  return [];
 }

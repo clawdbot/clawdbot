@@ -1,6 +1,5 @@
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
-import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -10,6 +9,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
 import {
@@ -4865,19 +4865,27 @@ describe("tool expansion state", () => {
     const paneId = "released-pane";
     const sessionKey = "released-session";
     const populatePane = () => {
-      const items = buildCachedChatItems(
-        createProps({ paneId, sessionKey, messages: [new TranscriptMessage()] }),
-      );
+      const message = new TranscriptMessage();
+      const items = buildCachedChatItems(createProps({ paneId, sessionKey, messages: [message] }));
       syncToolCardExpansionState(sessionKey, items, true);
+      return {
+        messageReference: new WeakRef(message),
+        collectionControl: new WeakRef({ unowned: true }),
+      };
     };
     try {
-      populatePane();
-      expect(queryObjects(TranscriptMessage)).toBe(1);
+      const { messageReference, collectionControl } = populatePane();
+      await collectGarbageForTest(() => {
+        expect(queryObjects(TranscriptMessage)).toBe(1);
+      });
+      expect(collectionControl.deref()).toBeUndefined();
+      expect(messageReference.deref() !== undefined).toBe(true);
 
       resetChatThreadState(paneId);
-      await setImmediate();
-
-      expect(queryObjects(TranscriptMessage)).toBe(0);
+      await collectGarbageForTest(() => {
+        expect(queryObjects(TranscriptMessage)).toBe(0);
+      });
+      expect(messageReference.deref()).toBeUndefined();
       expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
     } finally {
       resetChatThreadState();

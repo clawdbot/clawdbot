@@ -36,8 +36,13 @@ const GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL = "openclaw gateway diagnostics expo
 const DIAGNOSTICS_EXEC_SCOPE_KEY = "chat:diagnostics";
 const DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for diagnostics. Run /diagnostics from an owner DM so the sensitive diagnostics details are not posted in this chat.";
-const DIAGNOSTICS_PRIVATE_ROUTE_ACK =
-  "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.";
+const DIAGNOSTICS_PRIVATE_ROUTE_REPLIES = {
+  delivered: "Diagnostics are sensitive. I sent the diagnostics details to the owner privately.",
+  pending: "Diagnostics are sensitive. Private delivery is pending; I can't confirm receipt yet.",
+  suppressed:
+    "Diagnostics are sensitive. Private delivery of the diagnostics details was suppressed.",
+  failed: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
+};
 
 type GatewayDiagnosticsApprovalResult =
   | { status: "pending" }
@@ -112,7 +117,9 @@ export const handleDiagnosticsCommand: CommandHandler = async (params, allowText
     if (!privateReply) {
       return {
         shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
+        reply: {
+          text: "Diagnostics are sensitive. Owner approval is pending on the private route.",
+        },
       };
     }
     return await deliverGroupDiagnosticsReplyPrivately(commandParams, privateReply, privateTarget);
@@ -154,7 +161,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
     };
   }
-  const delivered = await deliverPrivateCommandReply({
+  const outcome = await deliverPrivateCommandReply({
     commandParams: params,
     targets: [target],
     reply,
@@ -162,7 +169,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
   return {
     shouldContinue: false,
     reply: {
-      text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
+      text: DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome],
     },
   };
 }

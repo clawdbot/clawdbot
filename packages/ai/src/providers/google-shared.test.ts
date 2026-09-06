@@ -17,11 +17,11 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
-  convertMessages,
-  consumeGoogleGenerateContentStream,
   createGoogleAssistantOutput,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
+import { convertMessages } from "./google-shared.test-helpers.js";
+import { consumeGoogleGenerateContentStream } from "./google-stream.js";
 
 const model: Model<"google-generative-ai"> = {
   id: "gemini-test",
