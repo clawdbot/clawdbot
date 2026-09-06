@@ -437,7 +437,7 @@ export async function handleFeishuMessage(params: {
       if (messageInfo) {
         ctx = { ...ctx, content: messageInfo.content };
       } else {
-        log(`feishu[${account.accountId}]: merge_forward API returned no items`);
+        log(`feishu[${account.accountId}]: merge_forward message retrieval returned no result`);
         ctx = { ...ctx, content: "[Merged and Forwarded Message - could not fetch]" };
       }
     } catch (err) {

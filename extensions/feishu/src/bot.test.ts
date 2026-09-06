@@ -2649,20 +2649,9 @@ describe("handleFeishuMessage command authorization", () => {
     expect(parsed).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
-  it("falls back when merge_forward API returns no sub-messages", async () => {
+  it("falls back when shared merge_forward retrieval returns no message", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    mockCreateFeishuClient.mockReturnValue({
-      contact: {
-        user: {
-          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
-        },
-      },
-      im: {
-        message: {
-          get: vi.fn().mockResolvedValue({ code: 0, data: { items: [] } }),
-        },
-      },
-    });
+    mockGetMessageFeishu.mockResolvedValueOnce(null);
 
     const cfg = createFeishuTestConfig({ dmPolicy: "open" });
     const event = createFeishuTestEvent({
@@ -2674,6 +2663,11 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      accountId: "default",
+      messageId: "msg-merge-empty",
+    });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain("[Merged and Forwarded Message - could not fetch]");
   });
