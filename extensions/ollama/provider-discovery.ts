@@ -38,9 +38,6 @@ function resolveOllamaPluginConfig(ctx: ProviderCatalogContext): OllamaPluginCon
 }
 
 async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
-  if (ctx.providerIds && !ctx.providerIds.includes(OLLAMA_PROVIDER_ID)) {
-    return null;
-  }
   return await resolveOllamaDiscoveryResult({
     ctx,
     pluginConfig: resolveOllamaPluginConfig(ctx),

@@ -22,6 +22,8 @@ export type ProviderCatalogContext = {
     apiKey: string | undefined;
     discoveryApiKey?: string;
     profileId?: string;
+    /** Credential kind from this lookup when known; never infer it from another selection. */
+    mode?: "api_key" | "oauth" | "token";
   };
   resolveProviderAuth: (
     providerId?: string,

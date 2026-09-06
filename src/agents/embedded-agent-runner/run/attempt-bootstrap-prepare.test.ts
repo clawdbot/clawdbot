@@ -89,6 +89,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         trigger: "user",
+        bootstrapWorkspaceDir: workspace,
         isCanonicalWorkspace: true,
         config: { agents: { defaults: { workspace } } },
       } as EmbeddedRunAttemptParams,

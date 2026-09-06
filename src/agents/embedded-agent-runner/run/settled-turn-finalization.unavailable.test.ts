@@ -30,12 +30,13 @@ describe("unavailable finalization through the real core backend", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { terminal: "ok", context: "unavailable" },
-    { terminal: "failed", context: "unavailable" },
-    { terminal: "failed", context: "openclaw-transcript" },
+    { terminal: "ok", context: "unavailable", toolFailed: false },
+    { terminal: "failed", context: "unavailable", toolFailed: false },
+    { terminal: "failed", context: "openclaw-transcript", toolFailed: false },
+    { terminal: "ok", context: "unavailable", toolFailed: true },
   ] as const)(
-    "persists one honest fallback without replaying completed work ($terminal/$context)",
-    async ({ terminal, context }) => {
+    "preserves settled work when finalization is unavailable ($terminal/$context/toolFailed=$toolFailed)",
+    async ({ terminal, context, toolFailed }) => {
       const admittedRunContext = await admission.admit("embedded");
       const assistant = buildEmbeddedRunnerAssistant({
         provider: "openai",
@@ -61,7 +62,7 @@ describe("unavailable finalization through the real core backend", () => {
             toolCallId: "completed-command",
             toolName: "exec",
             content: [{ type: "text", text: "completed-once" }],
-            isError: false,
+            isError: toolFailed,
             timestamp: 3,
           },
         ],
@@ -69,6 +70,9 @@ describe("unavailable finalization through the real core backend", () => {
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        lastToolError: toolFailed
+          ? { toolName: "exec", error: "Command exited with code 127" }
+          : undefined,
       });
       attempt.settledTurnFinalizationContext =
         context === "unavailable"
@@ -119,6 +123,14 @@ describe("unavailable finalization through the real core backend", () => {
       expect(runAttempt).not.toHaveBeenCalled();
       expect(result.finalizationOutcome).toBe("failed");
       expect(result.prepared.failureSignal).toBeUndefined();
+      if (toolFailed) {
+        expect(result.attempt).toBe(attempt);
+        expect(result.prepared.payloadsWithToolMedia).toEqual([
+          expect.objectContaining({ text: expect.stringContaining("failed"), isError: true }),
+        ]);
+        expect(await readVisibleSessionTranscriptMessageEntries(target)).toEqual(prefix);
+        return;
+      }
       expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
       expect(result.prepared.payloadsWithToolMedia).toEqual([
         expect.objectContaining({ text: FALLBACK }),

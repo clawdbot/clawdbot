@@ -176,17 +176,36 @@ describe("searchKeyword trigram fallback", () => {
 
   const itWithTrigramFts = supportsTrigramFts() ? it : it.skip;
 
-  itWithTrigramFts("finds short Chinese queries with substring fallback", async () => {
-    const results = await runSearch({
-      rows: [{ id: "1", path: "memory/zh.md", text: "今天玩成语接龙游戏" }],
-      query: "成语",
-    });
-    expect(results.map((row) => row.id)).toContain("1");
-    // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
-    // (recall only); the hybrid merge must not treat it as a perfect match.
-    expect(results[0]?.textScore).toBe(0);
-    expect(results[0]?.hasBodyMatch).toBe(true);
-  });
+  itWithTrigramFts.each([
+    { query: "成语", text: "今天玩成语接龙游戏", unrelated: "今天看电影" },
+    { query: "AI", text: "Use ai for classification", unrelated: "Use rules for classification" },
+    { query: "UK", text: "Ship to the uk", unrelated: "Ship to the EU" },
+    { query: "42", text: "The answer is 42", unrelated: "The answer is 24" },
+    { query: "C_", text: "Keep the C_ prefix", unrelated: "Keep the CA prefix" },
+    { query: "ΔΕ", text: "The δε project", unrelated: "The δζ project" },
+    { query: "МО", text: "The мо project", unrelated: "The ми project" },
+    { query: "ΟΣ", text: "The οσ project", unrelated: "The οτ project" },
+    { query: "Σ", text: "ς", unrelated: "τ" },
+    { query: "S", text: "ſ", unrelated: "z" },
+    { query: "K", text: "K", unrelated: "q" },
+    { query: "Ǆ", text: "ǅ", unrelated: "ǈ" },
+  ])(
+    "finds the short literal query $query with substring fallback",
+    async ({ query, text, unrelated }) => {
+      const results = await runSearch({
+        rows: [
+          { id: "match", path: "memory/match.md", text },
+          { id: "unrelated", path: "memory/unrelated.md", text: unrelated },
+        ],
+        query,
+      });
+      expect(results.map((row) => row.id)).toEqual(["match"]);
+      // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
+      // (recall only); the hybrid merge must not treat it as a perfect match.
+      expect(results[0]?.textScore).toBe(0);
+      expect(results[0]?.hasBodyMatch).toBe(true);
+    },
+  );
 
   itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
     const japaneseResults = await runSearch({
@@ -202,15 +221,41 @@ describe("searchKeyword trigram fallback", () => {
     expect(koreanResults.map((row) => row.id)).toEqual(["ko"]);
   });
 
-  itWithTrigramFts(
-    "keeps MATCH semantics for long trigram terms while requiring short CJK substrings",
-    async () => {
+  itWithTrigramFts.each([
+    {
+      query: "成语接龙 游戏",
+      match: "今天玩成语接龙游戏",
+      partial: "今天玩成语接龙",
+      short: "游戏",
+    },
+    {
+      query: "shipping UK",
+      match: "Shipping across the UK",
+      partial: "Shipping across the EU",
+      short: "UK office",
+    },
+    {
+      query: "shipping ΔΕ",
+      match: "Shipping for the δε project",
+      partial: "Shipping for the δζ project",
+      short: "δε office",
+    },
+    {
+      query: "shipping ΟΣ",
+      match: "Shipping for the οσ project",
+      partial: "Shipping for the οτ project",
+      short: "οσ office",
+    },
+  ])(
+    "keeps MATCH semantics while requiring every term in $query",
+    async ({ query, match, partial, short }) => {
       const results = await runSearch({
         rows: [
-          { id: "match", path: "memory/good.md", text: "今天玩成语接龙游戏" },
-          { id: "partial", path: "memory/partial.md", text: "今天玩成语接龙" },
+          { id: "match", path: "memory/good.md", text: match },
+          { id: "partial", path: "memory/partial.md", text: partial },
+          { id: "short", path: "memory/short.md", text: short },
         ],
-        query: "成语接龙 游戏",
+        query,
       });
       expect(results.map((row) => row.id)).toEqual(["match"]);
       expect(results[0]?.textScore).toBeGreaterThan(0);
@@ -445,7 +490,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
       expect(typeof warning).toBe("string");
       expect(
         (warning as string | undefined)?.startsWith(
-          "memory search: FTS5 MATCH failed, falling back to LIKE: ",
+          "memory search: FTS5 MATCH failed, falling back to substring search: ",
         ),
       ).toBe(true);
     } finally {
@@ -767,23 +812,17 @@ describe("searchPathKeyword", () => {
     }
   });
 
-  it("case-folds short Cyrillic and Greek trigram terms after an anchor prefilter", async () => {
+  it("case-folds short Cyrillic and Greek trigram terms", async () => {
     const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
     try {
       if (!schema.ftsAvailable) {
         return;
       }
-      const insertSource = db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', ?, 0, 0)",
-      );
-      for (let index = 0; index < 256; index += 1) {
-        insertSource.run(`memory/unrelated-${index}.md`, `unrelated-${index}`);
-      }
-      insertSource.run("memory/Мир.md", "cyrillic-anchor-negative");
-      insertSource.run("memory/Αλφα.md", "greek-anchor-negative");
       for (const fixture of [
         { id: "cyrillic-short", path: "memory/Москва-notes.md" },
         { id: "greek-short", path: "memory/Αθήνα-notes.md" },
+        { id: "cyrillic-negative", path: "memory/Мир.md" },
+        { id: "greek-negative", path: "memory/Αλφα.md" },
       ]) {
         insertKeywordFixture(db, fixture);
       }
@@ -793,17 +832,6 @@ describe("searchPathKeyword", () => {
       expect(
         db.prepare("SELECT 1 FROM memory_index_paths_fts WHERE path LIKE ? LIMIT 1").get("%ΑΘ%"),
       ).toBeUndefined();
-      for (const anchors of [
-        ["%М%", "%м%"],
-        ["%Α%", "%α%"],
-      ]) {
-        const candidateCount = db
-          .prepare(
-            "SELECT count(*) AS count FROM memory_index_paths_fts WHERE path LIKE ? OR path LIKE ?",
-          )
-          .get(...anchors) as { count: number };
-        expect(candidateCount.count).toBe(2);
-      }
       const search = (query: string) =>
         searchPathKeywordFixture(db, query, {
           ftsTokenizer: "trigram",
