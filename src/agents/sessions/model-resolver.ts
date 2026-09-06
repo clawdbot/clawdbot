@@ -38,68 +38,54 @@ function isAlias(id: string): boolean {
   return !datePattern.test(id);
 }
 
+function collectModelReferenceMatches(modelReference: string, availableModels: Model[]): Model[] {
+  const trimmedReference = modelReference.trim();
+  if (!trimmedReference) {
+    return [];
+  }
+
+  const scopes: Array<[string, Model[]]> = [[trimmedReference, availableModels]];
+  const slashIndex = trimmedReference.indexOf("/");
+  if (slashIndex !== -1) {
+    const provider = trimmedReference.slice(0, slashIndex).trim().toLowerCase();
+    const modelId = trimmedReference.slice(slashIndex + 1).trim();
+    // A provider-qualified reference wins over another provider's slash-containing id.
+    scopes.unshift([
+      modelId,
+      availableModels.filter((model) => model.provider.toLowerCase() === provider),
+    ]);
+  }
+
+  for (const [modelId, candidates] of scopes) {
+    const exact = candidates.filter((model) => model.id === modelId);
+    if (exact.length > 0) {
+      return exact;
+    }
+    const foldedId = modelId.toLowerCase();
+    const folded = candidates.filter((model) => model.id.toLowerCase() === foldedId);
+    if (folded.length > 0) {
+      return folded;
+    }
+  }
+  return [];
+}
+
 /**
- * Find an exact model reference match.
- * Supports either a bare model id or a canonical provider/modelId reference.
- * When matching by bare id, ambiguous matches across providers are rejected.
+ * Match a bare id or provider/model reference, preferring exact model-id casing.
+ * Case-insensitive matches remain available only when unambiguous.
  */
 export function findExactModelReferenceMatch(
   modelReference: string,
   availableModels: Model[],
 ): Model | undefined {
-  const trimmedReference = modelReference.trim();
-  if (!trimmedReference) {
-    return undefined;
-  }
-
-  const normalizedReference = trimmedReference.toLowerCase();
-
-  const canonicalMatches = availableModels.filter(
-    (model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
-  );
-  if (canonicalMatches.length === 1) {
-    return canonicalMatches[0];
-  }
-  if (canonicalMatches.length > 1) {
-    return undefined;
-  }
-
-  const slashIndex = trimmedReference.indexOf("/");
-  if (slashIndex !== -1) {
-    const provider = trimmedReference.slice(0, slashIndex).trim();
-    const modelId = trimmedReference.slice(slashIndex + 1).trim();
-    if (provider && modelId) {
-      const providerMatches = availableModels.filter(
-        (model) =>
-          model.provider.toLowerCase() === provider.toLowerCase() &&
-          model.id.toLowerCase() === modelId.toLowerCase(),
-      );
-      if (providerMatches.length === 1) {
-        return providerMatches[0];
-      }
-      if (providerMatches.length > 1) {
-        return undefined;
-      }
-    }
-  }
-
-  const idMatches = availableModels.filter(
-    (model) => model.id.toLowerCase() === normalizedReference,
-  );
-  return idMatches.length === 1 ? idMatches[0] : undefined;
+  const matches = collectModelReferenceMatches(modelReference, availableModels);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
-/**
- * Try to match a pattern to a model from the available models list.
- * Returns the matched model or undefined if no match found.
- */
-function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | undefined {
-  const exactMatch = findExactModelReferenceMatch(modelPattern, availableModels);
-  if (exactMatch) {
-    return exactMatch;
-  }
-
-  // No exact match - fall back to partial matching
+function matchPartialModelPattern(
+  modelPattern: string,
+  availableModels: Model[],
+): Model | undefined {
   const matches = availableModels.filter(
     (m) =>
       m.id.toLowerCase().includes(modelPattern.toLowerCase()) ||
@@ -167,22 +153,30 @@ function selectAvailableFallbackModel(availableModels: readonly Model[]): Model 
  *
  * Algorithm:
  * 1. Try to match full pattern as a model
- * 2. If found, return it with "off" thinking level
+ * 2. If found, leave the thinking level unspecified
  * 3. If not found and has colons, split on last colon:
  *    - If suffix is valid thinking level, use it and recurse on prefix
- *    - If suffix is invalid, warn and recurse on prefix with "off"
+ *    - If suffix is invalid, warn and leave the thinking level unspecified
  *
- * @internal Exported for testing
+ * @internal Shared with the session extension SDK
  */
 export function parseModelPattern(
   pattern: string,
   availableModels: Model[],
   options?: { allowInvalidThinkingLevelFallback?: boolean },
 ): ParsedModelResult {
-  // Try exact match first
-  const exactMatch = tryMatchModel(pattern, availableModels);
-  if (exactMatch) {
-    return { model: exactMatch, thinkingLevel: undefined, warning: undefined };
+  const exactMatches = collectModelReferenceMatches(pattern, availableModels);
+  // Ambiguity must not fall through to fuzzy selection or custom-model construction.
+  if (exactMatches.length > 1) {
+    return {
+      model: undefined,
+      thinkingLevel: undefined,
+      warning: `Model "${pattern}" is ambiguous. Use an exact provider/model ID.`,
+    };
+  }
+  const model = exactMatches[0] ?? matchPartialModelPattern(pattern, availableModels);
+  if (model) {
+    return { model, thinkingLevel: undefined, warning: undefined };
   }
 
   // No match - try splitting on last colon if present
@@ -386,18 +380,6 @@ export function resolveCliModel(options: {
     }
   }
 
-  // If no provider was inferred from the slash, try exact matches without provider inference.
-  // This handles models whose IDs naturally contain slashes (e.g. OpenRouter-style IDs).
-  if (!provider) {
-    const lower = cliModel.toLowerCase();
-    const exact = availableModels.find(
-      (m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
-    );
-    if (exact) {
-      return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
-    }
-  }
-
   if (cliProvider && provider) {
     // If both were provided, tolerate --model <provider>/<pattern> by stripping the provider prefix
     const prefix = `${provider}/`;
@@ -409,38 +391,28 @@ export function resolveCliModel(options: {
   const candidates = provider
     ? availableModels.filter((m) => m.provider === provider)
     : availableModels;
-  const { model, thinkingLevel, warning } = parseModelPattern(pattern, candidates, {
+  let parsed = parseModelPattern(pattern, candidates, {
     allowInvalidThinkingLevelFallback: false,
   });
-
-  if (model) {
-    return { model, thinkingLevel, warning, error: undefined };
-  }
 
   // If we inferred a provider from the slash but found no match within that provider,
   // fall back to matching the full input as a raw model id across all models.
   // This handles OpenRouter-style IDs like "openai/gpt-4o:extended" where "openai"
   // looks like a provider but the full string is actually a model id on openrouter.
-  if (inferredProvider) {
-    const lower = cliModel.toLowerCase();
-    const exact = availableModels.find(
-      (m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
-    );
-    if (exact) {
-      return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
-    }
-    // Also try parseModelPattern on the full input against all models
-    const fallback = parseModelPattern(cliModel, availableModels, {
+  if (!parsed.model && !parsed.warning && inferredProvider) {
+    parsed = parseModelPattern(cliModel, availableModels, {
       allowInvalidThinkingLevelFallback: false,
     });
-    if (fallback.model) {
-      return {
-        model: fallback.model,
-        thinkingLevel: fallback.thinkingLevel,
-        warning: fallback.warning,
-        error: undefined,
-      };
-    }
+  }
+
+  const { model, thinkingLevel, warning } = parsed;
+  if (model || warning) {
+    return {
+      model,
+      thinkingLevel,
+      warning: model ? warning : undefined,
+      error: model ? undefined : warning,
+    };
   }
 
   if (provider) {
