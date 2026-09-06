@@ -1065,31 +1065,34 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("projects typed run startup status onto the active chat stream", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
-    registerNamedChatRun(chatRunState, "startup", {
-      agentId: "main",
-    });
+  it.each(["preparing_context", "memory_flushing"])(
+    "projects %s onto the active chat stream",
+    (phase) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+      registerNamedChatRun(chatRunState, "startup", {
+        agentId: "main",
+      });
 
-    emitAgentEvent(handler, "run-startup", "run_status", { phase: "preparing_context" });
+      emitAgentEvent(handler, "run-startup", "run_status", { phase });
 
-    expect(chatBroadcastCalls(broadcast)).toEqual([
-      [
-        "chat",
-        {
-          runId: "client-startup",
-          sessionKey: "session-startup",
-          agentId: "main",
-          seq: 1,
-          state: "status",
-          phase: "preparing_context",
-        },
-        { dropIfSlow: true, sessionKeys: ["session-startup"] },
-      ],
-    ]);
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
-    expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
-  });
+      expect(chatBroadcastCalls(broadcast)).toEqual([
+        [
+          "chat",
+          {
+            runId: "client-startup",
+            sessionKey: "session-startup",
+            agentId: "main",
+            seq: 1,
+            state: "status",
+            phase,
+          },
+          { dropIfSlow: true, sessionKeys: ["session-startup"] },
+        ],
+      ]);
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+      expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
+    },
+  );
 
   it.each(["rate_limit", "overloaded", "server_error", "timeout"])(
     "keeps %s retries transient through long backoff and subsequent assistant output",

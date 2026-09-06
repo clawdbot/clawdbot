@@ -4635,6 +4635,7 @@ export const en: TranslationMap & {
       runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
+      memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",

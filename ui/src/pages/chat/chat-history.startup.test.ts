@@ -22,12 +22,14 @@ describe("chat history startup progress", () => {
       text: "",
       startup: { state: "status", runId: "run-live", phase: "preparing_workspace" },
     },
-    ...["naming_worktree", "creating_worktree", "running_setup"].map((phase) => ({
-      name: `restores ${phase} before visible activity`,
-      phase,
-      text: "",
-      startup: { state: "status", runId: "run-live", phase },
-    })),
+    ...["naming_worktree", "creating_worktree", "running_setup", "memory_flushing"].map(
+      (phase) => ({
+        name: `restores ${phase} before visible activity`,
+        phase,
+        text: "",
+        startup: { state: "status", runId: "run-live", phase },
+      }),
+    ),
     {
       name: "keeps actual assistant activity ahead of an older startup status",
       phase: "preparing_workspace",

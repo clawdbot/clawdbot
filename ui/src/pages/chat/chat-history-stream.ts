@@ -280,6 +280,7 @@ export function applyHistoryRun(params: {
     startupPhase === "running_setup" ||
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
+    startupPhase === "memory_flushing" ||
     startupPhase === "starting_model";
   if (
     run.text &&

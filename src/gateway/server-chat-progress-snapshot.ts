@@ -32,6 +32,7 @@ export function updateChatRunProgressSnapshot(
       "running_setup",
       "provisioning_environment",
       "preparing_context",
+      "memory_flushing",
       "starting_model",
     ].includes(phase);
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
