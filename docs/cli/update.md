@@ -223,10 +223,9 @@ fields and adds optional `activeRun` and `lastRun` records. While a run is activ
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
 
-The pre-restart notice can arrive before staging begins while the managed Gateway
-parks for the updater. That notice does not advance the recorded phase. If the
-Control UI cannot read fresh progress, it shows the read error alongside the last
-recorded run; use **Check status** to retry without starting another update.
+Native service-stop observations do not advance the update's recorded phase.
+If the Control UI cannot read fresh progress, it shows the read error alongside
+the last recorded run; use **Check status** to retry without starting another update.
 
 Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
 `restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,

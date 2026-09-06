@@ -14,7 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
   restartCandidate: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
-    async () => true,
+    async () => "ok",
   ),
   stopCandidate: vi.fn(),
   restart:
@@ -455,7 +455,7 @@ describe("failed update recovery restart", () => {
   it.each([79, 80])(
     "does not restart again after post-activation convergence exits %s",
     async (childExitCode) => {
-      mocks.restartCandidate.mockResolvedValueOnce(true);
+      mocks.restartCandidate.mockResolvedValueOnce("ok");
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
       const detail = "Fresh Doctor could not persist the migrated config.";
       mocks.freshProcess.mockResolvedValueOnce({
@@ -591,7 +591,7 @@ describe("failed package update recovery safety", () => {
         refreshDefinition: true,
       },
     });
-    mocks.restartCandidate.mockResolvedValueOnce(true);
+    mocks.restartCandidate.mockResolvedValueOnce("ok");
     const rollback = vi.fn(async () => ({
       name: "package rollback",
       activePackageRoot: originalRoot,

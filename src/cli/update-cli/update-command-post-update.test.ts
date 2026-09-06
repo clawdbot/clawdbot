@@ -294,7 +294,7 @@ describe("successful update finalization ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readServiceState.mockReset();
-    mocks.restartService.mockReset().mockResolvedValue(true);
+    mocks.restartService.mockReset().mockResolvedValue("ok");
     mocks.stopService.mockReset();
     mocks.leaseActive = false;
     mocks.loadPluginRecords.mockResolvedValue({});
@@ -723,11 +723,11 @@ describe("successful update finalization ordering", () => {
           now += events.length === 1 ? 500 : 200;
           if (restartFailed && events.length > 1) {
             recordUpdateRunVerification(run.runId, { serviceRunning: false }, { env: serviceEnv });
-            return false;
+            return "restart-health-failed";
           }
           recordVerified();
           params.onVerified?.(now);
-          return true;
+          return "ok";
         });
         const plugins = { ...successfulPluginUpdate, changed };
         mocks.updatePlugins.mockImplementationOnce(async () => {

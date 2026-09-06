@@ -127,6 +127,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           mocks.events.push("restart managed service");
           mocks.running = true;
           servingBuildId = "target-build";
+          return true;
         });
       }
       mocks.child.mockImplementation(async (argv) => {
