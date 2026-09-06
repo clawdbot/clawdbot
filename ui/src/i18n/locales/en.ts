@@ -543,6 +543,10 @@ export const en: TranslationMap & {
     dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
   updates: {
+    preview: {
+      title: "Available changes",
+      partial: "Showing {shown} of {total} commits",
+    },
     adminRequired: "Administrator access is required to change update settings or start an update.",
     campaign: {
       countdown: "Updating in {time}",

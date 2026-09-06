@@ -20,6 +20,7 @@ import { PollController } from "../lit/poll-controller.ts";
 import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
+import { renderUpdateChangePreview } from "./update-change-preview.ts";
 import "./tooltip.ts";
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
@@ -458,6 +459,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         aria-live=${campaign ? nothing : "polite"}
       >
         ${this.renderStatus()}
+        ${!busy && actionable ? renderUpdateChangePreview(update, this.updateSchedule) : nothing}
         ${
           actionable
             ? html`<div class="sidebar-update-card__actions">

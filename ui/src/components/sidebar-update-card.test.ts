@@ -61,6 +61,26 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
+  it("shows commit subjects in the expanded Inbox without starting an update", async () => {
+    const element = await mount({
+      channel: "dev",
+      currentVersion: "1.0.0",
+      latestVersion: "1.0.0",
+      currentSha: "1111111",
+      commitsBehind: 6,
+      commits: [{ sha: "abc1234", subject: "fix: preserve active sessions" }],
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+    element.compact = true;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-issues-panel__body")?.textContent).toContain(
+      "fix: preserve active sessions",
+    );
+    expect(element.textContent).toContain("Showing 1 of 6 commits");
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it("renders the refresh state and invokes its action", async () => {
     const element = await mount(null);
     const onRefresh = vi.fn(async () => false);

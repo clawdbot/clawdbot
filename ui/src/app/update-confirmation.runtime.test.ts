@@ -157,6 +157,26 @@ it("states a git distance once instead of labelling it as an available version",
   await settled;
 });
 
+it("previews available commit subjects before confirmation without starting an update", async () => {
+  const { settled, startGatewayUpdate } = startUpdate({
+    updateAvailable: {
+      ...UPDATE_AVAILABLE,
+      currentSha: "1111111",
+      commitsBehind: 6,
+      commits: [{ sha: "abc1234", subject: "fix: preserve active sessions" }],
+    },
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  expect(modal.textContent).toContain("Available changes");
+  expect(modal.textContent).toContain("Showing 1 of 6 commits");
+  expect(modal.textContent).toContain("fix: preserve active sessions");
+  expect(modal.textContent).toContain("abc1234");
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  findButton("Cancel").click();
+  await settled;
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+});
+
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();
   const second = startUpdate();
