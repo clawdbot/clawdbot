@@ -51,7 +51,12 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { loadAgentFileContent, saveAgentFile } from "./files.ts";
+import {
+  loadAgentFileContent,
+  overwriteAgentFile,
+  reloadAgentFile,
+  saveAgentFile,
+} from "./files.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -101,6 +106,8 @@ class AgentsPage
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
   @state() agentFileContents: Record<string, string> = {};
+  @state() agentFileHashes: Record<string, string> = {};
+  @state() agentFileConflict: string | null = null;
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
@@ -749,6 +756,8 @@ class AgentsPage
     this.agentFilesError = null;
     this.agentFileActive = null;
     this.agentFileContents = {};
+    this.agentFileHashes = {};
+    this.agentFileConflict = null;
     this.agentFileDrafts = {};
     this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
@@ -867,6 +876,13 @@ class AgentsPage
     void saveAgentFile(this, agentId, name, content);
   }
 
+  private overwriteSelectedAgentFile(agentId: string, name: string, content: string) {
+    if (!this.canCall("agents.files.set", "operator.admin")) {
+      return;
+    }
+    void overwriteAgentFile(this, agentId, name, content);
+  }
+
   private reloadConfig() {
     void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
@@ -974,6 +990,7 @@ class AgentsPage
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,
             saving: this.agentFileSaving,
+            conflict: this.agentFileConflict,
           },
           agentIdentityLoading: this.agentIdentityLoading,
           agentIdentityError: this.agentIdentityError,
@@ -1036,6 +1053,20 @@ class AgentsPage
           onFileSave: (name) => {
             if (selectedAgentId) {
               this.saveSelectedAgentFile(
+                selectedAgentId,
+                name,
+                this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",
+              );
+            }
+          },
+          onFileReload: (name) => {
+            if (selectedAgentId) {
+              void reloadAgentFile(this, selectedAgentId, name);
+            }
+          },
+          onFileOverwrite: (name) => {
+            if (selectedAgentId) {
+              this.overwriteSelectedAgentFile(
                 selectedAgentId,
                 name,
                 this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",

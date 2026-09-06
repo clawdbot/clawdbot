@@ -35,6 +35,7 @@ import {
   formatNextRun,
 } from "../../lib/presenter.ts";
 import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
+import { renderAgentFileError } from "./file-conflict-callout.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
 function countWords(text: string) {
@@ -378,12 +379,15 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  agentFileConflict: string | null;
   canWrite: boolean;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
+  onFileReload: (name: string) => void;
+  onFileOverwrite: (name: string) => void;
 }) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
@@ -425,11 +429,14 @@ export function renderAgentFiles(params: {
       : t("agents.files.updatedUnknown");
 
   return html`
-    ${
-      params.agentFilesError
-        ? html`<div class="callout danger">${params.agentFilesError}</div>`
-        : nothing
-    }
+    ${renderAgentFileError({
+      error: params.agentFilesError,
+      conflictName: active && params.agentFileConflict === active ? active : null,
+      busy: params.agentFilesLoading || params.agentFileSaving,
+      canWrite: params.canWrite,
+      onReload: params.onFileReload,
+      onOverwrite: params.onFileOverwrite,
+    })}
     ${renderSettingsSection(
       {
         title: t("agents.files.coreFilesTitle"),

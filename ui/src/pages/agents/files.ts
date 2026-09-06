@@ -1,5 +1,6 @@
 // Control UI controller manages agent files gateway state.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -12,6 +13,8 @@ type AgentFilesState = {
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFileContents: Record<string, string>;
+  agentFileHashes: Record<string, string>;
+  agentFileConflict: string | null;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
@@ -21,7 +24,9 @@ async function requestAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
-  operation: { kind: "read"; force?: boolean } | { kind: "write"; content: string },
+  operation:
+    | { kind: "read"; force?: boolean; resolution?: "draft" | "hash" }
+    | { kind: "write"; content: string },
 ): Promise<boolean> {
   const saving = operation.kind === "write";
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
@@ -54,12 +59,20 @@ async function requestAgentFile(
   const revision = state.agentFileWriteRevisions.get(name);
   const isCurrent = () =>
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
+  const expectedHash = state.agentFileHashes[name];
+  const resolution = operation.kind === "read" ? operation.resolution : undefined;
   state[busy] = true;
   state.agentFilesError = null;
   try {
     const res = await client.request<AgentsFilesGetResult | AgentsFilesSetResult | null>(
       saving ? "agents.files.set" : "agents.files.get",
-      { agentId, name, ...(operation.kind === "write" ? { content: operation.content } : {}) },
+      {
+        agentId,
+        name,
+        ...(operation.kind === "write"
+          ? { content: operation.content, ...(expectedHash ? { expectedHash } : {}) }
+          : {}),
+      },
     );
     if (res?.file && isCurrent()) {
       const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
@@ -67,11 +80,24 @@ async function requestAgentFile(
       const currentDraft = state.agentFileDrafts[name];
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
       // Reads rebase clean drafts; writes preserve edits made after submission.
-      if (
+      const rebasesDraft =
+        resolution === "draft" ||
         !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === (saving ? content : previousBase)
-      ) {
+        currentDraft === (saving ? content : previousBase);
+      if (rebasesDraft) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      }
+      if (saving || resolution !== undefined || rebasesDraft) {
+        const hashes = { ...state.agentFileHashes };
+        if (res.file.hash) {
+          hashes[name] = res.file.hash;
+        } else {
+          delete hashes[name];
+        }
+        state.agentFileHashes = hashes;
+        if (state.agentFileConflict === name) {
+          state.agentFileConflict = null;
+        }
       }
       state.agentFilesError = null;
       agents.recordFile(res);
@@ -80,6 +106,9 @@ async function requestAgentFile(
   } catch (err) {
     if (isCurrent()) {
       state.agentFilesError = formatUiError(err);
+      if (isAgentFileConflict(err)) {
+        state.agentFileConflict = name;
+      }
     }
     return false;
   } finally {
@@ -91,6 +120,14 @@ async function requestAgentFile(
     }
   }
   return false;
+}
+
+function isAgentFileConflict(err: unknown): boolean {
+  return (
+    err instanceof GatewayRequestError &&
+    isRecord(err.details) &&
+    err.details.type === "agent_file_conflict"
+  );
 }
 
 export function loadAgentFileContent(
@@ -109,4 +146,33 @@ export function saveAgentFile(
   content: string,
 ): Promise<boolean> {
   return requestAgentFile(state, agentId, name, { kind: "write", content });
+}
+
+export function reloadAgentFile(
+  state: AgentFilesState,
+  agentId: string,
+  name: string,
+): Promise<boolean> {
+  return requestAgentFile(state, agentId, name, {
+    kind: "read",
+    force: true,
+    resolution: "draft",
+  });
+}
+
+export async function overwriteAgentFile(
+  state: AgentFilesState,
+  agentId: string,
+  name: string,
+  content: string,
+): Promise<boolean> {
+  const rebased = await requestAgentFile(state, agentId, name, {
+    kind: "read",
+    force: true,
+    resolution: "hash",
+  });
+  if (!rebased) {
+    return false;
+  }
+  return await requestAgentFile(state, agentId, name, { kind: "write", content });
 }

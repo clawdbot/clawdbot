@@ -132,7 +132,7 @@ export type WorkspaceFileUpdateResult =
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
-function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
   const result = workspaceFileUpdateQueue.then(update, update);
   workspaceFileUpdateQueue = result.then(
     () => undefined,
