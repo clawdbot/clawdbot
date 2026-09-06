@@ -2329,7 +2329,6 @@ src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-install-config.ts	2
-src/cli/plugins-uninstall-command.ts	4
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	9
 src/cli/precomputed-help.ts	1
