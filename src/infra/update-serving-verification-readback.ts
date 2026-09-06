@@ -7,11 +7,16 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import type { UpdateServingReceipt } from "./update-serving-verification-receipt.js";
 
 type TranscriptProof = UpdateServingReceipt["transcript"];
+
+type UpdateServingTranscriptResult =
+  | { status: "persisted"; sessionId: string; transcript: TranscriptProof }
+  | { status: "not-found" | "response-mismatch" | "turn-incomplete" };
 
 /** A fresh read-only snapshot; never borrows the Gateway/writer's cached handle. */
 export function readUpdateServingTranscript(params: {
@@ -22,7 +27,7 @@ export function readUpdateServingTranscript(params: {
   agentRunId: string;
   prompt: string;
   response: string;
-}): { sessionId: string; transcript: TranscriptProof } | undefined {
+}): UpdateServingTranscriptResult {
   const scope = resolveSqliteScope({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -34,7 +39,7 @@ export function readUpdateServingTranscript(params: {
   });
   const opened = openOpenClawAgentDatabaseReadOnly(toDatabaseOptions(scope));
   if (!opened.found) {
-    return undefined;
+    return { status: "not-found" };
   }
   const { db, close } = opened.database;
   try {
@@ -57,8 +62,11 @@ export function readUpdateServingTranscript(params: {
         .where("node.entry_valid", "=", 1)
         .where("node.archived_at", "is", null),
     );
-    if (!owner || ["failed", "killed", "timeout"].includes(owner.status ?? "")) {
-      return undefined;
+    if (!owner) {
+      return { status: "not-found" };
+    }
+    if (["failed", "killed", "timeout"].includes(owner.status ?? "")) {
+      return { status: "turn-incomplete" };
     }
     // The verifier creates a new session for one tiny turn. Bound bytes in SQLite
     // before crossing into JS, and reject overflow instead of searching partial history.
@@ -80,22 +88,32 @@ export function readUpdateServingTranscript(params: {
         .orderBy("seq", "asc")
         .limit(33),
     ).rows;
-    if (rows.length === 0 || rows.length > 32) {
-      return undefined;
+    if (rows.length === 0) {
+      return { status: "not-found" };
+    }
+    if (rows.length > 32) {
+      return { status: "turn-incomplete" };
     }
     let user: TranscriptProof["user"] | undefined;
     let assistant: TranscriptProof["assistant"] | undefined;
+    let assistantComplete = false;
+    let responseMatches = false;
+    // Allow prose and punctuation without accepting an extended or partial token.
+    const responsePattern = new RegExp(
+      `(?:^|[^\\p{L}\\p{N}_-])${escapeRegExp(params.response)}(?=$|[^\\p{L}\\p{N}_-])`,
+      "u",
+    );
     const parents = new Map<string, string | null>();
     for (const row of rows) {
       if (!row.event_json) {
-        return undefined;
+        return { status: "turn-incomplete" };
       }
       const event: unknown = JSON.parse(row.event_json);
       if (!isRecord(event) || typeof event.id !== "string") {
-        return undefined;
+        return { status: "turn-incomplete" };
       }
       if (event.type === "reset" || event.type === "compaction") {
-        return undefined;
+        return { status: "turn-incomplete" };
       }
       parents.set(event.id, typeof event.parentId === "string" ? event.parentId : null);
       if (event.type !== "message" || !isRecord(event.message)) {
@@ -116,30 +134,32 @@ export function readUpdateServingTranscript(params: {
               : undefined;
         // Exactly one newly persisted request, not a historical or concurrent turn.
         if (user || text !== params.prompt) {
-          return undefined;
+          return { status: "turn-incomplete" };
         }
         user = { entryId: event.id, seq: row.seq };
       }
       // A trailing tool result or other message is not a completed assistant turn.
-      assistant = undefined;
+      assistantComplete = false;
       if (message.role === "assistant") {
         const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
-        assistant =
-          user &&
+        assistant = { entryId: event.id, seq: row.seq };
+        assistantComplete =
+          user !== undefined &&
           metadata?.runId === params.agentRunId &&
           message.stopReason === "stop" &&
           typeof message.provider === "string" &&
           message.provider.length > 0 &&
           typeof message.model === "string" &&
           message.model.length > 0 &&
-          !message.errorMessage &&
-          extractAssistantPhaseText(message)?.trim() === params.response
-            ? { entryId: event.id, seq: row.seq }
-            : undefined;
+          !message.errorMessage;
+        responseMatches = responsePattern.test(extractAssistantPhaseText(message)?.trim() ?? "");
       }
     }
     if (!user || !assistant || assistant.seq <= user.seq) {
-      return undefined;
+      return { status: "not-found" };
+    }
+    if (!assistantComplete) {
+      return { status: "turn-incomplete" };
     }
     // Raw events are canonical. Prove the terminal assistant descends from the
     // exact request rather than accepting an unrelated abandoned transcript branch.
@@ -150,9 +170,13 @@ export function readUpdateServingTranscript(params: {
       parent = parents.get(parent);
     }
     if (parent !== user.entryId) {
-      return undefined;
+      return { status: "turn-incomplete" };
+    }
+    if (!responseMatches) {
+      return { status: "response-mismatch" };
     }
     return {
+      status: "persisted",
       sessionId: owner.current_session_id,
       transcript: {
         generation: owner.generation,

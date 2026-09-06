@@ -363,7 +363,7 @@ disable every hosted catalog request with `models.catalogRefresh.enabled:
 false`. When disabled, pricing stays at bundled and explicitly configured
 values. A self-hosted mirror can be selected with an HTTPS
 `models.catalogRefresh.url` (or localhost HTTP for testing); see
-[configuration reference](/gateway/configuration-reference#models).
+[configuration reference](/gateway/config-runtime#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 

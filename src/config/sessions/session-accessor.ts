@@ -281,6 +281,7 @@ export {
   type ClosedTranscriptTurnReadResult,
 } from "./session-accessor.transcript-range.js";
 export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,

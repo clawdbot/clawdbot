@@ -56,6 +56,8 @@ const text = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
 const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
+const triageAfterFailure =
+  vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
 const updateFailureActionMocks = vi.hoisted(() => ({
   runInteractiveUpdateFailureAction: vi.fn(),
 }));
@@ -609,6 +611,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: runtimeCapture,
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
+vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
@@ -1870,6 +1873,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    triageAfterFailure.mockResolvedValue(undefined);
     managedUpdateHandoff.activate.mockResolvedValue(false);
     unattendedRepair.mockResolvedValue({
       status: "unavailable",
@@ -8876,8 +8880,8 @@ describe("update-cli", () => {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
         if (failureKind === "post-core exception") {
-          expect(getTriageFailures()).toContainEqual(
-            expect.objectContaining({ error: failure.message }),
+          expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
+            expect.objectContaining({ kind: "update", error: failure.message }),
           );
         }
         expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();

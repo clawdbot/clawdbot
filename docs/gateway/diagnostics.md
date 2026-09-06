@@ -119,6 +119,24 @@ The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
 and can exceed `1`. See
 [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
 
+With diagnostics enabled, `sessions.patch` and `sessions.patchMany` calls lasting
+at least one second add an info-level `slow session patch` file-log record. Its
+`elapsedMs`, `phaseDurationsMs`, and `phaseCounts` distinguish lifecycle admission,
+snapshot reads, catalog preparation, projection, commit, runtime acknowledgements,
+effects, and response work. Records inherit the request's diagnostic trace when
+available and contain fixed phase names and numbers, not patch values or session
+keys. Repeated stage visits contribute to the counts and totals. Parallel and
+nested stages can overlap, so their totals are neither an exclusive breakdown
+of request time nor CPU measurements.
+
+SQLite session-write warnings also separate `queueWaitMs`, `writerExecutionMs`,
+and `completionDelayMs`. These measure time until the writer starts, work and
+awaits inside the writer lane, and time until its caller resumes after execution.
+Writer execution is not SQLite transaction-lock hold time; native transaction
+lock-wait and hold warnings remain separate. Writes rejected before entering the
+writer omit these three fields. This breakdown is in
+file logs, not the aggregate Gateway RPC Prometheus histograms.
+
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the

@@ -55,23 +55,14 @@ Run in any terminal:
 openclaw onboard
 ```
 
-The guided flow detects existing AI access, then waits for you to choose a
-connection. The picker includes detected connections and every supported provider,
-including official providers that need a plugin installed. **More…** contains
-additional provider groups, with regions, plans, and supported browser, device,
-API-key, or token methods in a second menu. Only your selected connection is
-tested. Failure returns to the picker; cancellation stops that attempt without
-trying another provider. It saves the model and credential only after a passing
-completion, then starts OpenClaw to
-configure the workspace, Gateway, channels, agents, plugins, and other optional
-features. In local onboarding, **Skip for now** prepares the named agent's workspace
-and local Gateway configuration, then exits without starting a Gateway or AI chat.
-Run `openclaw onboard` again to connect AI and finish setup. There is no
-in-flow classic handoff; exit and run `openclaw onboard --classic` when you want
-the classic wizard instead.
+On a fresh install the guided flow offers **Quick start** and **Custom setup**,
+detects the AI access you already have, verifies your one chosen connection with
+a real completion, and only then configures the rest of the setup. Both lanes,
+the provider picker, **Skip for now**, and the foreground Gateway are described
+step by step in [Onboarding (CLI)](/start/wizard#guided-default).
 
 After inference passes, OpenClaw can hand channel setup to a masked terminal
-wizard. It does not open guided or classic provider setup; exit OpenClaw and
+wizard. It does not open guided or classic provider setup. Exit OpenClaw and
 run `openclaw onboard` to change the model provider or its authentication.
 
 Use `openclaw onboard --classic` for detailed model/auth, channel, skill,
