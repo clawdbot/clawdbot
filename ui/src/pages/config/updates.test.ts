@@ -93,6 +93,7 @@ describe("renderUpdates", () => {
         openSystemSettings: vi.fn(),
         openPanel: vi.fn(),
         checkForUpdates: vi.fn(),
+        installChromeExtension: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;

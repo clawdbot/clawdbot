@@ -83,6 +83,7 @@ describe("sidebar entries", () => {
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
     const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    iosSnapshot.voice.speakerphoneEnabled = false;
     for (const [formFactor, labelKey] of [
       ["phone", "nav.settingsGroupThisIPhone"],
       ["pad", "nav.settingsGroupThisIPad"],
@@ -106,6 +107,27 @@ describe("sidebar entries", () => {
     ] as const) {
       expect(search(query, iosCapability)).toContainEqual(expect.objectContaining({ routeId }));
       expect(search(query, null)).toEqual([]);
+      expect(search(query, capability)).toEqual([]);
+      expect(search(query, { ...capability, snapshot: null })).toEqual([]);
+    }
+    for (const query of [
+      "Dock icon",
+      "Launch at login",
+      "Quick Chat",
+      "Cookie sync",
+      "computer presence",
+    ]) {
+      expect(search(query, capability)).not.toEqual([]);
+      expect(search(query, iosCapability)).toEqual([]);
+    }
+    const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
+    sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
+    delete sparseIosSnapshot.voice.speakerphoneEnabled;
+    sparseIosSnapshot.permissions.entries = sparseIosSnapshot.permissions.entries.filter(
+      (entry) => entry.id !== "contacts",
+    );
+    for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
+      expect(search(query, { ...capability, snapshot: sparseIosSnapshot })).toEqual([]);
     }
     for (const route of ["device", "device-permissions"] as const) {
       expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);

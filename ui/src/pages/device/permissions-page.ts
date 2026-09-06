@@ -39,6 +39,8 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
   private renderPermissions(snapshot: NativeDeviceSettingsSnapshot) {
     const capability = this.context.nativeDeviceSettings;
     const { permissions } = snapshot;
+    const preciseEditable =
+      permissions.location.preciseEditable ?? snapshot.device.platform === "macos";
     return html`
       ${renderSettingsSection(
         { title: t("configPage.deviceSettings.systemAccess") },
@@ -72,7 +74,7 @@ class DevicePermissionsPage extends OpenClawLightDomElement {
             }),
           })}
           ${
-            permissions.location.preciseEditable === false
+            !preciseEditable
               ? renderSettingsRow({
                   title: t("configPage.deviceSettings.preciseLocation"),
                   description: t("configPage.deviceSettings.preciseLocationReadOnlyHint"),
