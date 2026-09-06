@@ -4,7 +4,9 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k"] as const;
+// Includes the bare kimi.com short ids and the Moonshot upstream wire id ("kimi-k3"),
+// which self-hosted Kimi K3 gateways register verbatim under the kimi provider.
+export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3"] as const;
 const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
 
 const KIMI_K3_THINKING_LEVELS = [
