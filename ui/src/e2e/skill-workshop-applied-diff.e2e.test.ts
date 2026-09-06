@@ -124,6 +124,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
         "skills.proposals.list": {
           proposals: [latest, previous],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: latest.updatedAt,
         },
       },
@@ -133,7 +134,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}skills/workshop`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-history").click();
       await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
 
       const changes = page.getByRole("button", { name: "Changes", exact: true });
@@ -197,6 +198,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
         "skills.proposals.list": {
           proposals: [latest, previous],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: latest.updatedAt,
         },
       },
@@ -206,7 +208,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}skills/workshop`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-history").click();
       await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
 
       const notice = page.locator(".sw-diff__notice");

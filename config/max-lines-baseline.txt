@@ -631,7 +631,6 @@ src/gateway/server-methods/nodes.invoke-wake.test.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
-src/gateway/server-methods/sessions-files.ts
 src/gateway/server-methods/skills.ts
 src/gateway/server-methods/talk.test.ts
 src/gateway/server-methods/talk.ts
@@ -739,7 +738,6 @@ src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
 src/plugins/conversation-binding.test.ts
-src/plugins/conversation-binding.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
@@ -853,7 +851,6 @@ ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/skill-workshop/view.ts
 ui/src/pages/skills/view.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts

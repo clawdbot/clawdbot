@@ -5,12 +5,38 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "./git-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("Git filesystem paths", () => {
+  it.each([
+    { input: "/c", expected: "C:\\" },
+    { input: "/C", expected: "C:\\" },
+    { input: "/c/", expected: "C:\\" },
+    { input: "/c/Users/example/repo", expected: "C:\\Users\\example\\repo" },
+    { input: "C:\\c\\Users\\example", expected: "C:\\c\\Users\\example" },
+    { input: "C:/Users/example", expected: "C:/Users/example" },
+    { input: "\\\\server\\share\\repo", expected: "\\\\server\\share\\repo" },
+    { input: "relative/repo", expected: "relative/repo" },
+    { input: "/cygdrive/c/repo", expected: "/cygdrive/c/repo" },
+    { input: "/workspace/repo", expected: "/workspace/repo" },
+    { input: "/rr", expected: "/rr" },
+  ])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
+    expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+  });
+
+  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
+    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
+    (input) => {
+      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+    },
+  );
+});
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
 const failure = {

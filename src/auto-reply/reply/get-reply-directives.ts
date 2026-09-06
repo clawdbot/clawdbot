@@ -7,7 +7,7 @@ import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -51,11 +51,7 @@ import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js"
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import {
-  createFastTestModelSelectionState,
-  createModelSelectionState,
-  resolveContextTokens,
-} from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -69,24 +65,6 @@ const commandsRegistryLoader = createLazyImportLoader(
 const skillCommandsLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-
-function canUseFastExplicitModelDirective(params: {
-  directives: InlineDirectives;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): boolean {
-  const raw = normalizeOptionalString(params.directives.rawModelDirective);
-  if (!raw || /^[0-9]+$/.test(raw)) {
-    return false;
-  }
-  return Boolean(
-    resolveModelRefFromString({
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    }),
-  );
-}
 
 type ReplyDirectiveContinuation = {
   commandSource: string;
@@ -446,52 +424,31 @@ export async function resolveReplyDirectives(params: {
     isFastTestEnv: isFastTestRuntimeEnv(),
   });
 
-  const useFastModelSelection =
-    useFastReplyRuntime &&
-    !hasResolvedHeartbeatModelOverride &&
-    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
-    !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-    (!directives.hasModelDirective ||
-      canUseFastExplicitModelDirective({
-        directives,
-        defaultProvider,
-        aliasIndex: params.aliasIndex,
-      }));
-
   let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   try {
-    modelState = useFastModelSelection
-      ? createFastTestModelSelectionState({
-          agentCfg,
-          provider,
-          model,
-        })
-      : await createModelSelectionState({
-          cfg,
-          agentId,
-          agentCfg,
-          sessionEntry: targetSessionEntry,
-          sessionStore,
-          sessionKey,
-          parentSessionKey:
-            targetSessionEntry?.parentSessionKey ??
-            ctx.ModelParentSessionKey ??
-            ctx.ParentSessionKey,
-          storePath,
-          defaultProvider,
-          defaultModel,
-          primaryProvider,
-          primaryModel,
-          provider,
-          model,
-          hasModelDirective: directives.hasModelDirective,
-          hasOneTurnModelOverride,
-          skipStoredModelOverride,
-          hasResolvedHeartbeatModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
-          preparedModelCatalog: params.preparedModelCatalog,
-        });
+    modelState = await createModelSelectionState({
+      cfg,
+      agentId,
+      agentCfg,
+      sessionEntry: targetSessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      provider,
+      model,
+      hasModelDirective: directives.hasModelDirective,
+      hasOneTurnModelOverride,
+      skipStoredModelOverride,
+      hasResolvedHeartbeatModelOverride,
+      isHeartbeat: opts?.isHeartbeat === true,
+      preparedModelCatalog: params.preparedModelCatalog,
+    });
   } catch (error) {
     if (
       !(error instanceof ModelSelectionLockedError) &&

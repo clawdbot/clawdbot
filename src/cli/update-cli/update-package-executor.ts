@@ -5,15 +5,9 @@ import {
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
 
-type PackageUpdatePreparation = Omit<
-  PackageInstallUpdateParams,
-  "allowGatewayActivation" | "allowGatewayServiceRepair" | "managedServiceEnv"
->;
+type PackageUpdatePreparation = Omit<PackageInstallUpdateParams, "managedServiceEnv">;
 
-type PackageUpdateActivation = Pick<
-  PackageInstallUpdateParams,
-  "allowGatewayActivation" | "allowGatewayServiceRepair" | "managedServiceEnv"
->;
+type PackageUpdateActivation = Pick<PackageInstallUpdateParams, "managedServiceEnv">;
 
 declare const preparedPackageUpdateBrand: unique symbol;
 

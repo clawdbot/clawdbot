@@ -377,6 +377,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+    identity: params.identity,
     config: params.selection.cfg,
     agentDir: params.selection.agentDir,
     workspaceDir: params.harness.workspaceDir,

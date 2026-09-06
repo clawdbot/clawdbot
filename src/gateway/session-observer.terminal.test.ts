@@ -117,6 +117,7 @@ function commitObserverSessionReset(harness: Harness, notify = true): void {
     return;
   }
   emitSessionIdentityMutation({
+    agentId: "main",
     kind: "reset",
     previous: { sessionId, sessionKeys: [sessionKey] },
     current: { sessionId, sessionKeys: [sessionKey] },

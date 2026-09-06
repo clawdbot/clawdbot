@@ -144,11 +144,12 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureAutomations(_ item: NSMenuItem) {
-        let jobs = self.enabledJobs
+        let summary = self.cron.summary
+        let jobs = summary.jobs
         let detail = if let next = jobs.compactMap(\.nextRunDate).min() {
-            "\(jobs.count) · \(Self.relativeRun(next))"
+            "\(summary.total) · \(Self.relativeRun(next))"
         } else {
-            String(jobs.count)
+            String(summary.total)
         }
         item.title = String(localized: "Automations")
         item.image = nil
@@ -160,7 +161,7 @@ final class StatusMenuSummaries: NSObject {
                 detail: detail),
             highlights: true)
 
-        var entries = jobs.prefix(8).map { job in
+        var entries = jobs.prefix(CronJobsSummary.previewLimit).map { job in
             MenuEntry(id: "cron.job.\(job.id)") { [weak self] item in
                 item.title = job.displayName
                 item.target = self
@@ -300,12 +301,6 @@ final class StatusMenuSummaries: NSObject {
             item.state = gateway.isPrimary ? .on : .off
         }
         item.title = StatusMenuMetrics.fittedTitle(item.title)
-    }
-
-    private var enabledJobs: [CronJob] {
-        self.cron.jobs.filter(\.enabled).sorted { lhs, rhs in
-            (lhs.nextRunDate ?? .distantFuture) < (rhs.nextRunDate ?? .distantFuture)
-        }
     }
 
     private var usageRows: [UsageRow] {

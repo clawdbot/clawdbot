@@ -475,7 +475,7 @@ export function lanesNeedE2eImageKind(
 }
 
 export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean {
-  return poolLanes.some((poolLane) => poolLane.e2eImageKind);
+  return poolLanes.some((poolLane) => poolLane.needsPackage || poolLane.e2eImageKind);
 }
 
 export function findLaneByName(name: string): DockerE2eLane | undefined {
