@@ -10,6 +10,7 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import type { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
 
 export type ManagedRepairBoundary = {
@@ -95,7 +96,7 @@ function managedRepairSpawnPreload(root: string): string {
       // Source orchestration consumes the packaged SQLite worker from the completed build.
       if (Array.isArray(args) && args.length === 3 && args[0] === "--import" && args[1] === "tsx" &&
           args[2] === ${JSON.stringify(path.resolve("src/infra/update-candidate-state.worker.ts"))}) {
-        args = [${JSON.stringify(path.resolve("dist/update-candidate-state.worker.js"))}];
+        args = [${JSON.stringify(path.resolve("dist", runtimeProcessEntrypoints.updateCandidateState.distWorkerPath))}];
       }
       const script = Array.isArray(args) ? args.join(" ") : "";
       for (const effect of ["first", "second"]) {

@@ -76,7 +76,8 @@ export async function runUpdateCommandRepair(params: {
     try {
       if (params.phase === "validating") {
         const snapshot = await readConfigFileSnapshot({
-          skipPluginValidation: true,
+          // Plugin metadata reads SQLite; materialize it only after binding the rehearsal.
+          pluginValidation: "core-only",
           observe: false,
         });
         rehearsal = await prepareUpdateCandidateRehearsal({

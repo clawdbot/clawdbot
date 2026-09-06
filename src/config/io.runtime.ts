@@ -126,7 +126,7 @@ export function readCurrentConfigForPolicyCheck(params: {
     configPath: params.configPath,
     env: cloneEnvWithPlatformSemantics(params.env),
     observe: false,
-    pluginValidation: "skip",
+    pluginValidation: "core-only",
     shellEnvFallback: "defer",
     suppressFutureVersionWarning: true,
     logger: { warn: () => {}, error: () => {} },
