@@ -494,7 +494,14 @@ export async function killSubagentRunAdmin(
   if (!entry) {
     return publish({ found: false as const, killed: false as const });
   }
-  if (params.expectedRunId?.trim() && entry.runId !== params.expectedRunId.trim()) {
+  // A resumed task keeps a stable taskRunId while its backing subagent run
+  // advances to a new execution generation with a fresh runId. Accept either
+  // identity so cancellation of a resumed task resolves to its current run.
+  if (
+    params.expectedRunId?.trim() &&
+    entry.runId !== params.expectedRunId.trim() &&
+    entry.taskRunId !== params.expectedRunId.trim()
+  ) {
     return publish({ found: false as const, killed: false as const });
   }
   if (

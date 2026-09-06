@@ -282,6 +282,64 @@ describe("killSubagentRunAdmin", () => {
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
   });
 
+  it("kills a resumed task by its stable taskRunId when the execution runId advanced", async () => {
+    const childSessionKey = "agent:main:subagent:resumed-stable-runid";
+    const storePath = await writeSessionStoreFixture("admin-kill-resumed", {
+      [childSessionKey]: {
+        sessionId: "sess-resumed",
+        updatedAt: Date.now(),
+      },
+    });
+
+    // A resumed task keeps its stable taskRunId while the backing subagent run
+    // advances to a new execution generation with a fresh runId. The caller
+    // still references the stable task runId (task.runId), so cancellation
+    // must resolve it to the current execution generation instead of failing.
+    addSubagentRunForTests({
+      runId: "execution-A2",
+      taskRunId: "stable-A",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "resumed work",
+      cleanup: "keep",
+      generation: 2,
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    });
+
+    const cfg = cfgWithSessionStore(storePath);
+
+    const result = await killSubagentRunAdmin({
+      cfg,
+      sessionKey: childSessionKey,
+      expectedRunId: "stable-A",
+    });
+
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    if (!result.found) {
+      throw new Error("expected tracked subagent run");
+    }
+    expect(result.runId).toBe("execution-A2");
+    expect(result.sessionKey).toBe(childSessionKey);
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(true);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeTypeOf(
+      "number",
+    );
+    expect(detachedTaskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
+    // Task finalization keys on the stable task runId, not the execution runId.
+    expect(detachedTaskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "stable-A",
+        runtime: "subagent",
+        sessionKey: childSessionKey,
+        status: "cancelled",
+      }),
+    );
+  });
+
   it("does not kill a same-id replacement generation", async () => {
     const childSessionKey = "agent:main:subagent:same-id-replacement";
     addSubagentRunForTests({
