@@ -296,6 +296,24 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines.map((line) => line.message)).toEqual(["new"]);
   });
 
+  it("keeps generation coverage for a partial record beyond the byte window", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const complete = `${JSON.stringify({
+      0: "complete",
+      time: "2026-01-22T00:00:00.000Z",
+      _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+    })}\n`;
+    await fs.writeFile(file, `${"x".repeat(1_000_000)}\n${complete}partial`);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(result.generation).toBeDefined();
+    expect(result.lines.map((entry) => entry.message)).toEqual(["complete"]);
+  });
+
   it("keeps the first line when the byte window starts exactly after a newline", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");

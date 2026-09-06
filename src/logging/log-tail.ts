@@ -257,7 +257,7 @@ async function readLogSliceAttempt(
   // fingerprint after the output buffer was produced.
   const prefixLength = Math.min(64, size);
   const prefixSnapshot = await readBytes(0, prefixLength);
-  const generationSnapshotStart = Math.max(0, size - LOG_GENERATION_WINDOW_BYTES);
+  const generationSnapshotStart = Math.max(0, start - LOG_GENERATION_WINDOW_BYTES);
   const generationSnapshot = await readBytes(
     generationSnapshotStart,
     size - generationSnapshotStart,

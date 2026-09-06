@@ -414,6 +414,44 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("waits for stdout drain before emitting the next follow record", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "backpressure" }),
+      );
+      let blocked = true;
+      const writeJson = vi.fn(() => {
+        if (blocked) {
+          blocked = false;
+          return false;
+        }
+        return true;
+      });
+      const followRuntime = {
+        ...runtime,
+        writeStdout: vi.fn(),
+        writeJson,
+      };
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        followRuntime,
+      );
+
+      await vi.waitFor(() => expect(writeJson).toHaveBeenCalledTimes(1));
+      expect(writeJson.mock.calls).toHaveLength(1);
+
+      process.stdout.emit("drain");
+      await vi.waitFor(() => expect(writeJson).toHaveBeenCalledTimes(2));
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not replay a short file when an append grows its prefix", async () => {
     vi.useFakeTimers();
     try {

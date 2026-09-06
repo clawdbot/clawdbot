@@ -1043,12 +1043,13 @@ export async function runPluginMarketplaceListCommand(
   }
 
   if (opts.json) {
-    return defaultRuntime.writeJson({
+    defaultRuntime.writeJson({
       source: result.sourceLabel,
       name: result.manifest.name,
       version: result.manifest.version,
       plugins: result.manifest.plugins,
     });
+    return;
   }
 
   if (result.manifest.plugins.length === 0) {

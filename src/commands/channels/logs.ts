@@ -149,24 +149,98 @@ function parseIntervalOption(value: unknown): number {
   return parsed;
 }
 
+function waitForFollowOutputDrain(
+  writeResult: boolean | void,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  // A pipe can accept less than one follow batch at a time; wait for drain so polling
+  // cannot enqueue unbounded output, while abort/close still lets SIGINT unwind promptly.
+  if (writeResult !== false || signal.aborted) {
+    return undefined;
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      process.stdout.off("drain", onDrain);
+      process.stdout.off("close", onClose);
+      process.stdout.off("error", onError);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const settle = (error?: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    };
+    const onDrain = () => settle();
+    const onClose = () => settle();
+    const onError = (error: Error) => {
+      if (isOutputClosedError(error)) {
+        settle();
+      } else {
+        settle(error);
+      }
+    };
+    const onAbort = () => settle();
+
+    process.stdout.once("drain", onDrain);
+    process.stdout.once("close", onClose);
+    process.stdout.once("error", onError);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      settle();
+    }
+  });
+}
+
+function writeFollowStdout(
+  runtime: RuntimeEnv,
+  value: string,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  return waitForFollowOutputDrain(writeRuntimeStdout(runtime, value), signal);
+}
+
+function writeFollowJson(
+  runtime: RuntimeEnv,
+  value: unknown,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  return waitForFollowOutputDrain(writeRuntimeJson(runtime, value, 0), signal);
+}
+
 function writeChannelLogLine(
   runtime: RuntimeEnv,
   line: ParsedLogLine,
   json: boolean,
   follow = false,
-): void {
+  signal?: AbortSignal,
+): Promise<void> | undefined {
   if (json) {
-    writeRuntimeJson(runtime, { type: "log", ...line }, 0);
+    const writeResult = writeRuntimeJson(runtime, { type: "log", ...line }, 0);
+    if (follow && signal) {
+      return waitForFollowOutputDrain(writeResult, signal);
+    }
     return;
   }
   const ts = line.time ? `${line.time} ` : "";
   const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
   const output = `${ts}${level}${line.message}`.trim();
   if (follow) {
-    writeRuntimeStdout(runtime, output);
+    const writeResult = writeRuntimeStdout(runtime, output);
+    if (signal) {
+      return waitForFollowOutputDrain(writeResult, signal);
+    }
     return;
   }
   runtime.log(output);
+  return undefined;
 }
 
 function installFollowSignalHandlers(controller: AbortController): () => void {
@@ -466,42 +540,110 @@ async function followChannelLogs(
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
       if (json) {
         if (firstRead || fileChanged) {
-          writeRuntimeJson(runtime, { type: "meta", file: tail.file, channel }, 0);
-        }
-        if (tail.truncated) {
-          writeRuntimeJson(
+          const outputWait = writeFollowJson(
             runtime,
-            { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
-            0,
+            { type: "meta", file: tail.file, channel },
+            controller.signal,
           );
-        }
-        if (tail.reset || reanchored) {
-          writeRuntimeJson(
-            runtime,
-            { type: "notice", message: "Log file reset; re-reading the current tail." },
-            0,
-          );
-        }
-      } else {
-        if (firstRead || fileChanged) {
-          writeRuntimeStdout(runtime, theme.info(`Log file: ${tail.file}`));
-          if (channel !== "all") {
-            writeRuntimeStdout(runtime, theme.info(`Channel: ${channel}`));
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
           }
         }
         if (tail.truncated) {
-          writeRuntimeStdout(
+          const outputWait = writeFollowJson(
             runtime,
-            theme.warn("Log tail truncated; earlier entries were omitted."),
+            { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+            controller.signal,
           );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
         }
         if (tail.reset || reanchored) {
-          writeRuntimeStdout(runtime, theme.warn("Log file reset; re-reading the current tail."));
+          const outputWait = writeFollowJson(
+            runtime,
+            { type: "notice", message: "Log file reset; re-reading the current tail." },
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+      } else {
+        if (firstRead || fileChanged) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.info(`Log file: ${tail.file}`),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+          if (channel !== "all") {
+            const channelOutputWait = writeFollowStdout(
+              runtime,
+              theme.info(`Channel: ${channel}`),
+              controller.signal,
+            );
+            if (channelOutputWait) {
+              await channelOutputWait;
+              if (controller.signal.aborted) {
+                return;
+              }
+            }
+          }
+        }
+        if (tail.truncated) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.warn("Log tail truncated; earlier entries were omitted."),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+        if (tail.reset || reanchored) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.warn("Log file reset; re-reading the current tail."),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
         }
       }
 
       for (const line of tail.lines) {
-        writeChannelLogLine(runtime, line, json, true);
+        if (controller.signal.aborted) {
+          return;
+        }
+        const outputWait = writeChannelLogLine(runtime, line, json, true, controller.signal);
+        if (outputWait) {
+          await outputWait;
+          if (controller.signal.aborted) {
+            return;
+          }
+        }
       }
       cursor = checkpoint ? tail.cursor : undefined;
       previousFile = tail.file;

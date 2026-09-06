@@ -54,6 +54,18 @@ describe("writeRuntimeJson", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 2);
   });
 
+  it("returns the JSON writer backpressure result", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(() => false),
+    };
+
+    expect(writeRuntimeJson(runtime, { key: "value" })).toBe(false);
+  });
+
   it("writes JSON using log when writeJson not available", () => {
     const runtime = {
       log: vi.fn(),
@@ -101,6 +113,18 @@ describe("writeRuntimeStdout", () => {
 
     expect(runtime.writeStdout).toHaveBeenCalledWith("plain output");
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("returns the stdout writer backpressure result", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(() => false),
+      writeJson: vi.fn(),
+    };
+
+    expect(writeRuntimeStdout(runtime, "plain output")).toBe(false);
   });
 
   it("falls back to the runtime logger when no stdout writer is available", () => {
