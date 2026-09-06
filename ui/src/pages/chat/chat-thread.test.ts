@@ -3310,25 +3310,34 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("keeps identical assistant text separate when source message ids differ", () => {
-    const groups = messageGroups({
-      messages: [
-        assistantMessage([{ type: "text", text: "Same update" }], 1, {
-          id: "reply-7",
-          senderLabel: "Parzival",
-        }),
-        assistantMessage([{ type: "text", text: "Same update" }], 2, {
-          id: "reply-8",
-          senderLabel: "Parzival",
-        }),
-      ],
-    });
+  it.each([
+    { role: "assistant", firstId: "reply-7", secondId: "reply-8" },
+    { role: "assistant", firstId: "reply-7", secondId: undefined },
+    { role: "assistant", firstId: undefined, secondId: "reply-8" },
+    { role: "user", firstId: "prompt-7", secondId: undefined },
+    { role: "user", firstId: undefined, secondId: "prompt-8" },
+  ])(
+    "keeps identical $role text separate with source identities $firstId and $secondId",
+    ({ role, firstId, secondId }) => {
+      const groups = messageGroups({
+        messages: [
+          chatMessage(role, [{ type: "text", text: "Same update" }], 1, {
+            id: firstId,
+            senderLabel: "Parzival",
+          }),
+          chatMessage(role, [{ type: "text", text: "Same update" }], 2, {
+            id: secondId,
+            senderLabel: "Parzival",
+          }),
+        ],
+      });
 
-    expect(groups).toHaveLength(1);
-    expect(groupAt(groups, 0).messages).toHaveLength(2);
-    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
-    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
-  });
+      expect(groups).toHaveLength(1);
+      expect(groupAt(groups, 0).messages).toHaveLength(2);
+      expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+      expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+    },
+  );
 
   it("keeps identical user prompts separate when canonical transcript identities differ", () => {
     const groups = messageGroups({

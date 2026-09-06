@@ -560,11 +560,8 @@ export async function resumeMainSession(params: {
     }
     dispatchStarted = true;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
-      agentId: params.agentId,
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
-      recoveryRunId,
-      sessionKey: dispatchSessionKey,
     });
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);

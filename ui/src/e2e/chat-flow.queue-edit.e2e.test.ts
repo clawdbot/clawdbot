@@ -427,7 +427,7 @@ suite.define(() => {
       const first = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
       expect(first.message).toBe("send last");
       const firstRunId = requireString(first.idempotencyKey, "first queued send idempotency key");
-      await gateway.resolveDeferred("chat.send", { runId: firstRunId, status: "started" });
+      await gateway.resolveDeferred("chat.send");
       await gateway.emitChatFinal({ runId: firstRunId, text: "First queued turn completed." });
 
       const second = requireRecord((await waitForRequests(gateway, "chat.send", 3))[2]?.params);

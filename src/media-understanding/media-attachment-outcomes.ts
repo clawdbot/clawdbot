@@ -1,9 +1,9 @@
 import type { MediaAttachmentDisposition, MediaUnderstandingCapability } from "./types.js";
 
-export const MAX_SKIPPED_FILE_MARKERS = 5;
+const MAX_SKIPPED_FILE_MARKERS = 5;
 
 // Reason-neutral because the shared overflow can mix file and media outcomes.
-export function renderSkippedFileOverflowSummary(count: number): string {
+function renderSkippedFileOverflowSummary(count: number): string {
   return `[${count} more attachment${count === 1 ? "" : "s"} skipped]`;
 }
 
@@ -29,4 +29,21 @@ export function renderMediaAttachmentDisposition(
     default:
       return disposition satisfies never;
   }
+}
+
+export type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
+
+export function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
+  const rendered: string[] = [];
+  let markers = 0;
+  let overflow = 0;
+  for (const block of blocks) {
+    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
+      overflow += 1;
+      continue;
+    }
+    markers += Number(block.consumesMarkerBudget);
+    rendered.push(block.text);
+  }
+  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
 }

@@ -1213,7 +1213,7 @@ describe("chrome MCP page parsing", () => {
       profileName: "chrome-live",
       targetId,
       uid: refA,
-      filePath: "/tmp/input.txt",
+      filePaths: ["/tmp/input.txt", "/tmp/attachment.txt"],
     });
     await evaluateChromeMcpScript({
       profileName: "chrome-live",
@@ -1240,7 +1240,7 @@ describe("chrome MCP page parsing", () => {
     expect(argsFor("upload_file")).toMatchObject({
       pageId: 1,
       uid: "uid-a",
-      filePath: "/tmp/input.txt",
+      filePaths: ["/tmp/input.txt", "/tmp/attachment.txt"],
     });
     expect(argsFor("evaluate_script")).toMatchObject({
       pageId: 1,
@@ -1936,17 +1936,55 @@ describe("chrome MCP page parsing", () => {
     expect(calls).toEqual(["list_pages", "take_snapshot", "list_pages", "new_page", "click"]);
   });
 
-  it("parses evaluate_script text responses when structuredContent is missing", async () => {
-    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
-    setChromeMcpSessionFactoryForTest(factory);
+  it.each([
+    ["script", "text", "fenced", 123],
+    ["script", "text", "fenced", "literal ``` inside text"],
+    ["script", "structured", "fenced", { text: '```json\n{"ok":true}\n```' }],
+    ["script", "text", "crlf", ["first", "```", "last"]],
+    ["script", "structured", "fenced", ""],
+    ["script", "text", "raw", "```json\nnot a wrapper\n```"],
+    ["script", "text", "trailing-fence", "preserved ``` text"],
+    ["document", "structured", "fenced", "Example:\n```js\nconst value = 1;\n```"],
+  ] as const)("preserves %s %s %s JSON result %j", async (caller, surface, format, value) => {
+    const json = JSON.stringify(value);
+    const message =
+      format === "raw"
+        ? json
+        : [
+            "Script ran on page and returned:",
+            "```json",
+            json,
+            "```",
+            ...(format === "trailing-fence" ? ["Diagnostic:", "```txt", "extra", "```"] : []),
+          ].join(format === "crlf" ? "\r\n" : "\n");
+    setChromeMcpSessionFactoryForTest(async () =>
+      createPageSession({
+        pid: 141,
+        pages: [{ id: 1, url: "https://example.com" }],
+        onTool: (call) => {
+          if (call.name === "take_snapshot") {
+            return {
+              structuredContent: { snapshot: { id: "root", role: "RootWebArea" } },
+            };
+          }
+          if (call.name === "evaluate_script") {
+            return {
+              ...(surface === "structured" ? { structuredContent: { message } } : {}),
+              content: [{ type: "text", text: message }],
+            };
+          }
+          return undefined;
+        },
+      }),
+    );
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    const params = { profileName: "chrome-live", targetId };
+    const result =
+      caller === "document"
+        ? await withChromeMcpDocument(params, (document) => document.evaluate("() => 123"))
+        : await evaluateChromeMcpScript({ ...params, fn: "() => 123" });
 
-    const result = await evaluateChromeMcpScript({
-      profileName: "chrome-live",
-      targetId: FAKE_TARGET_1,
-      fn: "() => 123",
-    });
-
-    expect(result).toBe(123);
+    expect(result).toEqual(value);
   });
 
   it("defaults non-finite coordinate click delays before injecting the browser script", async () => {
