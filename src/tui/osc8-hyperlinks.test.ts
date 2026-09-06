@@ -1,4 +1,5 @@
 // Verifies OSC8 hyperlink formatting for TUI terminal output.
+import { getOsc8LinkAtColumn } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
 
@@ -106,20 +107,40 @@ describe("extractUrls", () => {
 });
 
 describe("addOsc8Hyperlinks", () => {
+  it.each([
+    { name: "BEL", params: "", terminator: "\x07" },
+    { name: "ST with link identity", params: "id=docs", terminator: "\x1b\\" },
+  ])("preserves authored spans alongside unlinked URLs ($name)", ({ params, terminator }) => {
+    const label = "https://example.test/label";
+    const target = "https://example.test/destination";
+    const bare = "https://example.test/bare";
+    const prefix = "See ";
+    const authored = `\x1b]8;${params};${target}${terminator}\x1b[32m${label}\x1b[0m\x1b]8;;${terminator}`;
+    const line = `${prefix}${authored} then ${bare}`;
+
+    const [rendered] = addOsc8Hyperlinks([line], [target, bare]);
+
+    expect(rendered).toContain(authored);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length)).toBe(target);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length)).toBeUndefined();
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length + " then ".length)).toBe(
+      bare,
+    );
+  });
+
   it("returns lines unchanged when no URLs", () => {
     const lines = ["Hello world", "No links here"];
     expect(addOsc8Hyperlinks(lines, [])).toEqual(lines);
   });
 
-  it("wraps a single-line URL with OSC 8", () => {
-    const url = "https://example.com";
-    const lines = [`Visit ${url} for info`];
-    const result = addOsc8Hyperlinks(lines, [url]);
-
-    expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
-    expect(result[0]).toContain(`\x1b]8;;\x07`);
-    // The URL text should be between open and close
-    expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
+  it.each([
+    { prefix: "Visit ", url: "https://example.com", suffix: " for info" },
+    { prefix: "🦞 東京 ", url: "https://example.com/😀/e\u0301", suffix: " 🧑‍💻" },
+    { prefix: "\ud800 ", url: "https://example.com/\udfff", suffix: " \udc00" },
+  ])("wraps a single-line URL with OSC 8 ($url)", ({ prefix, url, suffix }) => {
+    expect(addOsc8Hyperlinks([`${prefix}${url}${suffix}`], [url])).toEqual([
+      `${prefix}\x1b]8;;${url}\x07${url}\x1b]8;;\x07${suffix}`,
+    ]);
   });
 
   it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
@@ -173,6 +194,16 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;${fullUrl}\x07`);
     // Line 2: continuation should also be wrapped
     expect(result[1]).toContain(`\x1b]8;;${fullUrl}\x07`);
+  });
+
+  it("keeps a whole code point when a wrapped continuation matches only its high surrogate", () => {
+    const prefix = "https://example.com/";
+    const url = `${prefix}😀/path`;
+
+    expect(addOsc8Hyperlinks([prefix, "😁 next"], [url])).toEqual([
+      `\x1b]8;;${url}\x07${prefix}\x1b]8;;\x07`,
+      `\x1b]8;;${url}\x07😁\x1b]8;;\x07 next`,
+    ]);
   });
 
   it("wraps a URL with a bracketed IPv6 authority", () => {

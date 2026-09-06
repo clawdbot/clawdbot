@@ -2,7 +2,7 @@ import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/r
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { ServiceChildStart } from "./service-child-protocol.js";
 
-export function buildWindowsJobEnvironmentBlock(env: Record<string, string> | undefined): Buffer {
+export function buildWindowsJobEnvironmentBlock(env: Record<string, string>): Buffer {
   const merged = mergeProcessEnv([env], "win32");
   for (const [key, value] of Object.entries(merged)) {
     if (key.includes("\0") || value.includes("\0")) {

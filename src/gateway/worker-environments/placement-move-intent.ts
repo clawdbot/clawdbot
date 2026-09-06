@@ -16,7 +16,12 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import { normalizeEpoch, required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  isForceAbandonedWorkerPlacement,
+  normalizeEpoch,
+  required,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -420,14 +425,17 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         }
         const current = getRequired(db, sessionId);
         if (
-          current.state !== "active" ||
+          (current.state !== "active" &&
+            !(abandonSource && isForceAbandonedWorkerPlacement(current))) ||
           current.generation !== source.generation ||
           current.environmentId !== source.environmentId ||
           current.activeOwnerEpoch !== source.ownerEpoch
         ) {
           throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
         }
-        requireExactAttachedEnvironment(db, { sessionId, ...source });
+        if (current.state === "active") {
+          requireExactAttachedEnvironment(db, { sessionId, ...source });
+        }
         ensureWorkerPlacementMoveSchema(db);
         const timestamp = now();
         const row: MoveRow = {
@@ -446,16 +454,18 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           db,
           moveQuery(db).insertInto("worker_session_placement_moves").values(row),
         );
-        const placement = drainWorkerSessionPlacement(
-          db,
-          {
-            sessionId,
-            environmentId: source.environmentId,
-            ownerEpoch: source.ownerEpoch,
-            expectedGeneration: source.generation,
-          },
-          timestamp,
-        );
+        const placement =
+          current.state === "failed"
+            ? current
+            : drainWorkerSessionPlacement(
+                db,
+                {
+                  sessionId,
+                  ...source,
+                  expectedGeneration: source.generation,
+                },
+                timestamp,
+              );
         return { intent: fromRow(row), placement, joined: false };
       });
     },

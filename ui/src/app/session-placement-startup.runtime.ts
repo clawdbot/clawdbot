@@ -71,6 +71,7 @@ function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
   return {
     id: recovery.messageId,
     text: recovery.message,
+    ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
     attachments: entry.attachments,
     createdAt: entry.createdAt,
     sessionKey: recovery.sessionKey,
@@ -157,6 +158,7 @@ export default function createApplicationPlacementStartupRuntime(
         entry.owner.sessionKey,
         {
           text: recovery.message,
+          mentions: recovery.mentions,
           attachments: entry.attachments,
           createdAt: entry.createdAt,
         },
@@ -178,7 +180,11 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     error: string,
   ) => {
-    const paused = pauseSessionPlacementRecovery(recovery, error, entry.persistRecovery);
+    const { recovery: paused } = pauseSessionPlacementRecovery(
+      recovery,
+      error,
+      entry.persistRecovery,
+    );
     entry.work = { kind: "paused", recovery: paused };
     publish();
   };
@@ -386,7 +392,7 @@ export default function createApplicationPlacementStartupRuntime(
       if (!entry || !isCurrent(entry)) {
         return;
       }
-      const recovery = pauseSessionPlacementRecovery(
+      const { recovery } = pauseSessionPlacementRecovery(
         entry.work.recovery,
         error,
         entry.persistRecovery,

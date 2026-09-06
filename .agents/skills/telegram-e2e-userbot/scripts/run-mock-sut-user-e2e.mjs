@@ -560,6 +560,9 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
 
 export async function drainSutUpdates(sutToken, lease, fetchImpl = fetch) {
   const before = await telegram(sutToken, "getWebhookInfo", {}, lease, fetchImpl);
+  if (before.url) {
+    await telegram(sutToken, "deleteWebhook", { drop_pending_updates: true }, lease, fetchImpl);
+  }
   const updates = await telegram(
     sutToken,
     "getUpdates",
@@ -1131,7 +1134,14 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway
-        ? ["--import", "tsx", "src/entry.ts", "gateway", "--port", String(args.gatewayPort)]
+        ? [
+            "--import",
+            "./scripts/tsx.mjs",
+            "src/entry.ts",
+            "gateway",
+            "--port",
+            String(args.gatewayPort),
+          ]
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {

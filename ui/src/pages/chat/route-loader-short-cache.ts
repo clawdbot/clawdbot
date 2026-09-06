@@ -10,7 +10,12 @@ import {
   findUiSessionRow,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 
 export function sessionKeyUuid(sessionKey: string): string | null {
@@ -18,15 +23,38 @@ export function sessionKeyUuid(sessionKey: string): string | null {
   return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
 }
 
-function rowMatchesShortTarget(
-  row: GatewaySessionRow,
-  target: Extract<SessionPathTarget, { kind: "short" }>,
-): boolean {
-  const uuid = sessionKeyUuid(row.key);
-  if (!uuid || !uuid.startsWith(target.shortId.toLowerCase().replaceAll("-", ""))) {
-    return false;
+export function findLocalSessionReference(
+  rows: readonly GatewaySessionRow[],
+  target: SessionPathTarget,
+  mainKey = "main",
+): GatewaySessionRow | undefined {
+  const scoped = rows.filter(
+    (row) => parseAgentSessionKey(row.key)?.agentId === normalizeAgentId(target.agentId),
+  );
+  if (target.kind !== "short") {
+    const key =
+      target.kind === "main"
+        ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey })
+        : target.sessionKey;
+    const exact = scoped.find((row) => areUiSessionKeysEquivalent(row.key, key));
+    if (exact || target.kind === "main" || !target.slugCandidate) {
+      return exact;
+    }
   }
-  return !target.slugHint || controlUiSessionSlug(row.displayName) === target.slugHint;
+  const matches = scoped.filter((row) => {
+    const uuid = sessionKeyUuid(row.key);
+    return (
+      uuid &&
+      (target.kind !== "short" || uuid.startsWith(target.shortId.toLowerCase().replaceAll("-", "")))
+    );
+  });
+  const slug = target.kind === "short" ? target.slugHint : target.slugCandidate;
+  const slugMatches = slug
+    ? matches.filter((row) => controlUiSessionSlug(row.displayName) === slug)
+    : [];
+  // A stale name can narrow a short-id tie, but only slug matches resolve a slug-only URL.
+  const narrowed = slugMatches.length || target.kind !== "short" ? slugMatches : matches;
+  return narrowed.length === 1 ? narrowed[0] : undefined;
 }
 
 type CachedShortSession = {
@@ -52,7 +80,7 @@ export function findCachedShortSession(
       }
     };
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
-    if (carried && rowMatchesShortTarget(carried, target)) {
+    if (carried && findLocalSessionReference([carried], target)) {
       preserveLocationKeyForCanonicalReload();
       return { sessionKey: carried.key, row: carried };
     }

@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("sanitizePublicAgentCommandIngressOpts", () => {
-  it("removes a forged cron creator authority capability from plain-JavaScript ingress", () => {
+  it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
     const forgedCapability = {
       active: true,
       runId: "forged-run",
@@ -42,11 +42,15 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
     const opts = {
       prompt: "create an automation",
       cronCreatorAuthorityCapability: forgedCapability,
+      pinnedWidgetAuthoring: true,
+      assertSourceCurrent: () => {},
     } as unknown as AgentCommandIngressOpts;
 
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
       prompt: "create an automation",
       cronCreatorAuthorityCapability: undefined,
+      pinnedWidgetAuthoring: undefined,
+      assertSourceCurrent: undefined,
     });
   });
 });

@@ -120,21 +120,23 @@ export function renderSidebarServerDetails(
           <dt>${t("aboutPage.commit")}</dt>
           <dd class="sidebar-hover-card__metadata-value--mono sidebar-build-hover-card__commit">
             <span>${commit ?? unavailable}</span>
-            ${commit
-              ? html`<button
-                  type="button"
-                  class="sidebar-build-hover-card__copy"
-                  aria-label=${copyLabel}
-                  @click=${(event: Event) => void copyBuildCommit(event, commit, copyLabel)}
-                >
-                  <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true"
-                    >${icons.copy}</span
+            ${
+              commit
+                ? html`<button
+                    type="button"
+                    class="sidebar-build-hover-card__copy"
+                    aria-label=${copyLabel}
+                    @click=${(event: Event) => void copyBuildCommit(event, commit, copyLabel)}
                   >
-                  <span class="sidebar-build-hover-card__copy-done" aria-hidden="true"
-                    >${icons.check}</span
-                  >
-                </button>`
-              : null}
+                    <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true"
+                      >${icons.copy}</span
+                    >
+                    <span class="sidebar-build-hover-card__copy-done" aria-hidden="true"
+                      >${icons.check}</span
+                    >
+                  </button>`
+                : null
+            }
           </dd>
         </div>
         <div class="sidebar-hover-card__metadata-row">
@@ -144,10 +146,15 @@ export function renderSidebarServerDetails(
         <div class="sidebar-hover-card__metadata-row">
           <dt>${t("aboutPage.gateway")}</dt>
           <dd>
-            ${details.gatewayVersion
-              ? html`<span class="sidebar-build-hover-card__gateway-state" aria-hidden="true"></span
-                  ><span class="sr-only">${t("common.connected")}</span>`
-              : null}
+            ${
+              details.gatewayVersion
+                ? html`<span
+                      class="sidebar-build-hover-card__gateway-state"
+                      aria-hidden="true"
+                    ></span
+                    ><span class="sr-only">${t("common.connected")}</span>`
+                : null
+            }
             ${details.gatewayVersion ?? unavailable}
           </dd>
         </div>

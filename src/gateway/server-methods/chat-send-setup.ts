@@ -57,6 +57,27 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
+  if (normalizedRequest.value.mentions) {
+    const mentions = context.mentionInbox?.validateRecipients(
+      client,
+      preparedSession.value.entry
+        ? { sessionKey: preparedSession.value.sessionKey, agentId: preparedSession.value.agentId }
+        : { agentId: preparedSession.value.agentId },
+      normalizedRequest.value.mentions.map((mention) => mention.profileId),
+    );
+    if (!mentions?.ok) {
+      respond(
+        false,
+        undefined,
+        mentions?.error ??
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Human mentions are unavailable; reconnect and retry.",
+          ),
+      );
+      return undefined;
+    }
+  }
   const shouldAdmit = await runChatSendPreAdmission({
     request: normalizedRequest.value,
     session: preparedSession.value,

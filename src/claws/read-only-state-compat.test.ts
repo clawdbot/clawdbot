@@ -121,7 +121,7 @@ describe("read-only Claw state compatibility", () => {
     expect(plan.blockers).not.toContainEqual(
       expect.objectContaining({ code: "claw_identity_mismatch" }),
     );
-    await expect(readFile(fixture.databasePath)).resolves.toEqual(before);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 
   it("resumes a base-shape database without mutating it", async () => {
@@ -134,6 +134,6 @@ describe("read-only Claw state compatibility", () => {
 
     expect(state?.record).toMatchObject({ agentId: "legacy-worker", status: "complete" });
     expect(state?.record.bootstrap).toBeUndefined();
-    await expect(readFile(fixture.databasePath)).resolves.toEqual(before);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 });

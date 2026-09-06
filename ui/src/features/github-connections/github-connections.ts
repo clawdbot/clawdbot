@@ -24,6 +24,7 @@ import {
   renderGitHubConnectionSetup,
   renderGitHubDetails,
   renderGitHubHealth,
+  renderGitHubUnloadedStatus,
 } from "./github-identity-view.ts";
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
@@ -187,9 +188,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
         ? t("githubConnections.reconnectRequired")
         : connected
           ? t("githubConnections.connected")
-          : personal
-            ? t("githubConnections.disconnected")
-            : t("githubConnections.notLoaded");
+          : t("githubConnections.disconnected");
     return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
       ${renderSettingsSection(
         {
@@ -202,7 +201,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     ?disabled=${this.locked || (!this.profileId && !this.system.status)}
                     @click=${() => this.openSetup(this.profileId ? "personal" : "system")}
                   >
-                    ${t("agentTools.githubConnect")}
+                    ${t("githubConnections.manage")}
                   </button>
                   <button
                     class="btn btn--sm"
@@ -225,21 +224,29 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     "githubConnections.personalDescription",
                   )}`
                 : t("githubConnections.unboundDescription"),
-              control: html`${renderSettingsStatus({
-                kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
-                label: personalLabel,
-              })}
-              ${this.profileId && this.canRead
-                ? html`<button
-                    class="btn btn--sm"
-                    ?disabled=${this.locked}
-                    @click=${() => this.openSetup("personal")}
-                  >
-                    ${connected
-                      ? t("githubConnections.changeMine")
-                      : t("githubConnections.connectMine")}
-                  </button>`
-                : nothing}`,
+              control: html`${
+                this.profileId && !personal
+                  ? renderGitHubUnloadedStatus(this.personal)
+                  : renderSettingsStatus({
+                      kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
+                      label: personalLabel,
+                    })
+              }
+              ${
+                this.profileId && this.canRead && personal
+                  ? html`<button
+                      class="btn btn--sm"
+                      ?disabled=${this.locked}
+                      @click=${() => this.openSetup("personal")}
+                    >
+                      ${
+                        connected
+                          ? t("githubConnections.changeMine")
+                          : t("githubConnections.connectMine")
+                      }
+                    </button>`
+                  : nothing
+              }`,
             })}
           </div>
           <div data-github-connection="system">
@@ -248,15 +255,20 @@ export class GitHubConnections extends OpenClawLightDomElement {
               description: html`${system?.account ? `@${system.account.login} · ` : ""}${t(
                 "githubConnections.systemDescription",
               )}`,
-              control: html`${renderGitHubHealth(system)}${this.canAdmin
-                ? html`<button
-                    class="btn btn--sm"
-                    ?disabled=${this.locked || !this.system.status}
-                    @click=${() => this.openSetup("system")}
-                  >
-                    ${t("githubConnections.changeSystem")}
-                  </button>`
-                : renderSettingsValue(t("githubConnections.adminManaged"))}`,
+              control: html`${renderGitHubHealth(system, {
+                loading: this.system.loading || this.personal.loading,
+                error: this.system.error ?? this.personal.error,
+              })}${
+                this.canAdmin
+                  ? html`<button
+                      class="btn btn--sm"
+                      ?disabled=${this.locked || !this.system.status}
+                      @click=${() => this.openSetup("system")}
+                    >
+                      ${t("githubConnections.changeSystem")}
+                    </button>`
+                  : renderSettingsValue(t("githubConnections.adminManaged"))
+              }`,
             })}
           </div>
           ${renderGitHubConnectionError(
@@ -272,81 +284,89 @@ export class GitHubConnections extends OpenClawLightDomElement {
               ${t("common.retry")}
             </button>`,
           )}
-          ${showSetup
-            ? html`<div class="settings-subrows" data-github-setup>
-                ${renderSettingsRow({
-                  title: t("githubConnections.purpose"),
-                  control:
-                    this.profileId && this.canAdmin && this.system.status
-                      ? renderSettingsSegmented({
-                          value: this.purpose,
-                          options: [
-                            { value: "personal", label: t("githubConnections.forMe") },
-                            { value: "system", label: t("githubConnections.forSystem") },
-                          ],
-                          disabled: this.locked,
-                          ariaLabel: t("githubConnections.purpose"),
-                          onChange: (purpose) => this.openSetup(purpose),
+          ${
+            showSetup
+              ? html`<div class="settings-subrows" data-github-setup>
+                  ${renderSettingsRow({
+                    title: t("githubConnections.purpose"),
+                    control:
+                      this.profileId && this.canAdmin && this.system.status
+                        ? renderSettingsSegmented({
+                            value: this.purpose,
+                            options: [
+                              { value: "personal", label: t("githubConnections.forMe") },
+                              { value: "system", label: t("githubConnections.forSystem") },
+                            ],
+                            disabled: this.locked,
+                            ariaLabel: t("githubConnections.purpose"),
+                            onChange: (purpose) => this.openSetup(purpose),
+                          })
+                        : renderSettingsValue(
+                            this.purpose === "personal"
+                              ? t("githubConnections.forMe")
+                              : t("githubConnections.forSystem"),
+                          ),
+                  })}
+                  ${renderGitHubConnectionSetup(active)}
+                  ${
+                    !this.locked
+                      ? renderSettingsRow({
+                          title: t("githubConnections.purposeHint"),
+                          control: html`<button
+                            class="btn btn--sm"
+                            @click=${() => {
+                              this.setupOpen = false;
+                              active.hidePatFallback();
+                            }}
+                          >
+                            ${t("common.close")}
+                          </button>`,
                         })
-                      : renderSettingsValue(
-                          this.purpose === "personal"
-                            ? t("githubConnections.forMe")
-                            : t("githubConnections.forSystem"),
-                        ),
-                })}
-                ${renderGitHubConnectionSetup(active)}
-                ${!this.locked
-                  ? renderSettingsRow({
-                      title: t("githubConnections.purposeHint"),
-                      control: html`<button
-                        class="btn btn--sm"
-                        @click=${() => {
-                          this.setupOpen = false;
-                          active.hidePatFallback();
-                        }}
-                      >
-                        ${t("common.close")}
-                      </button>`,
-                    })
-                  : nothing}
-              </div>`
-            : nothing}
+                      : nothing
+                  }
+                </div>`
+              : nothing
+          }
           <details class="settings-row settings-row--stacked">
             <summary class="settings-row__title">${t("githubConnections.usage")}</summary>
             <div class="settings-row__desc">${t("githubConnections.usageDescription")}</div>
             ${renderGitHubDetails(system)}
           </details>
-          ${this.canAdmin && this.system.status?.selected.configured
-            ? renderSettingsRow({
-                title: t("agentTools.githubUseNativeNewRuns"),
-                description: t("agentTools.githubSystemMutationHint"),
+          ${
+            this.canAdmin && this.system.status?.selected.configured
+              ? renderSettingsRow({
+                  title: t("agentTools.githubUseNativeNewRuns"),
+                  description: t("agentTools.githubSystemMutationHint"),
+                  control: html`<button
+                    class="btn btn--sm"
+                    ?disabled=${this.locked}
+                    @click=${() => void this.system.inherit()}
+                  >
+                    ${t("agentTools.githubUseNativeNewRuns")}
+                  </button>`,
+                })
+              : nothing
+          }
+        `,
+      )}
+      ${
+        this.profileId && this.canRead && personal && personal.state !== "disconnected"
+          ? renderSettingsSection(
+              { danger: true },
+              renderSettingsRow({
+                title: t("githubConnections.disconnectMine"),
+                description: t("githubConnections.disconnectDescription"),
                 control: html`<button
                   class="btn btn--sm"
                   ?disabled=${this.locked}
-                  @click=${() => void this.system.inherit()}
+                  @click=${() => void this.personal.disconnect()}
                 >
-                  ${t("agentTools.githubUseNativeNewRuns")}
+                  ${t("githubConnections.disconnectMine")}
                 </button>`,
-              })
-            : nothing}
-        `,
-      )}
-      ${this.profileId && this.canRead && personal && personal.state !== "disconnected"
-        ? renderSettingsSection(
-            { danger: true },
-            renderSettingsRow({
-              title: t("githubConnections.disconnectMine"),
-              description: t("githubConnections.disconnectDescription"),
-              control: html`<button
-                class="btn btn--sm"
-                ?disabled=${this.locked}
-                @click=${() => void this.personal.disconnect()}
-              >
-                ${t("githubConnections.disconnectMine")}
-              </button>`,
-            }),
-          )
-        : nothing}
+              }),
+            )
+          : nothing
+      }
     </div>`;
   }
 }

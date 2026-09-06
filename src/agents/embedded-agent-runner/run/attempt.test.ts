@@ -17,7 +17,7 @@ import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
+  resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl,
 } from "../stream-resolution.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
@@ -40,10 +40,10 @@ const llmRuntime = {
   streamSimple,
 } as LlmRuntime;
 
-function resolveEmbeddedAgentStreamFn(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamFnImpl>[0], "llmRuntime">,
+function resolveEmbeddedAgentStream(
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime">,
 ) {
-  return resolveEmbeddedAgentStreamFnImpl({ ...params, llmRuntime });
+  return resolveEmbeddedAgentStreamImpl({ ...params, llmRuntime });
 }
 
 type FakeWrappedStream = {
@@ -487,7 +487,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 });
 
-describe("resolveEmbeddedAgentStreamFn", () => {
+describe("resolveEmbeddedAgentStream", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
@@ -504,7 +504,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("injects authStorage api keys into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -533,7 +533,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
     const providerStreamFn = vi.fn(async (_model, context) => context);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -557,7 +557,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
@@ -572,7 +572,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("keeps explicit custom currentStreamFn values unchanged", () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {
@@ -587,7 +587,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("routes runtime-auth custom currentStreamFn values through boundary-aware transports", async () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {
@@ -3306,58 +3306,63 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
-  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
-    resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
-      });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: {
-          sessionId: "session-123",
-          config: {} as OpenClawConfig,
-          skillsSnapshot: undefined,
-          provider: "openai",
-          modelId: "gpt-5.4",
-          thinkLevel: "off",
-          reasoningLevel: "on",
-          extraSystemPrompt: "extra",
-          ownerNumbers: ["+15555550123"],
-        },
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        activeAgentId: "main",
-      });
-
-      const activeProcessSessions = legacy.activeProcessSessions as
-        | Array<{ sessionId?: string; command?: string; pid?: number }>
-        | undefined;
-      expect(activeProcessSessions).toHaveLength(1);
-      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-      expect(activeSession.sessionId).toBe("sess-session-id");
-      expect(activeSession.command).toBe("sleep 600");
-      expect(activeSession.pid).toBe(1234);
-      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-        false,
-      );
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
+  it.each([undefined, "agent:main:execution"])(
+    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
+    (sessionKey) => {
       resetProcessRegistryForTests();
-    }
-  });
+      try {
+        const active = createProcessSessionFixture({
+          id: "sess-session-id",
+          command: "sleep 600",
+          backgrounded: true,
+          pid: 1234,
+        });
+        active.scopeKey = sessionKey ?? "session-123";
+        addSession(active);
+        const other = createProcessSessionFixture({
+          id: "sess-other",
+          command: "sleep 600",
+          backgrounded: true,
+        });
+        other.scopeKey = "agent:main";
+        addSession(other);
+
+        const legacy = buildAfterTurnRuntimeContext({
+          attempt: {
+            sessionId: "session-123",
+            sessionKey,
+            sandboxSessionKey: "agent:main",
+            config: {} as OpenClawConfig,
+            skillsSnapshot: undefined,
+            provider: "openai",
+            modelId: "gpt-5.4",
+            thinkLevel: "off",
+            reasoningLevel: "on",
+            extraSystemPrompt: "extra",
+            ownerNumbers: ["+15555550123"],
+          },
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          activeAgentId: "main",
+        });
+
+        const activeProcessSessions = legacy.activeProcessSessions as
+          | Array<{ sessionId?: string; command?: string; pid?: number }>
+          | undefined;
+        expect(activeProcessSessions).toHaveLength(1);
+        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+        expect(activeSession.sessionId).toBe("sess-session-id");
+        expect(activeSession.command).toBe("sleep 600");
+        expect(activeSession.pid).toBe(1234);
+        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+          false,
+        );
+        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+      } finally {
+        resetProcessRegistryForTests();
+      }
+    },
+  );
 
   it("uses primary model when compaction.model is not set", () => {
     const runtimeAuthPlan = {

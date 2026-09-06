@@ -8,7 +8,9 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -30,7 +32,6 @@ import {
 } from "./missing-configured-plugin-install.install.js";
 import {
   forceNpmInstallRecordRepair,
-  isInstalledRecordMissingOnDisk,
   isTrustedOfficialInstallRecordForCandidate,
   installPathsEqual,
   recordMatchesBundledPackage,
@@ -183,9 +184,10 @@ async function repairMissingPluginInstallsWithLease(
     // A later failed attempt does not resolve an earlier consent refusal.
     let outcome = failedPlugins.get(pluginId);
     const retainedEnabledInstall =
-      code === PLUGIN_CAPABILITY_CONSENT_REQUIRED &&
+      (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED ||
+        code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE) &&
       knownIds.has(pluginId) &&
-      !isInstalledRecordMissingOnDisk(records[pluginId], env) &&
+      !isPayloadMissing(env, records[pluginId]?.installPath) &&
       !installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) &&
       !configuredPluginIdsWithStaleDescriptors.has(pluginId) &&
       resolveEffectiveEnableState({
@@ -194,8 +196,7 @@ async function repairMissingPluginInstallsWithLease(
         config: normalizedPluginConfig,
         rootConfig: params.cfg,
       }).enabled;
-    // Consent refusal rolls back the replacement; a retained enabled artifact is
-    // still subject to the caller's payload smoke check, not a failed activation.
+    // Deferred replacements leave the installed artifact for the caller's payload smoke check.
     if (retainedEnabledInstall) {
       notices.push(
         `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
@@ -239,7 +240,7 @@ async function repairMissingPluginInstallsWithLease(
     for (const pluginId of updateDeferredPluginIds) {
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
-      if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
+      if (!record || !isPayloadMissing(env, record.installPath)) {
         continue;
       }
       const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
@@ -255,7 +256,7 @@ async function repairMissingPluginInstallsWithLease(
       Object.hasOwn(nextRecords, pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
-        (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))) ||
+        (!knownIds.has(pluginId) || isPayloadMissing(env, nextRecords[pluginId]?.installPath))) ||
         configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
         installedPluginIdsWithRepairablePackages.has(pluginId)),
   );
@@ -265,7 +266,14 @@ async function repairMissingPluginInstallsWithLease(
     // Dropping resolved fields forces an installer attempt, not a record mutation.
     const repairRecords = { ...nextRecords };
     for (const [pluginId, record] of missingRecordedPlugins) {
-      repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
+      if (
+        !installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
+        installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) ||
+        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
+        isPayloadMissing(env, record.installPath)
+      ) {
+        repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
+      }
     }
     const updateResult = await updateNpmInstalledPlugins({
       config: {
@@ -294,7 +302,13 @@ async function repairMissingPluginInstallsWithLease(
       beforePersistentEffect: params.beforePersistentEffect,
     });
     for (const outcome of updateResult.outcomes) {
-      if (outcome.status === "updated" || outcome.status === "unchanged") {
+      if (
+        outcome.status === "unchanged" &&
+        updateResult.config.plugins?.installs?.[outcome.pluginId] ===
+          repairRecords[outcome.pluginId]
+      ) {
+        notices.push(outcome.message);
+      } else if (outcome.status === "updated" || outcome.status === "unchanged") {
         repairedPluginIds.add(outcome.pluginId);
         failedPlugins.delete(outcome.pluginId);
         changes.push(
@@ -328,7 +342,7 @@ async function repairMissingPluginInstallsWithLease(
         (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
         (hasRecord &&
           !bundledPluginsById.has(pluginId) &&
-          isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))
+          isPayloadMissing(env, nextRecords[pluginId]?.installPath))
       );
     }),
   );
@@ -361,7 +375,7 @@ async function repairMissingPluginInstallsWithLease(
     }
     const hasRecord = Object.hasOwn(nextRecords, candidate.pluginId);
     const hasUsableRecord =
-      hasRecord && !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
+      hasRecord && !isPayloadMissing(env, nextRecords[candidate.pluginId]?.installPath);
     if (
       !shouldReplaceBrokenOfficialInstall &&
       (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
@@ -385,7 +399,10 @@ async function repairMissingPluginInstallsWithLease(
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
-      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
+      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId) &&
+      !installedPluginIdsWithRepairablePackageDiagnostics.has(candidate.pluginId) &&
+      !configuredPluginIdsWithStaleDescriptors.has(candidate.pluginId) &&
+      hasUsableRecord
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
@@ -412,7 +429,11 @@ async function repairMissingPluginInstallsWithLease(
     nextRecords = installed.records;
     changes.push(...installed.changes);
     notices.push(...installed.notices);
-    if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
+    if (
+      !installed.failedPluginId &&
+      installed.records !== previousRecords &&
+      installed.records[candidate.pluginId]
+    ) {
       repairedPluginIds.add(candidate.pluginId);
       failedPlugins.delete(candidate.pluginId);
     }

@@ -39,6 +39,10 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
@@ -47,6 +51,9 @@ import {
   type CredentialReloadHarnessOptions,
 } from "./server-secrets-reload.test-support.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
+
+const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
+let fixture: OpenClawTestState | undefined;
 
 function publishSharedGatewayGeneration(
   state: { current: string | undefined; required: string | undefined | null },
@@ -74,7 +81,6 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     restartGmailWatcher: overrides?.restartGmailWatcher ?? false,
     restartCron: overrides?.restartCron ?? false,
     restartHeartbeat: overrides?.restartHeartbeat ?? false,
-    restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
     reloadPlugins: overrides?.reloadPlugins ?? false,
     restartChannels: overrides?.restartChannels ?? new Set(),
     restartChannelAccounts: overrides?.restartChannelAccounts,
@@ -240,6 +246,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
   });
+  auxiliaries.push(gatewayAux);
   const { extraHandlers } = gatewayAux;
 
   return {
@@ -309,7 +316,11 @@ function createCredentialReloadHarness(options: CredentialReloadHarnessOptions =
 // the leaked env vars route the secrets.reload skip-mode branch and prevent
 // the channel restart loop from firing. Reset them before every test so this
 // suite is independent of worker import order.
-beforeEach(() => {
+beforeEach(async () => {
+  if (fixture) {
+    throw new Error("Previous auxiliary owner cleanup did not finish");
+  }
+  fixture = await createOpenClawTestState({ label: "gateway-aux-secrets-reload" });
   // These channel-only snapshots are not model fixtures; the real publication boundary is
   // exercised in server-secrets-reload.model-runtime.test.ts.
   vi.spyOn(modelRuntimeReload, "refreshModelRuntimeAfterHotReload").mockResolvedValue(undefined);
@@ -322,10 +333,16 @@ beforeEach(() => {
   secretStoreMocks.writeEntry.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const aux of auxiliaries) {
+    await aux.stopOperatorInteractions();
+  }
+  auxiliaries.length = 0;
   vi.restoreAllMocks();
   resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
+  await fixture?.cleanup();
+  fixture = undefined;
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });

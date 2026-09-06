@@ -274,6 +274,7 @@ function collectQaSuiteGatewayRuntimeOptions(
 function collectQaSuiteTransportPolicy(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let directMessageOnly = false;
   let requireGroupMention = false;
   let topLevelReplies = false;
   let senderAllowlist: readonly string[] | undefined;
@@ -282,6 +283,7 @@ function collectQaSuiteTransportPolicy(
       continue;
     }
     const policy = scenario.execution.transportPolicy;
+    directMessageOnly ||= policy?.directMessageOnly === true;
     requireGroupMention ||= policy?.requireGroupMention === true;
     topLevelReplies ||= policy?.topLevelReplies === true;
     if (!policy?.senderAllowlist) {
@@ -295,8 +297,9 @@ function collectQaSuiteTransportPolicy(
     }
     senderAllowlist = policy.senderAllowlist;
   }
-  return requireGroupMention || topLevelReplies || senderAllowlist
+  return directMessageOnly || requireGroupMention || topLevelReplies || senderAllowlist
     ? {
+        ...(directMessageOnly ? { directMessageOnly: true as const } : {}),
         ...(requireGroupMention ? { requireGroupMention: true as const } : {}),
         ...(senderAllowlist ? { senderAllowlist } : {}),
         ...(topLevelReplies ? { topLevelReplies: true as const } : {}),

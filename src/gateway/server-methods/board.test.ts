@@ -8,9 +8,12 @@ import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
 
 const reviewWidgetApproval = vi.hoisted(() => vi.fn());
 const readSessionEntry = vi.hoisted(() => vi.fn());
+const sessionKey = "agent:main:session";
+const boardBroadcastScope = { sessionKeys: [sessionKey], agentId: "main" };
 
 vi.mock("../../agents/exec-auto-reviewer.js", () => ({
   createModelExecAutoReviewer: vi.fn(() => reviewWidgetApproval),
@@ -250,7 +253,8 @@ describe("board gateway methods", () => {
   });
 
   it("applies updates and broadcasts board.changed", async () => {
-    const { invoke, broadcast } = createHarness();
+    const { invoke, broadcast, context } = createHarness();
+    const before = readSessionsMutationVersion(context);
     const response = await invoke("board.update", {
       sessionKey: "session",
       ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
@@ -259,10 +263,12 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({ sessionKey: "agent:main:session", revision: 1 }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1 },
+      boardBroadcastScope,
+    );
+    expect(readSessionsMutationVersion(context)).toBe(before + 1);
   });
 
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {
@@ -285,11 +291,11 @@ describe("board gateway methods", () => {
         widgets: [expect.objectContaining({ declaredSummary: ["Tool access: weather.refresh"] })],
       }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-      widget: "weather",
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1, widget: "weather" },
+      boardBroadcastScope,
+    );
 
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const grant = await invoke("board.widget.grant", {
@@ -306,10 +312,11 @@ describe("board gateway methods", () => {
         widgets: [expect.objectContaining({ grantState: "granted" })],
       }),
     );
-    expect(broadcast).toHaveBeenLastCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 2,
-    });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      "board.changed",
+      { sessionKey, revision: 2 },
+      boardBroadcastScope,
+    );
   });
 
   it.each(boardWidgetContentPermissionCases)(
@@ -392,11 +399,11 @@ describe("board gateway methods", () => {
         );
       }
       expect(broadcast).toHaveBeenCalledOnce();
-      expect(broadcast).toHaveBeenCalledWith("board.changed", {
-        sessionKey: "agent:main:session",
-        revision: grantState === "pending" ? 1 : 2,
-        widget: "weather",
-      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey, revision: grantState === "pending" ? 1 : 2, widget: "weather" },
+        boardBroadcastScope,
+      );
     },
   );
 
@@ -840,11 +847,11 @@ describe("board gateway methods", () => {
       true,
       expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
     );
-    expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "agent:main:session",
-      revision: 1,
-      widget: "canvas-widget",
-    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "board.changed",
+      { sessionKey, revision: 1, widget: "canvas-widget" },
+      boardBroadcastScope,
+    );
   });
 
   it("installs the trusted bridge before arbitrary complete HTML", async () => {

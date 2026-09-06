@@ -43,7 +43,10 @@ import {
 } from "./io.js";
 import { rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import {
+  ConfigMutationConflictError,
+  GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
+} from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
@@ -306,14 +309,31 @@ async function readConfigSnapshotForMutation(params: {
   return await readConfigFileSnapshotForWrite(options);
 }
 
+function mergeConfigMutationWriteOptions(
+  prepared: ConfigWriteOptions,
+  caller?: ConfigWriteOptions,
+): ConfigWriteOptions {
+  const merged = copyRuntimeConfigWriteApplication(caller, { ...prepared, ...caller });
+  const capturedGuard = prepared.assertConfigPathForWrite;
+  const callerGuard = caller?.assertConfigPathForWrite;
+  // Caller authority narrows the captured destination; it must never replace
+  // that ownership check through retries and post-write validation.
+  if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
+    merged.assertConfigPathForWrite = () => {
+      capturedGuard();
+      callerGuard();
+    };
+  } else if (capturedGuard) {
+    merged.assertConfigPathForWrite = capturedGuard;
+  }
+  return merged;
+}
+
 function createConfigMutationOwnership(
   prepared: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>,
   writeOptions?: ConfigWriteOptions,
 ): ConfigMutationOwnership {
-  const mergedWriteOptions = {
-    ...prepared.writeOptions,
-    ...writeOptions,
-  };
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(prepared.writeOptions, writeOptions);
   return {
     initialized: true,
     expectedConfigPath: mergedWriteOptions.expectedConfigPath ?? prepared.snapshot.path,
@@ -698,6 +718,10 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
     return null;
   }
+  if (params.writeOptions?.beforeCommit) {
+    // The pinned include writer cannot revalidate an async authority at publication.
+    throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
+  }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
   const writeEnv = params.io?.env ?? process.env;
@@ -1012,10 +1036,7 @@ export async function replaceConfigFile(params: {
         await replaceConfigFileUnlocked({
           ...params,
           snapshot: prepared.snapshot,
-          writeOptions: copyRuntimeConfigWriteApplication(params.writeOptions, {
-            ...prepared.writeOptions,
-            ...params.writeOptions,
-          }),
+          writeOptions: mergeConfigMutationWriteOptions(prepared.writeOptions, params.writeOptions),
         }),
     );
   }
@@ -1040,10 +1061,7 @@ async function replaceConfigFileUnlocked(params: {
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
-  const mergedWriteOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
-    ...writeOptions,
-    ...params.writeOptions,
-  });
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
@@ -1141,13 +1159,7 @@ async function transformConfigFileAttempt<T>(
       io: params.io,
       writeOptions: params.writeOptions,
     }));
-  let mergedWriteOptions: ConfigWriteOptions = copyRuntimeConfigWriteApplication(
-    params.writeOptions,
-    {
-      ...writeOptions,
-      ...params.writeOptions,
-    },
-  );
+  let mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   if (ownership) {
     if (!ownership.initialized) {
       ownership.initialized = true;

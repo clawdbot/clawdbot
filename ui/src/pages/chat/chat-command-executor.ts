@@ -832,7 +832,7 @@ async function executeSteer(
     );
     const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
     if (ackStatus === "started" || ackStatus === "in_flight") {
@@ -873,7 +873,7 @@ async function executeRedirect(
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {

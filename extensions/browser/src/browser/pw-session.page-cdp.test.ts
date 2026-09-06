@@ -13,12 +13,15 @@ describe("pw-session page-scoped CDP client", () => {
   });
 
   it("uses Playwright page sessions", async () => {
-    const sessionSend = vi.fn(async () => ({ ok: true }));
     const sessionDetach = vi.fn(async () => {});
-    const newCDPSession = vi.fn(async () => ({
-      send: sessionSend,
+    const session = {
+      send: vi.fn(async function (this: unknown) {
+        expect(this).toBe(session);
+        return { ok: true };
+      }),
       detach: sessionDetach,
-    }));
+    };
+    const newCDPSession = vi.fn(async () => session);
     const page = {
       context: () => ({
         newCDPSession,
@@ -35,7 +38,7 @@ describe("pw-session page-scoped CDP client", () => {
     });
 
     expect(newCDPSession).toHaveBeenCalledWith(page);
-    expect(sessionSend).toHaveBeenCalledWith("Emulation.setLocaleOverride", { locale: "en-US" });
+    expect(session.send).toHaveBeenCalledWith("Emulation.setLocaleOverride", { locale: "en-US" });
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 

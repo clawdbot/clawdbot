@@ -6,6 +6,7 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  disposeAcpSessionManagerInstance,
   expectMockCallFields,
   expectNoMockCallFields,
   expectRecordFields,
@@ -668,77 +669,100 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
-  it("re-ensures runtime handles after cwd runtime option updates", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:session-cwd-update";
-    let currentEntry = {
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta(),
-    };
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
-    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
+  it.each(["next turn", "shutdown"])(
+    "closes the previous runtime after cwd updates before %s",
+    async (operation) => {
+      const runtimeState = createRuntime();
+      const lifecycle: string[] = [];
+      runtimeState.ensureSession.mockImplementation(async (input) => {
+        lifecycle.push(`ensure:${input.cwd ?? "default"}`);
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: `runtime:${input.cwd ?? "default"}`,
+          cwd: input.cwd,
+        };
+      });
+      runtimeState.close.mockImplementation(async ({ handle }) => {
+        lifecycle.push(`close:${handle.cwd ?? "default"}`);
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = "agent:codex:acp:session-cwd-update";
+      let currentEntry = {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
       };
-      const nextMeta = params.mutate(currentEntry.acp, currentEntry);
-      if (nextMeta === null) {
-        return null;
-      }
-      currentEntry = {
-        ...currentEntry,
-        acp: nextMeta ?? currentEntry.acp,
-      };
-      return currentEntry;
-    });
+      hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
+      hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        const nextMeta = params.mutate(currentEntry.acp, currentEntry);
+        if (nextMeta === null) {
+          return null;
+        }
+        currentEntry = {
+          ...currentEntry,
+          acp: nextMeta ?? currentEntry.acp,
+        };
+        return currentEntry;
+      });
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    await expect(
-      manager.updateSessionRuntimeOptions({
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
-        patch: { cwd: "/workspace/next" },
-      }),
-    ).resolves.toEqual({
-      cwd: "/workspace/next",
-    });
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
 
-    expect(currentEntry.acp.runtimeOptions).toEqual({
-      cwd: "/workspace/next",
-    });
-    expect(currentEntry.acp.cwd).toBe("/workspace/next");
+      await expect(
+        manager.updateSessionRuntimeOptions({
+          cfg: baseCfg,
+          sessionKey,
+          patch: { cwd: "/workspace/next" },
+        }),
+      ).resolves.toEqual({
+        cwd: "/workspace/next",
+      });
 
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
+      expect(currentEntry.acp.runtimeOptions).toEqual({
+        cwd: "/workspace/next",
+      });
+      expect(currentEntry.acp.cwd).toBe("/workspace/next");
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.ensureSession, 1), {
-      sessionKey,
-      cwd: "/workspace/next",
-    });
-  });
+      if (operation === "shutdown") {
+        await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
+        expect(lifecycle).toEqual(["ensure:default", "close:default"]);
+        return;
+      }
+
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(runtimeState.ensureSession, 1), {
+        sessionKey,
+        cwd: "/workspace/next",
+      });
+      expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
+    },
+  );
 
   it("returns unsupported-control error when backend does not support set_config_option", async () => {
     const runtimeState = createRuntime();

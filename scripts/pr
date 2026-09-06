@@ -147,9 +147,12 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
           anchor_extraction_valid=0
+          # BSD tar can stop at the end marker before Git finishes writing padding,
+          # causing SIGPIPE under pipefail. Require producer completion before reading.
           if git -C "$anchor_git_root" archive "$anchor_commit" -- \
-            "${anchor_components[@]}" 2>/dev/null |
-            tar -x -C "$anchor_exec_dir" 2>/dev/null; then
+            "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" 2>/dev/null &&
+            tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir" 2>/dev/null; then
+            rm "$anchor_exec_dir/anchor.tar"
             anchor_extraction_valid=1
             anchor_verified_entries=0
             # Verify every extracted file byte-matches its anchor blob so an
@@ -302,7 +305,7 @@ Usage:
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
-    Empty files are valid. Existing source/server co-authors are always retained; queue merges reject it.
+    Empty files are valid. Explicit/source co-authors and preview credit backed by PR commits are retained; known machine credit is excluded. Queue merges reject it.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
   scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.

@@ -44,7 +44,7 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
       } else {
         await vi.advanceTimersByTimeAsync(1);
       }
-      await expect(closing).resolves.toBe(mode === "drained");
+      await expect(closing).resolves.toEqual({ exited: mode === "drained", cleanup: "uncertain" });
       expect(diagnostic).toEqual(["last startup diagnostic"]);
       expect(hasCodexAppServerNaturalExit(child)).toBe(mode === "drained");
       expect(child.stdout.destroyed).toBe(true);

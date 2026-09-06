@@ -20,10 +20,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  DEFAULT_POSIX_TMP_ROOT,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
+import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -42,18 +39,8 @@ import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
-function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
-}
-
-function resolveDefaultLogFile(defaultLogDir: string): string {
-  return canUseNodeFs()
-    ? path.join(defaultLogDir, "openclaw.log")
-    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
-}
-
-export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
+export const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
+export const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -82,7 +69,6 @@ const loadLoggerConfigDefault: LoggerConfigLoader = () => readLoggingConfig();
 let loadLoggerConfig: LoggerConfigLoader = loadLoggerConfigDefault;
 
 function invalidateLoggerSettings(): void {
-  loggingState.generation += 1;
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
@@ -521,7 +507,7 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR });
+  return resolveDefaultRollingLogFile();
 }
 
 function resolveSettings(): ResolvedRuntimeSettings {
@@ -540,7 +526,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR }),
+      file: resolveDefaultRollingLogFile(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
       rolling: true,
     };
@@ -563,12 +549,15 @@ setLoggerFileTargetResolver(() => {
   return { file, rolling };
 });
 
-export function isFileLogLevelEnabled(level: LogLevel): boolean {
+function getRuntimeSettings(): ResolvedRuntimeSettings {
   const settings =
     (loggingState.cachedSettings as ResolvedRuntimeSettings | null) ?? resolveSettings();
-  if (!loggingState.cachedSettings) {
-    loggingState.cachedSettings = settings;
-  }
+  loggingState.cachedSettings = settings;
+  return settings;
+}
+
+export function isFileLogLevelEnabled(level: LogLevel): boolean {
+  const settings = getRuntimeSettings();
   if (level === "silent") {
     return false;
   }
@@ -578,38 +567,59 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
-function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
-  const silent = settings.level === "silent";
-  const logger = new TsLogger<LogObj>({
+type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
+
+function inheritLogLevel(logger: TsLogger<LogObj>, getLevel: () => number): void {
+  let resolveLevel = getLevel;
+  Object.defineProperty(logger.settings, "minLevel", {
+    configurable: true,
+    enumerable: true,
+    get: () => resolveLevel(),
+    set: (level: number) => {
+      resolveLevel = () => level;
+    },
+  });
+}
+
+class RuntimeLogger extends TsLogger<LogObj> {
+  override getSubLogger(settings?: SubLoggerSettings, logObj?: LogObj): TsLogger<LogObj> {
+    const minLevel = settings?.minLevel ?? this.settings.minLevel;
+    // tslog rejects Infinity at construction, but its runtime filter supports silent.
+    const child = super.getSubLogger(
+      { ...settings, minLevel: minLevel === Infinity ? levelToMinLevel("fatal") : minLevel },
+      logObj,
+    );
+    // tslog copies settings; retain the parent's policy unless the caller supplies its own.
+    // Assigning settings.minLevel later still replaces that inherited policy.
+    if (settings?.minLevel == null) {
+      inheritLogLevel(child, () => this.settings.minLevel);
+    } else if (minLevel === Infinity) {
+      child.settings.minLevel = minLevel;
+    }
+    return child;
+  }
+}
+
+function buildLogger(): TsLogger<LogObj> {
+  const logger = new RuntimeLogger({
     name: "openclaw",
     maskValuesOfKeys: [],
-    // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
-    minLevel: levelToMinLevel(silent ? "fatal" : settings.level),
+    minLevel: levelToMinLevel("fatal"),
     type: "hidden", // no ansi formatting
   });
-
-  // Restore the silent threshold after constructor validation. Keep the diagnostic transport
-  // attached exactly as before; tslog filters every level before transport dispatch.
-  if (silent) {
-    logger.settings.minLevel = levelToMinLevel("silent");
-    attachDiagnosticEventTransport(logger);
-    return logger;
-  }
-
-  const rollingFile = settings.rolling;
-  let activeFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
-  fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-  // Clean up stale rolling logs when using a dated log filename.
-  if (rollingFile) {
-    pruneOldRollingLogs(path.dirname(activeFile));
-  }
+  inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
+  let activeFile: string | undefined;
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const nextActiveFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
+      const settings = getRuntimeSettings();
+      if (settings.level === "silent") {
+        return;
+      }
+      const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
       if (nextActiveFile !== activeFile) {
         activeFile = nextActiveFile;
         fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-        if (rollingFile) {
+        if (settings.rolling) {
           pruneOldRollingLogs(path.dirname(activeFile));
         }
       }
@@ -649,33 +659,13 @@ function resolveMaxLogFileBytes(raw: unknown): number {
 
 export function getLogger(): TsLogger<LogObj> {
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
-  const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
-  if (cachedLogger && cachedSettings) {
+  if (cachedLogger) {
     return cachedLogger;
   }
-  const settings = cachedSettings ?? resolveSettings();
-  const logger = buildLogger(settings);
+  getRuntimeSettings();
+  const logger = buildLogger();
   loggingState.cachedLogger = logger;
-  loggingState.cachedSettings = settings;
-  return loggingState.cachedLogger as TsLogger<LogObj>;
-}
-
-type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
-
-function getSubLoggerWithResolvedMinLevel(
-  logger: TsLogger<LogObj>,
-  settings: SubLoggerSettings,
-  minLevel: number,
-): TsLogger<LogObj> {
-  const silent = minLevel === levelToMinLevel("silent");
-  const child = logger.getSubLogger({
-    ...settings,
-    minLevel: silent ? levelToMinLevel("fatal") : minLevel,
-  });
-  if (silent) {
-    child.settings.minLevel = minLevel;
-  }
-  return child;
+  return logger;
 }
 
 export function getChildLogger(
@@ -683,33 +673,27 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return getSubLoggerWithResolvedMinLevel(
-    base,
-    {
-      name,
-      prefix: bindings ? [name ?? ""] : [],
-    },
-    minLevel,
-  );
+  return base.getSubLogger({
+    name,
+    prefix: bindings ? [name ?? ""] : [],
+    ...(opts?.level ? { minLevel: levelToMinLevel(opts.level) } : {}),
+  });
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
 export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
-  const buildChild = (bindings?: Record<string, unknown>) =>
-    toPinoLikeLogger(
-      getSubLoggerWithResolvedMinLevel(
-        logger,
-        { name: bindings ? JSON.stringify(bindings) : undefined },
-        logger.settings.minLevel,
-      ),
-      level,
-    );
-
   return {
     level,
-    child: buildChild,
+    child: (bindings) => {
+      const minLevel = logger.settings.minLevel;
+      const child = logger.getSubLogger({
+        name: bindings ? JSON.stringify(bindings) : undefined,
+        minLevel: minLevel === Infinity ? levelToMinLevel("fatal") : minLevel,
+      });
+      inheritLogLevel(child, () => logger.settings.minLevel);
+      return toPinoLikeLogger(child, level);
+    },
     trace: (...args: unknown[]) => logger.trace(...args),
     debug: (...args: unknown[]) => logger.debug(...args),
     info: (...args: unknown[]) => logger.info(...args),
@@ -786,5 +770,3 @@ function pruneOldRollingLogs(dir: string): void {
     // ignore missing dir or read errors
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

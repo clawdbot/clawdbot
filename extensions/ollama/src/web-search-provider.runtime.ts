@@ -10,7 +10,6 @@ import {
   redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  enablePluginInConfig,
   readPositiveIntegerParam,
   readResponseText,
   readStringParam,
@@ -335,22 +334,11 @@ async function warnOllamaWebSearchPrereqs(params: {
   return params.config;
 }
 
-export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
+export function createOllamaWebSearchProvider(): Pick<
+  WebSearchProviderPlugin,
+  "runSetup" | "createTool"
+> {
   return {
-    id: "ollama",
-    label: "Ollama Web Search",
-    hint: "Local Ollama host · requires ollama signin",
-    onboardingScopes: ["text-inference"],
-    requiresCredential: false,
-    envVars: [],
-    placeholder: "(run ollama signin)",
-    signupUrl: "https://ollama.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 110,
-    credentialPath: "",
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
-    applySelectionConfig: (config) => enablePluginInConfig(config, "ollama").config,
     runSetup: async (ctx) => await warnOllamaWebSearchPrereqs(ctx),
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,

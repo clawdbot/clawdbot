@@ -246,8 +246,8 @@ final class ComputerScreenActionExecutor {
     {
         guard let direction = params.scrollDirection else { throw ComputerActionError.invalidScroll }
         let amount = min(Self.maxScrollTicks, max(1, params.scrollAmount ?? 3))
-        // Position the pointer over the requested region first; both Peekaboo
-        // and the raw wheel event scroll at the current mouse location.
+        // ComputerActionService admits global input here; background requests stay
+        // window-scoped. Position the pointer for either foreground scroll path.
         if let point = try point(params.x, params.y, params: params, display: display) {
             try await self.automation.moveMouse(to: point, duration: 0, steps: 1, profile: .linear)
         } else {
@@ -259,7 +259,8 @@ final class ComputerScreenActionExecutor {
         if modifiers.isEmpty {
             try await self.automation.scroll(ScrollRequest(
                 direction: Self.scrollDirection(direction),
-                amount: amount))
+                amount: amount,
+                foreground: true))
         } else {
             try self.rawScroll(direction: direction, amount: amount, flags: modifiers.flags)
         }

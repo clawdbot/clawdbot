@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-session-participants-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -26,12 +26,12 @@ function participantRecordsBySessionKey(
   sessionKeys?: readonly string[],
 ): Map<string, SessionParticipantRecord[]> {
   const records = new Map<string, SessionParticipantRecord[]>();
-  if (!tableExists(database, SESSION_PARTICIPANTS_TABLE) || sessionKeys?.length === 0) {
+  if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
     return records;
   }
   let query = getSessionKysely(database).selectFrom("session_participants").selectAll();
   if (sessionKeys) {
-    query = query.where("session_key", "in", sessionKeys);
+    query = query.where("session_key", "in", sqliteStringSet(sessionKeys));
   }
   for (const row of executeSqliteQuerySync(
     database,

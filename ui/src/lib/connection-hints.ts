@@ -20,6 +20,7 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
   ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING,

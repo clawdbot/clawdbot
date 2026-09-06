@@ -1,0 +1,260 @@
+.transcripts-workspace {
+  min-width: 0;
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  color: var(--text);
+}
+
+.transcripts-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.transcripts-library {
+  min-width: 0;
+  padding: var(--space-4);
+  border-inline-end: 1px solid var(--border);
+}
+
+.transcripts-filters {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.transcripts-filters__advanced {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-block-start: var(--space-3);
+}
+
+.transcripts-filters summary {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.transcripts-filters input,
+.transcripts-search input {
+  width: 100%;
+  min-width: 0;
+}
+
+.transcripts-actions,
+.transcripts-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.transcripts-actions svg,
+.transcripts-search svg,
+.transcripts-back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.transcripts-list,
+.transcripts-utterances {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-6) 0;
+}
+
+.transcripts-list__entry {
+  display: block;
+  padding: var(--space-4) var(--space-3);
+  border-block-start: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.transcripts-list__entry:hover,
+.transcripts-list__entry[aria-current="page"] {
+  background: var(--bg-hover);
+}
+
+.transcripts-list__entry[aria-current="page"] {
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.meetings-row__title {
+  margin: var(--space-2) 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.meetings-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.meetings-row--silent .meetings-row__title {
+  color: var(--muted);
+}
+
+.meetings-day h2 {
+  margin-block: var(--space-5) var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+
+.meetings-day .transcripts-list {
+  margin-block: 0;
+}
+
+.meetings-row__meta,
+.meetings-row__overview {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.7;
+}
+
+.meetings-row__overview,
+.meetings-row__participants {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meetings-live {
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.transcripts-list__entry p,
+.transcripts-list__entry time,
+.transcripts-caption {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.transcripts-reader {
+  min-width: 0;
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+  padding: var(--space-7) var(--space-8);
+}
+
+.transcripts-reader__header {
+  margin-block: var(--space-4);
+}
+
+.transcripts-source-details {
+  margin-block: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.transcripts-reader__header h1 {
+  font-family: var(--font-display);
+  font-size: calc(var(--control-ui-text-lg) * 1.75);
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+  color: var(--text-strong);
+  margin-block: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.transcripts-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-md);
+}
+
+.transcripts-search {
+  margin-block: var(--space-5);
+}
+
+.transcripts-search .field {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.transcripts-utterances li {
+  margin-block: var(--space-7);
+}
+
+.transcripts-utterance__byline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+.transcripts-utterance__byline strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.transcripts-utterances p,
+.transcripts-summary {
+  margin-block: var(--space-2);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.transcripts-utterances p {
+  white-space: pre-wrap;
+}
+
+.meetings-notes pre {
+  overflow-x: auto;
+}
+
+.transcripts-notice {
+  padding: var(--space-7);
+  overflow-wrap: anywhere;
+}
+
+.transcripts-notice h2 {
+  font-size: var(--control-ui-text-lg);
+  color: var(--text-strong);
+}
+
+.transcripts-reader__placeholder {
+  padding-block: var(--space-8);
+}
+
+@media (max-width: 900px) {
+  .transcripts-layout {
+    display: block;
+  }
+
+  .transcripts-library {
+    border-inline-end: 0;
+  }
+
+  .transcripts-layout--selected .transcripts-library,
+  .transcripts-reader__placeholder {
+    display: none;
+  }
+
+  .transcripts-reader {
+    padding: var(--space-5);
+  }
+}
+
+@media (max-width: 400px) {
+  .transcripts-filters__advanced {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

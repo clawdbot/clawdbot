@@ -22,33 +22,6 @@ protocol MLXTTSSpeechModel: AnyObject, Sendable {
         referenceText: String?) -> AsyncThrowingStream<[Float], Error>
 }
 
-extension MLXTTSSpeechModel {
-    func generateStream(
-        text: String,
-        voice: String?,
-        language: String?,
-        referenceAudioPath: String?,
-        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
-    {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await continuation.yield(self.generate(
-                        text: text,
-                        voice: voice,
-                        language: language,
-                        referenceAudioPath: referenceAudioPath,
-                        referenceText: referenceText))
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-}
-
 typealias MLXTTSModelLoader = @Sendable (String) async throws -> any MLXTTSSpeechModel
 
 public actor MLXTTSHelperService {

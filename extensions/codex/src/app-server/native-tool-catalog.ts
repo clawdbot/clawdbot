@@ -18,7 +18,7 @@ export function hasCodexNativeToolCatalog(
   return binding?.connectionScope === "supervision" && !binding.pendingSupervisionBranch;
 }
 
-/** Pinned serde omits false deferLoading; every other declaration byte remains native-owned. */
+/** Pinned serde omits empty catalogs and false deferLoading; declarations remain native-owned. */
 export function parseCodexNativeToolCatalog(
   metadata: unknown,
   threadId: string,
@@ -28,12 +28,11 @@ export function parseCodexNativeToolCatalog(
     new Error(
       "The canonical Codex native tool catalog is missing, corrupt, or changed; the thread is preserved. Reconnect and inspect its native metadata before retrying.",
     );
-  if (
-    !isJsonObject(metadata) ||
-    metadata.id !== threadId ||
-    !Array.isArray(metadata.dynamic_tools) ||
-    Buffer.byteLength(JSON.stringify(metadata.dynamic_tools)) > 1024 * 1024
-  ) {
+  if (!isJsonObject(metadata) || metadata.id !== threadId) {
+    throw fail();
+  }
+  const catalog = metadata.dynamic_tools ?? [];
+  if (!Array.isArray(catalog) || Buffer.byteLength(JSON.stringify(catalog)) > 1024 * 1024) {
     throw fail();
   }
   const names = new Set<string>();
@@ -65,7 +64,7 @@ export function parseCodexNativeToolCatalog(
       ...(value.deferLoading === true ? { deferLoading: true } : {}),
     };
   };
-  const tools = metadata.dynamic_tools.map((value): CodexDynamicToolSpec => {
+  const tools = catalog.map((value): CodexDynamicToolSpec => {
     if (!isJsonObject(value) || value.type !== "namespace") {
       return readFunction(value);
     }

@@ -34,9 +34,38 @@ removed.
 4. Until approval, node commands stay filtered; approval exposes the declared
    surface, subject to the normal command policy.
 
-Pending requests expire automatically **5 minutes after the node's last
-retry** — an actively reconnecting node keeps its one pending request alive
-rather than generating a fresh request (and approval prompt) per attempt.
+Pending **node capability** requests do not expire just because time passes.
+They survive node disconnects and Gateway restarts, and remain pending until
+approved, rejected, superseded by a changed surface, or cleared by the node
+lifecycle, such as removal of the node role or a successful reconnect that no
+longer needs that approval.
+
+A pending capability request does not grant access. Approval still requires the
+operator scopes for the requested commands. Before updating a live connection,
+the Gateway checks its pairing identity and generation against the persisted
+approval and limits access to the capabilities and commands that connection
+declared.
+
+The **5-minute expiry** still applies to **device-pairing** requests,
+not to capability approvals on an already-paired device.
+
+### Upgrades and older writers
+
+Upgrade the Gateway and any CLI that directly writes the same state database
+together. An older app or CLI that only calls the Gateway over RPC is not a
+direct database writer; the Gateway handles those requests.
+
+The capability-request storage format is unchanged. Older Gateway or direct CLI
+writers still apply the former five-minute expiry and can persist deletion of
+aged requests, including during unrelated pairing updates. Downgrading can
+therefore restore the old expiry behavior; lifecycle retention is not guaranteed
+while an older version writes the database.
+
+On upgrade, an aged request that an older version only hid from its output can
+become visible again if it is still stored. It still requires explicit approval.
+An upgrade cannot recover an already deleted request: the node must submit a
+fresh capability request for the operator to review. Existing device pairing and
+previously approved capabilities are separate from that pending request.
 
 ## One-paste node pairing
 
@@ -79,7 +108,7 @@ Events:
 
 - `node.pair.requested` - emitted when a new pending request is created.
 - `node.pair.resolved` - emitted when a request is approved, rejected, or
-  expired.
+  cleared by the node lifecycle.
 
 Methods:
 
@@ -224,6 +253,12 @@ While a probe is running, the node client is told to keep retrying
 fails, the next attempt falls back to the normal prompt flow. Failed targets
 get a short cooldown (5 minutes after a key mismatch).
 
+Pairing settings hot-apply without restarting the Gateway. Automatic approvals
+recheck the current policy immediately before granting access, even if an SSH
+probe or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh probe and do not inherit the previous policy’s
+cooldown. Already paired devices remain paired.
+
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
 capability surface is approved in the same step — the key match already proves
 the node runs under the operator's account on a machine they own, which is the
@@ -246,6 +281,26 @@ Harden or disable:
   },
 }
 ```
+
+## Manual approval (macOS app)
+
+The macOS app shows node and device requests in one OpenClaw approval panel.
+Each request keeps the name, platform, source address, and all requested access
+visible. System-command execution and device admin access are highlighted.
+Node requests that Gateway classifies as requiring administrator approval also
+show a warning for the whole request. Expand **Details**
+for the full identity, app/core versions, and request metadata.
+
+**Approve Node** approves the node's declared capabilities; it does not rotate
+the device's access token. **Command-Return** approves only a single displayed
+request. Return alone does not approve. **Not Now** or **Escape** hides the panel
+without resolving requests. Device-pairing requests retain their normal
+expiry; node capability requests remain pending until their lifecycle resolves
+them.
+
+For multiple requests, **Approve All** and **Reject All** apply only to the
+displayed requests. Requests arriving after that view was displayed are not
+included in the decision.
 
 ## Auto-approval (macOS app)
 

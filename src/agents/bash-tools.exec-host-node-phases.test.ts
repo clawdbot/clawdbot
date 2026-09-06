@@ -239,12 +239,14 @@ describe("node execution target resolution", () => {
           {
             nodeId: "node-shared-exec",
             displayName: "build-worker",
+            clientId: "openclaw-macos",
             commands: ["system.run"],
             connected: true,
           },
           {
             nodeId: "node-shared-canvas",
             displayName: "build-worker",
+            clientId: "node-host",
             commands: ["canvas.present"],
             connected: true,
           },

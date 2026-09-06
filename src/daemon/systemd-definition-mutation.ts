@@ -179,12 +179,12 @@ export async function readSystemdDefinitionMutationCapability(
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const deadlineAt = options?.timeoutMs ? Date.now() + options.timeoutMs : undefined;
+  const deadlineAt = options?.timeoutMs ? performance.now() + options.timeoutMs : undefined;
   for (const name of names) {
     try {
       await assertNoSystemSystemdOwnership(
         name,
-        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now()),
+        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now()),
       );
     } catch (error) {
       const owned =
@@ -204,9 +204,9 @@ export async function withSystemdDefinitionMutation<T>(
   options?: { timeoutMs?: number },
 ): Promise<T> {
   const deadlineAt =
-    options?.timeoutMs && options.timeoutMs > 0 ? Date.now() + options.timeoutMs : undefined;
+    options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
   const remainingTimeoutMs = () =>
-    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now());
+    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now());
   let initial = await inspect(env, environment, remainingTimeoutMs());
   assertServiceDefinitionWritable(initial.capability);
   const { unit, generated } = resolveMutationTargets(env, environment);
@@ -259,7 +259,17 @@ export async function withSystemdDefinitionMutation<T>(
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
       try {
-        await fs.writeFile(temporary, contents, { flag: "wx", mode });
+        // Keep owner-write during preparation so the descriptor can be reopened
+        // even when the final snapshot mode is read-only.
+        await fs.writeFile(temporary, contents, { flag: "wx", mode: mode | 0o200 });
+        const temporaryHandle = await fs.open(temporary, constants.O_WRONLY | constants.O_NOFOLLOW);
+        try {
+          // Creation mode is filtered by umask. Apply the admitted mode through
+          // the already-open inode so rollback restores the exact snapshot mode.
+          await temporaryHandle.chmod(mode);
+        } finally {
+          await temporaryHandle.close();
+        }
         const written = await fs.lstat(temporary);
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename

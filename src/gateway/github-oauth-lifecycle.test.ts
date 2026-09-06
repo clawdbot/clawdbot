@@ -25,6 +25,7 @@ import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
+  assertCli: vi.fn(),
   clearVerificationCache: vi.fn(),
   verifyCredential: vi.fn(),
   requestDeviceCode: vi.fn(),
@@ -73,6 +74,12 @@ vi.mock("./github-tool-identity-config.js", () => ({
   updateGitHubToolIdentityConfig: mocks.updateConfig,
 }));
 
+vi.mock("./github-cli-preflight.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./github-cli-preflight.js")>();
+  return { ...actual, assertGitHubCliAvailable: mocks.assertCli };
+});
+
+import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -282,6 +289,22 @@ afterEach(async () => {
 });
 
 describe("GitHub OAuth authorization lifecycle", () => {
+  it.each(["system", "agent"] as const)(
+    "rejects a missing GitHub CLI before requesting a %s device code",
+    async (scope) => {
+      mocks.assertCli.mockImplementationOnce(() => {
+        throw new GitHubCliUnavailableError();
+      });
+      const lifecycle = createLifecycle();
+
+      await expect(startAuthorization(lifecycle, scope)).rejects.toThrow(
+        "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+      );
+      expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+      expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    },
+  );
+
   it("clears verified GitHub credentials when the lifecycle stops", async () => {
     const lifecycle = createLifecycle();
     expect(mocks.clearVerificationCache).not.toHaveBeenCalled();

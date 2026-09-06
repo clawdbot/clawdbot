@@ -80,7 +80,7 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
-/** Options for read-only service inspection that should fail soft under a deadline. */
+/** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;

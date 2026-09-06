@@ -275,8 +275,10 @@ export async function detectMime(opts: {
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =
-    mimeHints.find((mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred) ??
-    (extMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[extMime] === inferred ? extMime : undefined);
+    inferred &&
+    [...mimeHints, extMime].find(
+      (mime) => mime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
+    );
   if (audioContainerHint) {
     return audioContainerHint;
   }

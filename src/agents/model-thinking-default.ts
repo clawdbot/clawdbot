@@ -17,6 +17,7 @@ export function resolveConfiguredThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
 }): ThinkLevel | undefined {
   return resolveConfiguredThinkingDefaultCore(params);
 }
@@ -26,6 +27,7 @@ export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   catalog?: ModelCatalogEntry[];
   agentRuntime?: string | null;
 }): ThinkLevel {

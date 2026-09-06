@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
@@ -140,6 +146,56 @@ async function startMaintenanceRuntime(
 }
 
 describe("worker placement session maintenance ownership", () => {
+  it("retains a configured-store repository base after its placement manifest advances", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("custom-sessions", "openclaw-agent.sqlite");
+      await state.writeConfig({ session: { store: storePath } });
+      const placement = {
+        ...createPlacementFixture("agent:main:dashboard:repository-retention"),
+        workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
+      };
+      const repositories = getSessionRepositoryWorkspaceStore();
+      const repository = repositories.create({
+        agentId: placement.agentId,
+        sessionKey: placement.sessionKey,
+        url: "https://github.com/openclaw/fixture.git",
+        assertCurrent: () => {},
+      });
+      repositories.bindBase({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        baseCommit: "c".repeat(40),
+        baseManifestHash: placement.workspaceBaseManifestRef,
+        assertCurrent: () => {},
+      });
+      const entry = {
+        sessionId: placement.sessionId,
+        repositoryWorkspaceId: repository.workspaceId,
+        updatedAt: Date.now(),
+      };
+      await patchSessionEntryCore({ ...placement, storePath }, () => entry, {
+        fallbackEntry: entry,
+        skipMaintenance: true,
+      });
+      expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
+      const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
+      try {
+        createMaintenanceRuntime({ placements: [placement] });
+        const options = createRetention.mock.calls.at(-1)?.[0];
+        const additionalManifestRefs = options?.additionalManifestRefs;
+        const currentPlacement = options?.placements.list()[0];
+        if (!additionalManifestRefs || !currentPlacement) {
+          throw new Error("startup did not bind repository manifest retention");
+        }
+        const originalManifest = placement.workspaceBaseManifestRef;
+        placement.workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`;
+        expect(additionalManifestRefs(currentPlacement)).toEqual([originalManifest]);
+      } finally {
+        createRetention.mockRestore();
+      }
+    });
+  });
+
   it.each([
     { maintenance: "dashboard archive", sessionKey: "agent:main:dashboard:cloud-owned" },
     { maintenance: "stale pruning", sessionKey: "agent:main:explicit:cloud-owned-prune" },
@@ -163,6 +219,16 @@ describe("worker placement session maintenance ownership", () => {
         };
         await patchSessionEntryCore(sessionScope(sessionKey), () => entry, {
           fallbackEntry: entry,
+          replaceEntry: true,
+          skipMaintenance: true,
+        });
+        const sentinelKey = "agent:main:explicit:maintenance-sentinel";
+        const sentinelEntry = {
+          sessionId: "maintenance-sentinel",
+          updatedAt: now - 31 * 86_400_000,
+        };
+        await patchSessionEntryCore(sessionScope(sentinelKey), () => sentinelEntry, {
+          fallbackEntry: sentinelEntry,
           replaceEntry: true,
           skipMaintenance: true,
         });
@@ -191,6 +257,9 @@ describe("worker placement session maintenance ownership", () => {
 
         try {
           await triggerMaintenance();
+          await vi.waitFor(() => {
+            expect(loadSessionEntry(sessionScope(sentinelKey))).toBeUndefined();
+          });
           expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
             sessionId: placement.sessionId,
           });
@@ -201,12 +270,16 @@ describe("worker placement session maintenance ownership", () => {
           await sidecar.stop();
           expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
           await triggerMaintenance();
-          if (maintenance === "dashboard archive") {
-            expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toEqual(
-              expect.any(Number),
-            );
+          if (maintenance === "dashboard archive" || maintenance === "entry capping") {
+            await vi.waitFor(() => {
+              expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toEqual(
+                expect.any(Number),
+              );
+            });
           } else {
-            expect(loadSessionEntry(sessionScope(sessionKey))).toBeUndefined();
+            await vi.waitFor(() => {
+              expect(loadSessionEntry(sessionScope(sessionKey))).toBeUndefined();
+            });
           }
         } finally {
           await sidecar.stop();

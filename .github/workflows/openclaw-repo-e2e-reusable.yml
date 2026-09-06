@@ -157,3 +157,16 @@ jobs:
             exit 0
           fi
           ${{ matrix.command }}
+
+      # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
+      - name: Upload synthetic widget prompt failure evidence
+        if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: widget-sandbox-repo-e2e-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.png
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.webm
+          if-no-files-found: error
+          retention-days: 7

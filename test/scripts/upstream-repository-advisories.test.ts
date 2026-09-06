@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPublishedRepositoryAdvisories } from "../../scripts/lib/upstream-repository-advisories.mts";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 const REGISTRY = "https://registry.npmjs.org";
 const REPOSITORY = "fixture/packages";
@@ -26,7 +27,9 @@ function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = 
     vulnerabilities: [vulnerability(range)],
     ...fields,
   };
-  if (!publishedRows.has(row.ghsa_id)) publishedRows.set(row.ghsa_id, row);
+  if (!publishedRows.has(row.ghsa_id)) {
+    publishedRows.set(row.ghsa_id, row);
+  }
   return row;
 }
 
@@ -45,7 +48,7 @@ function createSourceFetch(
 ) {
   const calls: Array<{ url: URL; init: RequestInit | undefined }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
+    const url = new URL(input instanceof Request ? input.url : input);
     calls.push({ url, init });
     if (url.origin === REGISTRY) {
       return handlers.manifest ? handlers.manifest(url, init) : manifest(url);
@@ -54,7 +57,9 @@ function createSourceFetch(
       throw new Error(`Unexpected request origin: ${url.origin}`);
     }
     if (url.pathname.startsWith("/advisories/")) {
-      if (handlers.reviewed) return handlers.reviewed(url, init);
+      if (handlers.reviewed) {
+        return handlers.reviewed(url, init);
+      }
       const row = publishedRows.get(url.pathname.split("/").at(-1) ?? "");
       return Response.json({
         ...row,
@@ -713,14 +718,27 @@ describe("published upstream repository advisories", () => {
   it("keeps metadata and repository requests within four concurrent operations", async () => {
     let active = 0;
     let peak = 0;
+    const waves = [REGISTRY, "https://api.github.com"].map((origin) => ({
+      origin,
+      started: createDeferred(),
+      release: createDeferred(),
+    }));
     const source = createSourceFetch({
       manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
     });
     const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const wave = expectDefined(
+        waves.find(({ origin }) => origin === url.origin),
+        "request phase",
+      );
       active += 1;
       peak = Math.max(peak, active);
+      if (active === 4) {
+        wave.started.resolve();
+      }
       try {
-        await Promise.resolve();
+        await wave.release.promise;
         return await source.fetchImpl(input, init);
       } finally {
         active -= 1;
@@ -729,11 +747,32 @@ describe("published upstream repository advisories", () => {
     const payload = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
     );
-    const report = await scan(fetchImpl, payload);
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect(report.coverage.status).toBe("checked");
-    expect(report.coverage.checkedRepositories).toBe(8);
+    const scanning = scan(fetchImpl, payload);
+    try {
+      for (const wave of waves) {
+        await withTestTimeout(
+          wave.started.promise,
+          1_000,
+          `expected four requests to ${wave.origin}`,
+        );
+        // Let admission finish while requests stay blocked so excess fanout is observable.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(active).toBe(4);
+        wave.release.resolve();
+      }
+      const report = await scanning;
+      expect(peak).toBe(4);
+      expect(active).toBe(0);
+      expect(report.coverage.status).toBe("checked");
+      expect(report.coverage.checkedRepositories).toBe(8);
+    } finally {
+      for (const wave of waves) {
+        wave.release.resolve();
+      }
+      await scanning;
+    }
   });
 
   it.each([

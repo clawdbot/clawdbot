@@ -165,6 +165,7 @@ function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
   runAttempt.mockResolvedValue(
     makeEmbeddedRunnerAttempt({
       sessionIdUsed: sessionId,
+      providerRetryMaxRetries: 0,
       ...(stage === "prompt"
         ? { terminal: { kind: "failed", source: "prompt", error: new Error(message) } }
         : {

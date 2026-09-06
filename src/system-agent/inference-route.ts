@@ -33,7 +33,7 @@ export type SystemAgentConfiguredRoute = {
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
 type SystemAgentRouteProjectionDeps = Pick<
@@ -210,6 +210,7 @@ export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
   deps: SystemAgentRouteProjectionDeps = {},
+  sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
   const routeAgentId = resolveAmbientOwnerAgentId(config, requestedAgentId);
@@ -322,7 +323,9 @@ export async function projectInferenceRoute(
       : {}),
     env: structuredClone(config.env),
     secrets: structuredClone(config.secrets),
-    plugins: structuredClone(config.plugins),
+    // Plugin schema defaults can change when setup installs a provider. Guard
+    // complete authored policy while resolving execution from runtime config.
+    plugins: structuredClone(sourceConfig.plugins),
     tools: structuredClone(config.tools),
   };
 }

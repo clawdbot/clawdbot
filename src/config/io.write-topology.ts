@@ -16,6 +16,31 @@ import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./validation.js";
 
+function cloneConfigPathParents(
+  source: Record<string, unknown>,
+  target: Record<string, unknown>,
+  path: readonly string[],
+): void {
+  let sourceCursor: unknown = source;
+  let targetCursor = target;
+  for (const key of path.slice(0, -1)) {
+    const sourceChild = isRecord(sourceCursor) ? sourceCursor[key] : undefined;
+    const targetChild = targetCursor[key];
+    if (targetChild === sourceChild) {
+      const clone = isRecord(sourceChild) ? { ...sourceChild } : {};
+      targetCursor[key] = clone;
+      targetCursor = clone;
+    } else if (isRecord(targetChild)) {
+      targetCursor = targetChild;
+    } else {
+      const clone: Record<string, unknown> = {};
+      targetCursor[key] = clone;
+      targetCursor = clone;
+    }
+    sourceCursor = sourceChild;
+  }
+}
+
 // Validation and commits share ownership preparation. Cron migration, runtime refresh,
 // and persistence remain in the committing writer.
 export function prepareConfigWriteTopology(
@@ -170,8 +195,10 @@ export function prepareConfigWriteTopology(
     ownershipPaths: topologyPaths,
   });
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyPaths];
-  const explicitSetValueSource = structuredClone(options.explicitSetValueSource ?? nextConfig);
+  const explicitSource = options.explicitSetValueSource ?? nextConfig;
+  const explicitSetValueSource = { ...explicitSource };
   for (const ownershipPath of topologyPaths) {
+    cloneConfigPathParents(explicitSource, explicitSetValueSource, ownershipPath);
     setConfigValueAtPath(
       explicitSetValueSource,
       ownershipPath,

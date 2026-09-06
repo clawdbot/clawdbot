@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -112,9 +114,79 @@ it("shows an identified status failure once while opening personal setup", async
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(element.textContent).not.toContain("Change System GitHub");
   expect(element.textContent).toContain("Retry");
+  expect(element.textContent).toContain("Connection status unavailable");
+  expect(element.textContent).not.toContain("Not verified");
+  expect(element.textContent).not.toContain("Connect My GitHub");
+  expect(element.textContent).not.toContain("Not connected");
   Array.from(element.querySelectorAll("button"))
-    .find((button) => button.textContent?.trim() === "Connect GitHub")
+    .find((button) => button.textContent?.trim() === "Manage connections")
     ?.click();
   await waitForFast(() => expect(element.querySelector("[data-github-setup]")).not.toBeNull());
   expect(element.querySelectorAll('[role="alert"]')).toHaveLength(1);
+});
+
+it("shows loading rather than disconnected until personal connection status arrives", async () => {
+  const status = createDeferredCore<{ personal: typeof disconnected; system: typeof system }>();
+  const request = vi.fn(() => status.promise);
+  const { element } = mount(["operator.read"], "profile-a", request);
+  await waitForFast(() => expect(element.textContent).toContain("Checking connection…"));
+  expect(element.textContent).not.toContain("Not verified");
+  expect(element.textContent).not.toContain("Connect My GitHub");
+  status.resolve({ personal: disconnected, system });
+  await waitForFast(() => expect(element.textContent).toContain("Not connected"));
+  expect(element.textContent).toContain("Connect My GitHub");
+  expect(element.textContent).not.toContain("Checking connection…");
+});
+
+it("retries failed status without reconnecting the GitHub account", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Status lookup failed"))
+    .mockResolvedValue({
+      personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
+      system,
+    });
+  const { element } = mount(["operator.read"], "profile-a", request);
+  await waitForFast(() => expect(element.textContent).toContain("Connection status unavailable"));
+  Array.from(element.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Retry")
+    ?.click();
+  await waitForFast(() => expect(element.textContent).toContain("@personal-account"));
+  expect(request.mock.calls).toEqual([
+    ["users.github.status", {}],
+    ["users.github.status", {}],
+  ]);
+  expect(element.querySelector('[role="alert"]')).toBeNull();
+  expect(element.textContent).toContain("Change My GitHub");
+});
+
+it("distinguishes a failed System lookup from unverified credentials", async () => {
+  const status = createDeferredCore<ToolsGitHubStatusResult>();
+  const request = vi.fn(() => status.promise);
+  const { element } = mount(["operator.admin"], null, request);
+  const row = () => element.querySelector('[data-github-connection="system"]');
+  await waitForFast(() => expect(row()?.textContent).toContain("Checking connection…"));
+  status.reject(new Error("System status lookup failed"));
+  await waitForFast(() => expect(row()?.textContent).toContain("Connection status unavailable"));
+  expect(row()?.textContent).not.toContain("Not verified");
+  expect(row()?.textContent).not.toContain("No credentials");
+  expect(element.textContent).toContain("Retry");
+});
+
+it.each([
+  ["unverified", "Not verified"],
+  ["unavailable", "No credentials"],
+] as const)("preserves an authoritative %s credential result", async (credentialState, label) => {
+  const request = vi.fn(async () => ({
+    personal: disconnected,
+    system: { ...system, account: null, credentialState },
+  }));
+  const { element } = mount(["operator.read"], "profile-a", request);
+  await waitForFast(() =>
+    expect(element.querySelector('[data-github-connection="system"]')?.textContent).toContain(
+      label,
+    ),
+  );
+  expect(element.textContent).not.toContain("Connection status unavailable");
+  expect(element.textContent).toContain("Connect My GitHub");
 });

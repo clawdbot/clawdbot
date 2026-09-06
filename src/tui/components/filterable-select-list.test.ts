@@ -112,7 +112,12 @@ describe("FilterableSelectList", () => {
     expect(list.getSelectedItem()?.value).toBe("session-1");
   });
 
-  it("clears the active filter before cancelling", () => {
+  it.each([
+    { name: "Escape", key: "\x1b" },
+    { name: "Ctrl+C", key: "\u0003" },
+    { name: "Kitty Ctrl+C", key: "\x1b[99;5u" },
+    { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~" },
+  ])("clears the active filter before cancelling with $name", ({ key }) => {
     const list = new FilterableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
     list.onCancel = () => {
@@ -123,35 +128,14 @@ describe("FilterableSelectList", () => {
     expect(list.getFilterText()).toBe("beta");
     expect(list.getSelectedItem()?.value).toBe("session-2");
 
-    list.handleInput("\x1b");
+    list.handleInput(key);
 
     expect(cancelled).toBe(false);
     expect(list.getFilterText()).toBe("");
+    expect(list.getSelectedItem()?.value).toBe("session-1");
     expect(list.render(80).join("\n")).toContain("first session");
     expect(list.render(80).join("\n")).toContain("second session");
-  });
-
-  it("calls onCancel when escape is pressed with an empty filter", () => {
-    const list = new FilterableSelectList(testItems, 5, mockTheme);
-    let cancelled = false;
-    list.onCancel = () => {
-      cancelled = true;
-    };
-
-    list.handleInput("\x1b");
-
-    expect(cancelled).toBe(true);
-  });
-
-  it("calls onCancel when ctrl+c is pressed with an empty filter", () => {
-    const list = new FilterableSelectList(testItems, 5, mockTheme);
-    let cancelled = false;
-    list.onCancel = () => {
-      cancelled = true;
-    };
-
-    list.handleInput("\u0003");
-
+    list.handleInput(key);
     expect(cancelled).toBe(true);
   });
 

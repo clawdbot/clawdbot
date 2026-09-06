@@ -1,4 +1,3 @@
-// Mattermost plugin module implements channel behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -750,6 +749,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
     reload: {
       configPrefixes: ["channels.mattermost"],
+      noopPrefixes: ["messages.inbound"],
       /**
        * accounts.default is promoted; named resolution merges only channel-wide fields
        * plus the selected account. Monitor debounce and durable ingress use accountId.
