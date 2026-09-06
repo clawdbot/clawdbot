@@ -373,6 +373,7 @@ export async function prepareWorkspaceBuildGroup(
             cfg: input.config,
             env,
             metadataSnapshot: pluginMetadataSnapshot,
+            registeredProviders: runtimePluginRegistry?.providers.map(({ provider }) => provider),
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           }));
     // Provider definitions are process/config facts. Which refs are admitted remains agent-owned.

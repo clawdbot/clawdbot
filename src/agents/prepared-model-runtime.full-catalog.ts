@@ -65,6 +65,9 @@ export async function prepareFullCatalogFacts(
       cfg: input.config,
       env,
       metadataSnapshot: pluginMetadataSnapshot,
+      registeredProviders: pluginGeneration.pluginRegistry?.providers.map(
+        ({ provider }) => provider,
+      ),
       ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     }));
