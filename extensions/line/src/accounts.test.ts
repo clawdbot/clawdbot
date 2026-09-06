@@ -483,6 +483,14 @@ describe("LINE accounts", () => {
       expect(listLineAccountIds({})).toEqual([]);
     });
 
+    it("does not list a default account for a blank credential file the reader cannot use", () => {
+      const cfg: OpenClawConfig = {
+        channels: { line: { tokenFile: "   " } },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual([]);
+    });
+
     it("lists the default account when the channel token is a SecretRef", () => {
       const cfg: OpenClawConfig = {
         channels: {
