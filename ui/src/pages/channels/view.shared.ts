@@ -37,37 +37,33 @@ function resolveChannelStatus(
     : undefined;
 }
 
-function resolveDefaultChannelAccount(
-  key: ChannelKey,
-  props: ChannelsProps,
-): ChannelAccountSnapshot | null {
-  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
-  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
-  const defaultAccountId =
-    defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
-  return (
-    (defaultAccountId
-      ? accounts.find((account) => account.accountId === defaultAccountId)
-      : undefined) ??
-    accounts[0] ??
-    null
-  );
-}
-
 export function resolveChannelDisplayState(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelDisplayState {
   const status = resolveChannelStatus(key, props);
-  const defaultAccount = resolveDefaultChannelAccount(key, props);
+  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
+  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const defaultAccountId =
+    defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
+  const defaultAccount =
+    (defaultAccountId
+      ? accounts.find((account) => account.accountId === defaultAccountId)
+      : undefined) ??
+    accounts[0] ??
+    null;
   const configured =
     typeof status?.configured === "boolean"
       ? status.configured
-      : typeof defaultAccount?.configured === "boolean"
-        ? defaultAccount.configured
-        : null;
-  const running = typeof status?.running === "boolean" ? status.running : null;
-  const connected = typeof status?.connected === "boolean" ? status.connected : null;
+      : (defaultAccount?.configured ?? null);
+  const running =
+    typeof status?.running === "boolean"
+      ? status.running
+      : accounts.some((account) => account.running === true) || null;
+  const connected =
+    typeof status?.connected === "boolean"
+      ? status.connected
+      : accounts.some((account) => account.connected === true) || null;
 
   return {
     configured,
