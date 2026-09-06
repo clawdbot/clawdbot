@@ -56,6 +56,8 @@ private func respondToOnboardingHealth(
     return true
 }
 
+private let verifiedInferenceModelRef = "openai/gpt-5.5"
+
 private func verifiedInferenceResponse(id: String) -> Data {
     Data(
         """
@@ -65,7 +67,7 @@ private func verifiedInferenceResponse(id: String) -> Data {
           "ok": true,
           "payload": {
             "ok": true,
-            "modelRef": "openai/gpt-5.5",
+            "modelRef": "\(verifiedInferenceModelRef)",
             "latencyMs": 42
           }
         }
@@ -459,7 +461,9 @@ struct OnboardingDashboardHandoffTests {
                 if respondToOnboardingHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "agents.list":
-                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(
+                        id: id,
+                        modelRef: verifiedInferenceModelRef)))
                 case "openclaw.setup.verify":
                     task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
                 default:

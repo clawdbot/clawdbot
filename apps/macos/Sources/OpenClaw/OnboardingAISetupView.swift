@@ -34,7 +34,7 @@ private struct OnboardingRecommendedInstallCard: View {
             }
         }
         .onHover { self.hovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovered)
+        .animation(.easeOut(duration: 0.12), value: self.hovered)
     }
 
     private var content: some View {
@@ -42,8 +42,7 @@ private struct OnboardingRecommendedInstallCard: View {
             OnboardingProviderArtwork(
                 icon: self.install.icon,
                 brandCandidates: [self.install.brandId, self.install.id],
-                fallbackSymbol: "arrow.down.circle"
-            )
+                fallbackSymbol: "arrow.down.circle")
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.install.label)
                     .font(.callout.weight(.semibold))
@@ -67,12 +66,10 @@ private struct OnboardingRecommendedInstallCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(hovered ? 0.085 : 0.05))
-        )
+                .fill(Color.primary.opacity(self.hovered ? 0.085 : 0.05)))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-        )
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
     }
 }
 
@@ -80,7 +77,7 @@ struct OnboardingSurface: View {
     let cornerRadius: CGFloat
 
     var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
             .fill(Color.primary.opacity(0.045))
             .overlay {
                 RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
@@ -107,8 +104,7 @@ struct OnboardingAISetupView: View {
             title: "Gateway authentication required",
             message: issue.statusMessage,
             primaryTitle: "Back to Gateway",
-            secondaryTitle: "Try again"
-        )
+            secondaryTitle: "Try again")
     }
 
     var body: some View {
@@ -148,9 +144,8 @@ struct OnboardingAISetupView: View {
                 if !$0 {
                     self.model.cancelProviderAuth()
                 }
-            }
-        )) {
-            OnboardingAISetupSheet(model: self.model)
+            })) {
+                OnboardingAISetupSheet(model: self.model)
         }
     }
 
@@ -183,8 +178,7 @@ struct OnboardingAISetupView: View {
                         details: failure.detail,
                         docsSlug: "start/onboarding",
                         retryTitle: "Check again",
-                        retry: { self.retryConfiguredGatewayProbe(.inspectOnly) }
-                    )
+                        retry: { self.retryConfiguredGatewayProbe(.inspectOnly) })
                 } else {
                     Button("Check again") { self.retryConfiguredGatewayProbe(.inspectOnly) }
                         .buttonStyle(.bordered)
@@ -196,22 +190,22 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var resultsView: some View {
-        if !model.candidates.isEmpty {
+        if !self.model.candidates.isEmpty {
             VStack(spacing: 8) {
                 ForEach(self.model.candidates) { candidate in
                     self.candidateRow(candidate)
                 }
             }
-        } else if model.detectError == nil,
-                  model.configuredGatewayAuthIssue == nil
+        } else if self.model.detectError == nil,
+                  self.model.configuredGatewayAuthIssue == nil
         {
             // A failed detect must not claim "nothing found" — the error card
             // below owns that state and the claim would be unproven.
-            noCandidatesIntro
+            self.noCandidatesIntro
         }
 
-        if !model.unavailableCandidates.isEmpty {
-            unavailableCandidatesSection
+        if !self.model.unavailableCandidates.isEmpty {
+            self.unavailableCandidatesSection
         }
 
         if let authIssue = model.configuredGatewayAuthIssue {
@@ -223,18 +217,17 @@ struct OnboardingAISetupView: View {
                 retryTitle: card.primaryTitle,
                 secondaryTitle: card.secondaryTitle,
                 secondary: { self.retryConfiguredGatewayProbe(.startSetup) },
-                retry: returnToGatewayAuthentication
-            )
+                retry: self.returnToGatewayAuthentication)
         } else if let detectError = model.detectError {
             OnboardingErrorCard(
-                title: model.configuredGatewayProbeUnavailable
+                title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
                     : "Couldn’t check this Gateway for AI access",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again"
-            ) {
+                retryTitle: "Try again")
+            {
                 if self.model.configuredGatewayProbeUnavailable {
                     self.retryConfiguredGatewayProbe(.startSetup)
                 } else {
@@ -248,16 +241,16 @@ struct OnboardingAISetupView: View {
                 title: "Couldn’t load the full provider list",
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again"
-            ) {
+                retryTitle: "Try again")
+            {
                 self.model.retryFromScratch()
             }
         }
 
-        if model.providerCatalogLoaded {
-            providerPrepareSection
-            providerAuthSection
-            manualSection
+        if self.model.providerCatalogLoaded {
+            self.providerPrepareSection
+            self.providerAuthSection
+            self.manualSection
         }
     }
 
@@ -277,8 +270,8 @@ struct OnboardingAISetupView: View {
                     .foregroundStyle(.secondary)
                 LazyVGrid(
                     columns: [GridItem(.adaptive(minimum: 230), spacing: 10)],
-                    spacing: 10
-                ) {
+                    spacing: 10)
+                {
                     ForEach(self.model.recommendedInstalls) { install in
                         OnboardingRecommendedInstallCard(install: install)
                     }
@@ -316,9 +309,9 @@ struct OnboardingAISetupView: View {
     }
 
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
-        let status = model.statuses[candidate.kind] ?? .untried
-        let selected = model.selectedKind == candidate.kind
-        let presentation = model.candidatePresentation[candidate.kind]
+        let status = self.model.statuses[candidate.kind] ?? .untried
+        let selected = self.model.selectedKind == candidate.kind
+        let presentation = self.model.candidatePresentation[candidate.kind]
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
@@ -327,8 +320,7 @@ struct OnboardingAISetupView: View {
                     OnboardingProviderArtwork(
                         icon: presentation?.icon,
                         brandCandidates: [presentation?.brandId, candidate.kind],
-                        fallbackSymbol: Self.symbol(for: candidate.kind)
-                    )
+                        fallbackSymbol: Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
@@ -361,8 +353,8 @@ struct OnboardingAISetupView: View {
 
     private func subtitle(
         for candidate: OnboardingAISetupModel.Candidate,
-        status: OnboardingAISetupModel.CandidateStatus
-    ) -> String {
+        status: OnboardingAISetupModel.CandidateStatus) -> String
+    {
         switch status {
         case .testing:
             "Testing — asking \(candidate.modelRef) for a quick reply…"
@@ -374,8 +366,8 @@ struct OnboardingAISetupView: View {
     }
 
     private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus
-    ) -> Color {
+        for status: OnboardingAISetupModel.CandidateStatus) -> Color
+    {
         if case .failed = status {
             return .orange
         }
@@ -385,8 +377,8 @@ struct OnboardingAISetupView: View {
     @ViewBuilder
     private func trailingIndicator(
         status: OnboardingAISetupModel.CandidateStatus,
-        selected: Bool
-    ) -> some View {
+        selected: Bool) -> some View
+    {
         switch status {
         case .testing:
             ProgressView()
@@ -418,25 +410,25 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var manualSection: some View {
-        if model.manualProviders.isEmpty {
-            if model.authOptions.isEmpty {
+        if self.model.manualProviders.isEmpty {
+            if self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
                     title: "No key-based providers are available",
                     message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
                     docsSlug: "concepts/model-providers",
-                    retryTitle: "Check again"
-                ) {
+                    retryTitle: "Check again")
+                {
                     self.model.retryFromScratch()
                 }
             }
-        } else if model.candidates.isEmpty || model.showManualEntry {
-            manualForm
+        } else if self.model.candidates.isEmpty || self.model.showManualEntry {
+            self.manualForm
         }
     }
 
     @ViewBuilder
     private var providerPrepareSection: some View {
-        if !model.prepareOptions.isEmpty {
+        if !self.model.prepareOptions.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
@@ -451,8 +443,7 @@ struct OnboardingAISetupView: View {
                             OnboardingProviderArtwork(
                                 icon: option.icon,
                                 brandCandidates: [option.brandId, option.id],
-                                fallbackSymbol: "arrow.down.circle"
-                            )
+                                fallbackSymbol: "arrow.down.circle")
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.label)
                                     .font(.callout.weight(.semibold))
@@ -482,7 +473,7 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !model.authOptions.isEmpty || !model.manualProviders.isEmpty {
+        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 if self.model.nativeSessionCatalogPreferenceRequired,
                    !self.model.nativeSessionCatalogs.isEmpty
@@ -496,10 +487,9 @@ struct OnboardingAISetupView: View {
                                 Include existing %@ conversations in the sidebar. \
                                 This discovers them in place; it does not copy transcripts.
                                 """),
-                                self.model.nativeSessionCatalogSummary
-                            ))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                                self.model.nativeSessionCatalogSummary))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .toggleStyle(.checkbox)
@@ -509,11 +499,10 @@ struct OnboardingAISetupView: View {
                     .font(.headline)
                 Text(
                     "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
-                        "then continues into its own sign-in or API-key flow and verifies a real reply."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                        "then continues into its own sign-in or API-key flow and verifies a real reply.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 let featured = self.model.authOptions.filter(\.featured)
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
@@ -552,8 +541,7 @@ struct OnboardingAISetupView: View {
                 OnboardingProviderArtwork(
                     icon: nil,
                     brandCandidates: [],
-                    fallbackSymbol: "key.fill"
-                )
+                    fallbackSymbol: "key.fill")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("API Keys")
                         .font(.callout.weight(.semibold))
@@ -569,7 +557,7 @@ struct OnboardingAISetupView: View {
             .openClawSelectableRowChrome(selected: self.model.showManualEntry)
         }
         .buttonStyle(.plain)
-        .disabled(model.isBusy)
+        .disabled(self.model.isBusy)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -592,8 +580,7 @@ struct OnboardingAISetupView: View {
                 OnboardingProviderArtwork(
                     icon: option.icon,
                     brandCandidates: [option.brandId, option.id],
-                    fallbackSymbol: fallbackSymbol
-                )
+                    fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.callout.weight(.semibold))
@@ -612,7 +599,7 @@ struct OnboardingAISetupView: View {
             .openClawSelectableRowChrome(selected: false)
         }
         .buttonStyle(.plain)
-        .disabled(model.isBusy)
+        .disabled(self.model.isBusy)
     }
 
     private var manualForm: some View {
@@ -624,8 +611,7 @@ struct OnboardingAISetupView: View {
                     OnboardingProviderArtwork(
                         icon: provider.icon,
                         brandCandidates: [provider.brandId, provider.id],
-                        fallbackSymbol: "key.fill"
-                    )
+                        fallbackSymbol: "key.fill")
                 }
                 Picker("Provider", selection: self.$model.manualProviderID) {
                     ForEach(self.model.manualProviders) { provider in
@@ -668,8 +654,7 @@ struct OnboardingAISetupView: View {
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil
-                )
+                    retry: nil)
             }
         }
         .padding(12)
@@ -679,7 +664,7 @@ struct OnboardingAISetupView: View {
     }
 
     private var manualProviderHelp: String {
-        let hint = model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hint = self.model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let hint, !hint.isEmpty else {
             return "Paste the key or token here, and OpenClaw checks it with a real test question."
         }
@@ -710,8 +695,8 @@ struct OnboardingErrorCard: View {
         retryTitle: String? = nil,
         secondaryTitle: String? = nil,
         secondary: (() -> Void)? = nil,
-        retry: (() -> Void)?
-    ) {
+        retry: (() -> Void)?)
+    {
         self.title = title
         self.message = message
         self.details = details
@@ -772,8 +757,7 @@ struct OnboardingErrorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.10))
-        )
+                .fill(Color.orange.opacity(0.10)))
     }
 }
 
@@ -790,8 +774,7 @@ private struct OnboardingErrorDetails: View {
             } label: {
                 Label(
                     self.expanded ? "Hide details" : "Show details",
-                    systemImage: self.expanded ? "chevron.down" : "chevron.right"
-                )
+                    systemImage: self.expanded ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.link)
             .font(.caption)
@@ -809,8 +792,7 @@ private struct OnboardingErrorDetails: View {
                 .frame(maxHeight: 180)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
+                        .fill(Color.primary.opacity(0.05)))
                 Button {
                     Self.copy(self.text)
                 } label: {
