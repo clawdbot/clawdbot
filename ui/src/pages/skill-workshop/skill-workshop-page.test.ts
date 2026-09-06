@@ -129,13 +129,13 @@ function createProposal(overrides: Partial<SkillWorkshopProposal>): SkillWorksho
     ageLabel: "now",
     supportFiles: [],
     bodyLoaded: true,
-    isNew: false,
     ...overrides,
   };
 }
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.removeItem("openclaw:control-ui:skill-workshop-current-chat-revisions:v1");
 });
 
 describe("SkillWorkshopPage lifecycle", () => {
@@ -171,14 +171,14 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("renders truncated Today previews without dangling surrogates", async () => {
+  it("keeps the complete skill readable in Today without guessing section names", async () => {
     const previewText = `${"a".repeat(118)}😀trailing`;
     const proposal = createProposal({
       key: "proposal-utf16-preview",
       slug: "proposal-utf16-preview",
       name: "UTF-16 preview",
       oneLine: "Preview boundary coverage",
-      body: `## Workflow\n- ${previewText}`,
+      body: `## Проверка\n\nRead this before sending.\n\n- **Required:** ${previewText}\n- Second step\n- Third step\n- Final step\n\n\`\`\`sh\nverify --all\n\`\`\``,
       updatedAt: 0,
       origin: {
         agentId: "research",
@@ -198,7 +198,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
 
-    expect(page.querySelector(".sw-today__does li")?.textContent).toBe(`${"a".repeat(118)}…`);
+    const body = page.querySelector(".sw-today__hero .sidebar-markdown");
+    expect(body?.querySelector("h2")?.textContent).toBe("Проверка");
+    expect(body?.querySelector("p")?.textContent).toBe("Read this before sending.");
+    expect(body?.querySelector("li")?.textContent).toBe(`Required: ${previewText}`);
+    expect(body?.querySelectorAll("li")).toHaveLength(4);
+    expect(body?.querySelector("pre")?.textContent).toContain("verify --all");
   });
 
   it("forces a fresh proposal load when the gateway source changes", async () => {
@@ -474,65 +479,72 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(newContext.navigate).not.toHaveBeenCalled();
   });
 
-  it("admits a revision with the initiating gateway client and observed revision hash", async () => {
-    const sessions = {
-      state: {
-        agentId: "research",
-        result: {
-          sessions: [
-            {
-              key: "agent:research:revision",
-              archived: false,
-              hasActiveRun: false,
-            },
-          ],
+  it.each([false, true])(
+    "admits a revision on its origin session despite legacy current-chat setting %s",
+    async (enabled) => {
+      localStorage.setItem(
+        "openclaw:control-ui:skill-workshop-current-chat-revisions:v1",
+        String(enabled),
+      );
+      const sessions = {
+        state: {
+          agentId: "research",
+          result: {
+            sessions: [
+              {
+                key: "agent:research:revision",
+                archived: false,
+                hasActiveRun: false,
+              },
+            ],
+          },
+          loading: false,
+          error: null,
         },
-        loading: false,
-        error: null,
-      },
-      list: vi.fn(),
-      create: vi.fn(),
-    } as unknown as ApplicationContext["sessions"];
-    const request = vi.fn(async () => ({ status: "started" }));
-    const context = createContext(request, { sessions });
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const proposal = createProposal({
-      key: "proposal-owner",
-      slug: "proposal-owner",
-      updatedAt: 0,
-      origin: {
-        agentId: "research",
+        list: vi.fn(),
+        create: vi.fn(),
+      } as unknown as ApplicationContext["sessions"];
+      const request = vi.fn(async () => ({ status: "started" }));
+      const context = createContext(request, { sessions });
+      const loadedState = createSkillWorkshopState();
+      loadedState.skillWorkshopAgentId = "research";
+      loadedState.skillWorkshopLoaded = true;
+      const proposal = createProposal({
+        key: "proposal-owner",
+        slug: "proposal-owner",
+        updatedAt: 0,
+        origin: {
+          agentId: "research",
+          sessionKey: "agent:research:revision",
+        },
+      });
+      loadedState.skillWorkshopProposals = [proposal];
+      const page = document.createElement(
+        "openclaw-skill-workshop-page",
+      ) as SkillWorkshopPageTestElement;
+      page.data = skillWorkshopRouteData(loadedState);
+      page.context = context;
+      document.body.append(page);
+      await page.updateComplete;
+
+      await expect(
+        page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64)),
+      ).resolves.toMatchObject({
         sessionKey: "agent:research:revision",
-      },
-    });
-    loadedState.skillWorkshopProposals = [proposal];
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
-    page.context = context;
-    document.body.append(page);
-    await page.updateComplete;
+        status: "admitted",
+      });
 
-    await expect(
-      page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64)),
-    ).resolves.toMatchObject({
-      sessionKey: "agent:research:revision",
-      status: "admitted",
-    });
-
-    expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
-      agentId: "research",
-      targetAgentId: "research",
-      proposalId: "proposal-owner",
-      expectedRevisionHash: "a".repeat(64),
-      instructions: "revise it",
-      sessionKey: "agent:research:revision",
-      idempotencyKey: expect.any(String),
-    });
-  });
+      expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+        agentId: "research",
+        targetAgentId: "research",
+        proposalId: "proposal-owner",
+        expectedRevisionHash: "a".repeat(64),
+        instructions: "revise it",
+        sessionKey: "agent:research:revision",
+        idempotencyKey: expect.any(String),
+      });
+    },
+  );
 
   it("does not create a fallback revision session after a same-context reconnect", async () => {
     const sessionList = deferred<SessionsListResult>();

@@ -6,10 +6,8 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
-import {
-  resolveVitestPretestBuildMode,
-  resolveVitestRuntimeCliSelections,
-} from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
@@ -155,6 +153,22 @@ describe("test runtime prerequisites", () => {
       {},
     );
     expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+  });
+
+  it("projects invocation-owned include files when selecting prerequisites", () => {
+    const selections = resolveVitestRuntimeCliSelections(
+      "test/vitest/vitest.gateway-server.config.ts",
+      ["run"],
+      {},
+    );
+    for (const selection of selections) {
+      selection.includePatterns = ["src/gateway/server-request-context.test.ts"];
+    }
+    expect(resolveVitestPretestBuildMode(selections)).toBeUndefined();
+    for (const selection of selections) {
+      selection.includePatterns = ["src/gateway/server-sidecar-retention.test.ts"];
+    }
+    expect(resolveVitestPretestBuildMode(selections)).toBe("runtime");
   });
 
   it("combines private QA and runtime readers into one private build", () => {

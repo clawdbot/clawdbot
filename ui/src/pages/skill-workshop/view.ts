@@ -1,9 +1,10 @@
 // Control UI view renders skill workshop screen content.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/resizable-divider.ts";
@@ -13,6 +14,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
+import "../../styles/sidebar-markdown.css";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionNotice,
@@ -55,9 +57,6 @@ const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
   quarantined: "skillWorkshop.status.quarantined",
   stale: "skillWorkshop.status.stale",
 };
-
-const TODAY_PREVIEW_MAX_ITEMS = 3;
-const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
 
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "skillWorkshop.recency.today",
@@ -535,10 +534,9 @@ function renderToday(
   );
   const total = Math.max(pending.length, 1);
   const upNext = pending.filter((p) => p.key !== hero.key).slice(0, 3);
-  const applied = props.proposals.filter((p) => p.status === "applied").slice(0, 3);
-  const heroLabel = hero.isNew
-    ? t("skillWorkshop.today.new")
-    : hero.status === "pending"
+  const applied = filterSkillWorkshopProposals(props.proposals, "applied", "").slice(0, 3);
+  const heroLabel =
+    hero.status === "pending"
       ? t("skillWorkshop.today.waiting")
       : t("skillWorkshop.today.reviewed");
   const ageLabel = hero.ageLabel;
@@ -596,7 +594,14 @@ function renderToday(
         <h2 class="sw-today__name">${hero.slug}</h2>
         <p class="sw-today__one-liner">${hero.oneLine}</p>
 
-        ${renderTodayDoesBlock(hero)}
+        ${
+          hero.bodyLoaded
+            ? html`<details class="sw-today__body">
+                <summary>${t("skillWorkshop.today.readSkill")}</summary>
+                ${renderProposalBody(hero.body)}
+              </details>`
+            : html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+        }
 
         <div class="sw-today__author">
           <span class="sw-today__avatar">v${hero.version}</span>
@@ -720,14 +725,14 @@ function renderToday(
           ? html`
               <section class="sw-today__section">
                 <header class="sw-today__section-head">
-                  <h3>
-                    ${t("skillWorkshop.today.collection", {
-                      count: String(props.counts.applied),
-                    })}
-                  </h3>
+                  <h3>${t("skillWorkshop.today.recentlyApplied")}</h3>
                   <button
                     class="sw-today__link sw-today__link--muted"
-                    @click=${() => props.onModeChange("board")}
+                    @click=${() => {
+                      props.onQueryChange("");
+                      props.onStatusFilterChange("applied");
+                      props.onModeChange("board");
+                    }}
                   >
                     ${t("skillWorkshop.today.manage")}
                   </button>
@@ -738,6 +743,8 @@ function renderToday(
                       <button
                         class="sw-today__applied-row"
                         @click=${() => {
+                          props.onQueryChange("");
+                          props.onStatusFilterChange("applied");
                           props.onSelect(p.key);
                           props.onModeChange("board");
                         }}
@@ -913,141 +920,6 @@ function renderEvaluationMetrics(metrics: Record<string, string | number | boole
   `;
 }
 
-function renderTodayDoesBlock(hero: SkillWorkshopProposal) {
-  const preview = extractTodayProposalPreview(hero.body);
-  if (!preview) {
-    return nothing;
-  }
-  return html`
-    <div class="sw-today__does">
-      <div class="sw-today__does-h">${preview.heading}</div>
-      <ul>
-        ${preview.items.map((item) => html`<li>${item}</li>`)}
-      </ul>
-    </div>
-  `;
-}
-
-type TodayProposalPreview = {
-  heading: string;
-  items: string[];
-};
-
-type ProposalBodySection = {
-  title: string;
-  lines: string[];
-};
-
-function extractTodayProposalPreview(body: string): TodayProposalPreview | null {
-  const sections = splitProposalBodySections(body);
-  const workflow = findProposalSection(sections, [
-    "workflow",
-    "procedure",
-    "steps",
-    "agent workflow",
-    "process",
-  ]);
-  const workflowItems = workflow ? extractTopLevelListItems(workflow.lines) : [];
-  if (workflowItems.length > 0) {
-    return {
-      heading: t("skillWorkshop.today.workflowHeading"),
-      items: workflowItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
-    };
-  }
-
-  const applicability = findProposalSection(sections, [
-    "when to use",
-    "use when",
-    "applies when",
-    "trigger",
-    "triggers",
-  ]);
-  const applicabilityItems = applicability ? extractTopLevelListItems(applicability.lines) : [];
-  if (applicabilityItems.length > 0) {
-    return {
-      heading: t("skillWorkshop.today.applicabilityHeading"),
-      items: applicabilityItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
-    };
-  }
-
-  return null;
-}
-
-function splitProposalBodySections(body: string): ProposalBodySection[] {
-  const sections: ProposalBodySection[] = [];
-  let current: ProposalBodySection | null = null;
-  let inCode = false;
-
-  for (const raw of body.split("\n")) {
-    const trimmed = raw.trim();
-    if (trimmed.startsWith("```")) {
-      inCode = !inCode;
-    }
-    const heading = !inCode ? /^(#{2,4})\s+(.+?)\s*$/.exec(trimmed) : null;
-    const headingText = heading?.[2];
-    if (headingText) {
-      current = { title: normalizeSectionTitle(headingText), lines: [] };
-      sections.push(current);
-      continue;
-    }
-    current?.lines.push(raw);
-  }
-
-  return sections;
-}
-
-function findProposalSection(
-  sections: readonly ProposalBodySection[],
-  names: readonly string[],
-): ProposalBodySection | undefined {
-  const wanted = new Set(names.map(normalizeSectionTitle));
-  return sections.find((section) => wanted.has(section.title));
-}
-
-function normalizeSectionTitle(title: string): string {
-  return title
-    .replace(/[#*_`[\]().:]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function extractTopLevelListItems(lines: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const raw of lines) {
-    if (/^\s{2,}/.test(raw)) {
-      continue;
-    }
-    const line = raw.trim();
-    const m = /^(?:[-*]|\d+\.)\s+(.+)/.exec(line);
-    const item = m?.[1];
-    if (item) {
-      out.push(cleanTodayPreviewItem(item));
-    }
-  }
-  return out.filter(Boolean);
-}
-
-function cleanTodayPreviewItem(item: string): string {
-  const cleaned = item
-    .replace(/^\*\*[^*]+\*\*\s*/, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-  return truncateAtWord(cleaned, TODAY_PREVIEW_MAX_ITEM_CHARS);
-}
-
-function truncateAtWord(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  const clipped = truncateUtf16Safe(value, maxChars - 1);
-  const boundary = clipped.lastIndexOf(" ");
-  const base = boundary > 48 ? clipped.slice(0, boundary) : clipped;
-  return `${base.trimEnd()}…`;
-}
-
 function formatTodayDate(ms: number): string {
   const d = new Date(ms);
   const day = d.toLocaleDateString(undefined, { weekday: "long" });
@@ -1056,105 +928,15 @@ function formatTodayDate(ms: number): string {
 }
 
 function renderProposalBody(body: string) {
-  const lines = body.split("\n");
-  const out: unknown[] = [];
-  let para: string[] = [];
-  let list: string[] = [];
-  let inCode = false;
-  let codeBuf: string[] = [];
-
-  const flushPara = () => {
-    if (para.length) {
-      out.push(html`<p>${renderInline(para.join(" "))}</p>`);
-      para = [];
-    }
-  };
-  const flushList = () => {
-    if (list.length) {
-      const items = list;
-      out.push(html`
-        <ol>
-          ${items.map((line) => html`<li>${renderInline(line)}</li>`)}
-        </ol>
-      `);
-      list = [];
-    }
-  };
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (line.startsWith("```")) {
-      flushPara();
-      flushList();
-      if (inCode) {
-        out.push(html`<pre>${codeBuf.join("\n")}</pre>`);
-        codeBuf = [];
-        inCode = false;
-      } else {
-        inCode = true;
-      }
-      continue;
-    }
-    if (inCode) {
-      codeBuf.push(raw);
-      continue;
-    }
-    if (line === "") {
-      flushPara();
-      flushList();
-      continue;
-    }
-    if (line.startsWith("## ")) {
-      flushPara();
-      flushList();
-      out.push(html`<h3>${line.slice(3)}</h3>`);
-      continue;
-    }
-    if (line.startsWith("# ")) {
-      flushPara();
-      flushList();
-      out.push(html`<h3>${line.slice(2)}</h3>`);
-      continue;
-    }
-    const olMatch = /^\d+\.\s+(.+)/.exec(line);
-    const listItem = olMatch?.[1];
-    if (listItem) {
-      flushPara();
-      list.push(listItem);
-      continue;
-    }
-    para.push(line);
-  }
-  flushPara();
-  flushList();
-  if (inCode && codeBuf.length) {
-    out.push(html`<pre>${codeBuf.join("\n")}</pre>`);
-  }
-  return out;
-}
-
-// Inline render: handles `code` and **bold** in text segments.
-function renderInline(text: string): unknown {
-  const parts: unknown[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
-    if (match.index > last) {
-      parts.push(text.slice(last, match.index));
-    }
-    const token = match[0];
-    if (token.startsWith("`")) {
-      parts.push(html`<code>${token.slice(1, -1)}</code>`);
-    } else {
-      parts.push(html`<strong>${token.slice(2, -2)}</strong>`);
-    }
-    last = match.index + token.length;
-  }
-  if (last < text.length) {
-    parts.push(text.slice(last));
-  }
-  return parts;
+  return html`<article class="sidebar-markdown">
+    ${unsafeHTML(
+      toSanitizedMarkdownHtml(body, {
+        mode: "document",
+        codeBlockChrome: "none",
+        remoteImages: false,
+      }),
+    )}
+  </article>`;
 }
 
 function groupByRecency(

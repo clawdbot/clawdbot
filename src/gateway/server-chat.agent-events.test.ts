@@ -1066,6 +1066,12 @@ describe("agent event handler", () => {
               { phase: "error", error: "retryable failure" },
               { seq: 50 },
             );
+            expect(
+              frames
+                .filter((frame) => frame.event === "chat" && frame.payload.state === "delta")
+                .map((frame) => frame.payload.deltaText)
+                .join(""),
+            ).toBe(`${expected} failed tail`);
           } else if (terminal === "clearRun") {
             chatRunState.clearRun(runId);
           } else {
