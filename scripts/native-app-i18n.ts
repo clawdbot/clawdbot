@@ -64,6 +64,7 @@ export type NativeI18nQualityFinding = {
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   force?: boolean;
+  refreshIds?: string[];
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
   translationsDir?: string;
@@ -71,6 +72,7 @@ type NativeLocaleSyncOptions = {
 type NativeI18nCommand = {
   command: "baseline" | "check" | "sync" | "verify";
   force?: boolean;
+  refreshIds?: string[];
   locale?: string;
   write: boolean;
 };
@@ -1586,11 +1588,29 @@ export async function checkNativeLocaleArtifacts(
   );
 }
 
+function normalizeNativeRefreshIds(ids: readonly string[], force = false): string[] {
+  const distinct = [...new Set(ids)].toSorted(compareCodePoints);
+  if (distinct.length > 64) {
+    throw new Error("native refresh accepts at most 64 distinct `--refresh-id` values");
+  }
+  if (distinct.length > 0 && force) {
+    throw new Error("native refresh cannot combine `--refresh-id` with `--force`");
+  }
+  return distinct;
+}
+
 export async function syncNativeLocale(
   locale: string,
   entries: NativeI18nEntry[],
   options: NativeLocaleSyncOptions = {},
 ) {
+  const refreshIds = new Set(normalizeNativeRefreshIds(options.refreshIds ?? [], options.force));
+  const inventoryIds = new Set(entries.map((entry) => entry.id));
+  for (const id of refreshIds) {
+    if (!inventoryIds.has(id)) {
+      throw new Error(`unknown native refresh ID: ${id}`);
+    }
+  }
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
@@ -1633,16 +1653,24 @@ export async function syncNativeLocale(
       }
     }
   }
-  const glossaryChanged = previous?.version === 2 && previous.glossaryHash !== currentGlossaryHash;
+  const glossaryChanged =
+    (previous?.version === 2 || (migratingV1 && refreshIds.size > 0)) &&
+    previous?.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => options.force || glossaryChanged || !reusableById.get(entry.id))
+    .filter(
+      (entry) =>
+        options.force || refreshIds.has(entry.id) || glossaryChanged || !reusableById.get(entry.id),
+    )
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
     }));
+  // Default v1 migration is provider-free; an explicit refresh also completes
+  // its ordinary pending work instead of silently carrying selected translations.
+  const translatePending = !migratingV1 || options.force || refreshIds.size > 0;
   const translated =
-    pending.length && (!migratingV1 || options.force)
+    pending.length && translatePending
       ? await (options.translate ?? translateNativeEntries)(
           pending,
           locale,
@@ -1678,7 +1706,7 @@ export async function syncNativeLocale(
   process.stdout.write(
     `native-app-i18n: locale=${locale} entries=${entries.length} carried=${reusableById.size} translated=${translated.size} sourceFallback=${fallback} changed=${changed}\n`,
   );
-  if (migratingV1 && pending.length > 0) {
+  if (migratingV1 && !translatePending && pending.length > 0) {
     process.stdout.write(
       `native-app-i18n: locale=${locale} migration-source-fallback=${pending.length} ids=${pending.map((entry) => entry.id).join(",")}\n`,
     );
@@ -1690,10 +1718,11 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
   if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force]|verify",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force | --refresh-id <native-id> ...]|verify",
     );
   }
   let locale: string | undefined;
+  const requestedRefreshIds: string[] = [];
   let force = false;
   let write = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -1704,6 +1733,15 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
     }
     if (argument === "--write") {
       write = true;
+      continue;
+    }
+    if (argument === "--refresh-id") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("native refresh requires an ID after `--refresh-id`");
+      }
+      requestedRefreshIds.push(value);
+      index += 1;
       continue;
     }
     if (argument === "--locale") {
@@ -1719,6 +1757,12 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
       continue;
     }
     throw new Error(`unsupported native i18n argument: ${argument}`);
+  }
+  const refreshIds = normalizeNativeRefreshIds(requestedRefreshIds, force);
+  if (refreshIds.length > 0 && (command !== "sync" || !write || !locale)) {
+    throw new Error(
+      "native selected refresh requires `sync --write --locale <code> --refresh-id <native-id>`",
+    );
   }
   if (locale) {
     if (command !== "sync" || !write) {
@@ -1739,7 +1783,13 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   if (force && (command !== "sync" || !write || !locale)) {
     throw new Error("native full refresh requires `sync --write --locale <code> --force`");
   }
-  return { command, locale, write, ...(force ? { force } : {}) };
+  return {
+    command,
+    locale,
+    write,
+    ...(force ? { force } : {}),
+    ...(refreshIds.length > 0 ? { refreshIds } : {}),
+  };
 }
 
 async function main() {
@@ -1754,7 +1804,10 @@ async function main() {
       parsed.locale === undefined,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, entries, { force: parsed.force });
+    await syncNativeLocale(parsed.locale, entries, {
+      force: parsed.force,
+      refreshIds: parsed.refreshIds,
+    });
   }
   if (parsed.command === "verify" || parsed.command === "check") {
     const android = await import("./android-app-i18n.ts");
