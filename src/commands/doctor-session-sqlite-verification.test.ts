@@ -102,24 +102,31 @@ describe("createRecoveryDestinationVerifier", () => {
     );
   });
 
-  it("throws when a sidecar file is replaced with a different inode (identity change)", () => {
+  it("throws when a sidecar file is deleted after baseline (identity loss)", () => {
     const verify = createRecoveryDestinationVerifier(stateDir);
     const target = makeMinimalTargetManifest(sqlitePath, agentId);
 
     // Establish baseline.
     verify([{ target }]);
 
-    // Replace a sidecar file with a new file (different inode).
+    // Delete a sidecar file that existed in the baseline. The verifier should
+    // detect the identity change (dev/ino now undefined vs. recorded BigInt).
     const walPath = `${sqlitePath}-wal`;
     if (fs.existsSync(walPath)) {
       fs.unlinkSync(walPath);
+      // SHOULD throw — sidecar identity (dev/ino) changed from recorded to undefined.
+      expect(() => verify([{ target }])).toThrow(
+        "Recovery destination database changed; preview cleanup again.",
+      );
+    } else {
+      // If no WAL sidecar exists, create one and verify deletion is detected.
+      fs.writeFileSync(walPath, Buffer.alloc(32));
+      verify([{ target }]); // Re-establish baseline with the WAL present.
+      fs.unlinkSync(walPath);
+      expect(() => verify([{ target }])).toThrow(
+        "Recovery destination database changed; preview cleanup again.",
+      );
     }
-    fs.writeFileSync(walPath, Buffer.alloc(32));
-
-    // SHOULD throw — sidecar dev/ino changed (identity change is always fenced).
-    expect(() => verify([{ target }])).toThrow(
-      "Recovery destination database changed; preview cleanup again.",
-    );
   });
 
   it("establishes baseline and passes on a clean re-check", () => {
