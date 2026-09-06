@@ -52,6 +52,10 @@ checks, and the declared node commands execute. Schema-generated defaults for
 `enabled` remain available in plugin-local configuration, but the root runtime
 config retains only an authored value so a default cannot impersonate consent.
 
+Declare commands that expose the native catalog, not independently authorized
+execution transports. Disabling discovery must preserve turns in an already-bound
+conversation; those turns retain their existing execution and node permissions.
+
 New declarations default to off when no preference is authored, including plugins
 installed after configuration creation. Their schemas should also default `enabled`
 to `false`. New configuration files persist `false` for the host-generated catalog
