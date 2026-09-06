@@ -196,6 +196,115 @@ describe("session maintenance ownership", () => {
     },
   );
 
+  it.each(
+    (["external dependent", "nested independent", "released parent"] as const).flatMap(
+      (placement) => (["read", "foreground"] as const).map((action) => ({ placement, action })),
+    ),
+  )("orders child $action with $placement sibling", async ({ placement, action }) => {
+    const sessionKey = `session:combined:${placement}:${action}`;
+    const parentStarted = createDeferred();
+    const allowChild = createDeferred();
+    const childCreated = createDeferred();
+    const childCompleted = createDeferred();
+    const siblingStarted = createDeferred();
+    const finishSibling = createDeferred();
+    const finishParent = createDeferred();
+    const events: string[] = [];
+    const parent = createSessionMaintenanceOwner({ sessionKey });
+    let child: ReturnType<typeof createSessionMaintenanceOwner> | undefined;
+    let childWork: Promise<void> = Promise.resolve();
+    let siblingWork: Promise<void> = Promise.resolve();
+    const startSibling = () => {
+      const sibling = createSessionMaintenanceOwner({ sessionKey });
+      siblingWork = sibling.track(
+        sibling.run(async () => {
+          events.push("sibling started");
+          siblingStarted.resolve();
+          await finishSibling.promise;
+          events.push("sibling completed");
+        }),
+      );
+    };
+    const parentWork = parent.track(
+      parent.run(async () => {
+        events.push("parent started");
+        parentStarted.resolve();
+        await allowChild.promise;
+        if (placement === "nested independent") {
+          startSibling();
+          await siblingStarted.promise;
+        } else if (placement === "released parent") {
+          parent.releaseWrites();
+          await siblingStarted.promise;
+        }
+        child = createSessionMaintenanceOwner({ sessionKey });
+        childWork = child.track(
+          child.run(async () => {
+            events.push("child started");
+            if (action === "read") {
+              await waitForSessionMaintenance(sessionKey);
+            } else {
+              const release = await beginForegroundSessionMaintenance(sessionKey);
+              release();
+            }
+            events.push("child completed");
+            childCompleted.resolve();
+          }),
+        );
+        childCreated.resolve();
+        await childWork;
+        events.push("parent resumed");
+        await finishParent.promise;
+        events.push("parent completed");
+      }),
+    );
+    try {
+      await parentStarted.promise;
+      if (placement !== "nested independent") {
+        startSibling();
+      }
+      allowChild.resolve();
+      await childCreated.promise;
+      // These owner waits have no I/O: drain the scheduled continuations without
+      // relying on a test timeout to discover a circular dependency.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      if (placement === "external dependent") {
+        expect([...events]).toEqual([
+          "parent started",
+          "child started",
+          "child completed",
+          "parent resumed",
+        ]);
+      } else {
+        expect([...events]).toEqual(["parent started", "sibling started"]);
+        finishSibling.resolve();
+        await childCompleted.promise;
+      }
+      finishParent.resolve();
+      await parentWork;
+      await siblingStarted.promise;
+      finishSibling.resolve();
+      await siblingWork;
+      const ordered =
+        placement === "external dependent"
+          ? ["child completed", "parent completed", "sibling started"]
+          : ["sibling completed", "child started", "parent completed"];
+      expect(events.filter((event) => ordered.includes(event))).toEqual(ordered);
+    } finally {
+      // Break a failed fixture's dependency cycle only after its ordering assertion;
+      // actual tracked completion still settles every owner before teardown.
+      allowChild.resolve();
+      finishParent.resolve();
+      finishSibling.resolve();
+      parent.releaseWrites();
+      child?.releaseWrites();
+      await Promise.allSettled([parentWork, siblingWork, childWork]);
+    }
+    await waitForSessionMaintenance(sessionKey);
+  });
+
   it("releases writes after disposal while retaining completion ownership of an external rerun", async () => {
     const sessionKey = "session:external-rerun";
     const disposing = createDeferred();

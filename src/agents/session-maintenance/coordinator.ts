@@ -15,6 +15,8 @@ type MaintenanceOwner = {
   controller: AbortController;
   done: Promise<void>;
   writesDone: Promise<void>;
+  writesReleased: boolean;
+  predecessors: readonly MaintenanceOwner[];
   preemptible: boolean;
   running: boolean;
 };
@@ -66,6 +68,27 @@ function releaseSessionState(key: string, session: SessionMaintenance): void {
   }
 }
 
+function independentOwners(
+  session: SessionMaintenance | undefined,
+  current: ReadonlySet<MaintenanceOwner> | undefined,
+): MaintenanceOwner[] {
+  const blocked = new Set(current);
+  // Owners are registered in dependency order. Work waiting on an active ancestor
+  // cannot precede its child; released writes no longer propagate that dependency.
+  return [...(session?.owners ?? [])].filter((owner) => {
+    if (
+      blocked.has(owner) ||
+      owner.predecessors.some(
+        (predecessor) => !predecessor.writesReleased && blocked.has(predecessor),
+      )
+    ) {
+      blocked.add(owner);
+      return false;
+    }
+    return true;
+  });
+}
+
 registerAgentEventLifecycleRotationHandler("session-maintenance", () => {
   for (const session of state.sessions.values()) {
     for (const owner of session.owners) {
@@ -84,7 +107,6 @@ export function createSessionMaintenanceOwner(params: {
   const session = sessionState(key);
   const generation = getAgentEventLifecycleGeneration();
   const ancestors = state.current.getStore() ?? new Set<MaintenanceOwner>();
-  const predecessors = [...session.owners].filter((owner) => !ancestors.has(owner));
   const controller = new AbortController();
   const signal = AbortSignal.any([
     controller.signal,
@@ -96,12 +118,12 @@ export function createSessionMaintenanceOwner(params: {
     finish = resolve;
   });
   let finishWrites = () => {};
-  let writesReleased = false;
   const writesDone = new Promise<void>((resolve) => {
     finishWrites = resolve;
   });
   const releaseWrites = () => {
-    writesReleased = true;
+    owner.writesReleased = true;
+    owner.predecessors = [];
     finishWrites();
   };
   const owner: MaintenanceOwner = {
@@ -110,6 +132,8 @@ export function createSessionMaintenanceOwner(params: {
     controller,
     done,
     writesDone,
+    writesReleased: false,
+    predecessors: independentOwners(session, ancestors),
     preemptible: params.preemptible === true,
     running: params.preemptible !== true,
   };
@@ -118,7 +142,7 @@ export function createSessionMaintenanceOwner(params: {
   const assertCurrent = () => {
     signal.throwIfAborted();
     assertAgentRunLifecycleGenerationCurrent(generation);
-    if (writesReleased || !session.owners.has(owner)) {
+    if (owner.writesReleased || !session.owners.has(owner)) {
       throw createAbortError("Session maintenance owner is closed");
     }
   };
@@ -129,7 +153,7 @@ export function createSessionMaintenanceOwner(params: {
     releaseWrites,
     run: async <T>(run: () => Promise<T>): Promise<T> => {
       // Waiting on successors would make nested model reads mutually await sibling work.
-      await Promise.all(predecessors.map((predecessor) => predecessor.writesDone));
+      await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
       if (owner.preemptible) {
         while (session.foreground > 0) {
           let wake = () => {};
@@ -184,7 +208,7 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
     releaseSessionState(key, session);
   };
   const current = state.current.getStore();
-  const existing = [...session.owners].filter((owner) => !current?.has(owner));
+  const existing = independentOwners(session, current);
   const optional = existing.filter((owner) => owner.preemptible);
   for (const owner of optional) {
     recordPhase(key, owner, "foreground_preemption_requested");
@@ -200,17 +224,9 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
 export async function waitForSessionMaintenance(sessionKey?: string): Promise<void> {
   const session = sessionKey ? state.sessions.get(sessionKey.trim()) : undefined;
   const current = state.current.getStore();
-  const sequence = current?.size
-    ? Math.max(...[...current].map((owner) => owner.sequence))
-    : undefined;
   await Promise.all(
-    [...(session?.owners ?? [])]
-      .filter(
-        (owner) =>
-          (owner.running || session?.foreground === 0) &&
-          !current?.has(owner) &&
-          (sequence === undefined || owner.sequence < sequence),
-      )
-      .map((owner) => (sequence === undefined ? owner.done : owner.writesDone)),
+    independentOwners(session, current)
+      .filter((owner) => owner.running || session?.foreground === 0)
+      .map((owner) => (current?.size ? owner.writesDone : owner.done)),
   );
 }
