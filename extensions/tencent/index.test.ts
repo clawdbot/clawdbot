@@ -34,7 +34,7 @@ async function getTokenPlanProvider() {
 
 function hyReasoningModel(params: {
   provider: "tencent-tokenhub" | "tencent-tokenplan";
-  id: "hy3" | "hy3-preview";
+  id: "hy3" | "hy3-preview" | "hy4-preview";
   baseUrl: string;
   supportedReasoningEfforts?: string[];
 }): OpenAICompletionsModel {
@@ -224,12 +224,22 @@ describe("tencent provider plugin", () => {
     const modelIds = catalogProvider.models?.map((m) => m.id);
     expect(modelIds).toContain("hy3");
     expect(modelIds).toContain("hy3-preview");
+    expect(modelIds).toContain("hy4-preview");
 
     const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
     expect(hy3?.reasoning).toBe(true);
     expect(hy3?.maxTokens).toBe(128_000);
     expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
+    // hy3 (GA) exposes only the two-rung ladder — it does NOT accept `low`.
+    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+
+    const hy4Preview = catalogProvider.models?.find((m) => m.id === "hy4-preview");
+    expect(hy4Preview?.reasoning).toBe(true);
+    expect(hy4Preview?.contextWindow).toBe(1_024_000);
+    expect(hy4Preview?.maxTokens).toBe(64_000);
+    expect(hy4Preview?.compat?.supportsReasoningEffort).toBe(true);
+    // hy4-preview shares hy3's two-rung ladder — it does NOT accept `low`.
+    expect(hy4Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
 
     const hy3Preview = catalogProvider.models?.find((m) => m.id === "hy3-preview");
     expect(hy3Preview?.reasoning).toBe(true);
@@ -242,7 +252,7 @@ describe("tencent provider plugin", () => {
     >;
     expect(manifestRows.find((model) => model.id === "hy3-preview")).toMatchObject({
       status: "deprecated",
-      replacedBy: "hy3",
+      replacedBy: "hy4-preview",
     });
   });
 
@@ -254,13 +264,22 @@ describe("tencent provider plugin", () => {
     expect(catalogProvider.baseUrl).toBe("https://api.lkeap.cloud.tencent.com/plan/v3");
 
     const modelIds = catalogProvider.models?.map((m) => m.id);
-    expect(modelIds).toEqual(["hy3"]);
+    expect(modelIds).toEqual(["hy3", "hy4-preview"]);
 
     const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
     expect(hy3?.reasoning).toBe(true);
     expect(hy3?.maxTokens).toBe(128_000);
     expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
+    // hy3 (GA) exposes only the two-rung ladder — it does NOT accept `low`.
+    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+
+    const hy4Preview = catalogProvider.models?.find((m) => m.id === "hy4-preview");
+    expect(hy4Preview?.reasoning).toBe(true);
+    expect(hy4Preview?.contextWindow).toBe(1_024_000);
+    expect(hy4Preview?.maxTokens).toBe(64_000);
+    expect(hy4Preview?.compat?.supportsReasoningEffort).toBe(true);
+    // hy4-preview shares hy3's two-rung ladder — it does NOT accept `low`.
+    expect(hy4Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
   });
 
   it("injects reasoning_effort into TokenPlan hy3 chat-completions payload", async () => {
@@ -415,5 +434,60 @@ describe("tencent provider plugin", () => {
 
     expect(minimalPayload?.reasoning_effort).toBe("low");
     expect(mediumPayload?.reasoning_effort).toBe("low");
+  });
+
+  it("collapses hy4-preview onto its two-rung ladder on both endpoints", async () => {
+    const tokenHubProvider = await getTokenHubProvider();
+    const tokenPlanProvider = await getTokenPlanProvider();
+    const tokenHubModel = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy4-preview",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+    });
+    const tokenPlanModel = hyReasoningModel({
+      provider: "tencent-tokenplan",
+      id: "hy4-preview",
+      baseUrl: "https://api.lkeap.cloud.tencent.com/plan/v3",
+    });
+
+    // hy4-preview accepts `none` and `high` only, so every intermediate rung
+    // has to reach the gateway as `high` and every off-ish request as `none`.
+    // Leaving a rung unmapped lets the model default to thinking and answer
+    // with reasoning only, which surfaces as an incomplete turn.
+    const expected: Record<string, string> = {
+      off: "none",
+      none: "none",
+      minimal: "high",
+      low: "high",
+      medium: "high",
+      high: "high",
+      xhigh: "high",
+    };
+    for (const [provider, model] of [
+      [tokenHubProvider, tokenHubModel],
+      [tokenPlanProvider, tokenPlanModel],
+    ] as const) {
+      for (const [reasoning, rung] of Object.entries(expected)) {
+        expect(
+          captureTencentPayload({ provider, model, reasoning })?.reasoning_effort,
+          `${(model as { provider: string }).provider}/hy4-preview ${reasoning}`,
+        ).toBe(rung);
+      }
+    }
+
+    // hy3-preview keeps its three-rung ladder and stays on shared handling.
+    const hy3PreviewModel = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy3-preview",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      supportedReasoningEfforts: ["none", "low", "high"],
+    });
+    expect(
+      captureTencentPayload({
+        provider: tokenHubProvider,
+        model: hy3PreviewModel,
+        reasoning: "low",
+      })?.reasoning_effort,
+    ).toBe("low");
   });
 });

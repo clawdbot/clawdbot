@@ -71,15 +71,16 @@ describe("bundled setup config migrations", () => {
     });
 
     expect(result.changes).toEqual([
-      "Updated Tencent TokenHub agent model defaults to include tencent-tokenhub/hy3 and tencent-tokenhub/hy3-preview.",
-      "Changed Tencent TokenHub primary default from tencent-tokenhub/hy3-preview to tencent-tokenhub/hy3.",
+      "Updated Tencent TokenHub agent model defaults to include tencent-tokenhub/hy4-preview, tencent-tokenhub/hy3, tencent-tokenhub/hy3-preview.",
+      "Changed Tencent TokenHub primary default from tencent-tokenhub/hy3-preview to tencent-tokenhub/hy4-preview.",
     ]);
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "tencent-tokenhub/hy3",
+      primary: "tencent-tokenhub/hy4-preview",
     });
     expect(Object.keys(result.config.agents?.defaults?.models ?? {}).toSorted()).toEqual([
       "tencent-tokenhub/hy3",
       "tencent-tokenhub/hy3-preview",
+      "tencent-tokenhub/hy4-preview",
     ]);
   });
 

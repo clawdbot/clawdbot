@@ -1277,7 +1277,7 @@ extensions/telegram/src/thread-bindings.ts	2
 extensions/telegram/src/topic-name-cache.ts	3
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
-extensions/tencent/stream.ts	5
+extensions/tencent/stream.ts	4
 extensions/tlon/src/channel.runtime.ts	3
 extensions/tlon/src/channel.ts	2
 extensions/tlon/src/monitor/approval-runtime.ts	2
