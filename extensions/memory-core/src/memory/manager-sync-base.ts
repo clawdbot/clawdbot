@@ -363,6 +363,8 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected resolveCurrentIndexIdentityState(params?: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
+    providerKey?: string;
+    providerIdentities?: MemoryIndexProviderIdentity[];
     providerKeyKnown?: boolean;
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
@@ -410,20 +412,27 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         })
       : [];
     const providerIdentities =
-      initializedProviderIdentities.length > 0
+      params?.providerIdentities ??
+      (initializedProviderIdentities.length > 0
         ? initializedProviderIdentities
-        : configuredProviderIdentities;
+        : configuredProviderIdentities);
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
+    const providerKeyKnown = params?.providerIdentities
+      ? (params.providerKeyKnown ?? true)
+      : configuredProviderKeyKnown || params?.providerKeyKnown;
     return resolveMemoryIndexIdentityState({
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
-      providerKey: configuredProviderKeyKnown
-        ? providerIdentities[0]?.providerKey
-        : params?.providerKeyKnown === false
-          ? undefined
-          : (this.providerKey ?? undefined),
+      providerKey:
+        params && "providerKey" in params
+          ? params.providerKey
+          : configuredProviderKeyKnown
+            ? providerIdentities[0]?.providerKey
+            : providerKeyKnown === false
+              ? undefined
+              : (this.providerKey ?? undefined),
       providerAliases: providerIdentities.slice(1),
-      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
+      providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
