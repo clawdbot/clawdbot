@@ -275,12 +275,17 @@ export type RetainAdoptedCleanupHandle = {
   stop: () => void;
 };
 
+/** Default pace between retained /proc scans while a pgid member may still adopt. */
+export const DEFAULT_RETAIN_POLL_MS = 25;
+
 export type RetainAdoptedCleanupOptions = {
   rootPid: number;
   excludeTrackedPids?: readonly number[];
   /** Safety ceiling so a stuck live pgid member cannot retain forever. */
   maxRetainMs?: number;
-  /** Test seam: override scheduler (defaults to setImmediate / setTimeout(0)). */
+  /** Pace between scans (default 25ms). Not a fixed adoption delay — pgid drain still ends retention. */
+  pollIntervalMs?: number;
+  /** Test seam: override scheduler. */
   schedule?: (callback: () => void) => void;
   /** Test seam: clock for the safety ceiling. */
   now?: () => number;
@@ -299,25 +304,41 @@ export function retainAdoptedChildZombieCleanup(
   const excludeTrackedPids = options.excludeTrackedPids ?? [rootPid];
   const excludeSet = normalizeIdSet(excludeTrackedPids);
   const maxRetainMs = options.maxRetainMs ?? 30_000;
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_RETAIN_POLL_MS);
   const now = options.now ?? Date.now;
-  const schedule =
-    options.schedule ??
-    ((callback: () => void) => {
-      // Yield to the event loop while live pgid members remain; retention is
-      // still lifecycle-driven by pgid drain (not a fixed "hope it adopted" delay).
-      setTimeout(callback, 0);
-    });
   const startedAt = now();
   let stopped = false;
   let quietScans = 0;
   let scheduled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearScheduled = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    scheduled = false;
+  };
 
   const stop = () => {
     stopped = true;
+    clearScheduled();
+  };
+
+  const scheduleNext = (callback: () => void) => {
+    if (options.schedule) {
+      options.schedule(callback);
+      return;
+    }
+    // Paced poll + unref so retain loops cannot pin the event loop / keep the
+    // host process alive after the rest of the gateway wants to exit.
+    timer = setTimeout(callback, pollIntervalMs);
+    timer.unref?.();
   };
 
   const tick = () => {
     scheduled = false;
+    timer = undefined;
     if (stopped || process.platform === "win32") {
       return;
     }
@@ -343,11 +364,12 @@ export function retainAdoptedChildZombieCleanup(
     }
     if (!scheduled) {
       scheduled = true;
-      schedule(tick);
+      scheduleNext(tick);
     }
   };
 
-  schedule(tick);
+  scheduled = true;
+  scheduleNext(tick);
   return { stop };
 }
 

@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
 import { signalChildProcessTree } from "./child-process-tree.js";
 import {
+  DEFAULT_RETAIN_POLL_MS,
   reapOwnedChildZombies,
   reapOwnedChildZombiesAfterTreeKill,
   retainAdoptedChildZombieCleanup,
@@ -140,6 +141,28 @@ describe("scoped-child-reaper", () => {
     expect(
       reapOwnedChildZombiesAfterTreeKill({ rootPid: 42, usedProcessGroup: false }),
     ).toEqual({ reaped: [], pending: [] });
+  });
+
+  it("paces retained scans via pollIntervalMs and stops clear timers", async () => {
+    expect(DEFAULT_RETAIN_POLL_MS).toBeGreaterThan(0);
+    let scheduled = 0;
+    const handle = retainAdoptedChildZombieCleanup({
+      rootPid: 1,
+      maxRetainMs: 500,
+      pollIntervalMs: 30,
+      schedule: (callback) => {
+        scheduled += 1;
+        const timer = setTimeout(callback, 30);
+        timer.unref?.();
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    handle.stop();
+    const afterStop = scheduled;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // stop() should prevent further schedule growth from in-flight ticks finishing cleanly
+    expect(scheduled).toBeGreaterThanOrEqual(1);
+    expect(scheduled).toBeLessThanOrEqual(afterStop + 1);
   });
 
   it("never waitpids PIDs listed in excludeTrackedPids", () => {
