@@ -8,7 +8,7 @@ export type WorkspaceResultConflictLookup =
   | { kind: "absent" }
   | { kind: "conflict"; conflict: Required<WorkerWorkspaceResultConflict> }
   | { kind: "unknown"; reason: WorkspaceResultConflictUnknownReason };
-export type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavailable";
+type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavailable";
 
 export type WorkerWorkspaceRecoveryFailureReport = {
   sessionId: string;
