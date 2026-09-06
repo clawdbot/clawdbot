@@ -3477,7 +3477,6 @@ src/plugins/update-summary.ts	2
 src/plugins/web-search-credential-presence.ts	1
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
-src/process/command-queue.state.ts	1
 src/process/command-queue.ts	2
 src/process/exec-spawn.ts	4
 src/process/exec.ts	3
