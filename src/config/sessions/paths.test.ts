@@ -7,6 +7,7 @@ import {
   resolveSessionFilePathCore,
   resolveSessionStorePathCore,
   SessionStoreAgentIdRequiredError,
+  validateSessionId,
 } from "./paths.js";
 
 const tempDirs: string[] = [];
@@ -51,6 +52,18 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     );
 
     expect(resolved).toBe(foreign);
+  });
+});
+
+describe("validateSessionId", () => {
+  it("rejects a non-string session id with a diagnosable error instead of throwing on .trim()", () => {
+    // Legacy/corrupted store entries (e.g. a cron entry that never established
+    // a live session) can reach this function without a sessionId at runtime,
+    // even though the type declares it required. Regression coverage for
+    // https://github.com/openclaw/openclaw/issues/140261.
+    expect(() => validateSessionId(undefined as unknown as string)).toThrow(
+      "Invalid session ID: undefined",
+    );
   });
 });
 
