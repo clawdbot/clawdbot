@@ -116,7 +116,9 @@ by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
 
 Restart cancellation also preserves recoverability when the bulk shutdown marker
-cannot be written. Explicit user cancellation and genuine execution timeouts
+cannot be written. Native runtime preparation interrupted by the same Gateway
+restart is recorded as restart cancellation rather than a provider failure.
+Explicit user cancellation and genuine execution timeouts
 remain terminal. Recovery startup uses the admitted run's existing deadline,
 including runtime preparation and waiting for session or global capacity; waiting
 in a healthy queue does not consume separate failed-start attempts.
