@@ -55,46 +55,28 @@ object TalkDirectiveParser {
     val obj = parseJsonObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
 
     val speakerBoost =
-      boolValue(obj, listOf("speaker_boost", "speakerBoost"))
-        ?: boolValue(obj, listOf("no_speaker_boost", "noSpeakerBoost"))?.not()
+      obj.readAlias(listOf("speaker_boost", "speakerBoost")) { it.asBooleanOrNull() }
+        ?: obj.readAlias(listOf("no_speaker_boost", "noSpeakerBoost")) { it.asBooleanOrNull() }?.not()
 
     val directive =
       TalkDirective(
-        voiceId = stringValue(obj, listOf("voice", "voice_id", "voiceId")),
-        modelId = stringValue(obj, listOf("model", "model_id", "modelId")),
-        speed = doubleValue(obj, listOf("speed")),
-        rateWpm = intValue(obj, listOf("rate", "wpm")),
-        stability = doubleValue(obj, listOf("stability")),
-        similarity = doubleValue(obj, listOf("similarity", "similarity_boost", "similarityBoost")),
-        style = doubleValue(obj, listOf("style")),
+        voiceId = obj.readAlias(listOf("voice", "voice_id", "voiceId")) { it.asStringOrNull() },
+        modelId = obj.readAlias(listOf("model", "model_id", "modelId")) { it.asStringOrNull() },
+        speed = obj.readAlias(listOf("speed")) { it.asDoubleOrNull() },
+        rateWpm = obj.readAlias(listOf("rate", "wpm")) { it.asIntOrNull() },
+        stability = obj.readAlias(listOf("stability")) { it.asDoubleOrNull() },
+        similarity = obj.readAlias(listOf("similarity", "similarity_boost", "similarityBoost")) { it.asDoubleOrNull() },
+        style = obj.readAlias(listOf("style")) { it.asDoubleOrNull() },
         speakerBoost = speakerBoost,
-        seed = longValue(obj, listOf("seed")),
-        normalize = stringValue(obj, listOf("normalize", "apply_text_normalization")),
-        language = stringValue(obj, listOf("lang", "language_code", "language")),
-        outputFormat = stringValue(obj, listOf("output_format", "format")),
-        latencyTier = intValue(obj, listOf("latency", "latency_tier", "latencyTier")),
-        once = boolValue(obj, listOf("once")),
+        seed = obj.readAlias(listOf("seed")) { it.asLongOrNull() },
+        normalize = obj.readAlias(listOf("normalize", "apply_text_normalization")) { it.asStringOrNull() },
+        language = obj.readAlias(listOf("lang", "language_code", "language")) { it.asStringOrNull() },
+        outputFormat = obj.readAlias(listOf("output_format", "format")) { it.asStringOrNull() },
+        latencyTier = obj.readAlias(listOf("latency", "latency_tier", "latencyTier")) { it.asIntOrNull() },
+        once = obj.readAlias(listOf("once")) { it.asBooleanOrNull() },
       )
 
-    val hasDirective =
-      listOf(
-        directive.voiceId,
-        directive.modelId,
-        directive.speed,
-        directive.rateWpm,
-        directive.stability,
-        directive.similarity,
-        directive.style,
-        directive.speakerBoost,
-        directive.seed,
-        directive.normalize,
-        directive.language,
-        directive.outputFormat,
-        directive.latencyTier,
-        directive.once,
-      ).any { it != null }
-
-    if (!hasDirective) return TalkDirectiveParseResult(null, text, emptyList())
+    if (directive == TalkDirective()) return TalkDirectiveParseResult(null, text, emptyList())
 
     // Keep alias matching case-insensitive so dictated JSON can use snake/camel variants.
     val knownKeys =
@@ -149,65 +131,20 @@ object TalkDirectiveParser {
       null
     }
 
-  private fun stringValue(
-    obj: JsonObject,
+  private inline fun <T : Any> JsonObject.readAlias(
     keys: List<String>,
-  ): String? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asStringOrNull()?.trim()
-      if (!value.isNullOrEmpty()) return value
-    }
-    return null
-  }
-
-  private fun doubleValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Double? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asDoubleOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun intValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Int? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asIntOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun longValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Long? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asLongOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun boolValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Boolean? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asBooleanOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
+    convert: (JsonElement?) -> T?,
+  ): T? = keys.firstNotNullOfOrNull { convert(valueForKey(it)) }
 
   private fun JsonObject.valueForKey(key: String): JsonElement? = this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 }
 
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+private fun JsonElement?.asStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf { it.isString }
+    ?.content
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
 
 private fun JsonElement?.asDoubleOrNull(): Double? {
   val primitive = this as? JsonPrimitive ?: return null

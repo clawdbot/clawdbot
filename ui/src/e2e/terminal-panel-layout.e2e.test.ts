@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiTerminalReady,
@@ -16,13 +16,18 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const screenshotDir = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+const screenshotDirParent = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+let screenshotDir: string | undefined;
+beforeEach(() => {
+  screenshotDir = screenshotDirParent
+    ? createControlUiE2eArtifactDir("terminal-panel-layout", screenshotDirParent)
+    : undefined;
+});
 
 async function captureLayout(page: Page, theme: string, state: string): Promise<void> {
   if (!screenshotDir) {
     return;
   }
-  await fs.mkdir(screenshotDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     caret: "hide",
@@ -92,7 +97,7 @@ suite.define(() => {
             terminalEnabled: true,
           });
 
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(`${suite.server.baseUrl}activity`);
           await waitForControlUiGatewayReady(page);
           await waitForControlUiTerminalReady(page);
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
@@ -114,11 +119,10 @@ suite.define(() => {
           await captureLayout(page, theme, "bottom");
           await fill.click();
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--main");
-          expect(await fill.getAttribute("class")).toContain("is-active");
+          await expect.poll(() => fill.count()).toBe(0);
           await captureLayout(page, theme, "bottom-fill");
-          await fill.click();
+          await bottom.click();
           const bottomRestored = await surface.getAttribute("class");
-          const bottomActive = await bottom.getAttribute("class");
           await captureLayout(page, theme, "bottom-restored");
 
           await right.click();
@@ -126,17 +130,14 @@ suite.define(() => {
           await captureLayout(page, theme, "right");
           await fill.click();
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--main");
-          expect(await fill.getAttribute("class")).toContain("is-active");
+          await expect.poll(() => fill.count()).toBe(0);
           await captureLayout(page, theme, "right-fill");
-          await fill.click();
+          await right.click();
           const rightRestored = await surface.getAttribute("class");
-          const rightActive = await right.getAttribute("class");
           await captureLayout(page, theme, "right-restored");
 
           expect(bottomRestored).toContain("tp--bottom");
-          expect(bottomActive).toContain("is-active");
           expect(rightRestored).toContain("tp--right");
-          expect(rightActive).toContain("is-active");
         },
       );
     },

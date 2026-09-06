@@ -1,4 +1,6 @@
 // Qa Channel type declarations define plugin contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+
 type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;
@@ -7,8 +9,11 @@ type QaChannelActionConfig = {
 };
 
 export type QaChannelAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   name?: string;
   enabled?: boolean;
+  responsePrefix?: string;
   baseUrl?: string;
   botUserId?: string;
   botDisplayName?: string;
@@ -33,12 +38,9 @@ type QaChannelConfig = QaChannelAccountConfig & {
   defaultAccount?: string;
 };
 
-export type CoreConfig = {
+export type CoreConfig = OpenClawConfig & {
   channels?: {
     "qa-channel"?: QaChannelConfig;
-  };
-  session?: {
-    store?: string;
   };
 };
 
@@ -51,5 +53,6 @@ export type ResolvedQaChannelAccount = {
   botUserId: string;
   botDisplayName: string;
   pollTimeoutMs: number;
+  mediaMaxBytes?: number;
   config: QaChannelAccountConfig;
 };

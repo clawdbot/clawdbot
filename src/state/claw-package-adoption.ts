@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -25,39 +27,28 @@ export function markClawPackageIndependentlyOwned(
   const nowMs = options.nowMs ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
-      const workspaceScope =
-        artifact.kind === "skill"
-          ? `AND agent_id IN (
-             SELECT agent_id FROM claw_installs WHERE workspace = @workspace
-           )`
-          : "";
-      const versionScope = artifact.version ? "AND package_version = @package_version" : "";
-      const statement =
-        db /* sqlite-allow-raw: record a current non-Claw package owner after direct install. */
-          .prepare(
-            `UPDATE claw_package_refs
-            SET independent_owner = 1, updated_at_ms = @updated_at_ms
-          WHERE package_kind = @package_kind
-            AND package_source = @package_source
-            AND package_ref = @package_ref
-            ${versionScope}
-            AND independent_owner <> 1
-            ${workspaceScope}`,
-          );
-      const bindings: Record<string, string | number> = {
-        package_kind: artifact.kind,
-        package_source: artifact.source,
-        package_ref: artifact.ref,
-        updated_at_ms: nowMs,
-      };
+      const kysely = getNodeSqliteKysely<Pick<DB, "claw_package_refs" | "claw_installs">>(db);
+      let query = kysely
+        .updateTable("claw_package_refs")
+        .set({ independent_owner: 1, updated_at_ms: nowMs })
+        .where("package_kind", "=", artifact.kind)
+        .where("package_source", "=", artifact.source)
+        .where("package_ref", "=", artifact.ref)
+        .where("independent_owner", "!=", 1);
       if (artifact.version) {
-        bindings.package_version = artifact.version;
+        query = query.where("package_version", "=", artifact.version);
       }
       if (artifact.kind === "skill") {
-        bindings.workspace = artifact.workspace ?? "";
+        query = query.where(
+          "agent_id",
+          "in",
+          kysely
+            .selectFrom("claw_installs")
+            .select("agent_id")
+            .where("workspace", "=", artifact.workspace ?? ""),
+        );
       }
-      const result = statement.run(bindings);
-      return Number(result.changes);
+      return Number(executeSqliteQuerySync(db, query).numAffectedRows);
     }, options);
   } catch {
     // The canonical install already succeeded. Removal also checks its newer owner timestamp.

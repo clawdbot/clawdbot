@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   type WorkerLiveEventParams,
@@ -17,12 +18,15 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { createWorkerInferenceStore } from "../gateway/worker-environments/inference-store.js";
+import { createWorkerChatProjection } from "../gateway/worker-environments/live-chat.test-support.js";
 import * as liveEvents from "../gateway/worker-environments/live-events.js";
+import { projectWorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import * as placements from "../gateway/worker-environments/placement-store.js";
 import {
   createWorkerSessionPlacementGate,
@@ -37,6 +41,7 @@ import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnection } from "./worker-connection.js";
+import { WorkerFaultPlacementLifecycle } from "./worker-fault-placement-lifecycle.test-support.js";
 import * as workerRpc from "./worker-rpc-clients.js";
 
 export const SESSION_ID = "fault-session";
@@ -69,6 +74,7 @@ const BUNDLE_ARTIFACT = {
 };
 const PROVIDER: WorkerProvider = {
   id: "fake",
+  resolveAllocation: async () => ({ leaseId: "lease-fault", sharedHost: false }),
   provision: async () => ({ leaseId: "lease-fault", ssh: SSH_ENDPOINT }),
   inspect: async () => ({ status: "active" }),
   destroy: async () => {},
@@ -163,9 +169,8 @@ export class ComposedGatewayHarness {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly admissions: WorkerConnectionIdentity[] = [];
   readonly liveDeltas: string[] = [];
+  readonly chat: ReturnType<typeof createWorkerChatProjection>;
   readonly abandonedServices: workerEnv.WorkerEnvironmentService[] = [];
-  readonly placementWrites: Array<Parameters<WorkerSessionPlacementGate["updateAckCursors"]>[0]> =
-    [];
   providerCalls = 0;
   replacementProviderCalls = 0;
   connectionCount = 0;
@@ -174,6 +179,7 @@ export class ComposedGatewayHarness {
 
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
+  private readonly connectionWork = new GatewayConnectionWork();
   private readonly sockets = new Set<WebSocket>();
   private readonly socketCleanups = new Set<() => void>();
   private readonly requestMethods = new Map<string, string>();
@@ -181,6 +187,7 @@ export class ComposedGatewayHarness {
   private readonly liveEventGates: LiveEventGate[] = [];
   private serviceValue!: workerEnv.WorkerEnvironmentService;
   private liveEventsValue!: liveEvents.WorkerLiveEventReceiver;
+  private readonly placementLifecycle: WorkerFaultPlacementLifecycle;
   private placementGateValue: WorkerSessionPlacementGate | undefined;
   private useReplacementExecutor = false;
   private unsubscribeLive: (() => void) | undefined;
@@ -226,10 +233,24 @@ export class ComposedGatewayHarness {
     });
     this.seedAttachedEnvironment();
     this.liveEventsValue = this.createLiveEvents(true);
+    this.placementLifecycle = new WorkerFaultPlacementLifecycle({
+      agentId: "main",
+      bundleHash: BUNDLE_HASH,
+      environmentId: ENVIRONMENT_ID,
+      environmentStore: this.store,
+      getLiveEvents: () => this.liveEventsValue,
+      getOwnerEpoch: () => this.epoch,
+      placementStore: this.placementStore,
+      rpcSetVersion: WORKER_RPC_SET_VERSION,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore);
     this.serviceValue = this.createService();
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
+    this.chat = createWorkerChatProjection(SESSION_KEY);
     this.unsubscribeLive = onAgentRuntimeEvent((event) => {
       if (typeof event.data.delta === "string") {
         this.liveDeltas.push(event.data.delta);
@@ -238,15 +259,12 @@ export class ComposedGatewayHarness {
   }
 
   get epoch(): number {
-    const record = this.store.get(ENVIRONMENT_ID);
-    if (!record) {
-      throw new Error("fault environment missing");
-    }
-    return record.ownerEpoch;
+    return expectDefined(this.store.get(ENVIRONMENT_ID), "fault environment missing").ownerEpoch;
   }
 
   async start(): Promise<void> {
-    const listening = once(this.httpServer, "listening");
+    // ws forwards bind errors first; wait there so failed binds reject setup.
+    const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
     await listening;
   }
@@ -267,57 +285,20 @@ export class ComposedGatewayHarness {
     return gate;
   }
 
-  enablePlacement(runId: string): void {
-    let placement = this.placementStore.startDispatch({
-      sessionId: SESSION_ID,
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-    });
-    const transitions = [
-      { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
-      { to: "syncing", patch: { workerBundleHash: BUNDLE_HASH } },
-      {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"c".repeat(64)}`,
-          remoteWorkspaceDir: "/workspace/fault-session",
-        },
-      },
-      { to: "active", patch: { activeOwnerEpoch: this.epoch } },
-    ] as const;
-    for (const transition of transitions) {
-      placement = this.placementStore.transition({
-        sessionId: SESSION_ID,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...transition,
-      });
-    }
-    this.placementStore.claimTurn({
-      sessionId: SESSION_ID,
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      claimId: `claim:${runId}`,
-      runId,
-      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: this.epoch },
-    });
-    const placementGate = createWorkerSessionPlacementGate(this.placementStore);
-    this.placementGateValue = {
-      ...placementGate,
-      updateAckCursors: (binding) => {
-        this.placementWrites.push(structuredClone(binding));
-        placementGate.updateAckCursors(binding);
-      },
-    };
-    this.abandonedServices.push(this.serviceValue);
-    this.serviceValue = this.createService();
+  settleRun(runId: string): void {
+    this.placementLifecycle.settleRun(runId);
   }
 
   createDescriptor(params: WorkerClientOptions = {}): WorkerLaunchDescriptor {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
+    const runId = params.runId ?? RUN_ID;
+    const claim = this.placementLifecycle.prepareRun(runId, credential);
+    if (claim.owner.ownerEpoch !== epoch) {
+      throw new Error("fault descriptor epoch does not match its exact placement claim");
+    }
     return {
-      version: 3,
+      version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
@@ -329,8 +310,8 @@ export class ComposedGatewayHarness {
       },
       assignment: {
         agentId: "worker-agent",
-        runId: params.runId ?? RUN_ID,
-        operationalRunInstance: createOperationalRunInstanceRef(params.runId ?? RUN_ID),
+        runId,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
         agentRuntimeIdentityToken: "test-agent-runtime-token",
         turnId: "fault-turn",
         prompt: "fault injection",
@@ -377,10 +358,14 @@ export class ComposedGatewayHarness {
     };
   }
 
-  hardRestart(options: { corroborateLiveOwner: boolean }): void {
+  hardRestart(): void {
+    this.chat.state.clear();
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
-    this.liveEventsValue = this.createLiveEvents(options.corroborateLiveOwner);
+    this.liveEventsValue = this.createLiveEvents(false);
+    this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
+      rejectExistingWorkerClaims: true,
+    });
     this.useReplacementExecutor = true;
     this.serviceValue = this.createService();
     this.terminateSockets();
@@ -390,7 +375,19 @@ export class ComposedGatewayHarness {
     this.terminateSockets();
   }
 
-  reclaimWithCredential(credential: string): number {
+  reclaimWithCredential(credential: string, runId: string): number {
+    const placement = this.placementStore.get(SESSION_ID);
+    const staleClaim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+    if (
+      !placement ||
+      placement.state !== "active" ||
+      !staleClaim ||
+      staleClaim.owner.kind !== "worker"
+    ) {
+      throw new Error("fault placement has no active worker claim to reclaim");
+    }
+    this.settleRun(staleClaim.runId);
+    this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {
       throw new Error("fault environment is not attached");
@@ -426,6 +423,7 @@ export class ComposedGatewayHarness {
     ) {
       throw new Error("replacement live-event binding failed");
     }
+    this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }
 
@@ -457,6 +455,8 @@ export class ComposedGatewayHarness {
       cleanup();
     }
     this.socketCleanups.clear();
+    this.connectionWork.beginClose();
+    await this.connectionWork.drain();
     await this.serviceValue.stop();
     for (const service of this.abandonedServices) {
       await service.stop();
@@ -464,6 +464,7 @@ export class ComposedGatewayHarness {
     this.liveEventsValue.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
+    this.chat.dispose();
     await new Promise<void>((resolve) => {
       this.webSocketServer.close(() => resolve());
     });
@@ -638,6 +639,7 @@ export class ComposedGatewayHarness {
     const service = this.serviceValue;
     const cleanup = workerServer.attachWorkerWsMessageHandler({
       socket,
+      connectionWork: this.connectionWork,
       connId,
       service: {
         ...service,
@@ -660,7 +662,7 @@ export class ComposedGatewayHarness {
           return result;
         },
       } as workerServer.WorkerConnectionService,
-      ingress: "loopback",
+      publicAdmission: { clientIp: "127.0.0.1", rateLimiter: undefined },
       send: (frame) => this.send(socket, frame),
       close: (code = 1000, reason = "") => socket.close(code, reason),
       isClosed: () => closed || socket.readyState === WebSocket.CLOSED,
@@ -706,7 +708,7 @@ export class ComposedGatewayHarness {
     const fault = faultIndex >= 0 ? this.faults.splice(faultIndex, 1)[0] : undefined;
     if (fault?.kind === "drop-response") {
       if (fault.restart) {
-        this.hardRestart({ corroborateLiveOwner: false });
+        this.hardRestart();
       } else {
         socket.terminate();
       }

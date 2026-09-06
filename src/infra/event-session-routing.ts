@@ -9,8 +9,9 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   parseThreadSessionSuffix,
+  resolveEventSessionKey,
+  scopedHeartbeatWakeOptions,
 } from "../routing/session-key.js";
-import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 

@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
-  resolveSoleAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -16,11 +16,10 @@ import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
-import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
@@ -32,12 +31,9 @@ type ConfigIO = {
   readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
 };
 
-type ReplaceConfigFile = (params: {
-  nextConfig: OpenClawConfig;
-  snapshot: ConfigFileSnapshot;
-  afterWrite: { mode: "auto" };
-  writeOptions: ConfigWriteOptions;
-}) => Promise<unknown>;
+type ReplaceConfigFile = (
+  params: Parameters<ConfigIOModule["replaceConfigFile"]>[0],
+) => Promise<unknown>;
 
 type EnsureAgentWorkspace = (params: {
   dir: string;
@@ -150,6 +146,16 @@ export async function setupCommand(
   const prepared = await io.readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
   if (snapshot.exists && !snapshot.valid) {
+    if (opts?.json) {
+      const [{ formatCliJsonFailure }, { normalizeConfigIssues }] = await Promise.all([
+        import("../cli/failure-output.js"),
+        import("../config/issue-format.js"),
+      ]);
+      writeRuntimeJson(runtime, {
+        ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(configPath)}`),
+        issues: normalizeConfigIssues(snapshot.issues),
+      });
+    }
     const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
     runtime.error(
       `Config invalid at ${await formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
@@ -167,8 +173,10 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const selectedAgentId =
-    tryResolveLegacyCompatibilityAgentId(resolvedConfig) ?? resolveSoleAgentId(resolvedConfig);
+  const selectedAgentId = resolveAmbientOwnerAgentId(resolvedConfig, undefined, {
+    surface: "baseline setup",
+    hint: "Set agents.defaults.systemAgent.agentId.",
+  });
   const defaultEntry = resolveAgentEntry(resolvedConfig, selectedAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
@@ -228,14 +236,17 @@ export async function setupCommand(
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };
   }
 
+  let creationConfigHash: string | undefined;
   if (!snapshot.exists) {
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
     const onboardingAgent = await ensureOnboardingAgent({
       config: next,
       workspace,
       baseConfig: cfg,
+      expectedConfigHash: snapshot.hash ?? null,
     });
     next = onboardingAgent.config;
+    creationConfigHash = onboardingAgent.configHash;
     for (const warning of onboardingAgent.sessionMigrationWarnings ?? []) {
       runtime.log(`Warning: ${warning}`);
     }
@@ -250,7 +261,8 @@ export async function setupCommand(
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
     await replaceConfig({
       nextConfig: next,
-      snapshot,
+      // Agent creation advanced the revision; keep rejecting foreign writes after it.
+      ...(creationConfigHash ? { baseHash: creationConfigHash } : { snapshot }),
       afterWrite: { mode: "auto" },
       writeOptions: {
         ...prepared.writeOptions,

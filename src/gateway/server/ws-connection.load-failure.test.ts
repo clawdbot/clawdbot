@@ -21,12 +21,14 @@ async function connectWithMessageHandlerLoadError(error: Error) {
       throw error;
     },
   }));
-  const { attachGatewayWsConnectionHandler } = await import("./ws-connection.js");
+  const [{ attachGatewayWsConnectionHandler }, { prepareGatewayIngressAttribution }] =
+    await Promise.all([import("./ws-connection.js"), import("../ingress-attribution.js")]);
   const logWsControl = createGatewayWsTestLogger();
   const socket = createGatewayWsTestSocket({ closeEmits: true });
 
   attachGatewayWsForTest({
     attach: attachGatewayWsConnectionHandler,
+    prepareIngressAttribution: prepareGatewayIngressAttribution,
     socket,
     options: { logWsControl: logWsControl as never },
   });

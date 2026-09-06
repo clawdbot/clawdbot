@@ -2,6 +2,10 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
@@ -26,13 +30,22 @@ type FollowupDrainDisposition =
 
 /** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(
-  defaults: FollowupRunnerParams,
+  initialDefaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
-  const runFollowup = async (queued: FollowupRun): Promise<void> => {
+  const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
+    ? initialDefaults.resolveGatewayContext
+    : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const defaults = { ...initialDefaults, resolveGatewayContext };
+  // Every queue handoff, including delivery retries, retains this host owner
+  // without borrowing the invoking turn's request-local authority.
+  const runFollowup = (queued: FollowupRun): Promise<void> =>
+    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
+      inheritRequestScope: false,
+    });
+  const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;
-    let executionStarted = false;
     let queuedFollowupAdmitted = false;
     const initiallyAborted =
       queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
@@ -79,9 +92,6 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onExecutionStarted: () => {
-          executionStarted = true;
-        },
         onToolResult: async (payload, identity) => {
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
@@ -103,6 +113,9 @@ export function createFollowupRunner(
           });
         },
       });
+      // A closed execution result is terminal queue work. Commit consumption
+      // before accounting/delivery so their failures cannot replay model or tool effects.
+      disposition = { kind: "consumed" };
       try {
         await execution.progress.drain();
       } catch (error) {
@@ -136,7 +149,6 @@ export function createFollowupRunner(
         runId: execution.execution.runId,
         runFollowup,
       });
-      disposition = { kind: "consumed" };
     } catch (error) {
       if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
@@ -145,15 +157,11 @@ export function createFollowupRunner(
         operation.result.code === "aborted_by_user"
       ) {
         disposition = { kind: "consumed" };
-      } else if (executionStarted) {
-        // There is no durable post-execution resume record yet. Requeueing the prompt
-        // here can duplicate persisted turns and external tool side effects. Preserve
-        // the terminal failure through complete() rather than reporting success.
+      } else if (disposition.kind === "consumed") {
         defaultRuntime.error?.(
-          `followup queue: execution failed after start; refusing replay: ${formatErrorMessage(error)}`,
+          `followup queue: terminal handling failed after execution; refusing replay: ${formatErrorMessage(error)}`,
         );
         operation?.fail("run_failed", error);
-        disposition = { kind: "consumed" };
       } else {
         disposition = { kind: "retry", error };
       }

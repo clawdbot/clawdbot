@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import { createServer, get } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
@@ -57,6 +60,7 @@ function detectedCodex(): SetupInferenceDetection {
 }
 
 const servers = new Set<ReturnType<typeof createServer>>();
+const tempHomes = new Set<string>();
 
 beforeEach(() => {
   vi.resetModules();
@@ -82,15 +86,17 @@ async function requestHealth(url: string): Promise<{ body: string; statusCode: n
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(
-    [...servers].map(
+  await Promise.all([
+    ...[...servers].map(
       (server) =>
         new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         }),
     ),
-  );
+    ...[...tempHomes].map((home) => fs.rm(home, { recursive: true, force: true })),
+  ]);
   servers.clear();
+  tempHomes.clear();
 });
 
 describe("isolated setup inference detection", () => {
@@ -155,8 +161,8 @@ describe("isolated setup inference detection", () => {
     ).rejects.toMatchObject({
       name: "SetupInferenceDetectionTimeoutError",
       message:
-        "Checking this Gateway for AI access timed out after 0.05s. " +
-        "The Gateway may be busy — try again.",
+        "AI access detection did not finish after 0.05s. " +
+        "This Gateway may still be checking — try again.",
     });
   });
 
@@ -219,6 +225,45 @@ describe("isolated setup inference detection", () => {
     ]);
   });
 
+  it("returns stored CLI credentials when detection times out", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+    const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-")));
+    tempHomes.add(home);
+    const authPath = path.join(home, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(authPath), { recursive: true });
+    await fs.writeFile(
+      authPath,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "codex-access", refresh_token: "codex-refresh" },
+      }),
+      "utf8",
+    );
+
+    const detection = await detectSetupInferenceIsolated({
+      workerUrl: blockingWorkerUrl,
+      workerData: {
+        blockMs: 10_000,
+        detection: emptyDetection(),
+        partialDetection: emptyDetection(),
+      },
+      timeoutMs: 50,
+      fallbackEnv: { HOME: home },
+    });
+
+    expect(detection.candidates).toEqual([
+      {
+        kind: "codex-cli",
+        brandId: "openai",
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Codex",
+        detail: "credential file found",
+        credentials: true,
+        recommended: false,
+      },
+    ]);
+  });
+
   it("waits for timed-out worker shutdown before running a fresh detection", async () => {
     const { detectSetupInferenceIsolated } = await loadDetectionModule();
     let releaseShutdown: (() => void) | undefined;
@@ -240,7 +285,7 @@ describe("isolated setup inference detection", () => {
         timeoutMs: 50,
         fallbackEnv: {},
       }),
-    ).rejects.toThrow("Checking this Gateway for AI access timed out");
+    ).rejects.toThrow("AI access detection did not finish");
 
     let retrySettled = false;
     const fresh = detectedCodex();

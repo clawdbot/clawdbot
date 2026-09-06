@@ -1,4 +1,5 @@
 /** Builds bounded transcript projections for compaction worker planning. */
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -7,6 +8,7 @@ const TEXT_SAMPLE_CHARS = 8_192;
 const PLANNING_MAX_CHARS = 256 * 1024;
 const MAX_ARGUMENT_ESTIMATE_CHARS = 1_000_000;
 const UNMEASURABLE_ARGUMENT_OMITTED_CHARS = Number.MAX_SAFE_INTEGER;
+// Omitted chars use token-estimate weights; payload limits remain raw serialized lengths.
 const OMITTED_CHARS_FIELD = "__openclawCompactionPlanningOmittedChars";
 
 type ProjectionBudget = {
@@ -30,11 +32,15 @@ function projectText(
   budget.remainingChars -= sample.length;
   return {
     text: sample,
-    omittedChars: text.length - sample.length,
+    omittedChars: estimateStringChars(text.slice(sample.length)),
   };
 }
 
-function jsonStringLengthWithin(text: string, maxChars: number): number | undefined {
+function jsonStringLengthWithin(
+  text: string,
+  maxChars: number,
+  estimate: { cjkChars: number },
+): number | undefined {
   let length = 2;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? "";
@@ -64,16 +70,18 @@ function jsonStringLengthWithin(text: string, maxChars: number): number | undefi
       return undefined;
     }
   }
+  estimate.cjkChars += estimateStringChars(text) - text.length;
   return length;
 }
 
 function jsonLengthWithin(
   value: unknown,
   maxChars: number,
+  estimate: { cjkChars: number },
   seen = new Set<object>(),
 ): number | undefined {
   if (typeof value === "string") {
-    return jsonStringLengthWithin(value, maxChars);
+    return jsonStringLengthWithin(value, maxChars, estimate);
   }
   if (value === null) {
     return 4;
@@ -91,7 +99,12 @@ function jsonLengthWithin(
   if (Array.isArray(value)) {
     for (const entry of value) {
       const separatorLength = length === 2 ? 0 : 1;
-      const entryLength = jsonLengthWithin(entry, maxChars - length - separatorLength, seen);
+      const entryLength = jsonLengthWithin(
+        entry,
+        maxChars - length - separatorLength,
+        estimate,
+        seen,
+      );
       if (entryLength === undefined) {
         return undefined;
       }
@@ -107,10 +120,11 @@ function jsonLengthWithin(
         continue;
       }
       const separatorLength = length === 2 ? 0 : 1;
-      const keyLength = jsonStringLengthWithin(key, maxChars - length - separatorLength);
+      const keyLength = jsonStringLengthWithin(key, maxChars - length - separatorLength, estimate);
       const entryLength = jsonLengthWithin(
         record[key],
         maxChars - length - separatorLength - (keyLength ?? 0) - 1,
+        estimate,
         seen,
       );
       if (keyLength === undefined || entryLength === undefined) {
@@ -127,16 +141,18 @@ function jsonLengthWithin(
 }
 
 function projectToolArguments(value: unknown, budget: ProjectionBudget): number | undefined {
-  const length = jsonLengthWithin(value, budget.remainingChars);
-  if (length !== undefined) {
+  const estimate = { cjkChars: 0 };
+  const length = jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS, estimate);
+  if (length !== undefined && length <= budget.remainingChars) {
     budget.remainingChars -= length;
     return undefined;
   }
   budget.remainingChars = 0;
   // Unmeasurable arguments must force an oversized plan, never understate token pressure.
-  return (
-    jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS) ?? UNMEASURABLE_ARGUMENT_OMITTED_CHARS
-  );
+  // The replacement {} already contributes two chars to the projected estimate.
+  return length === undefined
+    ? UNMEASURABLE_ARGUMENT_OMITTED_CHARS
+    : length + estimate.cjkChars - 2;
 }
 
 function projectContentBlock(

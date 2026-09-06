@@ -1,28 +1,65 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
+import { normalizeToolPolicyName } from "../../../agents/tool-policy-shared.js";
 
-export const LEGACY_TASK_SUGGESTION_TOOL_NAME = "spawn_task";
-export const TASK_SUGGESTION_TOOL_NAME = "suggest_task";
+type LegacyToolNameMigration = {
+  legacyName: string;
+  canonicalName: string;
+};
 
-function isLegacyTaskSuggestionToolName(value: unknown): boolean {
-  return (
-    typeof value === "string" && value.trim().toLowerCase() === LEGACY_TASK_SUGGESTION_TOOL_NAME
-  );
-}
+export const TASK_SUGGESTION_TOOL_NAME_MIGRATION = {
+  legacyName: "spawn_task",
+  canonicalName: "suggest_task",
+} as const satisfies LegacyToolNameMigration;
 
-export function hasLegacyTaskSuggestionToolList(value: unknown): boolean {
-  return Array.isArray(value) && value.some(isLegacyTaskSuggestionToolName);
-}
+export const IMAGE_INSPECTION_TOOL_NAME_MIGRATION = {
+  legacyName: "image",
+  canonicalName: "view_image",
+} as const satisfies LegacyToolNameMigration;
 
-export function migrateLegacyTaskSuggestionToolList(value: unknown): boolean {
+function inspectLegacyToolNameList(value: unknown, migration: LegacyToolNameMigration) {
   if (!Array.isArray(value)) {
+    return null;
+  }
+  const entries = value.filter((entry): entry is string => typeof entry === "string");
+  const legacyName = normalizeToolPolicyName(migration.legacyName);
+  const patterns = compileGlobPatterns({ raw: entries, normalize: normalizeToolPolicyName });
+  const exactLegacy = entries.some((entry) => normalizeToolPolicyName(entry) === legacyName);
+  return {
+    exactLegacy,
+    appendCanonical:
+      !exactLegacy &&
+      matchesAnyGlobPattern(legacyName, patterns) &&
+      !matchesAnyGlobPattern(normalizeToolPolicyName(migration.canonicalName), patterns),
+  };
+}
+
+export function hasLegacyToolNameList(value: unknown, migration: LegacyToolNameMigration): boolean {
+  const state = inspectLegacyToolNameList(value, migration);
+  return state?.exactLegacy === true || state?.appendCanonical === true;
+}
+
+export function migrateLegacyToolNameList(
+  value: unknown,
+  migration: LegacyToolNameMigration,
+): boolean {
+  const state = inspectLegacyToolNameList(value, migration);
+  if (!state || !Array.isArray(value)) {
     return false;
   }
   let mutated = false;
-  for (const [index, entry] of value.entries()) {
-    if (isLegacyTaskSuggestionToolName(entry)) {
-      value[index] = TASK_SUGGESTION_TOOL_NAME;
-      mutated = true;
+  if (state.exactLegacy) {
+    const legacyName = normalizeToolPolicyName(migration.legacyName);
+    for (const [index, entry] of value.entries()) {
+      if (typeof entry === "string" && normalizeToolPolicyName(entry) === legacyName) {
+        value[index] = migration.canonicalName;
+        mutated = true;
+      }
     }
+  }
+  if (state.appendCanonical) {
+    value.push(migration.canonicalName);
+    mutated = true;
   }
   return mutated;
 }
@@ -35,15 +72,16 @@ function isToolPolicyPath(path: readonly string[]): boolean {
   return byProviderIndex >= 0 && path.slice(0, byProviderIndex).includes("tools");
 }
 
-function visitLegacyTaskSuggestionToolNames(
+function visitLegacyToolName(
   value: unknown,
   path: string[],
+  migration: LegacyToolNameMigration,
   migrate: boolean,
   matchedPaths: string[],
 ): void {
   if (Array.isArray(value)) {
     for (const [index, entry] of value.entries()) {
-      visitLegacyTaskSuggestionToolNames(entry, [...path, String(index)], migrate, matchedPaths);
+      visitLegacyToolName(entry, [...path, String(index)], migration, migrate, matchedPaths);
     }
     return;
   }
@@ -57,31 +95,36 @@ function visitLegacyTaskSuggestionToolNames(
   }
   for (const key of listKeys) {
     const list = value[key];
-    if (!Array.isArray(list) || !list.some(isLegacyTaskSuggestionToolName)) {
+    if (!hasLegacyToolNameList(list, migration)) {
       continue;
     }
     matchedPaths.push([...path, key].join("."));
     if (migrate) {
-      migrateLegacyTaskSuggestionToolList(list);
+      migrateLegacyToolNameList(list, migration);
     }
   }
 
   for (const [key, entry] of Object.entries(value)) {
-    visitLegacyTaskSuggestionToolNames(entry, [...path, key], migrate, matchedPaths);
+    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths);
   }
 }
 
-export function findLegacyTaskSuggestionToolPaths(value: unknown, path: string[] = []): string[] {
-  const matchedPaths: string[] = [];
-  visitLegacyTaskSuggestionToolNames(value, path, false, matchedPaths);
-  return matchedPaths;
-}
-
-export function migrateLegacyTaskSuggestionToolPolicies(
+export function findLegacyToolNamePaths(
   value: unknown,
+  migration: LegacyToolNameMigration,
   path: string[] = [],
 ): string[] {
   const matchedPaths: string[] = [];
-  visitLegacyTaskSuggestionToolNames(value, path, true, matchedPaths);
+  visitLegacyToolName(value, path, migration, false, matchedPaths);
+  return matchedPaths;
+}
+
+export function migrateLegacyToolNamePolicies(
+  value: unknown,
+  migration: LegacyToolNameMigration,
+  path: string[] = [],
+): string[] {
+  const matchedPaths: string[] = [];
+  visitLegacyToolName(value, path, migration, true, matchedPaths);
   return matchedPaths;
 }

@@ -37,6 +37,21 @@ async function withListeningServer(
 }
 
 describe("tryListenOnPort", () => {
+  it("rejects an already-aborted bind without opening a listener", async () => {
+    const abortController = new AbortController();
+    const reason = new Error("probe cancelled");
+    abortController.abort(reason);
+
+    await expect(
+      tryListenOnPort({
+        port: 0,
+        host: "127.0.0.1",
+        exclusive: true,
+        signal: abortController.signal,
+      }),
+    ).rejects.toBe(reason);
+  });
+
   it("can bind and release an ephemeral loopback port", async () => {
     let port;
     try {
@@ -53,21 +68,22 @@ describe("tryListenOnPort", () => {
     // instead collides with any foreign outbound socket occupying the port on
     // busy runners (EADDRINUSE flake) without detecting leaks any better.
     await expect(
-      new Promise<"accepted" | "refused">((resolve, reject) => {
+      new Promise<"accepted" | "unavailable">((resolve, reject) => {
         const socket = net.connect({ port, host: "127.0.0.1" });
         socket.once("connect", () => {
           socket.destroy();
           resolve("accepted");
         });
         socket.once("error", (err) => {
-          if ((err as NodeJS.ErrnoException).code === "ECONNREFUSED") {
-            resolve("refused");
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ECONNREFUSED" || code === "ECONNRESET") {
+            resolve("unavailable");
             return;
           }
           reject(err);
         });
       }),
-    ).resolves.toBe("refused");
+    ).resolves.toBe("unavailable");
   });
 
   it("rejects when the port is already in use", async () => {

@@ -19,6 +19,7 @@ const suite = createControlUiE2eSuite({
 function cronJob(id: string, name: string, schedule: Record<string, unknown>, state = {}) {
   return {
     id,
+    configRevision: `config-revision-${id}`,
     name,
     enabled: true,
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
@@ -913,6 +914,7 @@ suite.define(() => {
         const updateRequest = await gateway.waitForRequest("cron.update");
         expect(requestParams(updateRequest)).toMatchObject({
           id: existingJob.id,
+          expectedConfigRevision: existingJob.configRevision,
           patch: {
             payload: {
               kind: "agentTurn",
@@ -971,6 +973,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("cron.update");
         const params = requestParams(request);
         expect(params.id).toBe(existingJob.id);
+        expect(params.expectedConfigRevision).toBe(existingJob.configRevision);
         expect(requireRecord(params.patch)).toMatchObject({
           deleteAfterRun: true,
           schedule: { kind: "at", at: expectedAt },
@@ -1041,7 +1044,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}cron`);
-        await page.locator('[data-test-id="cron-list-tab-tasks"]').waitFor();
+        await page.locator('[data-test-id="cron-tab-all"]').waitFor();
 
         await page.keyboard.press("Tab");
         await expect
@@ -1052,9 +1055,11 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.activeElement?.id))
           .toBe("control-ui-main");
 
-        const tasksTab = page.getByRole("tab", { name: "Automations", exact: true });
+        const tasksTab = page.getByRole("tab", { name: "All", exact: true });
         const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
         await tasksTab.focus();
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("ArrowRight");
         await page.keyboard.press("ArrowRight");
         await expect
           .poll(() => activityTab.evaluate((element) => element === document.activeElement))

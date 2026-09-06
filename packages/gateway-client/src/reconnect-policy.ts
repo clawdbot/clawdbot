@@ -12,6 +12,8 @@ const NON_RECOVERABLE_AUTH_ERRORS = new Set<string>([
   ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+  ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
   ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
   ConnectErrorDetailCodes.PAIRING_REQUIRED,
   ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
@@ -38,6 +40,9 @@ export function shouldPauseGatewayReconnect(params: {
   }
   if (code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
     return params.tokenMismatchIsTerminal === true && !params.deviceTokenRetryPending;
+  }
+  if (code === ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED) {
+    return !params.deviceTokenRetryPending;
   }
   return (
     NON_RECOVERABLE_AUTH_ERRORS.has(code) ||

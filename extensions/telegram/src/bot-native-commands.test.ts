@@ -17,7 +17,6 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 type TelegramInlineKeyboardReplyMarkup = {
@@ -76,7 +75,6 @@ registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -193,10 +191,14 @@ describe("registerTelegramNativeCommands", () => {
     expect(registered).toEqual([
       { command: "custom_two", description: "Custom two unchanged" },
       { command: "custom_one", description: "Custom one unchanged" },
-      ...native.filter((command) => !command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
       { command: "alpha", description: "Alpha unchanged" },
       { command: "zeta", description: "Zeta unchanged" },
-      ...native.filter((command) => command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
   });
 

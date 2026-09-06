@@ -2,6 +2,7 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatHumanList } from "../shared/human-list.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 /** Formats the human destination label for where native approval prompts were delivered. */
 export function describeApprovalDeliveryDestination(params: {
@@ -37,7 +38,7 @@ export function resolveAmbiguousApprovalRouteNoticeText(): string {
 /** Builds the fallback slash-command notice when native approval delivery fails. */
 export function resolveApprovalDeliveryFailedNoticeText(params: {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions?: readonly string[];
 }): string {
   const commandId =

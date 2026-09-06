@@ -5,7 +5,10 @@ import {
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import {
+  isAutomaticMemoryEntryEligible,
+  type MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
 import { getMemoryRuntime } from "../plugins/memory-state.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 
@@ -76,6 +79,7 @@ function buildProjectMemoryBootstrap(params: {
         .map((key) => key.trim())
         .filter(Boolean);
       return (
+        isAutomaticMemoryEntryEligible(entry) &&
         storedProjectKeys !== undefined &&
         storedProjectKeys.length > 0 &&
         storedProjectKeys.every((key) => active.has(key)) &&

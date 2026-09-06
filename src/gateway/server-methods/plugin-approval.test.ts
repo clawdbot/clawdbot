@@ -3,14 +3,17 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function createManager() {
-  return new ExecApprovalManager<PluginApprovalRequestPayload>({ approvalKind: "plugin" });
+function createManager(testContext: TestContext) {
+  return createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+    approvalKind: "plugin",
+  });
 }
 
 function createLogGatewayMock() {
@@ -251,8 +254,8 @@ const invalidRequestCases = [
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
 
-  beforeEach(() => {
-    manager = createManager();
+  beforeEach((testContext) => {
+    manager = createManager(testContext);
   });
 
   afterEach(() => {
@@ -305,6 +308,7 @@ describe("createPluginApprovalHandlers", () => {
 
       const requestedBroadcast = broadcastCall(opts);
       expect(requestedBroadcast.event).toBe("plugin.approval.requested");
+      expect(requestedBroadcast.payload.approvalKind).toBe("plugin");
       expect(requestedBroadcast.payload.id).toBeTypeOf("string");
       expect(requestedBroadcast.options).toEqual({ dropIfSlow: true });
 
@@ -796,6 +800,7 @@ describe("createPluginApprovalHandlers", () => {
       const approvals = requireArray(listCall.result, "approval list");
       expect(approvals).toHaveLength(1);
       const approval = requireRecord(approvals[0], "approval");
+      expect(approval.approvalKind).toBe("plugin");
       const listedApprovalId = expectPluginApprovalId(approval.id, "listed approval id");
       const request = requireRecord(approval.request, "approval request");
       expect(request.title).toBe("Sensitive action");

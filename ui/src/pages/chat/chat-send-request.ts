@@ -1,49 +1,55 @@
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
-import type { ChatState } from "./chat-history.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
     runId: string;
     sessionKey?: string;
     agentId?: string;
     queueMode?: QueueMode;
+    intent?: ChatSendIntent;
+    sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
-    expectedRunId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  const sessionId = params.intent ? params.sessionId : routing.sessionId;
   const controlUiReconnectResume = Boolean(
-    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+    !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+    ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
     ...(params.expectedLeafEntryId !== undefined
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),
-    ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -104,44 +110,4 @@ function resolveChatSendRouting(
     ...(selectedAgentId ? { selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
-}
-
-export async function requestSkillWorkshopRevisionChatSend(
-  state: ChatState,
-  params: {
-    proposalId: string;
-    instructions: string;
-    runId: string;
-    sessionKey?: string;
-    agentId?: string;
-    targetAgentId?: string;
-  },
-): Promise<ChatSendAck> {
-  if (
-    !canCallGatewayMethod(
-      {
-        client: state.client,
-        hello: state.hello,
-        phase: state.connected ? "connected" : "offline",
-      },
-      "skills.proposals.requestRevision",
-      "operator.admin",
-    )
-  ) {
-    throw new Error("Skill Workshop revision requests require operator.admin access.");
-  }
-  const routing = resolveChatSendRouting(state, {
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-  });
-  const payload = await state.client!.request("skills.proposals.requestRevision", {
-    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
-    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
-    proposalId: params.proposalId,
-    instructions: params.instructions,
-    sessionKey: routing.sessionKey,
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
-    idempotencyKey: params.runId,
-  });
-  return normalizeChatSendAck(payload, params.runId);
 }

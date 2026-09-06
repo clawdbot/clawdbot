@@ -9,7 +9,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
-  attachModelProviderMetadataOwners,
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -18,8 +18,9 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow"> & {
   api?: Api;
+  contextWindow?: number;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -29,8 +30,6 @@ export type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  contextWindow?: ModelProviderConfig["contextWindow"];
-  contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
   headers?: unknown;
@@ -140,7 +139,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
-/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
+/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
   options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
@@ -176,14 +175,13 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderMetadataOwners(
+      const maxTokens = model.maxTokens ?? entry?.maxTokens;
+      return attachModelProviderRequestRouteFacts(
         attachModelProviderLocalService(
           attachModelProviderRequestTransport(
             {
               ...model,
-              contextWindow: model.contextWindow ?? entry?.contextWindow,
-              contextTokens: model.contextTokens ?? entry?.contextTokens,
-              maxTokens: model.maxTokens ?? entry?.maxTokens,
+              ...(maxTokens !== undefined ? { maxTokens } : {}),
               input: resolveProviderModelInput({
                 provider: trimmed,
                 modelId: model.id,

@@ -11,13 +11,14 @@ import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
   loadDeviceAuthToken,
+  loadDeviceAuthTokenReadOnly,
   loadDeviceAuthTokens,
   loadOriginDeviceToken,
+  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "./device-auth-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
@@ -32,43 +33,58 @@ afterEach(() => {
 });
 
 describe("infra/device-auth-store", () => {
-  it("lazily adds origin-scoped tokens without changing the schema version", async () => {
-    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
+  it("reads no device auth and creates no database when shared state is absent", async () => {
+    await withTempDir("openclaw-device-auth-readonly-missing-", async (stateDir) => {
       const env = createEnv(stateDir);
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const opened = openOpenClawStateDatabase({ env });
-      const version = opened.db.prepare("PRAGMA user_version").get();
-      closeOpenClawStateDatabaseForTest();
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const beforeEnsure = new DatabaseSync(databasePath);
-      beforeEnsure.exec("DROP TABLE gateway_origin_device_tokens;");
-      beforeEnsure.close();
-
-      const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("gateway_origin_device_tokens"),
-      ).toBeUndefined();
-      closeOpenClawStateDatabaseForTest();
 
       expect(
-        loadOriginDeviceToken({
+        loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }),
+      ).toBeNull();
+      expect(
+        loadOriginDeviceTokenReadOnly({
           gatewayScope: "wss://one.example",
           deviceId: "device-1",
           role: "operator",
           env,
         }),
       ).toBeNull();
-      const afterEnsure = new DatabaseSync(databasePath, { readOnly: true });
+      expect(fs.existsSync(databasePath)).toBe(false);
+    });
+  });
+
+  it("reads existing device auth without opening writable shared state", async () => {
+    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      storeDeviceAuthToken({
+        deviceId: "device-1",
+        role: "operator",
+        token: "local-token",
+        env,
+      });
+      storeOriginDeviceToken({
+        gatewayScope: "wss://one.example",
+        deviceId: "device-1",
+        role: "operator",
+        token: "origin-token",
+        env,
+      });
+      closeOpenClawStateDatabaseForTest();
+      const databaseDirectory = path.dirname(path.join(stateDir, "state", "openclaw.sqlite"));
+      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
+
       expect(
-        afterEnsure
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("gateway_origin_device_tokens"),
-      ).toEqual({ name: "gateway_origin_device_tokens" });
-      expect(afterEnsure.prepare("PRAGMA user_version").get()).toEqual(version);
-      afterEnsure.close();
+        loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env })?.token,
+      ).toBe("local-token");
+      expect(
+        loadOriginDeviceTokenReadOnly({
+          gatewayScope: "wss://one.example",
+          deviceId: "device-1",
+          role: "operator",
+          env,
+        })?.token,
+      ).toBe("origin-token");
+      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
     });
   });
 
@@ -317,6 +333,73 @@ describe("infra/device-auth-store", () => {
       expect(loadDeviceAuthToken({ deviceId: "device-2", role: "operator", env })?.token).toBe(
         "other",
       );
+    });
+  });
+
+  it("keeps credentials rotated after a stale request snapshot", async () => {
+    await withTempDir("openclaw-device-auth-rotation-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      const targets = [
+        {
+          name: "device",
+          load: () => loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
+          store: (token: string, expectedToken?: string) =>
+            storeDeviceAuthToken({
+              deviceId: "device-1",
+              role: "operator",
+              token,
+              scopes: ["operator.read"],
+              env,
+              ...(expectedToken === undefined ? {} : { expectedToken }),
+            }),
+          clear: (expectedToken: string) =>
+            clearDeviceAuthToken({
+              deviceId: "device-1",
+              role: "operator",
+              env,
+              expectedToken,
+            }),
+        },
+        {
+          name: "origin",
+          load: () =>
+            loadOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              env,
+            }),
+          store: (token: string, expectedToken?: string) =>
+            storeOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              token,
+              scopes: ["operator.read"],
+              env,
+              ...(expectedToken === undefined ? {} : { expectedToken }),
+            }),
+          clear: (expectedToken: string) =>
+            clearOriginDeviceToken({
+              gatewayScope: "wss://one.example",
+              deviceId: "device-1",
+              role: "operator",
+              env,
+              expectedToken,
+            }),
+        },
+      ];
+
+      for (const target of targets) {
+        const prepared = target.store(`${target.name}-prepared`);
+        const rotated = target.store(`${target.name}-rotated`);
+        expect(prepared).not.toBeNull();
+        expect(rotated).not.toBeNull();
+
+        expect(target.store(`${target.name}-stale-replacement`, prepared!.token)).toBeNull();
+        expect(target.clear(prepared!.token)).toBe(false);
+        expect(target.load()).toEqual(rotated);
+      }
     });
   });
 });

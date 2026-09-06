@@ -35,8 +35,7 @@ describe("parseZalouserTextStyles", () => {
     {
       name: "resolves ambiguous triple-marker nesting with CommonMark precedence",
       input: "***foo** bar*",
-      before: { text: "***foo** bar*", styles: [] },
-      after: {
+      expected: {
         text: "foo bar",
         styles: [
           { start: 0, len: 7, st: TextStyle.Italic },
@@ -47,14 +46,10 @@ describe("parseZalouserTextStyles", () => {
     {
       name: "uses Unicode-aware underscore flanking inside words",
       input: "привет_мир_снова",
-      before: {
-        text: "приветмирснова",
-        styles: [{ start: 6, len: 3, st: TextStyle.Italic }],
-      },
-      after: { text: "привет_мир_снова", styles: [] },
+      expected: { text: "привет_мир_снова", styles: [] },
     },
-  ])("documents before and after: $name", ({ input, after }) => {
-    expect(parseZalouserTextStyles(input)).toEqual(after);
+  ])("$name", ({ input, expected }) => {
+    expect(parseZalouserTextStyles(input)).toEqual(expected);
   });
 
   it("keeps inline code and plain math markers literal", () => {

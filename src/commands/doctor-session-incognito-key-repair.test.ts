@@ -1,7 +1,10 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -109,11 +112,8 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 1)",
         )
         .run(oldKey, oldKey);
-      stateDatabase.db
-        .prepare(
-          "INSERT INTO tui_last_sessions (scope_key, session_key, updated_at) VALUES ('main', ?, 1)",
-        )
-        .run(oldKey);
+      writeConfigMachineState("tui.lastSession.main", oldKey, { env });
+      writeConfigMachineState("unrelated.sessionReference", oldKey, { env });
       database.db
         .prepare(
           "INSERT INTO heartbeat_outcomes (session_key, run_session_key, outcome, summary, occurred_at, updated_at) VALUES (?, ?, 'done', 'done', 1, 1)",
@@ -192,9 +192,8 @@ describe("doctor reserved incognito session key repair", () => {
           .prepare("SELECT watcher_session_key, target_session_key FROM session_watch_cursors")
           .get(),
       ).toEqual({ watcher_session_key: newKey, target_session_key: newKey });
-      expect(stateDatabase.db.prepare("SELECT session_key FROM tui_last_sessions").get()).toEqual({
-        session_key: newKey,
-      });
+      expect(readConfigMachineState<string>("tui.lastSession.main", { env })).toBe(newKey);
+      expect(readConfigMachineState<string>("unrelated.sessionReference", { env })).toBe(oldKey);
       expect(
         stateDatabase.db
           .prepare("SELECT source_session_key, audience_session_keys_json FROM operator_approvals")
@@ -260,69 +259,159 @@ describe("doctor reserved incognito session key repair", () => {
     }
   });
 
-  it("resumes an interrupted cross-database repair from its durable journal", () => {
-    const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-resume-"));
+  it.each([false, true])(
+    "resumes an interrupted repair from its journal (shared owner: %s)",
+    (shared) => {
+      const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-resume-"));
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const sqlitePath = shared
+        ? path.join(stateDir, "shared.sqlite")
+        : resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const cfg: OpenClawConfig = shared
+        ? { agents: { entries: { beta: {} } }, session: { store: sqlitePath } }
+        : {};
+      const database = openOpenClawAgentDatabase({
+        agentId: shared ? "alpha" : "main",
+        env,
+        path: sqlitePath,
+      });
+      const stateDatabase = openOpenClawStateDatabase({ env });
+      const oldKey = "agent:main:dashboard:incognito-interrupted";
+      const newCollisionKey = "agent:main:dashboard:incognito-new";
+      const resumedKey = "agent:main:dashboard:legacy-incognito-interrupted-resumed";
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-old', ?, 1)",
+        )
+        .run(oldKey, JSON.stringify({ sessionId: "session-old" }));
+      database.db
+        .prepare(
+          "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-old', ?, 'conversation', 1, 1)",
+        )
+        .run(oldKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-new', ?, 1)",
+        )
+        .run(newCollisionKey, JSON.stringify({ sessionId: "session-new" }));
+      database.db
+        .prepare(
+          "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-new', ?, 'conversation', 1, 1)",
+        )
+        .run(newCollisionKey);
+      stateDatabase.db
+        .prepare(
+          "INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at) VALUES ('doctor-session-key-migration', 'reserved-incognito-v1', 'openclaw-doctor', ?, 1, 1)",
+        )
+        .run(
+          JSON.stringify({
+            version: 1,
+            renames: [{ from: oldKey, to: resumedKey }],
+          }),
+        );
+      stateDatabase.db
+        .prepare(
+          "INSERT INTO session_state_heads (session_key, agent_id, last_sequence, updated_at) VALUES (?, 'main', 1, 1)",
+        )
+        .run(resumedKey);
+
+      expect(repairReservedIncognitoSessionKeys({ apply: false, cfg, env })).toEqual({
+        found: 2,
+        repaired: 0,
+      });
+      expect(repairReservedIncognitoSessionKeys({ apply: true, cfg, env })).toEqual({
+        found: 2,
+        repaired: 2,
+      });
+      expect(
+        database.db
+          .prepare("SELECT session_key FROM session_nodes ORDER BY session_key")
+          .all()
+          .map((row) => (row as { session_key: string }).session_key),
+      ).toEqual([resumedKey, "agent:main:dashboard:legacy-incognito-new"].toSorted());
+      expect(
+        stateDatabase.db
+          .prepare("SELECT scope FROM state_leases WHERE owner = 'openclaw-doctor'")
+          .get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it("rewrites dense incognito references in bounded batches without changing payloads", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-density-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: sqlitePath });
-    const stateDatabase = openOpenClawStateDatabase({ env });
-    const oldKey = "agent:main:dashboard:incognito-interrupted";
-    const newCollisionKey = "agent:main:dashboard:incognito-new";
-    const resumedKey = "agent:main:dashboard:legacy-incognito-interrupted-resumed";
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const oldKey = "agent:main:dashboard:incognito-density";
+    const newKey = "agent:main:dashboard:legacy-incognito-density";
+    const payload = "incognito-payload-".repeat(128);
     database.db
       .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-old', ?, 1)",
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, 'incognito-density-owner', ?, 1, 1)",
       )
-      .run(oldKey, JSON.stringify({ sessionId: "session-old" }));
+      .run(oldKey, JSON.stringify({ sessionId: "incognito-density-owner", updatedAt: 1 }));
     database.db
-      .prepare(
-        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-old', ?, 'conversation', 1, 1)",
-      )
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(oldKey);
     database.db
       .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-new', ?, 1)",
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('incognito-density-owner', ?, 'conversation', 1, 1)",
       )
-      .run(newCollisionKey, JSON.stringify({ sessionId: "session-new" }));
-    database.db
-      .prepare(
-        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-new', ?, 'conversation', 1, 1)",
-      )
-      .run(newCollisionKey);
-    stateDatabase.db
-      .prepare(
-        "INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at) VALUES ('doctor-session-key-migration', 'reserved-incognito-v1', 'openclaw-doctor', ?, 1, 1)",
-      )
-      .run(
+      .run(oldKey);
+    const insertNode = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at, parent_session_key) VALUES (?, ?, ?, 1, ?, ?)",
+    );
+    const insertWindow = database.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key) VALUES (?, ?, 'conversation', ?, ?, ?)",
+    );
+    for (let index = 0; index < 130; index += 1) {
+      const sessionKey = `agent:main:incognito-density-${String(index).padStart(3, "0")}`;
+      const sessionId = `incognito-density-session-${index}`;
+      insertNode.run(
+        sessionKey,
+        sessionId,
         JSON.stringify({
-          version: 1,
-          renames: [{ from: oldKey, to: resumedKey }],
+          parentSessionKey: oldKey,
+          payload,
+          sessionId,
+          updatedAt: index + 2,
         }),
+        index + 2,
+        oldKey,
       );
-    stateDatabase.db
-      .prepare(
-        "INSERT INTO session_state_heads (session_key, agent_id, last_sequence, updated_at) VALUES (?, 'main', 1, 1)",
-      )
-      .run(resumedKey);
+      insertWindow.run(sessionId, sessionKey, index + 2, index + 2, oldKey);
+    }
+    const originalExec = database.db.exec.bind(database.db);
+    let writeTransactions = 0;
+    vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE") {
+        writeTransactions += 1;
+      }
+      return originalExec(sql);
+    });
 
-    expect(repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
-      found: 2,
-      repaired: 0,
-    });
     expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
-      found: 2,
-      repaired: 2,
+      found: 1,
+      repaired: 1,
     });
+    expect(writeTransactions).toBeGreaterThanOrEqual(4);
     expect(
       database.db
-        .prepare("SELECT session_key FROM session_nodes ORDER BY session_key")
-        .all()
-        .map((row) => (row as { session_key: string }).session_key),
-    ).toEqual([resumedKey, "agent:main:dashboard:legacy-incognito-new"].toSorted());
-    expect(
-      stateDatabase.db
-        .prepare("SELECT scope FROM state_leases WHERE owner = 'openclaw-doctor'")
+        .prepare("SELECT count(*) AS count FROM session_nodes WHERE entry_valid <> 1")
         .get(),
-    ).toBeUndefined();
+    ).toEqual({ count: 0 });
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+        .get(newKey),
+    ).toEqual({
+      session_key: newKey,
+    });
+    for (const index of [0, 65, 129]) {
+      const sessionKey = `agent:main:incognito-density-${String(index).padStart(3, "0")}`;
+      const row = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey) as { entry_json: string };
+      expect(JSON.parse(row.entry_json)).toMatchObject({ parentSessionKey: newKey, payload });
+    }
   });
 });

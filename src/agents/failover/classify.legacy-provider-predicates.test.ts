@@ -1,115 +1,45 @@
 // Covers provider-specific error-pattern classification hooks.
 import { describe, expect, it, vi } from "vitest";
+import { classifyFailoverClassificationFromHttpStatus } from "./classification-rules.js";
 import type { FailoverReason } from "./signal.js";
 
 const hoisted = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn((): FailoverReason | null => null),
 }));
 
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => hoisted,
-}));
+vi.mock("../../plugins/provider-failover.js", () => hoisted);
 
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
-import {
-  classifyFailoverReason,
-  isContextOverflowError,
-  classifyProviderPluginError,
-  classifyProviderSpecificError,
-  matchesProviderContextOverflow,
-} from "./classify.js";
+import { classifyFailoverReason, isContextOverflowError } from "./classify.js";
+import { isLikelyHttpErrorText, renderSanitizedUserFacingText } from "./user-copy.js";
 
-describe("classifyProviderPluginError", () => {
-  it("retains the direct provider-hook compatibility predicate", () => {
-    expect(
-      classifyProviderPluginError({ provider: "demo-provider", errorMessage: "quota exhausted" }),
-    ).toBeNull();
-  });
+it("renders task results and HTTP errors without activating provider hooks", () => {
+  hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
+  expect(renderSanitizedUserFacingText("Audit complete.", { errorContext: true })).toBe(
+    "Audit complete.",
+  );
+  expect(isLikelyHttpErrorText("500 Internal Server Error")).toBe(true);
+  expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
 
-describe("matchesProviderContextOverflow", () => {
+describe("isContextOverflowError provider-hook gate", () => {
   it("skips provider hook dispatch for unrelated errors", () => {
     // Avoid calling plugin hooks for obviously unrelated text so classifier hot
     // paths stay cheap and side-effect free.
     hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
 
     expect(
-      matchesProviderContextOverflow("Permission denied for /root/oc-acp-write-should-fail.txt."),
+      isContextOverflowError("Permission denied for /root/oc-acp-write-should-fail.txt."),
     ).toBe(false);
     expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
-  it.each([
-    // AWS Bedrock
-    "ValidationException: The input is too long for the model",
-    "ValidationException: Input token count exceeds the maximum number of input tokens",
-    "ModelStreamErrorException: Input is too long for this model",
-
-    // Google Vertex
-    "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
-
-    // Ollama
-    "ollama error: context length exceeded, too many tokens",
-
-    // Mistral
-    "mistral: input is too long for this model",
-
-    // Cohere
-    "total tokens exceeds the model's maximum limit of 4096",
-
-    // llama.cpp HTTP server (slot ctx-size overflow)
-    "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
-    "request (130000 tokens) exceeds available context size (131072 tokens)",
-    "prompt (8500 tokens) exceeds the available context size (8192 tokens), try increasing it",
-
-    // Generic
-    "input is too long for model gpt-5.4",
-  ])("matches provider-specific overflow: %s", (msg) => {
-    expect(matchesProviderContextOverflow(msg)).toBe(true);
-  });
-
   it("does not match unrelated errors", () => {
     hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
-    expect(matchesProviderContextOverflow("rate limit exceeded")).toBe(false);
-    expect(matchesProviderContextOverflow("invalid api key")).toBe(false);
-    expect(matchesProviderContextOverflow("internal server error")).toBe(false);
+    expect(isContextOverflowError("rate limit exceeded")).toBe(false);
+    expect(isContextOverflowError("invalid api key")).toBe(false);
+    expect(isContextOverflowError("internal server error")).toBe(false);
     expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
-  });
-});
-
-describe("classifyProviderSpecificError", () => {
-  it("leaves Bedrock ThrottlingException to the generic rate-limit table", () => {
-    // FIXED(refactor-02): duplicate provider-specific throttling spellings were removed.
-    expect(classifyProviderSpecificError("ThrottlingException: Too many requests")).toBeNull();
-  });
-
-  it("classifies Bedrock ModelNotReadyException as overloaded", () => {
-    expect(classifyProviderSpecificError("ModelNotReadyException: model is not ready")).toBe(
-      "overloaded",
-    );
-  });
-
-  it("classifies Groq model_deactivated as model_not_found", () => {
-    expect(classifyProviderSpecificError("model_is_deactivated")).toBe("model_not_found");
-  });
-
-  it("leaves concurrency limits to the generic rate-limit table", () => {
-    expect(classifyProviderSpecificError("concurrency limit has been reached")).toBeNull();
-    expect(classifyProviderSpecificError("concurrency limit reached")).toBeNull();
-  });
-
-  it("classifies Cloudflare Workers AI quota errors as rate_limit", () => {
-    expect(classifyProviderSpecificError("workers_ai gateway error: quota limit exceeded")).toBe(
-      "rate_limit",
-    );
-  });
-
-  it("does not match generic 'model is not ready' without Bedrock prefix", () => {
-    expect(classifyProviderSpecificError("model is not ready")).toBeNull();
-  });
-
-  it("returns null for unmatched errors", () => {
-    expect(classifyProviderSpecificError("some random error")).toBeNull();
   });
 });
 
@@ -284,5 +214,36 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     const jsonRateLimit =
       '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
     expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
+  });
+});
+
+describe("context semantics through HTTP status mapping", () => {
+  it.each([400, 404, 422, 499, 500, 502, 503, 504, 529])(
+    "preserves a classified context overflow through HTTP %i",
+    (status) => {
+      expect(
+        classifyFailoverClassificationFromHttpStatus(
+          status,
+          "Context size has been exceeded.",
+          { kind: "context_overflow" },
+          status,
+        ),
+      ).toEqual({ kind: "context_overflow" });
+    },
+  );
+
+  it.each([
+    { status: 401, reason: "auth" },
+    { status: 403, reason: "auth" },
+    { status: 429, reason: "rate_limit" },
+  ])("preserves the HTTP $status access or quota boundary", ({ status, reason }) => {
+    expect(
+      classifyFailoverClassificationFromHttpStatus(
+        status,
+        "Context size has been exceeded.",
+        { kind: "context_overflow" },
+        status,
+      ),
+    ).toEqual({ kind: "reason", reason });
   });
 });

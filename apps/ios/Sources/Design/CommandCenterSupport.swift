@@ -93,6 +93,9 @@ struct CommandSessionRow: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 6)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: self.item.sessionColor)
+        }
         .contentShape(Rectangle())
     }
 
@@ -118,6 +121,7 @@ struct CommandSessionRow: View {
 struct CommandSessionActions {
     let rename: (String?) -> Void
     let moveToGroup: (String?) -> Void
+    let setColor: (String?) -> Void
     let togglePinned: () -> Void
     let toggleUnread: () -> Void
     let fork: () -> Void
@@ -154,6 +158,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     private func managedContent(_ content: Content) -> some View {
         content
             .contextMenu {
+                OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
                 if self.isArchived {
                     if self.canArchive {
                         self.actionButton("Unarchive", systemImage: "archivebox") {

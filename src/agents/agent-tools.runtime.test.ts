@@ -97,7 +97,10 @@ describe("wrapToolWithAbortSignal", () => {
     const wrapped = wrapToolWithAbortSignal(
       createSessionsYieldTool({
         sessionId: "requester",
-        onBeforeYield: beforeYield,
+        claimYield: () => {
+          beforeYield();
+          return true;
+        },
         onYield: () => {
           runAbort.abort(handoffReason);
         },
@@ -126,6 +129,7 @@ describe("wrapToolWithAbortSignal", () => {
     const yieldTool = wrapToolWithAbortSignal(
       createSessionsYieldTool({
         sessionId: "requester",
+        claimYield: () => true,
         onYield: () => {
           runAbort.abort(handoffReason);
         },
@@ -146,6 +150,7 @@ describe("wrapToolWithAbortSignal", () => {
     const wrapped = wrapToolWithAbortSignal(
       createSessionsYieldTool({
         sessionId: "requester",
+        claimYield: () => true,
         onYield: () => {
           runAbort.abort(handoffReason);
           callAbort.abort(handoffReason);
@@ -230,6 +235,7 @@ describe("wrapToolWithAbortSignal", () => {
     const wrapped = wrapToolWithAbortSignal(
       createSessionsYieldTool({
         sessionId: "requester",
+        claimYield: () => true,
         onYield: () => {
           runAbort.abort({ code: "sessions_yield", turnHandoff: true });
           throw yieldError;

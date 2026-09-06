@@ -21,6 +21,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
 import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
 import {
+  configureTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
@@ -96,9 +97,14 @@ describe("task operations product boundary", () => {
   it("runs persisted task operations through CLI, chat, notification, audit, and maintenance", async () => {
     await withOpenClawTestState(
       {
-        layout: "state-only",
+        layout: "home",
         scenario: "minimal",
         prefix: "openclaw-task-operations-e2e-",
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_URL: undefined,
+        },
       },
       async () => {
         resetTaskOperationsRuntime();
@@ -159,6 +165,15 @@ describe("task operations product boundary", () => {
             notifyPolicy: "done_only",
           });
 
+          const standaloneList = createRuntime();
+          await tasksListCommand({}, standaloneList.runtime);
+          expect(standaloneList.logs.join("\n")).toContain(
+            "Task pressure: 0 queued · 2 running · 0 issues",
+          );
+          expect(requireTask(stale.taskId).status).toBe("running");
+
+          // Only the Gateway can reconcile CLI runs from process-local liveness.
+          configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
           const list = createRuntime();
           await tasksListCommand({}, list.runtime);
           expect(list.logs.join("\n")).toContain("Background tasks: 3");
@@ -255,19 +270,26 @@ describe("task operations product boundary", () => {
 
           const cancel = createRuntime();
           await tasksCancelCommand({ lookup: operatorTask.taskId }, cancel.runtime);
-          expect(cancel.errors).toEqual([]);
-          expect(cancel.exits).toEqual([]);
-          expect(cancel.logs).toEqual([
-            `Cancelled ${operatorTask.taskId} (cli) run run-a07-operator.`,
+          // A persisted row cannot stand in for the Gateway's live execution owner.
+          expect(cancel.errors).toEqual([
+            expect.stringContaining(
+              "CLI task cancellation requires the live Gateway tasks.cancel path:",
+            ),
           ]);
+          expect(cancel.errors[0]).toContain("requires credentials before opening a websocket");
+          expect(cancel.exits).toEqual([1]);
+          expect(cancel.logs).toEqual([]);
+          resetTaskRegistryForTests({ persist: false });
+          reloadTaskRegistryFromStore();
           expect(requireTask(operatorTask.taskId)).toMatchObject({
-            status: "cancelled",
-            error: "Cancelled by operator.",
+            status: "running",
           });
 
-          const cancelledShow = createRuntime();
-          await tasksShowCommand({ lookup: operatorTask.taskId }, cancelledShow.runtime);
-          expect(cancelledShow.logs.join("\n")).toContain("status: cancelled");
+          expect(requireTask(operatorTask.taskId).error).toBeUndefined();
+
+          const retainedShow = createRuntime();
+          await tasksShowCommand({ lookup: operatorTask.taskId }, retainedShow.runtime);
+          expect(retainedShow.logs.join("\n")).toContain("status: running");
         } finally {
           clearHeartbeat();
           resetTaskOperationsRuntime();

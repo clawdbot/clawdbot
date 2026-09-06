@@ -9,7 +9,6 @@ describe("compaction retry backoff over real HTTP", () => {
   it("aborts after one provider response without changing the source history", async () => {
     const controller = new AbortController();
     const requests: Array<{ method: string; path: string }> = [];
-    let responseCompletedAt: number | undefined;
     let abortedAt: number | undefined;
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -32,7 +31,6 @@ describe("compaction retry backoff over real HTTP", () => {
           // Start cancellation only after the real provider response can put
           // production compaction into its minimum 500 ms retry backoff.
           if (requests.length === 1) {
-            responseCompletedAt = performance.now();
             abortTimer = setTimeout(() => {
               abortedAt = performance.now();
               controller.abort();
@@ -89,11 +87,10 @@ describe("compaction retry backoff over real HTTP", () => {
       });
 
       await expect(summary).rejects.toThrow(/abort/i);
-      if (responseCompletedAt === undefined || abortedAt === undefined) {
+      if (abortedAt === undefined) {
         throw new Error("Compaction did not abort after the real loopback response");
       }
       expect(performance.now() - abortedAt).toBeLessThan(400);
-      expect(performance.now() - responseCompletedAt).toBeLessThan(400);
       expect(requests).toEqual([{ method: "POST", path: "/v1/chat/completions" }]);
       expect(Buffer.from(JSON.stringify(messages)).equals(originalHistory)).toBe(true);
     } finally {

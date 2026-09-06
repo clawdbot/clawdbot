@@ -277,6 +277,148 @@ describe("handleFileWrite — symlink protection", () => {
     await expectAccessMissing(path.join(realDir, "new"));
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted parent before writing bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.symlink(first, link);
+      const requestedPath = path.join(link, "out.txt");
+
+      const preflight = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("approved"),
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("not approved"),
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailure(result, "CANONICAL_PATH_CHANGED");
+      await expectAccessMissing(path.join(first, "out.txt"));
+      await expectAccessMissing(path.join(second, "out.txt"));
+    },
+  );
+
+  it("rejects an existing-file replacement at the same canonical pathname", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const moved = path.join(tmpRoot, "moved.txt");
+    await fs.writeFile(target, "approved");
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      overwrite: true,
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    await fs.rename(target, moved);
+    await fs.writeFile(target, "replacement");
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      overwrite: true,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailure(result, "CANONICAL_PATH_CHANGED");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
+    await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
+  });
+
+  it("writes through the preflight binding when the existing file is unchanged", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    await fs.writeFile(target, "before");
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("after"),
+      overwrite: true,
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("after"),
+      overwrite: true,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectSuccessFields(result, { path: target, size: 5 });
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("after");
+  });
+
+  it("rejects a parent replacement before creating a new file", async () => {
+    const parent = path.join(tmpRoot, "parent");
+    const moved = path.join(tmpRoot, "moved");
+    const target = path.join(parent, "new.txt");
+    await fs.mkdir(parent);
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    await fs.rename(parent, moved);
+    await fs.mkdir(parent);
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailure(result, "CANONICAL_PATH_CHANGED");
+    await expectAccessMissing(target);
+    await expectAccessMissing(path.join(moved, "new.txt"));
+  });
+
+  it("creates through the preflight anchor when the parent is unchanged", async () => {
+    const parent = path.join(tmpRoot, "parent");
+    const target = path.join(parent, "new.txt");
+    await fs.mkdir(parent);
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+
+    const result = await handleFileWrite({
+      path: target,
+      contentBase64: b64("next"),
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectSuccessFields(result, { path: target, size: 4 });
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("next");
+  });
+
   it("refuses to overwrite a directory", async () => {
     const target = path.join(tmpRoot, "is-a-dir");
     await fs.mkdir(target);

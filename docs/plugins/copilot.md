@@ -13,8 +13,12 @@ OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
-media delivery, the visible transcript mirror, `/btw` side questions (see
+media delivery, the visible chat transcript, `/btw` side questions (see
 [Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
+
+Direct bridged tools marked for sequential execution wait for earlier tool calls
+in the same attempt and delay later calls until they finish. Other tool calls
+can run concurrently.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
@@ -182,7 +186,7 @@ Precedence, applied per agent during `runCopilotAttempt`:
 Each agent gets its own `copilotHome` so Copilot CLI tokens, sessions, and
 config never leak between agents on the same machine. Default:
 `<agentDir>/copilot` (keeps SDK state out of the same directory as
-OpenClaw's `models.json` / `auth-profiles.json`), or
+OpenClaw's `models.json` / `openclaw-agent.sqlite`), or
 `~/.openclaw/agents/<agentId>/copilot` when no agent directory is supplied.
 Override with `copilotHome: <path>` on the attempt input for a custom
 location (for example, a shared mount for migration).
@@ -228,22 +232,32 @@ When `harness.compact` runs, the Copilot SDK harness:
 3. Returns the SDK compaction outcome without writing compatibility marker
    files under the workspace.
 
-The OpenClaw-side transcript mirror (below) keeps receiving post-compaction
+The OpenClaw-side transcript journal (below) keeps receiving post-compaction
 messages, so user-facing chat history stays consistent.
 
-## Transcript mirroring
+## Transcript persistence
 
-`runCopilotAttempt` dual-writes each turn's mirrorable messages into the
-OpenClaw audit transcript via
-`extensions/copilot/src/dual-write-transcripts.ts`. The mirror is scoped per
-session (`copilot:${sessionId}`) and keyed per message
-(`${role}:${sha256_16(role,content)}`), so re-emitted prior-turn entries
-collide with existing on-disk keys instead of duplicating.
+`runCopilotAttempt` gives each attempt a transcript journal
+(`createAttemptTranscriptJournal` in
+`extensions/copilot/src/attempt-transcript-journal.ts`) that persists every
+turn's messages into the OpenClaw session transcript. Journal identity is
+turn-scoped, not content-scoped: the initial user turn is keyed
+`${runId}:user` and SDK-sourced events are keyed
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
+idempotency scan at the transcript store, so re-emitted prior-turn entries
+cannot duplicate.
 
-Two layers of failure containment wrap the mirror so a transcript write
-failure never fails the attempt: an internal best-effort wrapper, plus a
-defense-in-depth `.catch(...)` at the attempt level. Failures are logged, not
-surfaced.
+Assistant turns and their tool results are journaled as structurally complete
+groups, so a crash between groups leaves a valid transcript prefix.
+`before_message_write` hooks may redact content but cannot change role or
+tool topology; a structurally destructive rewrite suppresses the whole group
+instead of persisting a false replay.
+
+Persistence failures fail closed. The first write failure marks the journal
+failed, aborts the in-flight SDK session, and flags the attempt's replay as
+unvalidated so the next run creates a fresh SDK session instead of trusting a
+partial transcript. Only the post-append transcript update notification is
+best-effort and logged.
 
 ## Side questions (`/btw`)
 

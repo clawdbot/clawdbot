@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsListResult } from "../api/types.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
@@ -8,60 +11,44 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
-export type SessionCreatorOption = SessionCreatedActor & { id: string };
+export type SessionOwnerOption = NonNullable<SessionsListResult["owners"]>[number];
 
-export function listSessionCreators(
-  sessions: readonly { createdActor?: SessionCreatedActor }[],
-): SessionCreatorOption[] {
-  const creators = new Map<string, SessionCreatorOption>();
-  for (const session of sessions) {
-    const id = session.createdActor?.id?.trim();
-    if (!id) {
-      continue;
-    }
-    const label = session.createdActor?.label?.trim();
-    const avatarUrl = session.createdActor?.avatarUrl?.trim();
-    const existing = creators.get(id);
-    const nextLabel =
-      label && (!existing?.label || label.localeCompare(existing.label) < 0)
-        ? label
-        : existing?.label;
-    const nextAvatarUrl = [existing?.avatarUrl, avatarUrl]
-      .filter((value): value is string => Boolean(value))
-      .toSorted()[0];
-    if (!existing || nextLabel !== existing.label || nextAvatarUrl !== existing.avatarUrl) {
-      creators.set(id, {
-        type: session.createdActor?.type ?? "human",
-        id,
-        ...(nextLabel ? { label: nextLabel } : {}),
-        ...(nextAvatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
-      });
-    }
-  }
-  return [...creators.values()].toSorted((a, b) => {
-    const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
-    return byLabel || a.id.localeCompare(b.id);
-  });
+export function sessionSelfOwner(
+  self: AuthenticatedUser | null | undefined,
+): SessionOwnerOption | null {
+  return self
+    ? {
+        type: "human",
+        id: self.id,
+        identity: { type: "profile", id: self.id },
+        label: self.name,
+        avatarUrl: self.avatarUrl,
+      }
+    : null;
 }
 
 export function renderSessionOwnerChip(
-  createdActor: SessionCreatedActor | null | undefined,
+  owner: SessionCreatedActor | null | undefined,
   size: "row" | "header",
-  attribution: "created" | "archived" = "created",
+  attribution: "created" | "owned" | "archived" = "created",
   viewingNow?: boolean,
+  participants?: readonly SessionParticipant[],
+  participantCount?: number,
 ) {
-  return createdActor?.id
+  return owner?.id
     ? html`<openclaw-session-owner-chip
-        .createdActor=${createdActor}
+        .owner=${owner}
         size=${size}
         attribution=${attribution}
         .viewingNow=${viewingNow}
+        .participants=${participants ?? []}
+        .participantCount=${participantCount ?? participants?.length ?? 0}
       ></openclaw-session-owner-chip>`
     : nothing;
 }
 
-function ownerInitials(createdActor: SessionCreatedActor): string {
-  const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
+export function sessionOwnerInitials(owner: SessionCreatedActor): string {
+  const source = owner.label?.trim() || owner.id?.trim() || "";
   if (!source) {
     return "";
   }
@@ -85,66 +72,99 @@ function ownerHue(id: string): number {
   return Math.abs(hash) % 360;
 }
 
+export function renderSessionOwnerAvatar(
+  owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">,
+) {
+  return html`<openclaw-viewer-avatar
+    .identity=${owner.identity}
+    .user=${{
+      id: owner.id,
+      name: owner.label,
+      avatarUrl: owner.avatarUrl,
+      watchedSessions: [],
+    }}
+    .markAsViewer=${false}
+    variant="session"
+    aria-hidden="true"
+  ></openclaw-viewer-avatar>`;
+}
+
 /**
- * Permanent session-owner avatar. Ownership is provenance, so the chip remains
- * when its owner leaves; live viewing only changes avatar saturation. Render
- * only when the gateway has 2+ distinct creator identities (solo mode shows no
- * attribution chrome). Human actors use the durable profile projection carried
- * by the session record; actors without it keep stable initials.
+ * Session-owner avatar. The owner may be reassigned; live viewing only changes
+ * avatar saturation. Render only when the Gateway's complete owner facet has 2+
+ * identities (solo mode shows no attribution chrome). Human actors use the durable
+ * profile projection carried by the session record; actors without it keep stable initials.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
-  @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
+  @property({ attribute: false }) owner: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
-  @property({ type: String }) attribution: "created" | "archived" = "created";
+  @property({ type: String }) attribution: "created" | "owned" | "archived" = "created";
   @property({ attribute: false }) viewingNow?: boolean;
+  @property({ attribute: false }) participants: readonly SessionParticipant[] = [];
+  @property({ type: Number }) participantCount = 0;
 
   override render() {
-    const createdActor = this.createdActor;
-    if (!createdActor?.id) {
+    const owner = this.owner;
+    if (!owner?.id) {
       return nothing;
     }
-    const initials = ownerInitials(createdActor);
+    const initials = sessionOwnerInitials(owner);
     if (!initials) {
       return nothing;
     }
-    const title = createdActor.label || createdActor.id;
-    const attributionLabel = t(
-      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
-      { name: title },
-    );
+    const title = owner.label || owner.id;
+    const attributionKey =
+      this.attribution === "archived"
+        ? "sessionsView.archivedBy"
+        : this.attribution === "owned"
+          ? "sessionsView.ownedBy"
+          : "sessionsView.createdBy";
+    const attributionLabel = t(attributionKey, { name: title });
     const accessibleLabel = this.viewingNow
       ? `${attributionLabel} · ${t("sessionsView.viewingNow")}`
       : attributionLabel;
-    const avatar = createdActor.avatarUrl
-      ? resolveAvatar({
-          id: createdActor.id,
-          name: createdActor.label,
-          profileAvatarUrl: createdActor.avatarUrl,
-        })
-      : null;
-    return html`
+    const avatar = resolveAvatar({
+      id: owner.id,
+      identity: owner.identity,
+      name: owner.label,
+      profileAvatarUrl: owner.avatarUrl,
+    });
+    const stacked = this.size === "row" && this.participantCount > 0;
+    const chip = html`
       <span
-        class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
-          ? "session-owner-chip--away"
-          : ""}"
-        style="--owner-hue: ${ownerHue(createdActor.id)}"
+        class="session-owner-chip session-owner-chip--${this.size} ${
+          this.viewingNow === false ? "session-owner-chip--away" : ""
+        } ${stacked ? "session-owner-stack__front" : ""}"
+        style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${avatar?.kind === "profile"
-          ? html`<openclaw-viewer-avatar
-              .user=${{
-                id: createdActor.id,
-                name: createdActor.label,
-                avatarUrl: createdActor.avatarUrl,
-                watchedSessions: [],
-              }}
-              variant="session"
-              aria-hidden="true"
-            ></openclaw-viewer-avatar>`
-          : initials}</span
+        >${
+          avatar?.kind === "profile"
+            ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
+            : initials
+        }</span
       >
     `;
+    if (!stacked) {
+      return chip;
+    }
+    const participant = this.participants[0];
+    const participantTitle = participant?.label || participant?.identity.id;
+    const combinedLabel =
+      this.participantCount === 1 && participantTitle
+        ? `${accessibleLabel} · ${t("sessionsView.withParticipant", { name: participantTitle })}`
+        : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
+    return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
+      <span class="session-owner-stack__back" aria-hidden="true">
+        ${
+          this.participantCount === 1 && participant
+            ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
+            : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`
+        }
+      </span>
+      ${chip}
+    </span>`;
   }
 }
 

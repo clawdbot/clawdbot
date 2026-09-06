@@ -1,0 +1,17 @@
+/* Shared by compact sidebar and chat-header menus. */
+.session-menu--compact .session-menu__back {
+  z-index: 1;
+  position: sticky;
+  top: 0;
+  background: var(--wa-color-surface-raised);
+}
+
+html[dir="rtl"] .session-menu__chevron,
+html[dir="rtl"] .session-menu__back > .session-menu__icon {
+  transform: scaleX(-1);
+}
+
+wa-dropdown.session-menu--compact::part(menu) {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}

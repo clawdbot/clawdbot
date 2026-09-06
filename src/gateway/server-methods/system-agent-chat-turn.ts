@@ -3,12 +3,50 @@ import type {
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { appendTranscriptTurn } from "../../system-agent/transcript-store.js";
+import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
 type SystemAgentChatEngineInput = Pick<
   SystemAgentChatEngine,
   "answerWizard" | "cancelWizard" | "handle"
 >;
+
+/**
+ * Build the welcome-only result for rejoining an existing session. A
+ * reconnecting client must re-render the live wizard/question controls the
+ * session still awaits; the stale welcome question only fills in when no live
+ * interaction exists.
+ */
+export function buildSystemAgentRejoinResult(params: {
+  sessionId: string;
+  welcome: string;
+  welcomeQuestion?: SystemAgentChatResult["question"];
+  engine: {
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatResult["question"];
+      step?: SystemAgentChatResult["step"];
+    };
+  };
+}): SystemAgentChatResult {
+  const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
+  return {
+    sessionId: params.sessionId,
+    reply: rejoin.text || params.welcome,
+    action: "none",
+    ...(rejoin.sensitive === true ? { sensitive: true } : {}),
+    ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),
+    ...(rejoin.step ? { step: rejoin.step } : {}),
+    ...(rejoin.question
+      ? { question: rejoin.question }
+      : params.welcomeQuestion
+        ? { question: params.welcomeQuestion }
+        : {}),
+  };
+}
 
 export function getSystemAgentChatInputError(params: SystemAgentChatParams): string | undefined {
   if (params.message !== undefined && params.wizardAnswer !== undefined) {
@@ -56,7 +94,6 @@ export async function runSystemAgentChatInput(params: {
 export function buildSystemAgentChatResult(params: {
   sessionId: string;
   reply: SystemAgentChatReply;
-  proposalId?: string;
 }): SystemAgentChatResult {
   const action =
     params.reply.action === "open-tui"
@@ -72,6 +109,9 @@ export function buildSystemAgentChatResult(params: {
         ? "Setup here is done — continue with your agent."
         : "Nothing to change."),
     action,
+    ...(params.reply.handoff?.kind === "model-accounts"
+      ? { handoff: { kind: "model-accounts" as const } }
+      : {}),
     ...(action === "open-agent" && params.reply.agentDraft
       ? { agentDraft: params.reply.agentDraft }
       : {}),
@@ -84,6 +124,16 @@ export function buildSystemAgentChatResult(params: {
     ...(params.reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
     ...(params.reply.question ? { question: params.reply.question } : {}),
     ...(params.reply.step ? { step: params.reply.step } : {}),
-    ...(params.proposalId ? { needsApproval: true, proposalId: params.proposalId } : {}),
   };
+}
+
+export function persistSystemAgentEngineHistory(
+  engine: GatewaySystemAgentSession["engine"],
+  startIndex: number,
+): void {
+  const at = Date.now();
+  for (const turn of engine.historySince(startIndex)) {
+    // Engine history has already masked sensitive user input.
+    appendTranscriptTurn({ ...turn, at });
+  }
 }

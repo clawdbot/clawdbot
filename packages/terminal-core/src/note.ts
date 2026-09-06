@@ -100,6 +100,8 @@ function wrapLine(line: string, maxWidth: number): string[] {
   const firstWidth = Math.max(10, maxWidth - visibleWidth(firstPrefix));
   const nextWidth = Math.max(10, maxWidth - visibleWidth(nextPrefix));
 
+  // Printable ASCII width equals length; reuse that fact for every word and candidate.
+  const isPrintableAscii = /^[\u0020-\u007E]*$/.test(content);
   const words = content.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let current = "";
@@ -107,50 +109,31 @@ function wrapLine(line: string, maxWidth: number): string[] {
   let available = firstWidth;
 
   for (const word of words) {
-    if (!current) {
-      if (visibleWidth(word) > available) {
-        if (isCopySensitiveToken(word)) {
-          current = word;
-          continue;
-        }
-        pushWrappedWordSegments({
-          word,
-          available,
-          firstPrefix: prefix,
-          continuationPrefix: nextPrefix,
-          lines,
-        });
-        prefix = nextPrefix;
-        available = nextWidth;
+    if (current) {
+      const candidate = `${current} ${word}`;
+      if ((isPrintableAscii ? candidate.length : visibleWidth(candidate)) <= available) {
+        current = candidate;
         continue;
       }
-      current = word;
-      continue;
+      lines.push(prefix + current);
+      current = "";
+      prefix = nextPrefix;
+      available = nextWidth;
     }
 
-    const candidate = `${current} ${word}`;
-    if (visibleWidth(candidate) <= available) {
-      current = candidate;
-      continue;
-    }
-
-    lines.push(prefix + current);
-    prefix = nextPrefix;
-    available = nextWidth;
-
-    if (visibleWidth(word) > available) {
-      if (isCopySensitiveToken(word)) {
-        current = word;
-        continue;
-      }
+    if (
+      (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
+      !isCopySensitiveToken(word)
+    ) {
       pushWrappedWordSegments({
         word,
         available,
         firstPrefix: prefix,
-        continuationPrefix: prefix,
+        continuationPrefix: nextPrefix,
         lines,
       });
-      current = "";
+      prefix = nextPrefix;
+      available = nextWidth;
       continue;
     }
     current = word;
@@ -206,31 +189,39 @@ export function resolveNoteOutputColumns(message: string, columns: number): numb
   return Math.max(columns, widestLine + 6);
 }
 
-function createNoteOutput(columns: number): NodeJS.WriteStream {
-  if (process.stdout.columns === columns) {
-    return process.stdout;
+function createNoteOutput(output: NodeJS.WriteStream, columns: number): NodeJS.WriteStream {
+  if (output.columns === columns) {
+    return output;
   }
-  const output = Object.create(process.stdout) as NodeJS.WriteStream;
-  Object.defineProperty(output, "columns", {
+  const adaptedOutput = Object.create(output) as NodeJS.WriteStream;
+  Object.defineProperty(adaptedOutput, "columns", {
     value: columns,
     configurable: true,
   });
-  output.write = process.stdout.write.bind(process.stdout);
-  return output;
+  adaptedOutput.write = output.write.bind(output);
+  return adaptedOutput;
 }
 
-export function note(message: unknown, title?: string) {
+export function noteToStream(
+  message: unknown,
+  title: string | undefined,
+  output: NodeJS.WriteStream,
+) {
   if (
     suppressNotesStorage.getStore() === true ||
     isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
   ) {
     return;
   }
-  const columns = resolveNoteColumns(process.stdout.columns);
+  const columns = resolveNoteColumns(output.columns);
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
-    output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
+    output: createNoteOutput(output, resolveNoteOutputColumns(wrappedMessage, columns)),
   });
+}
+
+export function note(message: unknown, title?: string) {
+  noteToStream(message, title, process.stdout);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

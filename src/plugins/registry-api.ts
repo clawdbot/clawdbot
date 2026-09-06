@@ -1,10 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import { buildPluginApi } from "./api-builder.js";
-import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
   getPluginRunContext,
@@ -14,7 +14,6 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
-import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistrars } from "./registry-registrars.js";
 import type { PluginRuntimeResolver } from "./registry-runtime.js";
@@ -26,6 +25,10 @@ import {
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
+
+// Registration exposes these async operations without loading session storage or delivery.
+const loadAttachments = createLazyRuntimeModule(() => import("./host-hook-attachments.js"));
+const loadHookState = createLazyRuntimeModule(() => import("./host-hook-state.js"));
 
 function normalizeLogger(logger: PluginLogger): PluginLogger {
   return {
@@ -83,6 +86,7 @@ export function createPluginApiFactory(
     registerReload,
     registerNodeHostCommand,
     registerNodeInvokePolicy,
+    registerWidgetPresenter,
     registerSecurityAuditCollector,
     registerInteractiveHandler,
     registerConversationBindingResolvedHandler,
@@ -95,6 +99,7 @@ export function createPluginApiFactory(
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerBoardWidgetContentKind,
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,
@@ -104,7 +109,6 @@ export function createPluginApiFactory(
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryEmbeddingProvider,
     registerCli,
     registerChannel,
   } = registrars;
@@ -189,7 +193,8 @@ export function createPluginApiFactory(
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
               registerEmbeddingProvider: (provider) => registerEmbeddingProvider(record, provider),
-              registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerAgentHarness: (harness, options) =>
+                registerAgentHarness(record, harness, options),
               registerDetachedTaskRuntime: (runtime) =>
                 registerDetachedTaskRuntime(record, runtime),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
@@ -222,6 +227,7 @@ export function createPluginApiFactory(
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
               registerNodeInvokePolicy: (policy) =>
                 registerNodeInvokePolicy(record, policy, params.pluginConfig),
+              registerWidgetPresenter: (presenter) => registerWidgetPresenter(record, presenter),
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) =>
@@ -240,7 +246,7 @@ export function createPluginApiFactory(
                 registerAgentToolResultMiddleware(record, handler, options, params.hookPolicy);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
-              enqueueNextTurnInjection: (injection) => {
+              enqueueNextTurnInjection: async (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({
                     level: "warn",
@@ -248,12 +254,13 @@ export function createPluginApiFactory(
                     source: record.source,
                     message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
                   });
-                  return Promise.resolve({
+                  return {
                     enqueued: false,
                     id: "",
                     sessionKey: injection.sessionKey,
-                  });
+                  };
                 }
+                const { enqueuePluginNextTurnInjection } = await loadHookState();
                 return enqueuePluginNextTurnInjection({
                   cfg: registryParams.runtime.config.current() as OpenClawConfig,
                   pluginId: record.id,
@@ -265,6 +272,8 @@ export function createPluginApiFactory(
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
+              registerBoardWidgetContentKind: (definition) =>
+                registerBoardWidgetContentKind(record, definition),
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
@@ -312,6 +321,7 @@ export function createPluginApiFactory(
                   return { ok: false, error: "global side effects disabled" };
                 }
                 try {
+                  const { sendPluginSessionAttachment } = await loadAttachments();
                   if (!isLoadedRecordInLiveRegistry()) {
                     return { ok: false, error: "plugin is not loaded" };
                   }
@@ -368,8 +378,6 @@ export function createPluginApiFactory(
                 registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
-              registerMemoryEmbeddingProvider: (adapter) =>
-                registerMemoryEmbeddingProvider(record, adapter),
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
             }

@@ -8,7 +8,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { TextContent } from "../llm/types.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -75,10 +75,6 @@ function resolveSummaryModelRef(
   return { ref: resolved.ref, source: "summaryModel" };
 }
 
-function isTextContentBlock(block: { type: string }): block is TextContent {
-  return block.type === "text";
-}
-
 /** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
@@ -139,15 +135,18 @@ export async function summarizeText(
         options: {
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
+          // Summary text is spoken; never recover incomplete reasoning as visible prose.
+          strictReasoningTags: true,
           signal: controller.signal,
         },
       });
-      const summary = res.content
-        .filter(isTextContentBlock)
-        .map((block) => block.text.trim())
-        .filter(Boolean)
-        .join(" ")
-        .trim();
+      const summary = sanitizeAssistantVisibleText(
+        res.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text.trim())
+          .filter(Boolean)
+          .join(" "),
+      );
 
       if (!summary) {
         throw new Error("No summary returned");

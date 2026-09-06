@@ -75,6 +75,7 @@ export function createCodexDynamicToolExecutionRegistry() {
 
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
+  availableTools: readonly { name: string }[],
   hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
@@ -85,17 +86,8 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  // Keep directness stable across source delivery modes while the tool is
-  // enabled. Disabled tools can remain registered for schema stability, but
-  // must not be advertised as immediately callable.
-  if (params.disableMessageTool !== true) {
+  if (availableTools.some((tool) => tool.name === "message")) {
     names.push("message");
-  }
-  // Restricted plugin runs replace Codex's native tool surface with an exact
-  // OpenClaw policy-filtered catalog. Keep the replacement planner visible in
-  // the initial context so Codex can maintain the same user-facing plan stream.
-  if (params.pluginHarnessToolPolicyRestricted === true) {
-    names.push("update_plan");
   }
   return names;
 }

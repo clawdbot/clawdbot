@@ -91,6 +91,39 @@ deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
 
+## Price estimates
+
+Chat discovery keeps model membership, order, tags, and limits from DeepInfra's
+agent projection. Prices come separately from the anonymous native
+[`/models/list`](https://docs.deepinfra.com/api-reference/models/models-list)
+catalog. The plugin converts cents per token to USD per million tokens, applies
+the advertised numeric discount once, and uses the native cached-input ratio.
+Both requests share the existing five-minute live-catalog cache and run
+concurrently only for configured chat discovery. Image and video discovery do
+not request chat prices.
+
+Schedules qualified by pricing prose, a nonempty pricing table, or a scheduled
+discount expiry remain unknown; OpenClaw does not guess context tiers or parse
+promotion dates. A declared generic cache-write rate also remains unsupported
+because its numeric semantics are not documented. Explicit 5-minute/1-hour
+retention and priority/flex rates are separate contracts and are not included in
+standard estimates. See DeepInfra's [prompt caching](https://docs.deepinfra.com/chat/prompt-caching)
+and [cache retention](https://docs.deepinfra.com/chat/prompt-cache-retention) docs.
+
+Missing, malformed, or unavailable native prices never restore the projection's
+flat prices. Models remain selectable; the required runtime zero-cost placeholder
+means unknown, not verified free billing. If metadata discovery fails, OpenClaw
+keeps bundled model metadata and applies any available native prices. The complete
+bundled fallback, including prices, is used only when both sources fail or live
+discovery is skipped. Onboarding adds the model alias without pinning provider
+prices, and explicitly configured model costs remain authoritative.
+
+Hosted publication uses the same native parser. It preserves metadata without
+cost for unsupported or absent schedules, retains declared zero prices, and
+leaves the previous hosted catalog intact if the native feed fails validation.
+The existing [hosted catalog refresh and Gateway restart lifecycle](/concepts/models#hosted-catalog-updates)
+is unchanged.
+
 ## Notes
 
 - Model refs are `deepinfra/<provider>/<model>` (for example `deepinfra/Qwen/Qwen3-Max`).

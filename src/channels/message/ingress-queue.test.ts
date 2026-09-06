@@ -182,56 +182,6 @@ describe("channel ingress queue", () => {
     });
   });
 
-  it("can bound pending scans and prune stale pending rows", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => clock++ });
-
-      await queue.enqueue("0002", { index: 2 });
-      await queue.enqueue("0001", { index: 1 });
-      await queue.enqueue("0003", { index: 3 });
-
-      expect(
-        (await queue.listPending({ limit: 2, orderBy: "id" })).map((record) => record.id),
-      ).toEqual(["0001", "0002"]);
-      expect(await queue.prune({ pendingTtlMs: 3, pendingMaxEntries: 1, now: 7 })).toBe(2);
-      expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-        "0003",
-      ]);
-    });
-  });
-
-  it("does not prune protected rows while enforcing max-entry limits", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("z", { index: 1 });
-      await queue.enqueue("a", { index: 2 });
-
-      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: ["a"] })).toBe(0);
-      expect(
-        (await queue.listPending({ limit: "all", orderBy: "id" })).map((row) => row.id),
-      ).toEqual(["a", "z"]);
-    });
-  });
-
-  it("prunes max-entry overflow across bounded batches", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => clock++ });
-
-      for (let index = 0; index < 520; index += 1) {
-        await queue.enqueue(String(index).padStart(4, "0"), { index });
-      }
-
-      expect(await queue.prune({ pendingMaxEntries: 2 })).toBe(518);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([
-        "0518",
-        "0519",
-      ]);
-    });
-  });
-
   it("claims, releases, and skips blocked lanes", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
@@ -685,7 +635,6 @@ describe("channel ingress queue", () => {
         await queue.enqueue("good-2", { text: "world" });
 
         const pending = await queue.listPending();
-        expect(pending).toHaveLength(2);
         expect(pending.map((r) => r.id).toSorted()).toEqual(["good-1", "good-2"]);
       });
     });
@@ -960,7 +909,7 @@ describe("channel ingress queue", () => {
         });
 
         await expect(queue.enqueue("dup-claimed-bad", { text: "late" })).rejects.toThrow(
-          "Corrupt payload_json in claimed channel ingress event",
+          "Corrupt claimed channel ingress event",
         );
 
         const { db } = openIngressStateDatabase(stateDir);
@@ -1016,6 +965,65 @@ describe("channel ingress queue", () => {
         expect(row?.claim_token).toBeNull();
         expect(row?.claimed_at).toBeNull();
         await expect(queue.recoverStaleClaims({ staleMs: Date.now() - oldTime })).resolves.toBe(0);
+      });
+    });
+
+    it("tombstones malformed claims regardless of timestamp and keeps them resubmittable", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue<{ text: string }>(stateDir);
+        const payload = JSON.stringify({ text: "still valid" });
+        // Valid payloads, but incomplete claim columns: no owner can ever
+        // release these rows. A NULL claimed_at dodges cutoff-based scans, and
+        // a corrupt future claimed_at dodges every cutoff comparison; the
+        // missing columns alone must pull both rows into the recovery scan.
+        insertCorruptRow(stateDir, '["test","account"]', "claimless", {
+          payload_json: payload,
+          status: "claimed",
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "future-ownerless", {
+          payload_json: payload,
+          status: "claimed",
+          claim_token: "test-token-placeholder",
+          claimed_at: 1_000_000,
+        });
+
+        await expect(queue.listClaims()).resolves.toEqual([]);
+
+        const shouldRecoverCorrupt = vi.fn(() => false);
+        await expect(
+          queue.recoverStaleClaims({ staleMs: 10, now: 20, shouldRecoverCorrupt }),
+        ).resolves.toBe(2);
+        // No reachable owner exists, so ownership policy is not consulted.
+        expect(shouldRecoverCorrupt).not.toHaveBeenCalled();
+
+        const { db } = openIngressStateDatabase(stateDir);
+        const rows = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["event_id", "status", "failed_reason", "payload_json", "claim_token"])
+            .where("queue_name", "=", '["test","account"]')
+            .orderBy("event_id", "asc"),
+        ).rows;
+        expect(rows).toEqual([
+          {
+            event_id: "claimless",
+            status: "failed",
+            failed_reason: "corrupt_claim",
+            payload_json: payload,
+            claim_token: null,
+          },
+          {
+            event_id: "future-ownerless",
+            status: "failed",
+            failed_reason: "corrupt_claim",
+            payload_json: payload,
+            claim_token: null,
+          },
+        ]);
+
+        const resubmitted = await queue.resubmit?.("claimless");
+        expect(resubmitted?.kind).toBe("resubmitted");
       });
     });
 

@@ -1,9 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 
 export type OtlpSignal = "logs" | "metrics" | "traces";
 
@@ -37,10 +34,12 @@ type OtlpScopeSpans = {
 };
 
 type OtlpResourceSpans = {
+  serviceName?: string;
   scopeSpans?: OtlpScopeSpans[];
 };
 
 export type CapturedRequest = {
+  headerValues?: Record<string, string | undefined>;
   bytes: number;
   contentEncoding?: string;
   logCount: number;
@@ -53,6 +52,7 @@ export type CapturedRequest = {
 };
 
 export type CapturedSpan = {
+  serviceName?: string;
   attributes: Record<string, string | number | boolean | string[]>;
   endTimeMs?: number;
   name: string;
@@ -73,34 +73,47 @@ export type CapturedLogRecord = {
   traceId: string;
 };
 
-export function runModelCallAndCaptureTraceparent(params: {
-  trace: DiagnosticTraceContext;
-  runId: string;
-  callId: string;
-  provider: string;
-  model: string;
-}): string | undefined {
-  let outboundTraceparent: string | undefined;
-  const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-    ((
-      _model: Parameters<StreamFn>[0],
-      _context: Parameters<StreamFn>[1],
-      options: Parameters<StreamFn>[2],
-    ) => {
-      outboundTraceparent = options?.headers?.traceparent;
-      return undefined as never;
-    }) as StreamFn,
-    {
-      runId: params.runId,
-      provider: params.provider,
-      model: params.model,
-      trace: params.trace,
-      nextCallId: () => params.callId,
-      suppressPluginHooks: true,
+type CapturedTraceSummary = {
+  traceId: string;
+  names: Record<string, number>;
+};
+
+const MAX_RECENT_TRACE_SUMMARIES = 8;
+const MAX_SPAN_NAMES_PER_TRACE_SUMMARY = 16;
+const OTHER_SPAN_NAME = "other";
+
+export function createRecentTraceSummary() {
+  const traces = new Map<string, Map<string, number>>();
+
+  return {
+    add(spans: readonly CapturedSpan[]): void {
+      for (const span of spans) {
+        const traceId = span.traceId || "missing";
+        const names = traces.get(traceId) ?? new Map<string, number>();
+        const name =
+          names.has(span.name) || names.size < MAX_SPAN_NAMES_PER_TRACE_SUMMARY - 1
+            ? span.name
+            : OTHER_SPAN_NAME;
+        names.set(name, (names.get(name) ?? 0) + 1);
+
+        // Map insertion order owns recency; reinserting keeps the latest active trace last.
+        traces.delete(traceId);
+        traces.set(traceId, names);
+        if (traces.size > MAX_RECENT_TRACE_SUMMARIES) {
+          const oldestTraceId = traces.keys().next().value;
+          if (oldestTraceId !== undefined) {
+            traces.delete(oldestTraceId);
+          }
+        }
+      }
     },
-  );
-  void wrapped({} as never, {} as never);
-  return outboundTraceparent;
+    read: (): CapturedTraceSummary[] => {
+      return [...traces].map(([traceId, names]) => ({
+        traceId,
+        names: Object.fromEntries(names),
+      }));
+    },
+  };
 }
 
 const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
@@ -488,15 +501,20 @@ function decodeScopeSpans(message: Uint8Array): OtlpScopeSpans {
 function decodeResourceSpans(message: Uint8Array): OtlpResourceSpans {
   const reader = new ProtoReader(message);
   const scopeSpans: OtlpScopeSpans[] = [];
+  let serviceName: string | undefined;
   while (!reader.done()) {
     const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
+    if (field === 1 && wire === 2) {
+      serviceName = decodeKeyValueList(reader.bytes()).values?.find(
+        (attribute) => attribute.key === "service.name",
+      )?.value?.stringValue;
+    } else if (field === 2 && wire === 2) {
       scopeSpans.push(decodeScopeSpans(reader.bytes()));
     } else {
       reader.skip(wire);
     }
   }
-  return { scopeSpans };
+  return { scopeSpans, serviceName };
 }
 
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
@@ -520,6 +538,7 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
         }
         spans.push({
           attributes: spanAttributes(span),
+          ...(resource.serviceName ? { serviceName: resource.serviceName } : {}),
           endTimeMs: span.endTimeMs,
           name,
           parent: (span.parentSpanId?.length ?? 0) > 0,
@@ -666,12 +685,16 @@ function closeLocalOtlpReceiverConnections(
   server.closeAllConnections();
 }
 
-export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
+export function startLocalOtlpReceiver(
+  disallowedBodyNeedles: string[] = [],
+  captureHeaderNames: string[] = [],
+) {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
+  const recentTraceSummary = createRecentTraceSummary();
   const sockets = new Set<Socket>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -736,11 +759,19 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
         return;
       }
       capturedSpans.push(...spans);
+      recentTraceSummary.add(spans);
       capturedMetrics.push(...metrics);
       capturedLogRecords.push(...logRecords);
       capturedRequests.push({
         path: requestPath,
         signal,
+        ...(captureHeaderNames.length > 0
+          ? {
+              headerValues: Object.fromEntries(
+                captureHeaderNames.map((name) => [name, headerValue(req.headers[name])]),
+              ),
+            }
+          : {}),
         bytes: body.length,
         contentEncoding,
         receivedAtMs: Date.now(),
@@ -767,6 +798,7 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
     capturedMetrics,
     capturedLogRecords,
     capturedBodyText,
+    recentTraceSummary: recentTraceSummary.read,
     async listen(): Promise<number> {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);

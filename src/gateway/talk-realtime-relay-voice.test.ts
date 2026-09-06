@@ -31,8 +31,12 @@ function createRelaySession(): {
   });
   const session = {
     id: "relay-voice-bounded",
-    sessionKey: "agent:main:main",
-    agentId: "main",
+    sessionTarget: {
+      agentId: "main",
+      sessionKey: "main",
+      canonicalKey: "agent:main:work",
+      storePath: "/tmp/relay-voice-sessions.sqlite",
+    },
     provider: "openai",
     context: {
       getRuntimeConfig: () => ({}),
@@ -42,7 +46,6 @@ function createRelaySession(): {
     voiceTranscriptSeq: 0,
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
     failSession,
-    pendingVoiceTranscripts: [],
   } as unknown as RelaySession;
   return { session, failSession };
 }
@@ -83,7 +86,16 @@ describe("realtime relay voice transcript persistence", () => {
     }
 
     expect(accepted).toBe(41);
-    expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledOnce();
+    expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "main",
+        sessionTarget: {
+          sessionKey: "agent:main:work",
+          storePath: "/tmp/relay-voice-sessions.sqlite",
+        },
+      }),
+    );
     expect(failSession).toHaveBeenCalledOnce();
     const close = session.voiceSessionClose;
     expect(close).toBeDefined();
@@ -129,25 +141,5 @@ describe("realtime relay voice transcript persistence", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("normalizes the bounded pre-bind transcript buffer", () => {
-    const { session } = createRelaySession();
-    session.sessionKey = undefined;
-    session.agentId = undefined;
-
-    for (let index = 0; index < 100; index += 1) {
-      expect(enqueueRelayVoiceTranscript(session, "user", " \t\n ")).toBe(true);
-    }
-    expect(session.pendingVoiceTranscripts).toHaveLength(0);
-
-    for (let index = 0; index < 100; index += 1) {
-      expect(enqueueRelayVoiceTranscript(session, "user", `  ${"x".repeat(9_000)}  `)).toBe(true);
-    }
-
-    expect(session.pendingVoiceTranscripts).toHaveLength(40);
-    expect(session.pendingVoiceTranscripts.every((entry) => entry.text.length === 8_000)).toBe(
-      true,
-    );
   });
 });

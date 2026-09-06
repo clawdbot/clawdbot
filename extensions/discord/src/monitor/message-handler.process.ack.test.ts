@@ -29,6 +29,33 @@ import {
   requireRecord,
 } from "./message-handler.process.test-helpers.js";
 
+const failedFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 1,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: false,
+} as const;
+
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage ack reactions", () => {
@@ -248,7 +275,7 @@ describe("processDiscordMessage ack reactions", () => {
     dispatchInboundMessage.mockResolvedValueOnce({
       queuedFinal: false,
       counts: { final: 0, tool: 0, block: 0 },
-      failedCounts: { final: 1 },
+      settledReceipt: failedFinalReceipt,
     });
 
     const ctx = await createAutomaticSourceDeliveryContext();
@@ -311,7 +338,7 @@ describe("processDiscordMessage ack reactions", () => {
     await runPromise;
 
     expectReactionCallsContain("c1", "tracked-m1", "📈");
-    expectReactionCallsContain("c1", "tracked-m1", "✉️");
+    expect(getReactionEmojis()).toEqual(["👀", "📈"]);
   });
 
   it("resolves tracked reaction to targets like the Discord reaction action", async () => {
@@ -352,7 +379,7 @@ describe("processDiscordMessage ack reactions", () => {
       "default",
     );
     expectReactionCallsContain("dm-u1", "m1", "📈");
-    expectReactionCallsContain("dm-u1", "m1", "✉️");
+    expect(getReactionEmojis()).toEqual(["👀", "📈"]);
   });
 
   it("falls back to plain ack when status reactions are disabled", async () => {
@@ -376,17 +403,17 @@ describe("processDiscordMessage ack reactions", () => {
     expect(getReactionEmojis()).toEqual(["👀"]);
   });
 
-  it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
+  it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
       await params?.replyOptions?.onCompactionStart?.();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_000);
-      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
       await params?.replyOptions?.onCompactionEnd?.();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_000);
-      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1_000);
       return createNoQueuedDispatchResult();
     });
 
@@ -398,12 +425,10 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const runPromise = runProcessDiscordMessage(ctx);
-    await vi.advanceTimersByTimeAsync(2_500);
     await vi.runAllTimersAsync();
     await runPromise;
 
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain(DEFAULT_EMOJIS.compacting);
-    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
+    expect(getReactionEmojis()).toEqual(["👀"]);
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 });

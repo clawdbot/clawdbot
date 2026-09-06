@@ -1,56 +1,16 @@
 // Deepinfra plugin module adapts its text embedding runtime to the generic provider contract.
-import type {
-  EmbeddingInput,
-  EmbeddingProvider,
-  EmbeddingProviderAdapter,
-  EmbeddingProviderCreateOptions,
-} from "openclaw/plugin-sdk/embedding-providers";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderCreateOptions,
+import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
+import {
+  embeddingProviderOwnsDestination,
+  sanitizeEmbeddingCacheHeaders,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createDeepInfraEmbeddingProvider,
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
-import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import { DEEPINFRA_BASE_URL, type DeepInfraSurfaceModel } from "./media-models.js";
 
-function textFromEmbeddingInput(input: EmbeddingInput): string {
-  return typeof input === "string" ? input : input.text;
-}
-
-function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): EmbeddingProvider {
-  return {
-    id: provider.id,
-    model: provider.model,
-    ...(typeof provider.maxInputTokens === "number"
-      ? { maxInputTokens: provider.maxInputTokens }
-      : {}),
-    embed: async (input, options) =>
-      await provider.embedQuery(textFromEmbeddingInput(input), { signal: options?.signal }),
-    embedBatch: async (inputs, options) =>
-      await provider.embedBatch(inputs.map(textFromEmbeddingInput), { signal: options?.signal }),
-    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
-  };
-}
-
-function buildMemoryCreateOptions(
-  options: EmbeddingProviderCreateOptions,
-): MemoryEmbeddingProviderCreateOptions {
-  return {
-    config: options.config,
-    agentDir: options.agentDir,
-    provider: "deepinfra",
-    fallback: "none",
-    remote: options.remote,
-    model: options.model,
-    inputType: options.inputType,
-    queryInputType: options.queryInputType,
-    documentInputType: options.documentInputType,
-    outputDimensionality: options.dimensions,
-    taskType: options.taskType as MemoryEmbeddingProviderCreateOptions["taskType"],
-  };
-}
+const EXCLUDED_EMBEDDING_HEADERS = ["authorization", "content-type", "x-api-key", "api-key"];
 
 // First entry of embedModels becomes the default embedding model.
 export function buildDeepInfraEmbeddingAdapter(options?: {
@@ -64,16 +24,25 @@ export function buildDeepInfraEmbeddingAdapter(options?: {
     authProviderId: "deepinfra",
     create: async (createOptions) => {
       const { provider, client } = await createDeepInfraEmbeddingProvider({
-        ...buildMemoryCreateOptions(createOptions),
+        ...createOptions,
+        provider: "deepinfra",
         defaultModel,
       });
+      const headers = sanitizeEmbeddingCacheHeaders(client.headers, EXCLUDED_EMBEDDING_HEADERS);
+      const usesDefaultIdentity =
+        headers.length === 0 &&
+        embeddingProviderOwnsDestination({
+          baseUrl: client.baseUrl,
+          providerBaseUrl: DEEPINFRA_BASE_URL,
+        });
       return {
-        provider: provider ? adaptMemoryEmbeddingProvider(provider) : null,
+        provider,
         runtime: {
           id: "deepinfra",
           cacheKeyData: {
             provider: "deepinfra",
             model: client.model,
+            ...(usesDefaultIdentity ? {} : { baseUrl: client.baseUrl, headers }),
           },
         },
       };

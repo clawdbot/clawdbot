@@ -8,6 +8,7 @@ import {
 } from "../../execution-contract.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { assessLastAssistantMessage } from "../thinking.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export type IncompleteTurnAttempt = Pick<
@@ -15,6 +16,7 @@ export type IncompleteTurnAttempt = Pick<
   | "assistantTexts"
   | "clientToolCalls"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "heartbeatToolResponse"
@@ -29,7 +31,6 @@ export type IncompleteTurnAttempt = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "lastToolError"
-  | "lastAssistant"
   | "itemLifecycle"
   | "messagesSnapshot"
   | "replayMetadata"
@@ -58,9 +59,14 @@ export function isIncompleteTerminalAssistantTurn(params: {
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
   const stopReason = params.lastAssistant?.stopReason;
-  // Tool-use expects a post-tool continuation; length means the output budget
-  // ended before a complete final answer. Partial visible text completes neither.
-  return stopReason === "toolUse" || (stopReason === "length" && !params.hasTerminalOutput);
+  // Tool-use expects a post-tool continuation, so partial visible text completes
+  // nothing. Length is different: the output budget ended, no continuation is
+  // pending, and any visible text the model did emit is the answer so far. Only
+  // a length stop with nothing to show is an incomplete turn.
+  return (
+    stopReason === "toolUse" ||
+    (stopReason === "length" && !params.hasTerminalOutput && !params.hasAssistantVisibleText)
+  );
 }
 
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
@@ -125,69 +131,6 @@ export function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
 }
 
-export function isEmptyResponseAssistantTurn(params: {
-  payloadCount: number;
-  attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
-  >;
-}): boolean {
-  if (params.payloadCount !== 0) {
-    return false;
-  }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (!assistant) {
-    return true;
-  }
-  if (assistant.stopReason === "error") {
-    return false;
-  }
-  if (
-    isIncompleteTerminalAssistantTurn({
-      hasAssistantVisibleText: false,
-      lastAssistant: assistant,
-    }) ||
-    isReasoningOnlyAssistantTurn(assistant)
-  ) {
-    return false;
-  }
-  return true;
-}
-
-export function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
-  payloadCount: number;
-  attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
-  >;
-}): boolean {
-  if (isEmptyResponseAssistantTurn(params)) {
-    return true;
-  }
-  if (params.payloadCount !== 0) {
-    return false;
-  }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (!assistant || assistant.stopReason === "error") {
-    return false;
-  }
-  if (
-    isIncompleteTerminalAssistantTurn({
-      hasAssistantVisibleText: false,
-      lastAssistant: assistant,
-    })
-  ) {
-    return false;
-  }
-  return isReasoningOnlyAssistantTurn(assistant);
-}
-
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
@@ -234,18 +177,25 @@ export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
   >;
 }) {
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
+  const visibleText = joinAssistantTexts(params.attempt.assistantTexts);
+  const reasoningOnly = isReasoningOnlyAssistantTurn(assistant);
+  const nonVisibleEligibleForSilentReply =
+    params.payloadCount === 0 &&
+    visibleText.length === 0 &&
+    assistant?.stopReason !== "error" &&
+    !isIncompleteTerminalAssistantTurn({
+      hasAssistantVisibleText: false,
+      lastAssistant: assistant,
+    });
   return {
     assistant,
-    visibleText: joinAssistantTexts(params.attempt.assistantTexts),
-    onlySilentReply: hasOnlySilentAssistantReply(params.attempt.assistantTexts),
-    reasoningOnly: isReasoningOnlyAssistantTurn(assistant),
-    unsignedThinkingOnly: isUnsignedThinkingOnlyAssistantTurn(assistant),
-    emptyResponse: isEmptyResponseAssistantTurn(params),
-    nonVisibleEligibleForSilentReply: isNonVisibleAssistantTurnEligibleForSilentReply(params),
-    hasPositiveOutputTokenUsage: hasPositiveOutputTokenUsage(assistant ?? null),
+    visibleText,
+    reasoningOnly,
+    emptyResponse: nonVisibleEligibleForSilentReply && !reasoningOnly,
+    nonVisibleEligibleForSilentReply,
   };
 }

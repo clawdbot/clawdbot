@@ -6,46 +6,6 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
-export {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
-  readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelMessageIngress,
-  resolveStableChannelMessageIngress,
-} from "../channels/message-access/index.js";
-export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
-export type {
-  AccessGroupMembershipFact,
-  ChannelIngressDecision,
-  ChannelIngressAccessGroupMembershipResolver,
-  ChannelIngressCommandPresetInput,
-  ChannelIngressConfigInput,
-  ChannelIngressContextBinding,
-  ChannelIngressEventInput,
-  ChannelIngressEventPresetInput,
-  ChannelIngressIdentityDescriptor,
-  ChannelIngressIdentityAlias,
-  ChannelIngressIdentityField,
-  ChannelIngressIdentitySubjectInput,
-  ChannelIngressIdentifierKind,
-  ChannelIngressPolicyInput,
-  ChannelIngressRouteAccess,
-  ChannelIngressRouteDescriptor,
-  ChannelIngressResolver,
-  ChannelIngressResolverMessageParams,
-  ChannelIngressStateInput,
-  ChannelIngressState,
-  ChannelMessageIngressCommandInput,
-  CreateChannelIngressResolverParams,
-  IngressReasonCode,
-  ResolvedChannelMessageIngress,
-  ResolveChannelMessageIngressParams,
-  ResolveStableChannelMessageIngressParams,
-  StableChannelIngressIdentityParams,
-} from "../channels/message-access/index.js";
-export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
-
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDrainOptions,
@@ -54,6 +14,54 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
+export {
+  channelIngressRoutes,
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "../channels/message-access/runtime.js";
+export {
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "../channels/message-access/identifier-authentication.js";
+export {
+  defineStableChannelIngressIdentity,
+  identityEntryAuthenticationClassifier,
+} from "../channels/message-access/runtime-identity.js";
+export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
+export type {
+  ChannelIngressAccessGroupMembershipResolver,
+  ChannelIngressCommandPresetInput,
+  ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
+  ChannelIngressEventPresetInput,
+  ChannelIngressIdentityDescriptor,
+  ChannelIngressIdentityAlias,
+  ChannelIngressIdentityField,
+  ChannelIngressIdentitySubjectInput,
+  ChannelIngressRouteAccess,
+  ChannelIngressRouteDescriptor,
+  ChannelIngressResolver,
+  ChannelIngressResolverMessageParams,
+  ChannelMessageIngressCommandInput,
+  CreateChannelIngressResolverParams,
+  ResolvedChannelMessageIngress,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  StableChannelIngressIdentityParams,
+} from "../channels/message-access/runtime-types.js";
+export type {
+  AccessGroupMembershipFact,
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
+  ChannelIngressIdentifierKind,
+  ChannelIngressPolicyInput,
+  ChannelIngressState,
+  ChannelIngressStateInput,
+  IngressReasonCode,
+} from "../channels/message-access/types.js";
+export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -177,6 +185,11 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         for (const lifecycle of lifecycles) {
           lifecycle.onDeferred();
+        }
+      },
+      onDeferredHeartbeat: () => {
+        for (const lifecycle of lifecycles) {
+          lifecycle.onDeferredHeartbeat?.();
         }
       },
       onAdoptionFinalizing: () => {

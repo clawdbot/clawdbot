@@ -14,6 +14,11 @@ describe("normalizeIMessageMessagingTarget", () => {
 
   it("preserves non-phone handles instead of collapsing them to a plus sign", () => {
     expect(normalizeIMessageMessagingTarget("auto:Alice Smith")).toBe("auto:AliceSmith");
+    expect(normalizeIMessageMessagingTarget("auto:C0AG22RN7L3")).toBe("auto:C0AG22RN7L3");
+  });
+
+  it("rejects unqualified provider identifiers instead of coercing them into phone numbers", () => {
+    expect(normalizeIMessageMessagingTarget("C0AG22RN7L3")).toBeUndefined();
   });
 
   it("drops service prefixes for chat targets", () => {

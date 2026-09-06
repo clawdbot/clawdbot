@@ -17,19 +17,28 @@ import {
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 
-const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
-const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
+const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
+  "BASH_ENV",
+  "BASHOPTS",
+  "ENV",
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL",
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
   "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
+  "SHELLOPTS",
 ]);
 
-function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
+function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
     delete env[envKey];
+  }
+  // Bash imports exported functions before the launcher can apply its allowlist.
+  for (const envKey of Object.keys(env)) {
+    if (envKey.startsWith("BASH_FUNC_")) {
+      delete env[envKey];
+    }
   }
   return env;
 }
@@ -59,6 +68,7 @@ export function buildQaRuntimeEnv(params: {
   bundledPluginsDir?: string;
   stagedBundledPluginsRoot?: string | null;
   compatibilityHostVersion?: string;
+  developmentSourceRoot: string | null;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
@@ -113,10 +123,17 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  if (params.developmentSourceRoot === null) {
+    delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
+  } else {
+    normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT = params.developmentSourceRoot;
+  }
+  // Parent shell startup controls must be removed after caller patches so no
+  // launcher or runtime child can import them before its own allowlist runs.
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+  return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
 }
 
 export async function stageQaCodexMockModelCatalog(params: {
@@ -125,6 +142,7 @@ export async function stageQaCodexMockModelCatalog(params: {
   providerMode: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
+  autoCompactTokenLimit?: number;
 }): Promise<string | undefined> {
   if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
     return undefined;
@@ -133,11 +151,16 @@ export async function stageQaCodexMockModelCatalog(params: {
   const selectedModelRefs = [params.primaryModel, params.alternateModel].filter(
     (model): model is string => typeof model === "string" && model.length > 0,
   );
-  await fs.writeFile(
-    modelCatalogPath,
-    `${JSON.stringify({ models: listMockCodexModelInfos(selectedModelRefs) }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const models = listMockCodexModelInfos(selectedModelRefs);
+  if (params.autoCompactTokenLimit !== undefined) {
+    for (const model of models) {
+      Object.assign(model, { auto_compact_token_limit: params.autoCompactTokenLimit });
+    }
+  }
+  await fs.writeFile(modelCatalogPath, `${JSON.stringify({ models }, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   return modelCatalogPath;
 }
 
@@ -175,7 +198,5 @@ export function buildQaForcedRuntimeEnvPatch(params: {
     providerBaseUrl,
     modelCatalogPath: params.codexModelCatalogPath,
   });
-  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
-  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
 }

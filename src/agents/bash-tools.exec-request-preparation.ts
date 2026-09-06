@@ -9,6 +9,11 @@ import {
   normalizeHostOverrideEnvVarKey,
   sanitizeHostExecEnvWithDiagnostics,
 } from "../infra/host-env-security.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../infra/installation-target-context.js";
 import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
@@ -24,7 +29,9 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -36,7 +43,6 @@ export type ExecToolArgs = Record<string, unknown> & {
   pty?: boolean;
   elevated?: boolean;
   host?: string;
-  security?: string;
   ask?: string;
   node?: string;
 };
@@ -44,9 +50,6 @@ export type ExecToolArgs = Record<string, unknown> & {
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
-};
-type DeferredResolveExecEnvPreparedState = {
-  hookContext?: HookContext;
 };
 type ResolvedExecWorkdirPreparedState = {
   host: ExecHost;
@@ -56,22 +59,20 @@ type ResolvedExecWorkdirPreparedState = {
 
 const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
-const deferredResolveExecEnvPreparedStates = new WeakMap<
-  ExecToolArgs,
-  DeferredResolveExecEnvPreparedState
->();
+const execHookContexts = new WeakMap<ExecToolArgs, HookContext | undefined>();
 const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
-  "command",
-  "workdir",
-  "host",
-  "security",
-  "ask",
-  "node",
-] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
+
+export function assertSupportedExecParams(args: unknown): void {
+  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+    throw new ToolInputError(
+      'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
+    );
+  }
+}
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -139,18 +140,16 @@ function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
 }
 
-function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
+function retainExecHookContext<T extends ExecToolArgs>(
   params: T,
-  state: DeferredResolveExecEnvPreparedState,
+  hookContext: HookContext | undefined,
 ): T {
-  deferredResolveExecEnvPreparedStates.set(params, state);
+  execHookContexts.set(params, hookContext);
   return params;
 }
 
-function getDeferredResolveExecEnvPreparedState(
-  params: ExecToolArgs,
-): DeferredResolveExecEnvPreparedState | undefined {
-  return deferredResolveExecEnvPreparedStates.get(params);
+function getExecHookContext(params: ExecToolArgs): HookContext | undefined {
+  return execHookContexts.get(params);
 }
 
 function markResolvedExecWorkdirPrepared<T extends ExecToolArgs>(
@@ -172,6 +171,17 @@ export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): bo
     return defaults.notifyOnExitEmptySuccess;
   }
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
+export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
+  return {
+    ...(defaults?.preparedRunEnvironment ??
+      prepareGitHubToolEnvironment({
+        config: defaults?.config ?? {},
+        agentId: defaults?.agentId ?? "main",
+      })),
+    localProcessEnv: installationTargetEnv(getInstallationTarget()),
+  };
 }
 
 export function createExecRequestPreparation(params: {
@@ -248,15 +258,17 @@ export function createExecRequestPreparation(params: {
     } catch {
       return execParams;
     }
+    const sessionId = context?.hookContext?.sessionId ?? params.defaults?.sessionId;
     const rawPluginEnv = await hookRunner.runResolveExecEnv(
       {
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
         toolName: "exec",
         host,
       },
       {
-        agentId: params.agentId ?? context?.hookContext?.agentId,
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        agentId: context?.hookContext?.agentId ?? params.agentId,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
+        ...(sessionId ? { sessionId } : {}),
         messageProvider: params.defaults?.messageProvider,
         channelId: params.defaults?.currentChannelId ?? context?.hookContext?.channelId,
         ...(params.defaults?.channelContext
@@ -275,35 +287,36 @@ export function createExecRequestPreparation(params: {
     args: unknown,
     context: { hookContext?: unknown },
   ): Promise<ExecToolArgs> => {
+    assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
-    const workdirState = getResolvedExecWorkdirPreparedState(execParams);
-    if (workdirState?.resolution.kind === "unavailable") {
-      return execParams;
-    }
     if (!isExecToolArgsObject(execParams)) {
       return execParams;
     }
-    if (shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)) {
-      return markDeferredResolveExecEnvPrepared(execParams, {
-        hookContext: context.hookContext as HookContext | undefined,
-      });
+    const hookContext = context.hookContext as HookContext | undefined;
+    retainExecHookContext(execParams, hookContext);
+    const workdirState = getResolvedExecWorkdirPreparedState(execParams);
+    if (
+      workdirState?.resolution.kind === "unavailable" ||
+      shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)
+    ) {
+      return execParams;
     }
-    return prepareParamsWithResolvedExecEnv(execParams, {
-      hookContext: context.hookContext as HookContext | undefined,
-    });
+    return prepareParamsWithResolvedExecEnv(execParams, { hookContext });
   };
 
   const finalizeBeforeToolCallParams = (rawParams: unknown, preparedParams: unknown) => {
     const envState = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
-    const deferredEnvState = getDeferredResolveExecEnvPreparedState(preparedParams as ExecToolArgs);
+    const hookContext = getExecHookContext(preparedParams as ExecToolArgs);
     const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
-    if (!envState && !deferredEnvState && !workdirState) {
+    if (!envState && !hookContext && !workdirState) {
       return rawParams;
     }
     if (!isExecToolArgsObject(rawParams)) {
       return rawParams;
     }
     const execParams = rawParams;
+    // Host/workdir rewrites invalidate cached facts, not the bound execution identity.
+    const invalidatePreparedParams = () => retainExecHookContext({ ...execParams }, hookContext);
     let host: ExecHost | undefined;
     const resolveFinalHost = () => {
       host ??= params.resolveHostForParams(execParams);
@@ -311,23 +324,23 @@ export function createExecRequestPreparation(params: {
     };
     try {
       if (envState?.host && execParams.command && resolveFinalHost() !== envState.host) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
       if (
         workdirState &&
         (resolveFinalHost() !== workdirState.host ||
           execParams.workdir !== workdirState.inputWorkdir)
       ) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
     } catch {
-      return { ...execParams };
+      return invalidatePreparedParams();
     }
     if (envState) {
       markResolveExecEnvPrepared(execParams, envState);
     }
-    if (deferredEnvState) {
-      markDeferredResolveExecEnvPrepared(execParams, deferredEnvState);
+    if (hookContext) {
+      retainExecHookContext(execParams, hookContext);
     }
     if (workdirState) {
       markResolvedExecWorkdirPrepared(execParams, workdirState);
@@ -341,7 +354,7 @@ export function createExecRequestPreparation(params: {
     finalizeBeforeToolCallParams,
     prepareParamsWithResolvedExecEnv,
     isResolveExecEnvPrepared,
-    getDeferredResolveExecEnvPreparedState,
+    getExecHookContext,
     getResolvedExecWorkdirPreparedState,
     getResolvedExecEnvPreparedState,
   };
@@ -358,8 +371,15 @@ export function resolvePreparedExecEnvironment(params: {
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
   secretEgressEnv?: Record<string, string>;
+  credentialScrubEnv?: Readonly<Record<string, string>>;
+  localIdentityEnv?: Readonly<Record<string, string>>;
+  managedLocalIdentity?: boolean;
+  localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
+  if (params.localProcessEnv && params.host !== "gateway") {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
   const inheritedBaseEnv = coerceEnv(process.env);
   if (params.secretEgressEnv) {
     Object.assign(inheritedBaseEnv, params.secretEgressEnv);
@@ -482,6 +502,16 @@ export function resolvePreparedExecEnvironment(params: {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
 
+  if (params.host === "gateway" && params.managedLocalIdentity === false) {
+    // Native GitHub identity is the explicit exception to the generic host-secret filter.
+    // Exact service-owner scrubs below still win; non-local hosts receive neither value.
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
+      const value = process.env[name];
+      if (typeof value === "string") {
+        env[name] = value;
+      }
+    }
+  }
   if (params.storeSecretEnv) {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
@@ -494,6 +524,18 @@ export function resolvePreparedExecEnvironment(params: {
   if (params.secretEgressEnv) {
     Object.assign(env, params.secretEgressEnv);
   }
+  const preparedEnv = {
+    ...params.localProcessEnv,
+    ...params.credentialScrubEnv,
+    ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
+  };
+  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
+  Object.assign(env, preparedEnv);
 
-  return { env, requestedEnv };
+  return {
+    env,
+    ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
+      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
+      : { requestedEnv }),
+  };
 }

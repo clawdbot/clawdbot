@@ -5,7 +5,7 @@ import { accessSync, closeSync, constants, openSync, readSync, statSync } from "
 import path from "node:path";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
-const PNPM_EXECUTABLE_RE = /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/;
+const PNPM_EXECUTABLE_RE = /^pnpm(?:-cli|-native)?(?:\.(?:[cm]?js|cmd|exe))?$/;
 const NODE_RUNNABLE_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
 
 function inspectExecutablePath(value) {
@@ -18,16 +18,14 @@ function isPnpmExecPath(value) {
   return PNPM_EXECUTABLE_RE.test(inspectExecutablePath(value).basename);
 }
 
-function hasScriptShebang(value) {
+function hasNodeShebang(value) {
   let fd;
   try {
     fd = openSync(value, "r");
-    const header = Buffer.alloc(2);
-    return (
-      readSync(fd, header, 0, header.length, 0) === header.length &&
-      header[0] === 0x23 &&
-      header[1] === 0x21
-    );
+    const header = Buffer.alloc(256);
+    const length = readSync(fd, header, 0, header.length, 0);
+    const firstLine = header.toString("utf8", 0, length).split("\n", 1)[0] ?? "";
+    return /^#![ \t]*(?:\S*\/)?(?:node|env(?:[ \t]+-S)?[ \t]+node)(?:[ \t\r]|$)/u.test(firstLine);
   } catch {
     return false;
   } finally {
@@ -105,25 +103,30 @@ function isNodeRunnablePnpmExecPath(value) {
   if (extension.length > 0) {
     return false;
   }
-  return hasScriptShebang(value);
-}
-
-function escapeForCmdExe(arg) {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
-    return escaped;
-  }
-  return `"${escaped.replace(/"/g, '""')}"`;
+  return hasNodeShebang(value);
 }
 
 function buildCmdExeCommandLine(command, args) {
-  return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(" ");
+  const escaped = [command, ...args].map((arg) => {
+    if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+      throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
+    }
+    // Quote through cmd and the CRT; consume backslash runs once to avoid quadratic scans.
+    const quoted = arg
+      .replace(/\\+/g, (backslashes, offset) => {
+        const next = arg[offset + backslashes.length];
+        return next === '"' || next === undefined ? backslashes.repeat(2) : backslashes;
+      })
+      .replace(/"/g, '""');
+    return `"${quoted}"`;
+  });
+  return `"${escaped.join(" ")}"`;
 }
 
 function windowsCmdSpec(command, args, comSpec) {
+  if (![".cmd", ".bat"].includes(inspectExecutablePath(command).extension)) {
+    return { command, args, shell: false };
+  }
   return {
     args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
     command: comSpec,

@@ -22,20 +22,36 @@ public struct CameraMovieSessionOptions: Sendable {
 }
 
 public enum CameraCapturePipelineSupport {
+    public static func selectCamera<Device>(
+        deviceId: String?,
+        matching: (String) -> Device?,
+        fallback: () -> Device?,
+        unavailableError: @autoclosure () -> Error,
+        deviceNotFoundError: (String) -> Error) throws -> Device
+    {
+        if let deviceId, !deviceId.isEmpty {
+            guard let device = matching(deviceId) else {
+                throw deviceNotFoundError(deviceId)
+            }
+            return device
+        }
+        guard let device = fallback() else {
+            throw unavailableError()
+        }
+        return device
+    }
+
     public static func preparePhotoSession(
         preferFrontCamera: Bool,
         deviceId: String?,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
+        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,
         mapSetupError: (CameraSessionConfigurationError) -> Error) throws
         -> (session: AVCaptureSession, device: AVCaptureDevice, output: AVCapturePhotoOutput)
     {
         let session = AVCaptureSession()
         session.sessionPreset = .photo
 
-        guard let device = pickCamera(preferFrontCamera, deviceId) else {
-            throw cameraUnavailableError()
-        }
+        let device = try pickCamera(preferFrontCamera, deviceId)
 
         do {
             try CameraSessionConfiguration.addCameraInput(session: session, camera: device)
@@ -48,17 +64,14 @@ public enum CameraCapturePipelineSupport {
 
     public static func prepareMovieSession(
         options: CameraMovieSessionOptions,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
+        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,
         mapSetupError: (CameraSessionConfigurationError) -> Error) throws
         -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
     {
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
-        guard let camera = pickCamera(options.preferFrontCamera, options.deviceId) else {
-            throw cameraUnavailableError()
-        }
+        let camera = try pickCamera(options.preferFrontCamera, options.deviceId)
 
         do {
             try CameraSessionConfiguration.addCameraInput(session: session, camera: camera)
@@ -74,8 +87,7 @@ public enum CameraCapturePipelineSupport {
 
     public static func prepareWarmMovieSession(
         options: CameraMovieSessionOptions,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
+        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,
         mapSetupError: (CameraSessionConfigurationError) -> Error) async throws
         -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
     {
@@ -83,7 +95,6 @@ public enum CameraCapturePipelineSupport {
         let prepared = try self.prepareMovieSession(
             options: options,
             pickCamera: pickCamera,
-            cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
         try Task.checkCancellation()
         prepared.session.startRunning()
@@ -99,8 +110,7 @@ public enum CameraCapturePipelineSupport {
 
     public static func withWarmMovieSession<T>(
         options: CameraMovieSessionOptions,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
+        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,
         mapSetupError: (CameraSessionConfigurationError) -> Error,
         operation: (AVCaptureMovieFileOutput) async throws -> T) async throws -> T
     {
@@ -108,7 +118,6 @@ public enum CameraCapturePipelineSupport {
         let prepared = try self.prepareMovieSession(
             options: options,
             pickCamera: pickCamera,
-            cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
         return try await self.withCaptureSessionLifecycle(
             start: { prepared.session.startRunning() },

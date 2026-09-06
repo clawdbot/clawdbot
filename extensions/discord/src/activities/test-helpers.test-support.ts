@@ -61,7 +61,7 @@ export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
   };
 }
 
-export function createMemoryActivityStore(): DiscordActivityStore {
+function createMemoryActivityStore(): DiscordActivityStore {
   const stores: DiscordActivityStores = {
     widgets: createMemoryKeyedStore<DiscordActivityWidget>(),
     sessions: createMemoryKeyedStore<DiscordActivitySession>(),

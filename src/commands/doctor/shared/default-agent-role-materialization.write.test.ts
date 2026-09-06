@@ -466,6 +466,66 @@ describe("default role materialization authored writes", () => {
     await expect(fs.readFile(configPath, "utf8")).resolves.toBe(firstPersisted);
   });
 
+  it("assigns ownerless jobs in an unmigrated legacy cron file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-json-cron-owner-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const storePath = path.join(root, "cron", "jobs.json");
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_TEST_FAST: "1",
+    } as NodeJS.ProcessEnv;
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { list: [{ id: "ops", default: true }, { id: "research" }] } }),
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          makeCronJob({ id: "ownerless" }),
+          makeCronJob({ id: "owned", agentId: "research" }),
+          { ...makeCronJob({ id: "session-owned" }), sessionKey: "agent:research:main" },
+        ],
+      }),
+    );
+    writeConfigMachineState("cron.store", storePath, { env });
+    const io = createConfigIO({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig: OpenClawConfig = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "ownership"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(persistedConfig.agents).toMatchObject({
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    });
+    const persistedStore = JSON.parse(await fs.readFile(storePath, "utf8"));
+    expect(persistedStore.jobs).toMatchObject([
+      { id: "ownerless", agentId: "ops" },
+      { id: "owned", agentId: "research" },
+      { id: "session-owned", sessionKey: "agent:research:main" },
+    ]);
+    expect(persistedStore.jobs[2]).not.toHaveProperty("agentId");
+  });
+
   it("leaves the legacy owner marker intact when a cron row is corrupt", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-corrupt-cron-owner-write-"));
     roots.push(root);
@@ -487,10 +547,8 @@ describe("default role materialization authored writes", () => {
       jobs: [makeCronJob({ id: "corrupt" })],
     });
     database
-      .prepare(
-        "UPDATE cron_jobs SET job_json = ?, schedule_kind = ? WHERE store_key = ? AND job_id = ?",
-      )
-      .run("not json", "broken", cronStoreKey(storePath), "corrupt");
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+      .run("not json", cronStoreKey(storePath), "corrupt");
     const io = createConfigIO({
       configPath,
       env,

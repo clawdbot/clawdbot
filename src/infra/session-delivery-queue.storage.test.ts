@@ -13,6 +13,7 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
+  mergeSessionDeliveryPreparedMediaBlocks,
   moveSessionDeliveryToFailed,
   releaseSessionDeliveryClaim,
 } from "./session-delivery-queue-storage.js";
@@ -270,7 +271,7 @@ describe("session-delivery queue storage", () => {
           inputProvenance: {
             kind: "inter_session",
             sourceSessionKey: "image_generate:task-1",
-            sourceChannel: "webchat",
+            sourceChannel: "internal",
             sourceTool: "image_generate",
           },
           sourceReplyDeliveryMode: "message_tool_only",
@@ -299,6 +300,10 @@ describe("session-delivery queue storage", () => {
           message: "all generated media",
           messageId: "image:task-retry:agent-loop",
           expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+          expectedMediaAttachments: {
+            "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+            "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+          },
         },
         tempDir,
       );
@@ -309,6 +314,27 @@ describe("session-delivery queue storage", () => {
       expect(entry).toMatchObject({ retryCount: 1 });
       expect(entry?.agentRunAttempt).toBeUndefined();
       expect(entry?.availableAt).toBeGreaterThan(Date.now());
+
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/one.png",
+        [{ type: "image", artifactId: "artifact-one" }],
+        tempDir,
+      );
+      await expect(
+        mergeSessionDeliveryPreparedMediaBlocks(
+          id,
+          "/tmp/one.png",
+          [{ type: "image", artifactId: "replacement-must-not-win" }],
+          tempDir,
+        ),
+      ).resolves.toEqual([{ type: "image", artifactId: "artifact-one" }]);
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/two.png",
+        [{ type: "image", artifactId: "artifact-two" }],
+        tempDir,
+      );
 
       await advanceSessionDeliveryAgentRun(
         id,
@@ -325,6 +351,14 @@ describe("session-delivery queue storage", () => {
         retryCount: 1,
         message: "only missing media",
         expectedMediaUrls: ["/tmp/two.png"],
+        expectedMediaAttachments: {
+          "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+          "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+        },
+        preparedMediaBlocks: {
+          "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
+          "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
+        },
         suppressTextDelivery: true,
       });
     });

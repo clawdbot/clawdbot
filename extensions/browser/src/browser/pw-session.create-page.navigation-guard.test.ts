@@ -1,4 +1,5 @@
 // Browser tests cover pw session.create page.navigation guard plugin behavior.
+import { EventEmitter } from "node:events";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -24,6 +25,11 @@ const {
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
+
+vi.mock(
+  "./pw-session-cdp-transport.js",
+  () => import("./pw-session-cdp-transport.test-support.js"),
+);
 
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
@@ -73,7 +79,8 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const contextOn = vi.fn();
-  const browserOn = vi.fn();
+  const browserEvents = new EventEmitter();
+  const browserOn = vi.fn(browserEvents.on.bind(browserEvents));
   const browserClose = vi.fn(async () => {});
   const sessionSend = vi.fn(async (method: string) => {
     if (method === "Target.getTargetInfo") {
@@ -111,6 +118,7 @@ function installBrowserMocks() {
   const browser = {
     contexts: () => [context],
     on: browserOn,
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
@@ -244,6 +252,36 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).not.toHaveBeenCalled();
   });
 
+  it("closes a new page when cancellation wins target resolution", async () => {
+    const { pageClose, sessionSend } = installBrowserMocks();
+    let releaseTargetInfo: (() => void) | undefined;
+    let markTargetInfoStarted: (() => void) | undefined;
+    const targetInfoStarted = new Promise<void>((resolve) => {
+      markTargetInfoStarted = resolve;
+    });
+    const targetInfoReleased = new Promise<void>((resolve) => {
+      releaseTargetInfo = resolve;
+    });
+    sessionSend.mockImplementationOnce(async () => {
+      markTargetInfoStarted?.();
+      await targetInfoReleased;
+      return { targetInfo: { targetId: "TARGET_1" } };
+    });
+    const controller = new AbortController();
+
+    const creation = createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+      signal: controller.signal,
+    });
+    await targetInfoStarted;
+    controller.abort(new Error("cancelled page creation"));
+    releaseTargetInfo?.();
+
+    await expect(creation).rejects.toThrow("cancelled page creation");
+    expect(pageClose).toHaveBeenCalledOnce();
+  });
+
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     const { pageGoto } = installBrowserMocks();
     getChromeWebSocketEndpointSpy.mockResolvedValue({
@@ -354,23 +392,25 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageClose).not.toHaveBeenCalled();
   });
 
-  it("preserves the created tab on ordinary navigation failure", async () => {
+  it("closes the created tab and propagates ordinary navigation failure", async () => {
     const { pageGoto, pageClose } = installBrowserMocks();
-    pageGoto.mockRejectedValueOnce(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED"));
+    const navigationError = new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
+    pageGoto.mockRejectedValueOnce(navigationError);
 
-    const created = await createPageViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "https://93.184.216.34/start",
-    });
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBe(navigationError);
 
-    expect(created.targetId).toBe("TARGET_1");
-    expect(created.url).toBe("about:blank");
     expect(pageGoto).toHaveBeenCalledTimes(1);
-    expect(pageClose).not.toHaveBeenCalled();
+    expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not quarantine a tab when route.continue fails", async () => {
+  it("closes the created tab when guarded route continuation fails", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const navigationError = new Error("page.goto: Frame has been detached");
     pageGoto.mockImplementationOnce(async () => {
       await dispatchMockNavigation({
         getRouteHandler,
@@ -378,21 +418,22 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         url: "https://example.com",
         route: {
           continue: vi.fn(async () => {
-            throw new Error("page.goto: Frame has been detached");
+            throw navigationError;
           }),
         },
       });
-      throw new Error("page.goto: Frame has been detached");
+      throw navigationError;
     });
 
-    const created = await createPageViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "https://example.com",
-    });
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+      }),
+    ).rejects.toBe(navigationError);
 
-    expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).toHaveBeenCalledTimes(1);
-    expect(pageClose).not.toHaveBeenCalled();
+    expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
   it("ignores already-handled route races during guarded navigation", async () => {
@@ -443,7 +484,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not quarantine a tab on transient redirect lookup errors", async () => {
+  it("closes the created tab on transient redirect lookup errors", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     const assertNavigationAllowedSpy = vi.spyOn(
       navigationGuardModule,
@@ -457,18 +498,35 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     try {
-      const created = await createPageViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://93.184.216.34/start",
-      });
+      await expect(
+        createPageViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          url: "https://93.184.216.34/start",
+        }),
+      ).rejects.toThrow(/getaddrinfo EAI_AGAIN internal-hop/);
       const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
 
-      expect(created.targetId).toBe("TARGET_1");
-      expect(pages).toHaveLength(1);
-      expect(pageClose).not.toHaveBeenCalled();
+      expect(pages).toHaveLength(0);
+      expect(pageClose).toHaveBeenCalledTimes(1);
     } finally {
       assertNavigationAllowedSpy.mockRestore();
     }
+  });
+
+  it("preserves the navigation error when closing the created tab fails", async () => {
+    const { pageGoto, pageClose } = installBrowserMocks();
+    const navigationError = new Error("page.goto: net::ERR_CONNECTION_REFUSED");
+    pageGoto.mockRejectedValueOnce(navigationError);
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBe(navigationError);
+
+    expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
   it("does not quarantine a tab on transient post-navigation check errors", async () => {
@@ -770,6 +828,67 @@ describe("pw-session guarded browser navigation route cleanup", () => {
     expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
     expect(getRouteHandler()).toBeNull();
     expect(pageGoto).not.toHaveBeenCalled();
+  });
+
+  it("rejects ownership revoked during route setup before navigating the retained page", async () => {
+    const { getRouteHandler, page, pageGoto, pageRoute, pageUnroute } = installBrowserMocks();
+    const installRoute = pageRoute.getMockImplementation();
+    let ownsPage = true;
+    pageRoute.mockImplementationOnce(async (...args) => {
+      await installRoute?.(...args);
+      ownsPage = false;
+    });
+    const navigation = {
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      url: "https://93.184.216.34/start",
+      timeoutMs: 1000,
+      targetId: "TARGET_1",
+      assertPageCurrent: () => {
+        if (!ownsPage) {
+          throw new BrowserTabNotFoundError({ input: "TARGET_1" });
+        }
+      },
+    };
+
+    await expect(gotoPageWithNavigationGuard(navigation)).rejects.toBeInstanceOf(
+      BrowserTabNotFoundError,
+    );
+
+    expect(pageGoto).not.toHaveBeenCalled();
+    expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
+    expect(getRouteHandler()).toBeNull();
+  });
+
+  it("awaits remote ownership validation and rejects revocation before goto", async () => {
+    const { page, pageGoto, pageUnroute } = installBrowserMocks();
+    let entered!: () => void;
+    let release!: () => void;
+    const validating = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const validation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const task = gotoPageWithNavigationGuard({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      url: "https://93.184.216.34/start",
+      timeoutMs: 1000,
+      targetId: "TARGET_1",
+      assertPageCurrent: async () => {
+        entered();
+        await validation;
+        throw new BrowserTabNotFoundError({ input: "TARGET_1" });
+      },
+    });
+    const rejected = expect(task).rejects.toBeInstanceOf(BrowserTabNotFoundError);
+    await validating;
+    expect(pageGoto).not.toHaveBeenCalled();
+    release();
+    await rejected;
+    expect(pageGoto).not.toHaveBeenCalled();
+    expect(pageUnroute).toHaveBeenCalled();
   });
 
   it("surfaces navigation route cleanup failure while the page remains open", async () => {

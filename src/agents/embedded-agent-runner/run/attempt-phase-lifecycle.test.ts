@@ -6,9 +6,14 @@ import {
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
@@ -62,6 +67,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -73,6 +79,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
@@ -100,12 +107,12 @@ describe("embedded attempt phase lifecycle state", () => {
       markTimedOutDuringCompaction: () => {
         timedOutDuringCompaction = true;
       },
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       cache: {
         observabilityEnabled: false,
         changesForTurn: null,
@@ -141,6 +148,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -153,6 +161,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
@@ -175,12 +184,12 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: AbortSignal.abort(),
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 0,
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       cache: {
         observabilityEnabled: false,
         changesForTurn: null,
@@ -226,6 +235,7 @@ describe("embedded attempt phase lifecycle state", () => {
       removeTrailingEntries: vi.fn(() => 0),
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -238,6 +248,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [
@@ -263,13 +274,17 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,
       prePromptMessageCount: 1,
-      toolSearchTargetTranscriptProjections: [
-        {
+      nestedToolActivities: [
+        createNestedToolActivity({
+          runId: "run-test",
+          scopeId: "scope-test",
+          afterEntryId: null,
+          startOrder: 0,
           parentToolCallId: "outer-exec",
           toolCallId: "tool_search_code:outer-exec:read:1",
           toolName: "read",
@@ -279,7 +294,9 @@ describe("embedded attempt phase lifecycle state", () => {
             details: { status: "error", error: "ENOENT" },
           },
           isError: true,
-        },
+          startedAt: 1,
+          timestamp: 2,
+        }),
       ],
       cache: {
         observabilityEnabled: false,
@@ -293,144 +310,159 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.currentAttemptAssistant).toBe(modelAssistant);
     expect(result.currentAttemptCompletedAssistant).toEqual(modelAssistant);
     expect(result.successfulNestedToolNames).toEqual([]);
-    expect(result.messagesSnapshot).toHaveLength(5);
-    expect(result.messagesSnapshot.at(-2)).toMatchObject({
-      role: "assistant",
-      stopReason: "toolUse",
-      content: [{ name: "read" }],
-    });
-    expect(result.messagesSnapshot.at(-1)).toMatchObject({
-      role: "toolResult",
-      toolName: "read",
-      isError: true,
-    });
+    expect(result.messagesSnapshot).toEqual(messages);
   });
 
-  it("emits the persisted terminal boundary to the outer fallback owner", async () => {
-    const dir = tempDirs.make("openclaw-attempt-terminal-anchor-");
-    const target = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
-    const persistedUser = await appendTranscriptMessage(target, {
-      cwd: dir,
-      eventId: "user-1",
-      message: userMessage,
-      now: 1,
-    });
-    if (!persistedUser?.anchor) {
-      throw new Error("expected persisted user anchor");
-    }
-    const recorder = createUserTurnTranscriptRecorder({
-      message: userMessage,
-      target: async () => undefined,
-    });
-    recorder.markRuntimePersisted(userMessage, persistedUser.anchor);
-    const sessionManager = SessionManager.open(target, dir);
-    const terminalEntryId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      api: "openai-responses",
-      provider: "openai",
-      model: "test-model",
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: 2,
-    });
-    const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
-      agentId: persistedUser.anchor.agentId,
-      sessionId: persistedUser.anchor.sessionId,
-      sessionKey: persistedUser.anchor.sessionKey,
-      storePath: persistedUser.anchor.storePath,
-      entryId: terminalEntryId,
-    });
-    if (!expectedTerminalAnchor) {
-      throw new Error("expected persisted terminal anchor");
-    }
-    const afterTurn = vi.fn(async () => {});
-    const maintain = vi.fn(async () => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
-    const onContextEngineTurnCandidate = vi.fn();
-    await completeEmbeddedAttemptAfterTurn({
-      attempt: {
-        runId: "run-1",
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        sessionFile: target.sessionKey,
-        provider: "test",
-        modelId: "model",
-        model: { api: "openai-responses" },
-        userTurnTranscriptRecorder: recorder,
-        onContextEngineTurnCandidate,
-      } as never,
-      activeContextEngine: {
-        info: { id: "test", name: "Test" },
-        assemble: vi.fn(),
-        compact: vi.fn(),
-        ingest: vi.fn(),
-        afterTurn,
-        maintain,
-      } as never,
-      activeSession: {} as never,
-      sessionManager,
-      withOwnedTranscriptWrite: async (operation) => await operation(),
-      state: {
-        promptError: null,
-        yieldAborted: false,
-        sessionIdUsed: target.sessionId,
-        messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
-        prePromptMessageCount: 0,
-        contextEngineAfterTurnCheckpoint: null,
-        compactionOccurredThisAttempt: false,
-      },
-      readLifecycleState: () => ({
-        aborted: false,
-        timedOut: false,
-        idleTimedOut: false,
-        timedOutDuringCompaction: false,
-      }),
-      runtime: {
-        effectiveWorkspace: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        sessionAgentId: "main",
-        resolveActiveContextEnginePluginId: () => "test",
-        shouldRecordCompletedBootstrapTurn: false,
-        cacheTrace: null,
-        anthropicPayloadLogger: null,
-        hookAgentId: "main",
-        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
-        skillWorkshopAvailable: false,
-        hookRunner: null,
-        promptStartedAt: Date.now(),
-      },
-    });
-
-    expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        boundary: {
-          admission: recorder.getAdmissionReceipt(),
-          terminal: expectedTerminalAnchor,
+  it.each(["complete", "missing admission", "missing terminal"] as const)(
+    "handles %s candidate anchors without skipping later lifecycle work",
+    async (boundary) => {
+      const dir = tempDirs.make("openclaw-attempt-terminal-anchor-");
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
+      const persistedUser = await appendTranscriptMessage(target, {
+        cwd: dir,
+        eventId: "user-1",
+        message: userMessage,
+        now: 1,
+      });
+      if (!persistedUser?.anchor) {
+        throw new Error("expected persisted user anchor");
+      }
+      const recorder = createUserTurnTranscriptRecorder({
+        message: userMessage,
+        target: async () => undefined,
+      });
+      if (boundary !== "missing admission") {
+        recorder.markRuntimePersisted(userMessage, persistedUser.anchor);
+      }
+      const sessionManager =
+        boundary === "missing terminal"
+          ? SessionManager.inMemory(dir)
+          : SessionManager.open(target, dir);
+      const terminalEntryId = sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "test-model",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-      }),
-    );
-    expect(afterTurn).not.toHaveBeenCalled();
-    expect(maintain).not.toHaveBeenCalled();
-  });
+        stopReason: "stop",
+        timestamp: 2,
+      });
+      const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
+        agentId: persistedUser.anchor.agentId,
+        sessionId: persistedUser.anchor.sessionId,
+        sessionKey: persistedUser.anchor.sessionKey,
+        storePath: persistedUser.anchor.storePath,
+        entryId: terminalEntryId,
+      });
+      if (boundary === "complete" && !expectedTerminalAnchor) {
+        throw new Error("expected persisted terminal anchor");
+      }
+      const afterTurn = vi.fn(async () => {});
+      const maintain = vi.fn(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
+      const onContextEngineTurnCandidate = vi.fn();
+      await completeEmbeddedAttemptAfterTurn({
+        attempt: {
+          runId: "run-1",
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          sessionTarget: target,
+          sessionFile: target.sessionKey,
+          provider: "test",
+          modelId: "model",
+          model: { api: "openai-responses" },
+          userTurnTranscriptRecorder: recorder,
+          onContextEngineTurnCandidate,
+        } as never,
+        activeContextEngine: {
+          info: { id: "test", name: "Test" },
+          assemble: vi.fn(),
+          compact: vi.fn(),
+          ingest: vi.fn(),
+          afterTurn,
+          maintain,
+        } as never,
+        activeSession: {} as never,
+        sessionManager,
+        withOwnedTranscriptWrite: async (operation) => await operation(),
+        state: {
+          promptError: null,
+          yieldAborted: false,
+          sessionIdUsed: target.sessionId,
+          messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
+          prePromptMessageCount: 0,
+          transcriptLeafId: null,
+          contextEngineAfterTurnCheckpoint: null,
+          compactionOccurredThisAttempt: false,
+        },
+        readLifecycleState: () => ({
+          aborted: false,
+          timedOut: false,
+          idleTimedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        runtime: {
+          effectiveWorkspace: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          sessionAgentId: "main",
+          resolveActiveContextEnginePluginId: () => "test",
+          shouldRecordCompletedBootstrapTurn: true,
+          cacheTrace: null,
+          anthropicPayloadLogger: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+          skillWorkshopAvailable: false,
+          hookRunner: null,
+          promptStartedAt: Date.now(),
+        },
+      });
+
+      if (boundary === "complete") {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            boundary: {
+              admission: recorder.getAdmissionReceipt(),
+              terminal: expectedTerminalAnchor,
+            },
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
+      expect(sessionManager.getEntries()).toContainEqual(
+        expect.objectContaining({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        }),
+      );
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+        sessionManager.getSessionTarget()
+          ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
+          : undefined,
+      );
+      expect(afterTurn).not.toHaveBeenCalled();
+      expect(maintain).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
     const abortError = Object.assign(new Error("This operation was aborted"), {
@@ -443,7 +475,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
@@ -451,6 +483,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },
@@ -482,6 +515,98 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(event?.error).toBeUndefined();
   });
 
+  it.each(["blocked writes", "interrupted tool result"] as const)(
+    "selects review evidence after the pre-turn boundary with %s",
+    async (tail) => {
+      const dir = tempDirs.make("openclaw-attempt-review-boundary-");
+      const target = {
+        agentId: "main",
+        sessionId: "review-boundary",
+        sessionKey: "agent:main:review-boundary",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const sessionManager = SessionManager.open(target, dir);
+      let currentTurn = false;
+      installSessionToolResultGuard(sessionManager, {
+        runId: "reused-run-id",
+        beforeMessageWriteHook: ({ message }) =>
+          currentTurn &&
+          (tail === "blocked writes" ||
+            (message.role === "assistant" && message.stopReason !== "toolUse"))
+            ? { block: true }
+            : undefined,
+      });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "Previous turn." }] }),
+      );
+      const transcriptLeafId = sessionManager.appendCustomEntry("previous-turn-finished");
+      currentTurn = true;
+      sessionManager.appendMessage({ role: "user", content: "Current task.", timestamp: 2 });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      );
+      const toolResultEntryId = sessionManager.appendMessage({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "Current verified result." }],
+        isError: false,
+        timestamp: 3,
+      });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
+      );
+
+      await completeEmbeddedAttemptAfterTurn({
+        attempt: { runId: "reused-run-id", sessionId: target.sessionId } as never,
+        activeSession: {} as never,
+        sessionManager,
+        withOwnedTranscriptWrite: async (operation) => await operation(),
+        state: {
+          promptError: null,
+          yieldAborted: false,
+          sessionIdUsed: target.sessionId,
+          messagesSnapshot: [],
+          prePromptMessageCount: 0,
+          transcriptLeafId,
+          contextEngineAfterTurnCheckpoint: null,
+          compactionOccurredThisAttempt: false,
+        },
+        readLifecycleState: () => ({
+          aborted: tail === "interrupted tool result",
+          timedOut: false,
+          idleTimedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        runtime: {
+          effectiveWorkspace: dir,
+          agentDir: dir,
+          sessionAgentId: "main",
+          resolveActiveContextEnginePluginId: () => undefined,
+          shouldRecordCompletedBootstrapTurn: true,
+          cacheTrace: null,
+          anthropicPayloadLogger: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+          skillWorkshopAvailable: true,
+          hookRunner: null,
+          promptStartedAt: Date.now(),
+        },
+      });
+
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+        tail === "interrupted tool result"
+          ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
+          : undefined,
+      );
+    },
+  );
+
   it("re-reads abort state inside the post-turn session write", async () => {
     let aborted = false;
     await completeEmbeddedAttemptAfterTurn({
@@ -491,7 +616,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
@@ -502,6 +627,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },
@@ -543,7 +669,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
@@ -551,6 +677,54 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => undefined,
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(hoisted.runAgentEndSideEffects).not.toHaveBeenCalled();
+  });
+
+  it("skips agent_end side effects for a detached run", async () => {
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        sessionPersistence: "detached",
+        sessionKey: "agent:main:telegram:group:1",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+      } as never,
+      activeSession: {} as never,
+      sessionManager: SessionManager.inMemory(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },

@@ -19,7 +19,6 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -119,7 +118,6 @@ function registerLoginCommand(params: {
 
 describe("registerTelegramNativeCommands /login", () => {
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
     loginSessionMocks.getSessionEntry

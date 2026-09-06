@@ -8,7 +8,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
@@ -17,6 +17,10 @@ import { materializeLegacyDefaultAgentRoles } from "../config/legacy.default-age
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import {
+  copyConfigResolutionFacts,
+  copyConfigResolutionFactsExcept,
+} from "../config/resolution-facts.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -24,7 +28,7 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { resolveGatewayAuth } from "./auth.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
@@ -56,7 +60,7 @@ export function assertValidGatewayStartupConfigSnapshot(
   }
   const issues =
     snapshot.issues.length > 0
-      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
@@ -73,6 +77,7 @@ function withRuntimeConfig(
   snapshot: ConfigFileSnapshot,
   runtimeConfig: OpenClawConfig,
 ): ConfigFileSnapshot {
+  copyConfigResolutionFacts(snapshot.sourceConfig, runtimeConfig);
   return {
     ...snapshot,
     runtimeConfig,
@@ -156,8 +161,8 @@ export function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
 
 export function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): void {
   assertGatewayAuthNotKnownWeak(
-    resolveGatewayAuth({
-      authConfig: config.gateway?.auth,
+    resolveGatewayAuthForConfig({
+      config,
       env: process.env,
       tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
     }),
@@ -203,7 +208,7 @@ export function applyGatewayAuthOverridesForStartupPreflight(
   if (!overrides.auth && !overrides.tailscale) {
     return config;
   }
-  return {
+  const next = {
     ...config,
     gateway: {
       ...config.gateway,
@@ -211,4 +216,9 @@ export function applyGatewayAuthOverridesForStartupPreflight(
       tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
     },
   };
+  copyConfigResolutionFactsExcept(config, next, [
+    ...(overrides.auth?.token !== undefined ? ["gateway.auth.token"] : []),
+    ...(overrides.auth?.password !== undefined ? ["gateway.auth.password"] : []),
+  ]);
+  return next;
 }

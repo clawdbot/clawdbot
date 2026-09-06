@@ -99,14 +99,11 @@ function imageWithinLimits(
 }
 
 function formatBytesShort(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 1024) {
-    return `${Math.max(0, Math.round(bytes))}B`;
-  }
   return formatByteSize(bytes, {
     style: "legacy-binary",
     maxUnit: "mega",
     separator: "",
-    fractionDigits: (_value, unit) => (unit === "kilo" ? 1 : 2),
+    fractionDigits: (_value, unit) => (unit === "mega" ? 2 : unit === "kilo" ? 1 : 0),
   });
 }
 
@@ -249,7 +246,7 @@ async function resizeImageBase64IfNeeded(params: {
             ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
             : 0;
         log.info(
-          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (-${byteReductionPct}%)`,
+          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
           {
             label: params.label,
             fileName: params.fileName,
@@ -287,8 +284,6 @@ async function resizeImageBase64IfNeeded(params: {
   }
 
   const best = smallest?.buffer ?? buf;
-  const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
-  const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
   const sourcePixels =
     typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
   const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
@@ -308,7 +303,9 @@ async function resizeImageBase64IfNeeded(params: {
       triggerOverDimensions: overDimensions,
     },
   );
-  throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
+  throw new Error(
+    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(best.byteLength)})`,
+  );
 }
 
 export async function sanitizeContentBlocksImages(

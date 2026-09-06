@@ -116,6 +116,7 @@ enum BoundedProcess {
         arguments: [String],
         environment: [String: String]? = nil,
         workingDirectory: String? = nil,
+        standardError: some ErrorOutputProtocol = .combinedWithOutput,
         timeout: TimeInterval) async throws -> BoundedProcessResult
     {
         precondition(timeout > 0)
@@ -129,7 +130,7 @@ enum BoundedProcess {
                 allowedDurationToNextStep: .zero),
         ]
         let configuration = Configuration(
-            .path(.init(path)),
+            executable: .path(.init(path)),
             arguments: Arguments(arguments),
             environment: environment.map(self.environment(from:)) ?? .inherit,
             workingDirectory: workingDirectory.map { .init($0) },
@@ -138,7 +139,7 @@ enum BoundedProcess {
             configuration,
             input: .none,
             output: .bytes(limit: self.outputLimit),
-            error: .combinedWithOutput)
+            error: standardError)
         { execution in
             let exitSignal = ProcessExitSignal(
                 processIdentifier: pid_t(execution.processIdentifier.value))
@@ -184,7 +185,7 @@ enum BoundedProcess {
             }
         }
 
-        if executionResult.closureOutput {
+        if executionResult.closureResult {
             throw BoundedProcessError.timedOut
         }
         let data = Data(executionResult.standardOutput)

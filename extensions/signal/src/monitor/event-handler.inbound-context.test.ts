@@ -2,6 +2,10 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
@@ -34,7 +38,24 @@ type DispatchInboundMessageMockParams = {
   };
 };
 
-type SendReactionSignalMockCall = [string, number, string, unknown];
+type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 const {
   sendTypingMock,
@@ -52,14 +73,18 @@ const {
   return {
     sendTypingMock: vi.fn(),
     sendReadReceiptMock: vi.fn(),
-    sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
+    sendReactionSignalMock: vi.fn<typeof import("../send-reactions.js").sendReactionSignal>(
+      async () => ({ ok: true }),
+    ),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
-    dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
-      captureState.ctx = params.ctx;
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    }),
+    dispatchInboundMessageMock: vi.fn(
+      async (params: DispatchInboundMessageMockParams): Promise<TestDispatchResult> => {
+        captureState.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
     logVerboseMock: vi.fn(),
     shouldLogVerboseMock: vi.fn(() => false),
     readAgentRunTerminalOutcomeMock: vi.fn(),
@@ -144,8 +169,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           history: resolved.history,
           admission: resolved.admission,
           botLoopProtection: resolved.botLoopProtection,
-          runDispatch: async () =>
-            await dispatchInboundMessageMock({
+          runDispatch: async () => {
+            const dispatchResult = await dispatchInboundMessageMock({
               ctx: resolved.ctxPayload,
               cfg: resolved.cfg,
               dispatcher,
@@ -153,7 +178,35 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
                 ...resolved.replyOptions,
                 onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
               },
-            }),
+            });
+            if (dispatchResult.settledReceipt) {
+              return dispatchResult;
+            }
+            const counts = (kind: "tool" | "block" | "final") => {
+              const failedBeforeSend = dispatchResult.failedCounts?.[kind] ?? 0;
+              return {
+                delivered: Math.max(0, (dispatchResult.counts?.[kind] ?? 0) - failedBeforeSend),
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend,
+                failedAfterSend: 0,
+              };
+            };
+            const settledCounts = {
+              tool: counts("tool"),
+              block: counts("block"),
+              final: counts("final"),
+            };
+            return {
+              ...dispatchResult,
+              settledReceipt: {
+                counts: settledCounts,
+                anyVisibleDelivered: Object.values(settledCounts).some(
+                  (entry) => entry.delivered > 0,
+                ),
+              },
+            };
+          },
         });
       };
       let result;
@@ -167,6 +220,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           routeSessionKey: resolved.route.sessionKey,
         });
         throw err;
+      } finally {
+        // Match the real buffered dispatcher's ownership of typing timers.
+        resolved.dispatcherOptions?.typingCallbacks?.onIdle?.();
       }
       await params.adapter.onFinalize?.(result);
       return result;
@@ -376,9 +432,7 @@ function receiveGroupMessage(
 }
 
 function sentReactionEmojis(): string[] {
-  return (sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]).map(
-    (call) => call[2],
-  );
+  return sendReactionSignalMock.mock.calls.map((call) => call[2]);
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
@@ -894,18 +948,26 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
   });
 
-  it("does not send Signal status reactions when ackReactionScope is off", async () => {
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig({
-        messages: { ackReactionScope: "off", statusReactions: { enabled: true } },
-      }),
-    });
-
-    await receiveDirectMessage(handler);
-    await nextTimerTick();
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+  it("applies acknowledgement scope changes to the next Signal message", async () => {
+    const cfg = createStatusReactionConfig({ messages: { ackReactionScope: "off" } });
+    setRuntimeConfigSnapshot(cfg, cfg);
+    try {
+      const handler = createTestHandler({ cfg });
+      for (const [index, scope] of (["off", "direct", "off"] as const).entries()) {
+        const next = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
+        setRuntimeConfigSnapshot(next, next);
+        const timestamp = 1700000000001 + index;
+        await receiveDirectMessage(handler, { timestamp });
+        for (let tick = 0; tick < 5; tick += 1) {
+          await nextTimerTick();
+        }
+        const reactions = sendReactionSignalMock.mock.calls.filter((call) => call[1] === timestamp);
+        expect(reactions.some((call) => call[2] === "👀")).toBe(scope === "direct");
+      }
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("treats message-tool-only Signal replies as successful status outcomes", async () => {
@@ -1120,6 +1182,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("sends typing + read receipt for allowed DMs", async () => {
+    vi.useFakeTimers();
     const handler = createTestHandler({
       cfg: createDirectConfig(),
       account: "+15550009999",
@@ -1129,26 +1192,33 @@ describe("signal createSignalEventHandler inbound context", () => {
       sendReadReceipts: true,
     });
 
-    await receiveMessage(handler, { message: "hi" });
+    try {
+      await receiveMessage(handler, { message: "hi" });
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
-      cfg: {
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-      },
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-    });
-    expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-      cfg: {
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-      },
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-    });
+      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
+      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops DM commands in open mode without allowlists", async () => {

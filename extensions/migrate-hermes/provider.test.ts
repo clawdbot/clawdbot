@@ -8,7 +8,7 @@ import {
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
 import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
@@ -53,6 +53,15 @@ describe("Hermes migration provider", () => {
       } else {
         process.env.OPENCLAW_HOME = previous;
       }
+    }
+  });
+
+  it("keeps literal $ patterns in home when expanding tildes", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
+    try {
+      expect(resolveHomePath("~/.hermes")).toBe(path.resolve("/home/$&user/.hermes"));
+    } finally {
+      spy.mockRestore();
     }
   });
 
@@ -367,11 +376,10 @@ describe("Hermes migration provider", () => {
     );
 
     expect(provider.supportedItemKinds).toEqual(["memory"]);
-    expect(plan.summary.total).toBe(7);
+    expect(plan.summary.total).toBe(6);
     expect(plan.summary.conflicts).toBe(2);
     expect(plan.summary.sensitive).toBe(1);
     expect(itemById(plan.items, "config:default-model")?.status).toBe("conflict");
-    expect(itemById(plan.items, "config:memory")?.status).toBe("planned");
     expect(itemById(plan.items, "config:memory-plugin-slot")?.status).toBe("planned");
     expect(plan.items.some((item) => item.id.startsWith("config:model-provider:"))).toBe(false);
     expect(itemById(plan.items, "workspace:SOUL.md")?.status).toBe("conflict");

@@ -1,15 +1,17 @@
 /** Full-entry coverage for sessions_yield terminal projection. */
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("sessions_yield orchestration", () => {
@@ -17,9 +19,15 @@ describe("sessions_yield orchestration", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "sessions-yield.orchestration" });
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("yield ends the turn without pending tool calls", async () => {
@@ -30,7 +38,7 @@ describe("sessions_yield orchestration", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-yield-orchestration",
     });
 
@@ -48,7 +56,7 @@ describe("sessions_yield orchestration", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-yield-vs-client-tool",
     });
 
@@ -75,7 +83,7 @@ describe("sessions_yield orchestration", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-multi-client-tool",
     });
 
@@ -99,13 +107,14 @@ describe("sessions_yield orchestration", () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
           yieldDetected: true,
+          yieldAcknowledgment: "Research started; results will follow.",
           assistantTexts: [],
           acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "child-key" }],
         }),
       );
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         runId: "run-yield-accepted-spawn-suppressed",
       });
 
@@ -113,6 +122,7 @@ describe("sessions_yield orchestration", () => {
       expect(result.payloads).toBeUndefined();
       expect(result.meta.stopReason).toBe("end_turn");
       expect(result.meta.yielded).toBe(true);
+      expect(result.meta.yieldAcknowledgment).toBe("Research started; results will follow.");
     });
 
     it("yield with async started tool — diagnostic suppressed", async () => {
@@ -125,7 +135,7 @@ describe("sessions_yield orchestration", () => {
       );
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         runId: "run-yield-async-tool-suppressed",
       });
 
@@ -145,7 +155,7 @@ describe("sessions_yield orchestration", () => {
       );
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         runId: "run-yield-runtime-continuation-suppressed",
       });
 
@@ -160,7 +170,7 @@ describe("sessions_yield orchestration", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-no-yield",
     });
 
@@ -178,7 +188,7 @@ describe("sessions_yield orchestration", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-yield-no-continuation",
     });
 
@@ -205,7 +215,7 @@ describe("sessions_yield orchestration", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-yield-empty-spawn",
     });
 

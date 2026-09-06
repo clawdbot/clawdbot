@@ -3,32 +3,35 @@ import OpenClawKit
 enum GatewayPushSubscription {
     @MainActor
     static func consume(
+        connection: GatewayConnection = .shared,
         bufferingNewest: Int? = nil,
-        onPush: @escaping @MainActor (GatewayPush) -> Void) async
+        onPush: @escaping @MainActor (GatewayConnection.PushDelivery) -> Void) async
     {
-        let stream: AsyncStream<GatewayPush> = if let bufferingNewest {
-            await GatewayConnection.shared.subscribe(bufferingNewest: bufferingNewest)
+        let stream: AsyncStream<GatewayConnection.PushDelivery> = if let bufferingNewest {
+            await connection.subscribe(bufferingNewest: bufferingNewest)
         } else {
-            await GatewayConnection.shared.subscribe()
+            await connection.subscribe()
         }
 
-        for await push in stream {
+        for await delivery in stream {
             if Task.isCancelled { return }
-            await MainActor.run {
-                onPush(push)
-            }
+            // Validate payloads on the consumer executor. Retirement receipts
+            // also reach exact-source cleanup; status/action users must recheck.
+            if delivery.push != nil, !delivery.isCurrent { continue }
+            onPush(delivery)
         }
     }
 
     @MainActor
     static func restartTask(
         task: inout Task<Void, Never>?,
+        connection: GatewayConnection = .shared,
         bufferingNewest: Int? = nil,
-        onPush: @escaping @MainActor (GatewayPush) -> Void)
+        onPush: @escaping @MainActor (GatewayConnection.PushDelivery) -> Void)
     {
         task?.cancel()
         task = Task {
-            await self.consume(bufferingNewest: bufferingNewest, onPush: onPush)
+            await self.consume(connection: connection, bufferingNewest: bufferingNewest, onPush: onPush)
         }
     }
 }

@@ -190,12 +190,18 @@ describe("pnpm 11 global install discovery", () => {
         fs.symlink(activeInstallRoot, path.join(globalRoot, "hash-active"), "dir"),
       ]);
       const runCommand: CommandRunner = async (argv) => {
+        if (argv.join(" ") === "npm root -g") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
         if (argv.join(" ") === "pnpm root -g") {
           return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${argv.join(" ")}`);
       };
 
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, sharedPackageRoot, 1000),
+      ).resolves.toBeNull();
       await expect(
         resolveGlobalInstallTarget({
           manager: "pnpm",
@@ -280,6 +286,9 @@ describe("pnpm 11 global install discovery", () => {
         if (command === "npm root -g") {
           return { stdout: `${npmGlobalRoot}\n`, stderr: "", code: 0 };
         }
+        if (command === "npm --version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
+        }
         if (command === "pnpm root -g") {
           return {
             stdout: `${path.join(base, "pnpm-home", "global", "v11")}\n`,
@@ -307,6 +316,10 @@ describe("pnpm 11 global install discovery", () => {
         command: "npm",
         globalRoot: npmGlobalRoot,
         packageRoot,
+        npmOwner: {
+          version: "12.0.0",
+          lifecyclePolicy: "allow-scripts",
+        },
       });
     });
   });

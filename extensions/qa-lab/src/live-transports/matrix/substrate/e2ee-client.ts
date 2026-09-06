@@ -284,6 +284,16 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
       mutateConfigFile: async () => ({}),
       replaceConfigFile: async () => ({}),
     },
+    logging: {
+      shouldLogVerbose: () => false,
+      // Rust crypto debug payloads can contain QR secrets. Keep normal
+      // diagnostics without falling back to the SDK's debug console logger.
+      getChildLogger: () => ({
+        info: (message: string) => console.info(message),
+        warn: (message: string) => console.warn(message),
+        error: (message: string) => console.error(message),
+      }),
+    },
     state: {
       resolveStateDir: () => params.outputDir,
       openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>

@@ -24,17 +24,40 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   }),
 }));
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  applySkillProposal,
-  inspectSkillProposal,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-  proposeUpdateSkill,
-  rejectSkillProposal,
+  applySkillProposal as applySkillProposalImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposalEvents as listSkillProposalEventsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  proposeUpdateSkill as proposeUpdateSkillImpl,
+  rejectSkillProposal as rejectSkillProposalImpl,
 } from "./service.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl({ config: workshopConfig, ...input });
+const inspectSkillProposal = (
+  proposalId: string,
+  options?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const listSkillProposalEvents = (
+  input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,
+) => listSkillProposalEventsImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
+const proposeUpdateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeUpdateSkillImpl>[0]>,
+) => proposeUpdateSkillImpl({ config: workshopConfig, ...input });
+const rejectSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof rejectSkillProposalImpl>[0]>,
+) => rejectSkillProposalImpl({ config: workshopConfig, ...input });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -49,6 +72,25 @@ afterEach(async () => {
   await testState.cleanup();
   await tempDirs.cleanup();
 });
+
+async function createOwnedSkill(workspaceDir: string, name: string): Promise<string> {
+  const proposal = await proposeCreateSkill({
+    workspaceDir,
+    agentId: "main",
+    name,
+    description: "Existing skill",
+    content: `# ${name}\n\nBefore.\n`,
+  });
+  await applySkillProposal({
+    workspaceDir,
+    agentId: "main",
+    proposalId: proposal.record.id,
+    expectedRevisionHash: proposal.revisionHash,
+  });
+  hookMocks.proposalChanged.mockClear();
+  hookMocks.skillChanged.mockClear();
+  return proposal.record.target.skillDir;
+}
 
 describe("Skill Workshop lifecycle hooks", () => {
   it("emits a committed live-skill artifact after apply", async () => {
@@ -91,19 +133,20 @@ describe("Skill Workshop lifecycle hooks", () => {
       { workspaceDir },
     );
     await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "lifecycle-hook", "SKILL.md"), "utf8"),
+      fs.readFile(
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "lifecycle-hook",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
     ).resolves.toContain("# Lifecycle Hook");
   });
 
   it("records and dispatches stale transitions detected during apply", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-stale-");
-    const skillDir = path.join(workspaceDir, "skills", "existing");
-    await writeSkill({
-      dir: skillDir,
-      name: "existing",
-      description: "Existing skill",
-      body: "# Existing\n\nBefore.\n",
-    });
+    const skillDir = await createOwnedSkill(workspaceDir, "existing");
     const proposal = await proposeUpdateSkill({
       workspaceDir,
       agentId: "main",
@@ -124,9 +167,7 @@ describe("Skill Workshop lifecycle hooks", () => {
     ).rejects.toThrow("proposal marked stale");
 
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "evaluation_completed", "stale"]);
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -166,15 +207,13 @@ describe("Skill Workshop lifecycle hooks", () => {
     ).rejects.toThrow("proposal marked stale");
 
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "stale"]);
-    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
-      {
-        record: { status: "stale" },
-      },
-    );
+    await expect(
+      inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
+    ).resolves.toMatchObject({
+      record: { status: "stale" },
+    });
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({
         action: "stale",
@@ -216,7 +255,7 @@ describe("Skill Workshop lifecycle hooks", () => {
       }
     });
 
-    const inspection = inspectSkillProposal(first.record.id, { workspaceDir });
+    const inspection = inspectSkillProposal(first.record.id, { config: {}, agentId: "main" });
     await hookEntered.promise;
     try {
       const rejected = await rejectSkillProposal({
@@ -230,21 +269,13 @@ describe("Skill Workshop lifecycle hooks", () => {
     }
     await expect(inspection).resolves.toMatchObject({ record: { status: "stale" } });
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: first.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: first.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "stale"]);
   });
 
   it("rejects apply when an untouched target asset changes after evaluation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-evaluation-race-");
-    const skillDir = path.join(workspaceDir, "skills", "existing");
-    await writeSkill({
-      dir: skillDir,
-      name: "existing",
-      description: "Existing skill",
-      body: "# Existing\n\nBefore.\n",
-    });
+    const skillDir = await createOwnedSkill(workspaceDir, "existing");
     const untouchedAsset = path.join(skillDir, "references", "untouched.txt");
     await fs.mkdir(path.dirname(untouchedAsset), { recursive: true });
     await fs.writeFile(untouchedAsset, "before\n");
@@ -294,15 +325,13 @@ describe("Skill Workshop lifecycle hooks", () => {
       }),
     ).rejects.toThrow("Proposal scan failed");
 
-    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
-      {
-        record: { status: "quarantined" },
-      },
-    );
+    await expect(
+      inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
+    ).resolves.toMatchObject({
+      record: { status: "quarantined" },
+    });
     expect(
-      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
-        (event) => event.type,
-      ),
+      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "evaluation_completed", "quarantined"]);
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({

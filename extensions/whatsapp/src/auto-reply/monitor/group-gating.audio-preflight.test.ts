@@ -75,14 +75,16 @@ describe("applyGroupGating audio preflight mention text", () => {
 
   it("defers a missing mention without storing placeholder history", async () => {
     const msg = makeGroupAudioMsg();
+    const params = makeParams(msg, groupHistories);
 
     const result = await applyGroupGating({
-      ...makeParams(msg, groupHistories),
+      ...params,
       deferMissingMention: true,
     });
 
     expect(result).toEqual({ shouldProcess: false, needsMentionText: true });
     expect(groupHistories.get("whatsapp:group:1203630")).toBeUndefined();
+    expect(params.replyLogger.warn).not.toHaveBeenCalled();
   });
 
   it("accepts voice transcript text that satisfies mention gating", async () => {

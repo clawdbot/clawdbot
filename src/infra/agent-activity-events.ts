@@ -32,7 +32,7 @@ export type AgentItemEventData = Record<string, unknown> & {
 };
 
 /** Incremental command output payload associated with an item/tool call. */
-export type AgentCommandOutputEventData = Record<string, unknown> & {
+export type AgentCommandOutputEventFields = {
   itemId: string;
   phase: "delta" | "end";
   title: string;
@@ -44,6 +44,7 @@ export type AgentCommandOutputEventData = Record<string, unknown> & {
   durationMs?: number;
   cwd?: string;
 };
+export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
 export type AgentPatchSummaryEventData = Record<string, unknown> & {

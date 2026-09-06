@@ -21,7 +21,8 @@ function countNoProgressStreak(
   terminalExecFailuresOnly: boolean,
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
-  let latestResultHash: string | undefined;
+  let latestOutcome: ToolCallRecord | undefined;
+  let crossedArgumentBoundary = false;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
   // changed outcome must reset vetoes from the previous no-progress streak.
   let pendingLoopVetoes = 0;
@@ -50,13 +51,28 @@ function countNoProgressStreak(
     if (terminalExecFailuresOnly && record.outcomeKind !== "terminal-exec-failure") {
       break;
     }
-    if (!latestResultHash) {
-      latestResultHash = record.resultHash;
+    if (!latestOutcome) {
+      latestOutcome = record;
+      crossedArgumentBoundary = record.argsHash !== argsHash;
       streak = pendingLoopVetoes + 1;
       pendingLoopVetoes = 0;
       continue;
     }
-    if (record.resultHash !== latestResultHash) {
+    if (terminalExecFailuresOnly) {
+      // Once the scan crosses away from the requested command, finding it again
+      // belongs to an older tail. Unique changing arguments can still count together.
+      if (crossedArgumentBoundary && record.argsHash === argsHash) {
+        break;
+      }
+      if (record.argsHash !== argsHash) {
+        crossedArgumentBoundary = true;
+      }
+    }
+    const repeatsSameFailure =
+      terminalExecFailuresOnly &&
+      record.failureIdentityHash !== undefined &&
+      record.failureIdentityHash === latestOutcome.failureIdentityHash;
+    if (record.resultHash !== latestOutcome.resultHash && !repeatsSameFailure) {
       break;
     }
     streak += pendingLoopVetoes + 1;
@@ -64,7 +80,7 @@ function countNoProgressStreak(
   }
 
   return {
-    count: latestResultHash ? streak : terminalExecFailuresOnly ? 0 : pendingLoopVetoes,
-    latestResultHash,
+    count: latestOutcome ? streak : terminalExecFailuresOnly ? 0 : pendingLoopVetoes,
+    latestResultHash: latestOutcome?.resultHash,
   };
 }

@@ -2,9 +2,9 @@
 import {
   createOpenAiCompatibleSpeechProvider,
   type SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
+} from "openclaw/plugin-sdk/speech-provider";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { OPENROUTER_BASE_URL } from "./provider-defaults.js";
 
 const DEFAULT_OPENROUTER_TTS_MODEL = "hexgrad/kokoro-82m";
 const DEFAULT_OPENROUTER_TTS_VOICE = "af_alloy";

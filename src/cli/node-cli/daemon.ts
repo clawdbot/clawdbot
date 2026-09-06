@@ -35,7 +35,7 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daem
 import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
+  resolveDaemonInstallBlockMessage,
   filterDaemonEnv,
   formatRuntimeStatus,
   resolveRuntimeStatusColor,
@@ -67,7 +67,7 @@ type NodeDaemonStatusOptions = {
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw node install"),
+    installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
     systemdServiceName: resolveNodeSystemdServiceName(),
@@ -111,12 +111,21 @@ async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void):
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
-  if (failIfNixDaemonInstallMode(fail)) {
+  const installBlock = resolveDaemonInstallBlockMessage("node");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
+  let gatewayOptions;
+  try {
+    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -129,10 +138,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail("--no-tls cannot be combined with --tls-fingerprint");
     return;
   }
+  if (cloudflareAccess && tls !== true) {
+    fail("Cloudflare Access credentials require --tls for the node Gateway connection");
+    return;
+  }
 
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
 
@@ -262,21 +275,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   } catch (error) {
     const message = `Node service check failed: ${formatErrorMessage(error)}`;
     if (json) {
-      defaultRuntime.writeJson({ error: message });
-    } else {
-      defaultRuntime.error(message);
+      throw new Error(message, { cause: error });
     }
+    defaultRuntime.error(message);
     defaultRuntime.exit(1);
     return;
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch(
-      (err: unknown): GatewayServiceRuntime => ({
-        status: "unknown",
-        detail: formatErrorMessage(err),
-      }),
-    ),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {
@@ -289,15 +299,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   if (json) {
     const safeEnvironment = filterDaemonEnv(command?.environment);
+    const publicCommand = command && {
+      ...command,
+      environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+    };
+    if (publicCommand) {
+      delete publicCommand.managedDefinition;
+      delete publicCommand.managedOverrides;
+    }
     defaultRuntime.writeJson({
       service: {
         ...payload.service,
-        command: command
-          ? {
-              ...command,
-              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
-            }
-          : command,
+        command: publicCommand,
       },
     });
     return;

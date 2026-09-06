@@ -9,6 +9,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
   channelRouteTargetsMatchExact,
@@ -31,25 +32,10 @@ type MessagingToolDedupeRouteParams = {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 };
-
-/** Removes text payloads already sent by message tools. */
-function filterMessagingToolDuplicates(params: {
-  payloads: ReplyPayload[];
-  sentTexts: string[];
-}): ReplyPayload[] {
-  const { payloads, sentTexts } = params;
-  if (sentTexts.length === 0) {
-    return payloads;
-  }
-  return payloads.filter(
-    (payload) =>
-      Boolean(payload.mediaUrl || payload.mediaUrls?.length) ||
-      !isMessagingToolDuplicate(payload.text ?? "", sentTexts),
-  );
-}
 
 /** Removes media payload URLs already sent by message tools. */
 export function filterMessagingToolMediaDuplicates(params: {
@@ -110,12 +96,12 @@ export function filterMessagingToolMediaDuplicates(params: {
     }
 
     const nextMediaUrl = stripSingle ? undefined : mediaUrl;
-    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
+    const nextMediaUrls = strippedMediaUrls ? filteredUrls : mediaUrls;
     const nextPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrl: nextMediaUrl,
-      mediaUrls: nextMediaUrls,
-      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+      mediaUrls: nextMediaUrls?.length ? nextMediaUrls : undefined,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls?.length
         ? { audioAsVoice: undefined }
         : {}),
     });
@@ -212,23 +198,23 @@ function resolveOriginThreadIdForPayload(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
-  if (originThreadId && !params.replyToIsExplicit) {
-    return originThreadId;
-  }
   const replyToId = normalizeThreadIdForComparison(params.replyToId);
   const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
-  if (!replyToId || !params.config || !resolveReplyTransport) {
+  if (!params.config || !resolveReplyTransport) {
     return originThreadId;
   }
+  // Implicit replies can leave the inbound thread; dedupe must use the same transport as delivery.
   const transport = resolveReplyTransport({
     cfg: params.config,
     accountId: params.accountId,
     threadId: originThreadId,
     replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {
@@ -270,6 +256,7 @@ function getMatchingMessagingToolReplyTargets(
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   return sentTargets.filter((target) => {
@@ -380,7 +367,7 @@ export function resolveMessagingToolPayloadDedupe(
 
 type FilterMessagingToolReplyPayloadParams = Omit<
   MessagingToolDedupeRouteParams,
-  "replyToId" | "replyToIsExplicit" | "replyDelivery"
+  "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
 > & {
   payload: ReplyPayload;
   sentMediaUrls?: string[];
@@ -408,6 +395,7 @@ export function filterMessagingToolReplyPayload(
     replyToIsExplicit: Boolean(
       metadata?.replyToIdExplicit || params.payload.replyToTag || params.payload.replyToCurrent,
     ),
+    replyToCurrent: params.payload.replyToCurrent,
     replyDelivery: metadata?.replyDelivery,
   });
   if (!decision.shouldDedupePayloads) {
@@ -422,14 +410,22 @@ export function filterMessagingToolReplyPayload(
     decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
       ? decision.routeSentTexts
       : (params.sentTexts ?? []);
-  const filterPayload = (normalizedSentMediaUrls: string[]) =>
-    filterMessagingToolDuplicates({
-      payloads: filterMessagingToolMediaDuplicates({
-        payloads: [params.payload],
-        sentMediaUrls: normalizedSentMediaUrls,
-      }),
-      sentTexts,
+  const filterPayload = (normalizedSentMediaUrls: string[]) => {
+    const payloads = filterMessagingToolMediaDuplicates({
+      payloads: [params.payload],
+      sentMediaUrls: normalizedSentMediaUrls,
     });
+    return sentTexts.length === 0
+      ? payloads
+      : payloads.filter(
+          (payload) =>
+            !isMessagingToolDuplicate(payload.text ?? "", sentTexts) ||
+            hasReplyPayloadContent(
+              { ...payload, text: undefined },
+              { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },
+            ),
+        );
+  };
   return params.normalizeSentMediaUrls
     ? params.normalizeSentMediaUrls(sentMediaUrls).then(filterPayload)
     : filterPayload(sentMediaUrls);
@@ -441,7 +437,7 @@ export function filterMessagingToolReplyPayload(
 export function hasSourceRoutedMessagingToolDelivery(
   params: Omit<
     MessagingToolDedupeRouteParams,
-    "replyToId" | "replyToIsExplicit" | "replyDelivery"
+    "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
   > & {
     messagingToolSentTexts?: string[];
     messagingToolSentMediaUrls?: string[];

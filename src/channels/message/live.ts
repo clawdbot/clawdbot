@@ -3,6 +3,7 @@
  *
  * Tracks draft previews and converts them into finalized message receipts when possible.
  */
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 
 /** Mutable draft preview handle used before a live message is finalized or discarded. */
@@ -228,7 +229,12 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
     }
   } finally {
     if (delivered) {
-      await params.draft.clear();
+      const draft = params.draft;
+      await runBestEffortCleanup({
+        cleanup: () => draft.clear(),
+        onError: () =>
+          console.warn("Live preview cleanup failed after delivery; a stale preview may remain"),
+      });
     }
   }
 

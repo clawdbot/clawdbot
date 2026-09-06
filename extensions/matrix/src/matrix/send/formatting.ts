@@ -22,16 +22,15 @@ import {
   type MatrixThreadRelation,
 } from "./types.js";
 
-const getCore = () => getMatrixRuntime();
-
 async function renderMatrixFormattedContent(params: {
   client: MatrixClient;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
   const markdown = params.markdown ?? "";
-  const body = markdownToMatrixBody(markdown);
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
   if (params.includeMentions === false) {
     const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
     return { body, html: html || undefined };
@@ -68,12 +67,14 @@ export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const { body, html, mentions } = await renderMatrixFormattedContent({
     client: params.client,
     markdown: params.markdown,
+    preparedBody: params.preparedBody,
     includeMentions: params.includeMentions,
     tableMode: params.tableMode,
   });
@@ -166,7 +167,7 @@ export function buildThreadRelation(threadId: string, replyToId?: string): Matri
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
-  const kind = getCore().media.mediaKindFromMime(contentType ?? "");
+  const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
       return MsgType.Image;

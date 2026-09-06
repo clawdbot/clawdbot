@@ -5,7 +5,7 @@ maintainer decisions and review-binding invariants, not incidental
 implementation details. Also read `extensions/AGENTS.md` for the plugin
 boundary rules.
 
-Verified against Telegram Bot API 10.2, July 14 2026.
+Verified against Telegram Bot API 10.3, August 24 2026.
 
 ## Reliability Invariants
 
@@ -17,7 +17,7 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
 
 - Completed rows tombstone via `complete()`, never `delete`.
 - Complete at turn adoption, not settle. Deferred holds the claim; watchdog
-  stays armed through deferral; dead-letter reason `handler-timeout`.
+  stays armed through deferral; watchdog timeouts use the shared retry disposition.
 - One retry policy: attempt floor **and** age gate (defaults 8 / 24h).
 - Claim refresh heartbeat while dispatching/deferred (`claimLeaseMs / 3`).
 - Never silently complete on transient failure — release/fail via disposition.

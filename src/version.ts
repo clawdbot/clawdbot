@@ -1,9 +1,8 @@
 // Resolves package version metadata for CLI and library callers.
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveLoadedCommitHash } from "./infra/git-commit.js";
 
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
-declare const __OPENCLAW_VERSION__: string | undefined;
 const CORE_PACKAGE_NAME = "openclaw";
 
 const PACKAGE_JSON_CANDIDATES = [
@@ -77,10 +76,6 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
-function readInjectedVersion(): string | undefined {
-  return typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined;
-}
-
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
@@ -104,12 +99,10 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
 
 export function resolveBinaryVersion(params: {
   moduleUrl: string;
-  injectedVersion?: string;
   bundledVersion?: string;
   fallback?: string;
 }): string {
   return (
-    firstNonEmpty(params.injectedVersion) ||
     resolveVersionFromModuleUrl(params.moduleUrl) ||
     firstNonEmpty(params.bundledVersion) ||
     params.fallback ||
@@ -121,7 +114,7 @@ export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
 
-export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
 type RuntimeVersionPreference = "env-first" | "runtime-first";
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
@@ -161,12 +154,17 @@ export function resolveRuntimeServiceVersion(
   });
 }
 
-// Generated build provenance is immutable for a process. Resolve it once so
-// handshakes never poll the filesystem on the connection hot path.
+// Loaded build provenance is immutable for a process. Resolve it once so a
+// checkout update cannot change the identity reported by the running service.
 const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
+const RUNTIME_SERVICE_COMMIT = resolveLoadedCommitHash({ moduleUrl: import.meta.url });
 
 export function resolveRuntimeServiceBuildId(): string | null {
   return RUNTIME_SERVICE_BUILD_ID;
+}
+
+export function resolveRuntimeServiceCommit(): string | null {
+  return RUNTIME_SERVICE_COMMIT;
 }
 
 export function resolveCompatibilityHostVersion(
@@ -186,10 +184,9 @@ export function resolveCompatibilityHostVersion(
 }
 
 // Single source of truth for the current OpenClaw version.
-// - Embedded/bundled builds: injected define or env var.
+// - Embedded/bundled builds: bundled-version env var.
 // - Dev/npm builds: package.json.
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: readInjectedVersion(),
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });

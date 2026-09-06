@@ -1,5 +1,6 @@
 // QA Lab plugin module embeds profile scorecard context into QA evidence.
 import fs from "node:fs/promises";
+import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   attachQaEvidenceScorecard,
   validateQaEvidenceSummaryJson,
@@ -19,12 +20,6 @@ type QaProfileScorecardFilters = {
 };
 
 type EvidenceCoverageRole = QaEvidenceSummaryEntry["coverage"][number]["role"];
-
-function uniqueSortedStrings(values: Iterable<string | undefined>) {
-  return [
-    ...new Set([...values].map((value) => value?.trim()).filter(Boolean) as string[]),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
 
 function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
@@ -64,7 +59,7 @@ function featureCounts(
   let partial = 0;
   let missing = 0;
   for (const feature of features) {
-    const coverageIds = uniqueSortedStrings(feature.coverageIds);
+    const coverageIds = normalizeSortedUniqueTrimmedStringList(feature.coverageIds);
     const fulfilledCoverageIds = coverageIds.filter((coverageId) =>
       primaryCoverageIds.has(coverageId),
     ).length;
@@ -97,7 +92,7 @@ function buildQaProfileScorecardEvidence(params: {
   const categoryInputs = params.categories.map((category) => ({
     category,
     features: category.features,
-    coverageIds: uniqueSortedStrings(category.coverageIds),
+    coverageIds: normalizeSortedUniqueTrimmedStringList(category.coverageIds),
   }));
   const categoryReports = categoryInputs.map(({ category, features, coverageIds }) => {
     const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
@@ -106,7 +101,7 @@ function buildQaProfileScorecardEvidence(params: {
     const secondaryOnlyCoverageIdCount = coverageIds.filter(
       (coverageId) => !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
     ).length;
-    const missingCoverageIds = uniqueSortedStrings(
+    const missingCoverageIds = normalizeSortedUniqueTrimmedStringList(
       coverageIds.filter((coverageId) => !primaryCoverageIds.has(coverageId)),
     );
     const missingCoverageIdCount = coverageIds.length - fulfilledCoverageIdCount;
@@ -129,7 +124,7 @@ function buildQaProfileScorecardEvidence(params: {
       missingCoverageIds,
     };
   });
-  const profileCoverageIds = uniqueSortedStrings(
+  const profileCoverageIds = normalizeSortedUniqueTrimmedStringList(
     categoryInputs.flatMap((input) => input.coverageIds),
   );
   const coverageIdCount = profileCoverageIds.length;

@@ -1,11 +1,13 @@
 // Discord tests cover thread title.generate plugin behavior.
-import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
-vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", { spy: true });
+const generateConversationLabelMock = vi.hoisted(() => vi.fn());
 
-const generateConversationLabelMock = vi.fn<typeof generateConversationLabel>();
+vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>()),
+  generateConversationLabel: generateConversationLabelMock,
+}));
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 
 function hasLoneSurrogate(value: string): boolean {
@@ -29,12 +31,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  vi.restoreAllMocks();
   generateConversationLabelMock.mockReset();
   generateConversationLabelMock.mockResolvedValue("Generated title");
-  vi.mocked(generateConversationLabel).mockImplementation((...args) =>
-    generateConversationLabelMock(...args),
-  );
 });
 
 describe("generateThreadTitle", () => {

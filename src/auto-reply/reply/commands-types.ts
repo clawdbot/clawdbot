@@ -1,11 +1,13 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 /** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type {
   ElevatedLevel,
@@ -14,8 +16,9 @@ import type {
   ThinkingCatalogEntry,
   VerboseLevel,
 } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { TypingController } from "./typing.js";
 
 /** Normalized command metadata derived from an inbound message. */
@@ -47,7 +50,7 @@ export type HandleCommandsParams = {
   rootCtx?: MsgContext;
   cfg: OpenClawConfig;
   command: CommandContext;
-  agentId?: string;
+  agentId: string;
   agentDir?: string;
   directives: InlineDirectives;
   elevated: {
@@ -61,12 +64,14 @@ export type HandleCommandsParams = {
   /** True only when the current command owns first creation of this session row. */
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
   sessionScope?: SessionScope;
   workspaceDir: string;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   /** Catalog snapshot prepared by model selection for status rendering. */
   thinkingCatalog?: ThinkingCatalogEntry[];
@@ -84,6 +89,7 @@ export type HandleCommandsParams = {
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
+  loadBundledSkillCommand?: (skillName: string) => Promise<SkillCommandSpec | undefined>;
   typing?: TypingController;
   /** Invocation authority for host-bound plugin command capabilities. */
   commandInvocationSignal?: AbortSignal;
@@ -94,6 +100,10 @@ export type HandleCommandsParams = {
 /** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
+  /** Exact skill files deliberately selected by a continuing command. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
+  /** Turn-local queue override requested by an authorized continuation command. */
+  queueModeOverride?: QueueMode;
   sessionCompaction?: Awaited<
     ReturnType<NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>>
   >;

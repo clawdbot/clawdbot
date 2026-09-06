@@ -1,5 +1,5 @@
 import type { ConfigUiHints } from "../api/types.ts";
-import { hintForPath, type JsonSchema } from "./config-form.shared.ts";
+import { hintForPath, type JsonSchema } from "../lib/config-form-utils.ts";
 
 type ConfigSchemaTierSplit = {
   common: JsonSchema | null;

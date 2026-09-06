@@ -155,7 +155,10 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
           content: [{ type: "text", text: id }],
           providerReplay: {
             v: 1,
-            type: "openai-responses-compaction",
+            type:
+              id === "cmp_rejected"
+                ? "openai-responses-retained-compaction"
+                : "openai-responses-compaction",
             data,
             id,
             replayIndex: 0,

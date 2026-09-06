@@ -95,25 +95,26 @@ function isRichConsoleEnv(): boolean {
   return term.length > 0 && term !== "dumb";
 }
 
+// Chalk caches style builders per instance; select between fixed levels on each message.
+const consoleColors: [ChalkInstance?, ChalkInstance?] = [];
+
 function getColorForConsole(): ChalkInstance {
   const hasForceColor =
     typeof process.env.FORCE_COLOR === "string" &&
     process.env.FORCE_COLOR.trim().length > 0 &&
     process.env.FORCE_COLOR.trim() !== "0";
-  if (hasForceColor) {
-    return new Chalk({ level: 1 });
-  }
-  if (process.env.NO_COLOR && !hasForceColor) {
-    return new Chalk({ level: 0 });
-  }
-  const hasTty = process.stdout.isTTY || process.stderr.isTTY;
-  return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
+  const level =
+    hasForceColor ||
+    (!process.env.NO_COLOR && (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
+      ? 1
+      : 0;
+  return (consoleColors[level] ??= new Chalk({ level }));
 }
 
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
-const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number]> = {
-  "gmail-watcher": "blue",
-};
+const SUBSYSTEM_COLOR_OVERRIDES = new Map<string, (typeof SUBSYSTEM_COLORS)[number]>([
+  ["gmail-watcher", "blue"],
+]);
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
@@ -153,18 +154,17 @@ function isChannelSubsystemPrefix(value: string): boolean {
   return CHANNEL_SUBSYSTEM_PREFIXES.has(normalized);
 }
 
-function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
-  const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
+function pickSubsystemColor(subsystem: string): (typeof SUBSYSTEM_COLORS)[number] {
+  const override = SUBSYSTEM_COLOR_OVERRIDES.get(subsystem);
   if (override) {
-    return color[override];
+    return override;
   }
   let hash = 0;
   for (let i = 0; i < subsystem.length; i += 1) {
     hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
   }
   const idx = Math.abs(hash) % SUBSYSTEM_COLORS.length;
-  const name = expectDefined(SUBSYSTEM_COLORS[idx], "subsystem colors entry at idx");
-  return color[name];
+  return expectDefined(SUBSYSTEM_COLORS[idx], "subsystem colors entry at idx");
 }
 
 function formatSubsystemForConsole(subsystem: string): string {
@@ -244,48 +244,33 @@ export function stripRedundantSubsystemPrefixForConsole(
   return message.slice(i);
 }
 
-function formatConsoleLine(opts: {
-  level: LogLevel;
-  subsystem: string;
-  message: string;
-  style: "pretty" | "compact" | "json";
-  meta?: Record<string, unknown>;
-}): string {
-  const displaySubsystem =
-    opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
-  if (opts.style === "json") {
-    return formatJsonConsoleLine({
-      level: opts.level,
-      subsystem: displaySubsystem,
-      message: opts.message,
-      meta: opts.meta,
-    });
-  }
-  const color = getColorForConsole();
+function createConsoleLineFormatter(subsystem: string) {
+  const displaySubsystem = formatSubsystemForConsole(subsystem);
   const prefix = `[${displaySubsystem}]`;
-  const prefixColor = pickSubsystemColor(color, displaySubsystem);
-  const levelColor =
-    opts.level === "error" || opts.level === "fatal"
-      ? color.red
-      : opts.level === "warn"
-        ? color.yellow
-        : opts.level === "debug" || opts.level === "trace"
-          ? color.gray
-          : color.cyan;
-  const redactedMessage = redactSensitiveText(opts.message);
-  const displayMessage = stripRedundantSubsystemPrefixForConsole(redactedMessage, displaySubsystem);
-  const time = (() => {
-    if (opts.style === "pretty") {
-      return color.gray(formatConsoleTimestamp("pretty"));
-    }
-    if (loggingState.consoleTimestampPrefix) {
-      return color.gray(formatConsoleTimestamp(opts.style));
-    }
-    return "";
-  })();
-  const prefixToken = prefixColor(prefix);
-  const head = [time, prefixToken].filter(Boolean).join(" ");
-  return `${head} ${levelColor(displayMessage)}`;
+  const prefixColor = pickSubsystemColor(displaySubsystem);
+  return (level: LogLevel, message: string, style: "pretty" | "compact"): string => {
+    const color = getColorForConsole();
+    const levelColor =
+      level === "error" || level === "fatal"
+        ? color.red
+        : level === "warn"
+          ? color.yellow
+          : level === "debug" || level === "trace"
+            ? color.gray
+            : color.cyan;
+    const redactedMessage = redactSensitiveText(message);
+    const displayMessage = stripRedundantSubsystemPrefixForConsole(
+      redactedMessage,
+      displaySubsystem,
+    );
+    const time =
+      style === "pretty" || loggingState.consoleTimestampPrefix
+        ? color.gray(formatConsoleTimestamp(style))
+        : "";
+    const prefixToken = color[prefixColor](prefix);
+    const head = time ? `${time} ${prefixToken}` : prefixToken;
+    return `${head} ${levelColor(displayMessage)}`;
+  };
 }
 
 function writeConsoleLine(level: LogLevel, line: string, opts: { redacted?: boolean } = {}) {
@@ -365,6 +350,10 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  let fileChild: TsLogger<LogObj> | undefined;
+  let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
+
+  const getFileLogger = () => (fileChild ??= getChildLogger({ subsystem: resolvedSubsystem }));
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -387,7 +376,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -405,13 +394,13 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     }
     writeConsoleLine(
       level,
-      formatConsoleLine({
-        level,
-        subsystem: resolvedSubsystem,
-        message: consoleSettings.style === "json" ? message : consoleMessage,
-        style: consoleSettings.style,
-        meta: fileMeta,
-      }),
+      consoleSettings.style === "json"
+        ? formatJsonConsoleLine({ level, subsystem: resolvedSubsystem, message, meta: fileMeta })
+        : (formatConsoleLine ??= createConsoleLineFormatter(resolvedSubsystem))(
+            level,
+            consoleMessage,
+            consoleSettings.style,
+          ),
       { redacted: true },
     );
   };
@@ -451,7 +440,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       const consoleSettings = getConsoleSettings();
       if (

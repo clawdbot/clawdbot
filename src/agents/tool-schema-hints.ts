@@ -6,16 +6,22 @@ const MAX_COMPACT_INPUT_HINT_CHARS = 300;
 // promotable with headroom; the quick index independently truncates total bytes.
 const MAX_COMPACT_OUTPUT_HINT_CHARS = 800;
 const MAX_COMPACT_INPUT_SCHEMA_PROPERTIES = 16;
-const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 21;
+const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 22;
 const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;
 const MAX_COMPACT_INPUT_DEPTH = 4;
 const MAX_COMPACT_OUTPUT_DEPTH = 6;
-const MAX_COMPACT_UNION_TYPES = 4;
+const MAX_COMPACT_UNION_TYPES = 5;
 // Keeps real literal unions such as agents_list's eight runtime sources renderable,
 // while the combined literal text remains independently capped below.
 const MAX_COMPACT_ENUM_VALUES = 8;
 const MAX_COMPACT_ENUM_CHARS = 96;
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const NUMERIC_INPUT_BOUNDS = [
+  ["minimum", ">="],
+  ["maximum", "<="],
+  ["exclusiveMinimum", ">"],
+  ["exclusiveMaximum", "<"],
+] as const;
 const UNSUPPORTED_SHAPE_KEYWORDS = [
   "$ref",
   "$dynamicRef",
@@ -41,17 +47,20 @@ type CompactSchemaLimits = {
   maxChars: number;
   maxDepth: number;
   maxProperties: number;
+  numericInputConstraints: boolean;
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_INPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_INPUT_DEPTH,
   maxProperties: MAX_COMPACT_INPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: true,
 };
 const OUTPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_OUTPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_OUTPUT_DEPTH,
   maxProperties: MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: false,
 };
 
 const UNKNOWN_HINT: SchemaHint = { text: "unknown", complete: false };
@@ -135,7 +144,7 @@ function compactSchemaUnion(
   }
   const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
   // Bound before any per-variant scan: neither the eight-value literal cap nor
-  // the four-variant structural cap can render a larger union, so oversized
+  // the five-variant structural cap can render a larger union, so oversized
   // unions must be rejected in O(1) instead of O(variants).
   if (
     !Array.isArray(variants) ||
@@ -353,7 +362,24 @@ function compactSchemaType(
     return finish(completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | ")));
   }
   if (type === "integer" || type === "number") {
-    return finish(completeHint("number"));
+    if (!limits.numericInputConstraints) {
+      return finish(completeHint("number"));
+    }
+    // Inputs need valid argument ranges; output hints retain their existing shapes.
+    const constraints = type === "integer" ? ["integer"] : [];
+    for (const [key, operator] of NUMERIC_INPUT_BOUNDS) {
+      const bound = schema[key];
+      if (bound === undefined) {
+        continue;
+      }
+      if (typeof bound !== "number" || !Number.isFinite(bound)) {
+        return UNKNOWN_HINT;
+      }
+      constraints.push(`${operator} ${bound}`);
+    }
+    return finish(
+      completeHint(`number${constraints.length > 0 ? ` /* ${constraints.join(", ")} */` : ""}`),
+    );
   }
   if (type === "array") {
     const itemHint = compactSchemaType(schema.items, depth + 1, limits);

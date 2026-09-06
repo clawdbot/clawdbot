@@ -7,8 +7,7 @@ import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText, toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import { listAcpSessionEntries, readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { SessionEntry, SessionAcpMeta } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -20,7 +19,7 @@ import {
   ACP_SESSIONS_USAGE,
   formatAcpCapabilitiesText,
 } from "./shared.js";
-import { resolveBoundAcpThreadSessionKey } from "./targets.js";
+import { resolveAcpTargetSessionKey } from "./targets.js";
 
 function isBackendPluginBlockedByAllowlist(params: {
   cfg: HandleCommandsParams["cfg"];
@@ -160,16 +159,19 @@ export function handleAcpInstallAction(
 
 function formatAcpSessionLine(params: {
   key: string;
+  agentId?: string;
+  currentAgentId: string;
   entry: SessionEntry;
   acp: SessionAcpMeta;
   currentSessionKey?: string;
   threadId?: string;
 }): string {
   const acp = params.acp;
-  const marker = params.currentSessionKey === params.key ? "*" : " ";
+  const marker =
+    params.currentSessionKey === params.key && params.currentAgentId === params.agentId ? "*" : " ";
   const label = normalizeOptionalString(params.entry.label) || acp.agent;
   const threadText = params.threadId ? `, thread:${params.threadId}` : "";
-  return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
+  return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${params.agentId ? `, owner:${params.agentId}` : ""}${threadText}) -> ${params.key}`;
 }
 
 export async function handleAcpSessionsAction(
@@ -180,10 +182,11 @@ export async function handleAcpSessionsAction(
     return commandReply(ACP_SESSIONS_USAGE);
   }
 
-  const currentSessionKey = resolveBoundAcpThreadSessionKey(params) || params.sessionKey;
-  if (!currentSessionKey) {
-    return commandReply("⚠️ Missing session key.");
+  const target = await resolveAcpTargetSessionKey({ commandParams: params });
+  if (!target.ok) {
+    return commandReply(`⚠️ ${target.error}`);
   }
+  const currentSessionKey = target.sessionKey;
 
   const bindingContext = resolveAcpCommandBindingContext(params);
   const normalizedChannel = bindingContext.channel;
@@ -194,7 +197,7 @@ export async function handleAcpSessionsAction(
     : readAcpSessionEntry({
         cfg: params.cfg,
         sessionKey: currentSessionKey,
-        agentId: params.agentId,
+        agentId: target.agentId,
       });
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
@@ -205,7 +208,7 @@ export async function handleAcpSessionsAction(
   const rows = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
     .slice(0, 20)
-    .map(({ storeSessionKey, entry, acp }) => {
+    .map(({ storeSessionKey, agentId, entry, acp }) => {
       if (!entry || !acp) {
         return "";
       }
@@ -218,6 +221,8 @@ export async function handleAcpSessionsAction(
         )?.conversation.conversationId;
       return formatAcpSessionLine({
         key: storeSessionKey,
+        agentId,
+        currentAgentId: target.agentId,
         entry,
         acp,
         currentSessionKey,

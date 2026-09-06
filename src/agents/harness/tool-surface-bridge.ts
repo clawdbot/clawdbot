@@ -1,5 +1,6 @@
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -25,6 +26,7 @@ import {
 } from "../tool-search.js";
 import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 
 const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -41,6 +43,7 @@ export type AgentHarnessToolSurfaceRuntime = {
     options?: { hookContext?: HookContext; localModelLeanApplied?: boolean },
   ) => {
     tools: AnyAgentTool[];
+    promptToolPolicy: ReturnType<typeof createAgentHarnessPromptToolPolicy<AnyAgentTool>>;
   };
   config: OpenClawConfig | undefined;
   includeToolSearchControls: boolean;
@@ -60,9 +63,11 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
   /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
-  model?: { compat?: unknown };
+  model?: { compat?: unknown; contextWindow?: number; toolSearchMode?: "tools" | false };
+  contextTokenBudget?: number;
   modelId?: string;
   modelProvider?: string;
+  codeModeOverride?: boolean | "auto";
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
@@ -71,7 +76,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   sessionKey?: string;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
-  skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
   const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
@@ -86,10 +90,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     sessionKey: params.sessionKey,
     forceDirectMessageTool,
     model: params.model,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    codeModeOverride: params.codeModeOverride,
     toolsEnabled: params.modelToolsEnabled,
     disableTools: params.disableTools,
     isRawModelRun: params.isRawModelRun === true,
-    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
     toolsAllow: params.toolsAllow,
   });
   const toolSearchCatalogRef =
@@ -125,7 +131,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   const compactTools = (
     tools: AnyAgentTool[],
     options: { hookContext?: HookContext; localModelLeanApplied?: boolean } = {},
-  ): { tools: AnyAgentTool[] } => {
+  ) => {
     // Native harness callers may supply raw tools, while the bundled tool constructor
     // already applied the full prepared policy and must not be filtered a second time.
     const projectedUncompactedTools = options.localModelLeanApplied
@@ -143,6 +149,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       ? createCodeModeTools({
           config: params.config,
           runtimeConfig: params.config,
+          modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -178,7 +185,17 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           preserveToolNames,
         });
     effectiveTools = [...filterRuntimeCompatibleTools(projectedCompactedTools).tools];
-    return { tools: effectiveTools };
+    if (!compacted.catalogRegistered) {
+      finalizeAgentToolAvailability(effectiveTools);
+    }
+    return {
+      tools: effectiveTools,
+      promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        tools: effectiveTools,
+        catalogRef: toolSearchCatalogRef,
+        codeModeControlsEnabled,
+      }),
+    };
   };
   return {
     codeModeControlsEnabled,

@@ -13,9 +13,12 @@ import {
   listConversations,
   registerConversationAddresses,
   resolveConversation,
+  resolveCurrentSessionPrimaryConversation,
 } from "./conversation-registry.js";
 import {
+  commitReplySessionInitialization,
   deleteSessionEntryLifecycle,
+  loadReplySessionInitializationSnapshot,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import {
@@ -67,13 +70,15 @@ describe("conversation registry", () => {
     });
 
     const conversations = listConversations({ agentId: "main", storePath }, { channel: "reef" });
-    expect(conversations).toHaveLength(2);
     expect(conversations.map((entry) => entry.target).toSorted()).toEqual([
       "reef:peer-a",
       "reef:peer-b",
     ]);
     expect(conversations.every((entry) => entry.role === "participant")).toBe(true);
     expect(conversations.every((entry) => entry.sessionKey === scope.sessionKey)).toBe(true);
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "shared-main-session" }),
+    ).toBeUndefined();
 
     const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
     expect(peerA).toBeDefined();
@@ -109,6 +114,250 @@ describe("conversation registry", () => {
     expect(resolveConversation({ agentId: "main", storePath }, identity!.conversationRef)).toEqual(
       conversation,
     );
+  });
+
+  it("round-trips authoritative route context on its conversation association", async () => {
+    const sessionKey = "agent:main:discord:channel:ops";
+    const scope = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      sessionId: "ops-session",
+      updatedAt: 100,
+      chatType: "channel",
+      deliveryContext: { channel: "discord", accountId: "default", to: "channel:ops" },
+    });
+    const snapshot = loadReplySessionInitializationSnapshot(scope);
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      routeContext: {
+        peerId: "canonical-ops",
+        guildId: "guild-a",
+        parentPeerId: "parent-a",
+        memberRoleIds: ["support", "admin"],
+      },
+      sessionEntry: snapshot.currentEntry!,
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    const canonicalConversation = listConversations(scope).find(
+      (conversation) => conversation.peerId === "canonical-ops",
+    );
+    expect(canonicalConversation).toBeDefined();
+    const conversationRef = canonicalConversation!.conversationRef;
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" }),
+    ).toEqual(canonicalConversation);
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "another-session" }),
+    ).toBeUndefined();
+    expect(
+      resolveCurrentSessionPrimaryConversation({
+        ...scope,
+        sessionId: "ops-session",
+        sessionKey: "agent:main:discord:channel:another",
+      }),
+    ).toBeUndefined();
+    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).toMatchObject({
+      peerId: "canonical-ops",
+      observedFromSession: true,
+      routeContextObserved: true,
+      routeContext: {
+        peerId: "canonical-ops",
+        guildId: "guild-a",
+        parentPeerId: "parent-a",
+        memberRoleIds: ["admin", "support"],
+      },
+    });
+
+    await upsertCanonicalSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
+    expect(
+      listConversations(scope).filter((conversation) => conversation.role === "primary"),
+    ).toEqual([expect.objectContaining({ conversationRef, peerId: "canonical-ops" })]);
+    const afterCurrentWrite = resolveConversation({ agentId: "main", storePath }, conversationRef);
+    expect(afterCurrentWrite).toMatchObject({
+      routeContextObserved: true,
+      routeContext: { guildId: "guild-a" },
+    });
+
+    const resolved = resolveSqliteReadScope(scope);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    database.db
+      .prepare(
+        `INSERT INTO session_conversations (
+          session_id, conversation_id, role, first_seen_at, last_seen_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(session_id, conversation_id, role) DO UPDATE SET
+          last_seen_at = excluded.last_seen_at`,
+      )
+      .run(
+        "ops-session",
+        conversationRef,
+        "primary",
+        afterCurrentWrite!.firstSeenAt,
+        afterCurrentWrite!.lastSeenAt,
+      );
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+      routeContextObserved: true,
+    });
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" })
+        ?.routeContext,
+    ).toBeUndefined();
+    await upsertCanonicalSessionEntry(scope, {
+      label: "after older writer",
+      updatedAt: afterCurrentWrite!.lastSeenAt + 1,
+    });
+    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+      routeContextObserved: true,
+    });
+  });
+
+  it("keeps route context with each conversation when a shared session changes primary", async () => {
+    const sessionKey = "agent:main:discord:channel:shared";
+    const scope = { agentId: "main", sessionKey, storePath };
+    const writeRoute = async (target: string, guildId: string, updatedAt: number) => {
+      await upsertSessionEntry(scope, {
+        sessionId: "shared-session",
+        updatedAt,
+        chatType: "channel",
+        deliveryContext: { channel: "discord", accountId: "default", to: target },
+      });
+      const snapshot = loadReplySessionInitializationSnapshot(scope);
+      const committed = await commitReplySessionInitialization({
+        activeSessionKey: sessionKey,
+        agentId: "main",
+        expectedRevision: snapshot.revision,
+        routeContext: { guildId },
+        sessionEntry: snapshot.currentEntry!,
+        sessionKey,
+        snapshotEntry: snapshot.currentEntry,
+        storePath,
+      });
+      expect(committed.ok).toBe(true);
+    };
+
+    await writeRoute("channel:alpha", "guild-alpha", 100);
+    await writeRoute("channel:beta", "guild-beta", 200);
+
+    expect(
+      listConversations(scope, { channel: "discord" })
+        .map(({ target, routeContext }) => ({ target, routeContext }))
+        .toSorted((left, right) => left.target.localeCompare(right.target)),
+    ).toEqual([
+      { target: "channel:alpha", routeContext: { guildId: "guild-alpha" } },
+      { target: "channel:beta", routeContext: { guildId: "guild-beta" } },
+    ]);
+    const resolved = resolveSqliteReadScope(scope);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .updateTable("session_conversations")
+        .set({ last_seen_at: 300 })
+        .where("session_id", "=", "shared-session")
+        .where("role", "=", "related"),
+    );
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "shared-session" }),
+    ).toMatchObject({ target: "channel:beta", routeContext: { guildId: "guild-beta" } });
+  });
+
+  it("preserves context across an unobserved rollover and clears it on observed-empty ingress", async () => {
+    const sessionKey = "agent:main:discord:channel:rollover";
+    const scope = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      sessionId: "before-rollover",
+      updatedAt: 100,
+      chatType: "channel",
+      deliveryContext: { channel: "discord", accountId: "default", to: "channel:rollover" },
+    });
+    let snapshot = loadReplySessionInitializationSnapshot(scope);
+    await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      routeContext: { guildId: "guild-a", memberRoleIds: ["support"] },
+      sessionEntry: snapshot.currentEntry!,
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    snapshot = loadReplySessionInitializationSnapshot(scope);
+    const rollover = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: { ...snapshot.currentEntry!, sessionId: "after-rollover", updatedAt: 200 },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+    expect(rollover.ok).toBe(true);
+    expect(listConversations(scope)[0]).toMatchObject({
+      sessionId: "after-rollover",
+      routeContextObserved: true,
+      routeContext: { guildId: "guild-a", memberRoleIds: ["support"] },
+    });
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "before-rollover" }),
+    ).toBeUndefined();
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
+    ).toMatchObject({ routeContext: { guildId: "guild-a" } });
+
+    snapshot = loadReplySessionInitializationSnapshot(scope);
+    await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      routeContext: null,
+      sessionEntry: snapshot.currentEntry!,
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+    expect(listConversations(scope)[0]).toMatchObject({
+      sessionId: "after-rollover",
+      routeContextObserved: true,
+    });
+    expect(listConversations(scope)[0]?.routeContext).toBeUndefined();
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" })
+        ?.routeContext,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { entry_valid: 0 },
+    { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
+  ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
+    const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
+    await upsertSessionEntry(scope, {
+      sessionId: "peer-a-session",
+      updatedAt: 100,
+      chatType: "direct",
+      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
+    });
+    const resolved = resolveSqliteReadScope(scope);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .updateTable("session_nodes")
+        .set(invalid)
+        .where("session_key", "=", scope.sessionKey),
+    );
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "peer-a-session" }),
+    ).toBeUndefined();
   });
 
   it("orders fresh directory addresses with session-backed conversation activity", async () => {
@@ -239,6 +488,9 @@ describe("conversation registry", () => {
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       archiveTranscript: false,
     });
+    expect(
+      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "deleted-session" }),
+    ).toBeUndefined();
 
     expect(
       resolveConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),

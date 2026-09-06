@@ -1,5 +1,4 @@
-import type MarkdownIt from "markdown-it";
-import type StateBlock from "markdown-it/lib/rules_block/state_block.mjs";
+import type { MarkdownIt, StateBlock } from "markdown-it";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
 
 export const MAX_MARKDOWN_DETAILS_DEPTH = 32;

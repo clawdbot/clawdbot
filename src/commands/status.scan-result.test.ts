@@ -89,9 +89,9 @@ describe("buildStatusScanResult", () => {
     const pluginCompatibility = [
       {
         pluginId: "legacy",
-        code: "deprecated-memory-embedding-provider-api" as const,
-        compatCode: "deprecated-memory-embedding-provider-api" as const,
-        severity: "warn" as const,
+        code: "hook-only" as const,
+        compatCode: "hook-only-plugin-shape" as const,
+        severity: "info" as const,
         message: "warn",
       },
     ];
@@ -100,6 +100,7 @@ describe("buildStatusScanResult", () => {
       buildStatusScanResult({
         cfg: { gateway: {} },
         sourceConfig: { gateway: {} },
+        configDiagnostics: null,
         secretDiagnostics: ["diag"],
         osSummary,
         tailscaleMode: "serve",
@@ -118,6 +119,7 @@ describe("buildStatusScanResult", () => {
     ).toEqual({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
+      configDiagnostics: null,
       secretDiagnostics: ["diag"],
       osSummary,
       tailscaleMode: "serve",

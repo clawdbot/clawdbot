@@ -61,6 +61,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "gmi": "gmicloud"
+    },
     "aliases": {
       "gmi-cloud": {
         "provider": "gmi"

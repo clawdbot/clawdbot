@@ -11,18 +11,16 @@ const normalizeProviderModelIdWithPluginMock = vi.fn();
 const loadPluginManifestRegistryCoreMock = vi.hoisted(() =>
   vi.fn(() => ({ plugins: [], diagnostics: [] })),
 );
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
-  configFingerprint: "gateway-session-utils-plugin-runtime-test-empty-plugin-metadata",
-  plugins: [],
-}));
+const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
@@ -35,6 +33,9 @@ let sessionUtils: typeof import("./session-utils.js");
 describe("gateway session list plugin runtime normalization", () => {
   beforeAll(async () => {
     vi.resetModules();
+    const { createPluginMetadataSnapshotFixture } =
+      await import("../plugins/plugin-metadata.test-support.js");
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
     sessionUtils = await import("./session-utils.js");
   });
 
@@ -58,6 +59,12 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const listed = await sessionUtils.listSessionsFromStoreAsync({
       cfg,
+      targetsBySessionKey: new Map(
+        Object.keys(store).map((key) => [
+          key,
+          { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
+        ]),
+      ),
       storePath: "",
       store,
       opts: {},
@@ -89,6 +96,7 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const row = sessionUtils.buildGatewaySessionRow({
       cfg,
+      agentId: "main",
       storePath: "",
       store: {},
       key: "main",

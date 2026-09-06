@@ -11,12 +11,26 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceTokenReadOnly,
+} from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, GatewayClientRequestError } from "./client.js";
+import {
+  GatewayClient,
+  GatewayClientRequestError,
+  isGatewayProtocolResponseError,
+} from "./client.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "./edge-auth.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
 
@@ -53,6 +67,8 @@ export type GatewayProbeServerSummary = {
 
 export type GatewayProbeResult = {
   ok: boolean;
+  /** Set only after a Gateway hello or a correlated protocol response. */
+  gatewayReached?: true;
   url: string;
   connectLatencyMs: number | null;
   error: string | null;
@@ -174,6 +190,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
     url,
     connectLatencyMs: null,
     error: formatProbeCloseError(close),
+    // This cached diagnostic does not prove the current listener still speaks Gateway.
     close,
     auth: emptyProbeAuth(),
     server: emptyProbeServer(),
@@ -184,7 +201,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
   };
 }
 
-function resolveProbeAuthSummary(params: {
+export function resolveProbeAuthSummary(params: {
   role?: string | null;
   scopes?: string[];
   authMetadataPresent?: boolean;
@@ -251,18 +268,21 @@ export async function probeGateway(opts: {
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
+  config?: OpenClawConfig;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
   detailLevel?: GatewayProbeDetailLevel;
   tlsFingerprint?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let connectErrorDetails: unknown = null;
+  let gatewayReached = false;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
   let server = emptyProbeServer();
@@ -291,13 +311,13 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = opts.suppressStoredDeviceAuth
         ? null
         : deviceAuthScope
-          ? loadOriginDeviceToken({
+          ? loadOriginDeviceTokenReadOnly({
               gatewayScope: deviceAuthScope,
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
             })
-          : loadDeviceAuthToken({
+          : loadDeviceAuthTokenReadOnly({
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
@@ -315,10 +335,20 @@ export async function probeGateway(opts: {
     return makeDeviceRequiredShortCircuitResult(opts.url);
   }
   const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: opts.config ?? {}, targetUrl: opts.url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: opts.config ?? {},
+    value: edgeAuthConfig,
+    targetUrl: opts.url,
+    env: opts.env ?? process.env,
+  });
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let onAbort: (() => void) | undefined;
     const startAbort = new AbortController();
     const clearProbeTimer = () => {
       if (timer) {
@@ -339,6 +369,10 @@ export async function probeGateway(opts: {
         return;
       }
       settled = true;
+      if (onAbort) {
+        opts.signal?.removeEventListener("abort", onAbort);
+        onAbort = undefined;
+      }
       startAbort.abort();
       clearProbeTimer();
       void (async () => {
@@ -349,7 +383,11 @@ export async function probeGateway(opts: {
         }
         if (result.ok) {
           clearDeviceRequiredProbeFailures(cacheKey);
-        } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
+        } else if (
+          cacheEligible &&
+          result.gatewayReached &&
+          isDeviceIdentityRequiredClose(result.close)
+        ) {
           noteDeviceRequiredProbeFailure(cacheKey, Date.now());
         }
         const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
@@ -374,6 +412,7 @@ export async function probeGateway(opts: {
     }) => {
       settle({
         ok: params.ok,
+        ...(gatewayReached ? { gatewayReached: true as const } : {}),
         connectLatencyMs,
         error: params.error,
         ...(params.missingScopeErrorDetails
@@ -404,21 +443,30 @@ export async function probeGateway(opts: {
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
-      tlsFingerprint: opts.tlsFingerprint,
+      edgeAuthHeaders,
+      // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
+      tlsFingerprint:
+        opts.tlsFingerprint ||
+        (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
+          ? opts.config?.gateway?.remote?.tlsFingerprint
+          : undefined),
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
+      sharedStateMode: "read-only",
       instanceId,
       deviceIdentity,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
+        gatewayReached ||= isGatewayProtocolResponseError(err);
       },
       onClose: (code, reason, info) => {
         close = { code, reason };
+        gatewayReached ||= isGatewayProtocolResponseError(info?.connectError);
         if (connectLatencyMs == null) {
           // Preserve the transport boundary: request-level handshake failures
           // still prove the listener was reachable once the socket opened.
@@ -436,6 +484,7 @@ export async function probeGateway(opts: {
         }
       },
       onHelloOk: (hello) => {
+        gatewayReached = true;
         void (async () => {
           connectLatencyMs = Date.now() - startedAt;
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
@@ -535,6 +584,26 @@ export async function probeGateway(opts: {
         })();
       },
     });
+
+    if (opts.signal) {
+      onAbort = () => {
+        settleProbe({
+          ok: false,
+          error: "aborted",
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        });
+      };
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+      if (opts.signal.aborted) {
+        onAbort();
+      }
+    }
+    if (settled) {
+      return;
+    }
 
     armProbeTimer(() => {
       const error = connectError ? `connect failed: ${connectError}` : "timeout";

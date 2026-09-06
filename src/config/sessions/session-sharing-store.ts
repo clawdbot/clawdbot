@@ -3,14 +3,15 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
@@ -27,25 +28,37 @@ function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabas
   return toDatabaseOptions(resolveSqliteScope(scope));
 }
 
-function getSessionMemberKysely(database: OpenClawAgentDatabase) {
+function getSessionMemberKysely(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SessionMemberDatabase>(database.db);
 }
 
+function readSessionMembers<T>(
+  scope: SessionAccessScope,
+  fallback: T,
+  operation: (database: Pick<OpenClawAgentDatabase, "db">) => T,
+): T {
+  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope), {
+    throwOnMissingTable: true,
+  });
+  return result.found ? result.value : fallback;
+}
+
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_members")
-      .select(["identity_id", "added_by", "added_at"])
-      .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-      .orderBy("identity_id"),
-  ).rows.map((row) => ({
-    identityId: row.identity_id,
-    addedBy: row.added_by,
-    addedAt: row.added_at,
-  }));
+  return readSessionMembers(scope, [], (database) => {
+    const db = getSessionMemberKysely(database);
+    return executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_members")
+        .select(["identity_id", "added_by", "added_at"])
+        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+        .orderBy("identity_id"),
+    ).rows.map((row) => ({
+      identityId: row.identity_id,
+      addedBy: row.added_by,
+      addedAt: row.added_at,
+    }));
+  });
 }
 
 export function listSessionMembershipKeys(
@@ -58,28 +71,32 @@ export function listSessionMembershipKeys(
   if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
     return new Set();
   }
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  const memberships = new Set<string>();
-  for (
-    let offset = 0;
-    offset < normalizedSessionKeys.length;
-    offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
-  ) {
-    const chunk = normalizedSessionKeys.slice(offset, offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select("session_key")
-        .where("identity_id", "=", normalizedIdentityId)
-        .where("session_key", "in", chunk),
-    ).rows;
-    for (const row of rows) {
-      memberships.add(row.session_key);
+  return readSessionMembers(scope, new Set<string>(), (database) => {
+    const db = getSessionMemberKysely(database);
+    const memberships = new Set<string>();
+    for (
+      let offset = 0;
+      offset < normalizedSessionKeys.length;
+      offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
+    ) {
+      const chunk = normalizedSessionKeys.slice(
+        offset,
+        offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE,
+      );
+      const rows = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("session_key")
+          .where("identity_id", "=", normalizedIdentityId)
+          .where("session_key", "in", chunk),
+      ).rows;
+      for (const row of rows) {
+        memberships.add(row.session_key);
+      }
     }
-  }
-  return memberships;
+    return memberships;
+  });
 }
 
 export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {
@@ -87,18 +104,19 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   if (!normalizedIdentityId) {
     return false;
   }
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select("identity_id")
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    ),
-  );
+  return readSessionMembers(scope, false, (database) => {
+    const db = getSessionMemberKysely(database);
+    return Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("identity_id")
+          .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+          .where("identity_id", "=", normalizedIdentityId),
+      ),
+    );
+  });
 }
 
 // Membership is bound to a live session entry, never a transcript placeholder.
@@ -110,26 +128,10 @@ function assertAuthorizedSessionInstance(
   sessionKey: string,
   expectedSessionId: string | undefined,
 ): void {
-  const row =
-    database.db /* sqlite-allow-raw: sync TOCTOU re-read of canonical entry identity inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
-      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
-  let entrySessionId: string | undefined;
-  try {
-    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
-    const candidate =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { sessionId?: unknown }).sessionId
-        : undefined;
-    entrySessionId = typeof candidate === "string" ? candidate : undefined;
-  } catch {
-    entrySessionId = undefined;
-  }
+  const sessionId = readSessionEntryInstanceId(database, sessionKey);
   if (
-    !row ||
-    entrySessionId === undefined ||
-    row.current_session_id !== entrySessionId ||
-    (expectedSessionId !== undefined && entrySessionId !== expectedSessionId)
+    sessionId === undefined ||
+    (expectedSessionId !== undefined && sessionId !== expectedSessionId)
   ) {
     throw new Error("session changed before sharing mutation");
   }

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { hashWorkerBundleManifest, type WorkerBundleHashEntry } from "./worker-bundle-hash.js";
+import {
+  compareWorkerBundlePaths,
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_ARTIFACT_MODE,
+  type WorkerBundleHashEntry,
+} from "./worker-bundle-hash.js";
 
 export { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "./worker-bundle-limits.js";
 
@@ -116,12 +121,12 @@ export async function readWorkerBundleArchiveManifest(
       }
       return {
         path: entry.path,
-        mode: entry.mode,
+        mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : entry.mode,
         size: entry.actualSize,
         sha256: entry.sha256,
       };
     })
-    .toSorted((left, right) => left.path.localeCompare(right.path));
+    .toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 
 export async function readWorkerBundleDirectoryManifest(params: {
@@ -163,14 +168,14 @@ export async function readWorkerBundleDirectoryManifest(params: {
       }
       entries.push({
         path: relative,
-        mode: stats.mode & 0o777,
+        mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : stats.mode & 0o777,
         size: stats.size,
         sha256: await hashFile(absolute),
       });
     }
   };
   await visit(root, "");
-  return entries.toSorted((left, right) => left.path.localeCompare(right.path));
+  return entries.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 
 export async function extractWorkerBundleArchive(params: {

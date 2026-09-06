@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
+import type { DoctorConfigPreflightResult } from "../../commands/doctor-config-preflight.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
@@ -15,7 +16,11 @@ import {
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { ExitError, type RuntimeEnv } from "../../runtime.js";
+import {
+  adoptProcessPluginCache,
+  getPluginMetadataSnapshotCache,
+} from "../../plugins/plugin-cache.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -190,7 +195,7 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
 }
 
 async function getConfigSnapshot(
-  options?: { observe: false; skipPluginValidation?: true },
+  options?: { observe: false; pluginValidation?: "skip" | "core-only" },
   measure?: ConfigSnapshotReadMeasure,
 ) {
   if (options?.observe === false) {
@@ -198,10 +203,6 @@ async function getConfigSnapshot(
       ...options,
       ...(measure ? { measure } : {}),
     });
-  }
-  // Tests often mutate config fixtures; caching can make those flaky.
-  if (process.env.VITEST === "true") {
-    return readConfigFileSnapshot(measure ? { measure } : undefined);
   }
   if (!configSnapshotPromise) {
     const pendingSnapshot = readConfigFileSnapshot(measure ? { measure } : undefined);
@@ -225,6 +226,7 @@ export async function ensureConfigReady(
     measure?: ConfigSnapshotReadMeasure;
     skipPristineCoreStateMigrations?: boolean;
     skipPristineStartupStateMigrations?: boolean;
+    validateConfigOnly?: boolean;
   },
   recoveryDeps?: InvalidConfigRecoveryDeps,
 ): Promise<void> {
@@ -233,8 +235,9 @@ export async function ensureConfigReady(
   const subcommandName = commandPath[1];
   const isRestartController =
     (commandName === "gateway" || commandName === "daemon") && subcommandName === "restart";
-  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
+  let preflightResult: DoctorConfigPreflightResult | null = null;
   const shouldConsiderStateMigration =
+    !params.validateConfigOnly &&
     commandName !== "config" &&
     commandName !== "health" &&
     commandName !== "logs" &&
@@ -270,8 +273,8 @@ export async function ensureConfigReady(
       });
     try {
       return !params.suppressDoctorStdout
-        ? (await runDoctorConfigPreflight()).snapshot
-        : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+        ? await runDoctorConfigPreflight()
+        : await withSuppressedNotes(runDoctorConfigPreflight);
     } catch (error) {
       if (error instanceof ExitError) {
         // The migration owner has unwound its lease and heartbeat before this handoff.
@@ -285,31 +288,32 @@ export async function ensureConfigReady(
     shouldConsiderStateMigration &&
     (!requiresLegacyStateInput || hasLegacyStateMigrationInputs())
   ) {
-    preflightSnapshot = await runStateMigrationPreflight();
+    preflightResult = await runStateMigrationPreflight();
   }
 
-  // Read-only diagnostics must not record config health; logs also skips plugin
-  // metadata discovery because opening the shared state DB creates SQLite sidecars.
-  const configSnapshotOptions =
-    commandName === "logs"
-      ? ({ observe: false, skipPluginValidation: true } as const)
+  // Read-only diagnostics must not record config health. Core-only validation
+  // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
+  const configSnapshotOptions = params.validateConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : commandName === "logs"
+      ? ({ observe: false, pluginValidation: "core-only" } as const)
       : commandName === "status" ||
           (commandName === "gateway" && subcommandName === "call") ||
           isRestartController
         ? ({ observe: false } as const)
         : undefined;
   let snapshot =
-    preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
+    preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   if (
-    !preflightSnapshot &&
+    !preflightResult &&
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
     requiresLegacyStateInput &&
     snapshot.valid &&
     snapshotHasConfiguredSessionStore(snapshot)
   ) {
-    preflightSnapshot = await runStateMigrationPreflight();
-    snapshot = preflightSnapshot;
+    preflightResult = await runStateMigrationPreflight();
+    snapshot = preflightResult.snapshot;
   }
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
@@ -325,19 +329,28 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const { formatConfigIssueLines } = await import("../../config/issue-format.js");
+  const [{ formatConfigIssueLines, normalizeConfigIssues }, { renderConfigValidationIssueLines }] =
+    await Promise.all([
+      import("../../config/issue-format.js"),
+      import("../../config/issue-location.js"),
+    ]);
   const issues =
-    snapshot.exists && !snapshot.valid
-      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
-      : [];
+    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
-  }
-  if (!invalid) {
+    if (
+      shouldRequireStartupMigrationCheckpoint(commandPath) &&
+      preflightResult?.pluginMetadataSnapshot
+    ) {
+      // Carry verified package facts into the final config reread without publishing Gateway policy.
+      adoptProcessPluginCache(
+        getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
+      );
+    }
     return;
   }
 
@@ -395,6 +408,16 @@ export async function ensureConfigReady(
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ),
   );
+  if (
+    mustBlockInvalid &&
+    (await import("../json-output-mode.js")).isJsonOutputModeActive(process.argv)
+  ) {
+    const { formatCliJsonFailure } = await import("../failure-output.js");
+    writeRuntimeJson(params.runtime, {
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
+      issues: normalizeConfigIssues(snapshot.issues),
+    });
+  }
   if (isPluginPackagingFailure && isGatewayStartup) {
     params.runtime.exit(78);
     return;
@@ -420,9 +443,7 @@ export async function ensureConfigReady(
           })
         ).snapshot;
         if (retrySnapshot.exists && !retrySnapshot.valid) {
-          const retryIssues = formatConfigIssueLines(retrySnapshot.issues, "-", {
-            normalizeRoot: true,
-          });
+          const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
           throw createInvalidConfigError(
             retrySnapshot.path,
             retryIssues.join("\n") || "Unknown validation issue.",

@@ -6,11 +6,7 @@ import {
 } from "./candidate-install-owner.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  getReusableCachedPluginRegistry,
-  pluginLoaderCacheState,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import {
   resolvePluginLoadCacheContext,
@@ -32,6 +28,7 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -48,6 +45,7 @@ type InternalPluginLoadOverrides = {
 
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   return {
+    complete: (...args) => runtime.subagent.complete(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
@@ -59,6 +57,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
   return {
     list: (...args) => runtime.nodes.list(...args),
     invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
   };
 }
 
@@ -98,10 +97,11 @@ function loadOpenClawPluginsInternal(
   const logger = options.logger ?? createPluginLoaderLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry(context.cacheKey);
+    const cached = pluginLoaderCacheState.get(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
         activatePluginRegistry(
           cached,
@@ -170,7 +170,6 @@ function loadOpenClawPluginsInternal(
         onlyPluginIdSet,
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
-        suppliedManifestRegistry: options.manifestRegistry,
       });
     const selectedMiddlewareOwnerManifests = new Map<
       string,
@@ -186,6 +185,7 @@ function loadOpenClawPluginsInternal(
       const activation = resolveEffectivePluginActivationState({
         id: record.id,
         origin: record.origin,
+        channelIds: record.channels,
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
@@ -294,7 +294,7 @@ function loadOpenClawPluginsInternal(
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
     if (cacheEnabled) {
-      setCachedPluginRegistry(context.cacheKey, registry);
+      pluginLoaderCacheState.set(context.cacheKey, registry);
     }
     return registry;
   } catch (error) {

@@ -15,8 +15,10 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
-import type { StoredConversationReference } from "../conversation-store.js";
-import type { MSTeamsConversationStore } from "../conversation-store.js";
+import type {
+  StoredConversationReference,
+  MSTeamsConversationStore,
+} from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
@@ -29,6 +31,9 @@ const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
 const MSTEAMS_CONVERSATION_ID_KIND = "plugin:msteams-conversation-id" as const;
 const msteamsIngressIdentity = {
   key: "sender-id",
+  // Bot Framework authenticates the connector and vouches for the activity, without this
+  // plugin independently proving exact ownership of every from.id representation.
+  authentication: "asserted",
   normalize: normalizeIngressValue,
   aliases: [
     {
@@ -36,11 +41,12 @@ const msteamsIngressIdentity = {
       kind: MSTEAMS_SENDER_NAME_KIND,
       normalizeEntry: normalizeSenderNameIngressValue,
       normalizeSubject: normalizeSenderNameIngressValue,
-      dangerous: true,
+      authentication: "mutable",
     },
     {
       key: "conversation-id",
       kind: MSTEAMS_CONVERSATION_ID_KIND,
+      authentication: "asserted",
       normalizeEntry: normalizeAllowlistConversationId,
       normalizeSubject: normalizeAllowlistConversationId,
     },
@@ -151,7 +157,28 @@ export async function resolveMSTeamsSenderAccess(params: {
   const resolved = await resolveStableChannelMessageIngress({
     channelId: "msteams",
     accountId: pairing.accountId,
-    identity: msteamsIngressIdentity,
+    identity: {
+      ...msteamsIngressIdentity,
+      resolveParticipant: () => {
+        const tenantId = activity.channelData?.tenant?.id ?? activity.conversation?.tenantId;
+        const aadId = activity.from?.aadObjectId;
+        if (tenantId && aadId) {
+          return {
+            domain: `entra:${tenantId.toLowerCase()}`,
+            idKind: "object-id",
+            id: aadId.toLowerCase(),
+          };
+        }
+        // Bot Framework sender ids are scoped to the receiving application, not local accountId.
+        return msteamsCfg?.appId && activity.from?.id
+          ? {
+              domain: `bot:${msteamsCfg.appId.toLowerCase()}`,
+              idKind: "channel-account-id",
+              id: activity.from.id,
+            }
+          : undefined;
+      },
+    },
     cfg: params.cfg,
     readStoreAllowFrom: pairing.readAllowFromStore,
     subject: {

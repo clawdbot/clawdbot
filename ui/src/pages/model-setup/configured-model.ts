@@ -11,7 +11,7 @@ import type { ModelSetupVerifyState } from "./state.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 
-export function failureLabel(status: string): string {
+function failureLabel(status: string): string {
   const labels: Record<string, string> = {
     auth: t("modelSetup.failure.auth"),
     rate_limit: t("modelSetup.failure.rateLimit"),
@@ -24,14 +24,14 @@ export function failureLabel(status: string): string {
   return labels[status] ?? labels.unknown!;
 }
 
-function failureGuidance(status: string): string {
-  const guidance: Record<string, string> = {
+function failureGuidance(status: string): string | typeof nothing {
+  const guidance: Record<string, string | typeof nothing> = {
     auth: t("modelSetup.failureGuidance.auth"),
     rate_limit: t("modelSetup.failureGuidance.rateLimit"),
     billing: t("modelSetup.failureGuidance.billing"),
     timeout: t("modelSetup.failureGuidance.timeout"),
     format: t("modelSetup.failureGuidance.format"),
-    unavailable: t("modelSetup.failureGuidance.unavailable"),
+    unavailable: nothing,
     unknown: t("modelSetup.failureGuidance.unknown"),
   };
   return guidance[status] ?? guidance.unknown!;
@@ -105,54 +105,55 @@ export function renderConfiguredModel(props: {
       </div>
       <div class="model-setup__row">
         <div class="model-setup__provider-copy">
-          ${providerId
-            ? renderProviderBrandIcon(providerId, { className: "model-setup__icon" })
-            : nothing}
+          ${
+            providerId
+              ? renderProviderBrandIcon(providerId, { className: "model-setup__icon" })
+              : nothing
+          }
           <div class="model-setup__current-copy">
             <strong>${providerLabel}</strong>
             <div class="muted">${detail}</div>
-            ${props.verify.phase === "checking"
-              ? html`<div class="model-setup__testing" role="status">
-                  ${t("modelSetup.verify.checking", { modelRef: configuredRef })}
-                </div>`
-              : props.verify.phase === "ok"
-                ? html`<div class="model-setup__verified" role="status">
-                    ${props.verify.latencyMs === undefined
-                      ? t("modelSetup.verify.ready")
-                      : t("modelSetup.verify.readyIn", {
-                          latencyMs: String(props.verify.latencyMs),
-                        })}
+            ${
+              props.verify.phase === "checking"
+                ? html`<div class="model-setup__testing" role="status">
+                    ${t("modelSetup.verify.checking", { modelRef: configuredRef })}
                   </div>`
-                : props.verify.phase === "failed"
-                  ? props.verify.status === "unavailable"
-                    ? html`<div class="model-setup__failure" role="alert">
-                        <span class="model-setup__failure-icon" aria-hidden="true">
-                          ${icons.alertTriangle}
-                        </span>
-                        <span>
-                          ${t("modelSetup.verify.providerUnavailable", { provider: providerLabel })}
-                        </span>
-                      </div>`
-                    : renderModelSetupFailure(props.verify.status, props.verify.error)
-                  : nothing}
+                : props.verify.phase === "ok"
+                  ? html`<div class="model-setup__verified" role="status">
+                      ${
+                        props.verify.latencyMs === undefined
+                          ? t("modelSetup.verify.ready")
+                          : t("modelSetup.verify.readyIn", {
+                              latencyMs: String(props.verify.latencyMs),
+                            })
+                      }
+                    </div>`
+                  : props.verify.phase === "failed"
+                    ? renderModelSetupFailure(props.verify.status, props.verify.error)
+                    : nothing
+            }
           </div>
         </div>
         <div class="model-setup__row-actions">
-          ${props.canVerify
-            ? html`<button
-                type="button"
-                class="btn"
-                ?disabled=${props.actionsDisabled}
-                @click=${props.onVerify}
-              >
-                ${verificationButtonLabel(props.verify)}
-              </button>`
-            : nothing}
-          ${props.onContinue
-            ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
-                ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
-              </button>`
-            : nothing}
+          ${
+            props.canVerify
+              ? html`<button
+                  type="button"
+                  class="btn"
+                  ?disabled=${props.actionsDisabled}
+                  @click=${props.onVerify}
+                >
+                  ${verificationButtonLabel(props.verify)}
+                </button>`
+              : nothing
+          }
+          ${
+            props.onContinue
+              ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
+                  ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
+                </button>`
+              : nothing
+          }
         </div>
       </div>
     </section>

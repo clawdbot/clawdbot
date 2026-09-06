@@ -15,6 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createDeferredEmbeddedRunLifecycleManager } from "./run/deferred-lifecycle-owner.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -65,50 +66,56 @@ describe("force-clear terminal state persistence", () => {
   });
 
   it("delays stale-owner followups until the old reply owner settles", async () => {
-    const sessionKey = "agent:main:reply-stuck-followup";
-    const sessionId = "session-reply-stuck-followup";
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    const handle = createRunHandle();
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-    });
-    operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    // Owner ordering must not depend on the host finishing within the drain deadline.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const sessionKey = "agent:main:reply-stuck-followup";
+      const sessionId = "session-reply-stuck-followup";
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      const handle = createRunHandle();
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: handle.abort,
+        isStreaming: handle.isStreaming,
+      });
+      operation.setPhase("running");
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
 
-    const followupObservedActiveHandle: boolean[] = [];
-    runAfterReplyOperationClear(operation, () => {
-      followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
-    });
+      const followupObservedActiveHandle: boolean[] = [];
+      runAfterReplyOperationClear(operation, () => {
+        followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
+      });
 
-    const recovery = abortAndDrainEmbeddedAgentRun({
-      sessionId,
-      sessionKey,
-      reason: "stuck_recovery",
-      forceClear: true,
-      settleMs: 100,
-    });
-    expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
-    expect(followupObservedActiveHandle).toEqual([]);
+      const recovery = abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        reason: "stuck_recovery",
+        forceClear: true,
+        settleMs: 100,
+      });
+      expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
+      expect(followupObservedActiveHandle).toEqual([]);
 
-    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-    let recoverySettled = false;
-    void recovery.then(() => {
-      recoverySettled = true;
-    });
-    await Promise.resolve();
-    expect(recoverySettled).toBe(false);
-    expect(followupObservedActiveHandle).toEqual([]);
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      let recoverySettled = false;
+      void recovery.then(() => {
+        recoverySettled = true;
+      });
+      await Promise.resolve();
+      expect(recoverySettled).toBe(false);
+      expect(followupObservedActiveHandle).toEqual([]);
 
-    operation.complete();
-    await expect(recovery).resolves.toEqual({
-      aborted: true,
-      drained: true,
-      forceCleared: false,
-    });
-    await Promise.resolve();
-    expect(followupObservedActiveHandle).toEqual([false]);
+      operation.complete();
+      await expect(recovery).resolves.toEqual({
+        aborted: true,
+        drained: true,
+        forceCleared: false,
+      });
+      await Promise.resolve();
+      expect(followupObservedActiveHandle).toEqual([false]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("force-clears exact owners before releasing followups after cancel throws", async () => {
@@ -348,6 +355,69 @@ describe("force-clear terminal state persistence", () => {
       abortedLastRun: true,
     });
   });
+
+  it.each(
+    ["main", "work"].flatMap((agentId) =>
+      ["direct", "deferred"].map((registration) => ({ agentId, registration })),
+    ),
+  )(
+    "persists forced terminal state only in $agentId's global store via $registration registration",
+    async ({ agentId, registration }) => {
+      const sessionKey = "global";
+      const sessionId = `${agentId}-global`;
+      const startedAt = Date.now() - 60_000;
+      setRuntimeConfigSnapshot({
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+        session: { scope: "global" },
+      });
+      for (const owner of ["main", "work"]) {
+        await upsertSessionEntryCore(
+          { agentId: owner, sessionKey },
+          {
+            sessionId: `${owner}-global`,
+            updatedAt: startedAt,
+            startedAt,
+            status: "running",
+            lifecycleRunId: `${owner}-run`,
+          },
+        );
+      }
+      const deferred =
+        registration === "deferred"
+          ? createDeferredEmbeddedRunLifecycleManager({
+              agentId,
+              sessionId,
+              sessionKey,
+              runId: `${agentId}-run`,
+            })
+          : undefined;
+      if (deferred) {
+        deferred.handoffToCli();
+      } else {
+        setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey, undefined, agentId);
+      }
+      await expect(
+        abortAndDrainEmbeddedAgentRun({
+          sessionId,
+          sessionKey,
+          forceClear: true,
+          reason: "stuck_recovery",
+          settleMs: 0,
+        }),
+      ).resolves.toMatchObject({ forceCleared: true });
+      const entry = loadSessionEntry({ agentId, sessionKey });
+      expect(entry).toMatchObject({ sessionId, status: "killed", abortedLastRun: true });
+      expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
+      expect(entry?.lifecycleRunId).toBeUndefined();
+      await deferred?.complete();
+      const otherAgentId = agentId === "main" ? "work" : "main";
+      expect(loadSessionEntry({ agentId: otherAgentId, sessionKey })).toMatchObject({
+        sessionId: `${otherAgentId}-global`,
+        status: "running",
+        lifecycleRunId: `${otherAgentId}-run`,
+      });
+    },
+  );
 
   it("does not fail when the session entry is absent", async () => {
     const sessionKey = "agent:main:missing";

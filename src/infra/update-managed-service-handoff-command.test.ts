@@ -1,24 +1,35 @@
 // Managed-service handoff command tests cover immutable update target serialization.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const getFileLockProcessStartTimeMock = vi.hoisted(() => vi.fn((_pid: number) => 17));
+const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
+const mockedHandoffLeaseCleanups = new Set<() => void>();
+const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
 
-function createReadyChild() {
+function createReadyChild(_command: string, args: string[]) {
   const child = Object.assign(new EventEmitter(), {
-    pid: 24680,
+    pid: process.pid,
     exitCode: null,
     signalCode: null,
+    stdin: new PassThrough(),
     stdout: new PassThrough(),
     unref: vi.fn(),
   });
   process.nextTick(() => {
-    child.stdout.write("OPENCLAW_UPDATE_HANDOFF_READY\n");
+    signalMockManagedUpdateHandoffReady({
+      child,
+      paramsPath: args.at(-1) ?? "",
+      cleanups: mockedHandoffLeaseCleanups,
+    });
   });
   return child;
 }
@@ -31,40 +42,66 @@ vi.mock("node:child_process", async () => {
   });
 });
 
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
+  getFileLockProcessStartTime: getFileLockProcessStartTimeMock,
+}));
+
+vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/child-process-tree.js")>()),
+  forceKillChildProcessTree: forceKillChildProcessTreeMock,
+}));
+
 beforeEach(() => {
+  getFileLockProcessStartTimeMock.mockReset();
+  getFileLockProcessStartTimeMock.mockReturnValue(17);
+  forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
   spawnMock.mockImplementation(createReadyChild);
 });
 
 afterEach(async () => {
+  for (const cleanup of mockedHandoffLeaseCleanups) {
+    cleanup();
+  }
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
   vi.resetModules();
 });
 
 async function startHandoffAndReadCommand(params: {
+  runId?: string;
   channel: "beta" | "extended-stable";
   tag?: string;
+  acceptCapabilities?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
+  restartDelayMs?: number;
+  restartDrainTimeoutMs?: number;
 }): Promise<{
   command: string;
   commandArgv: string[] | undefined;
+  parentExitTimeoutMs: number;
+  parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
 }> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const result = await startManagedServiceUpdateHandoff({
-    root: "/tmp/openclaw",
-    restartDrainTimeoutMs: 300_000,
+    runId: params.runId,
+    root: MOCK_INSTALL_ROOT,
+    restartDrainTimeoutMs: params.restartDrainTimeoutMs ?? 300_000,
+    ...(params.restartDelayMs === undefined ? {} : { restartDelayMs: params.restartDelayMs }),
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
-    parentPid: 12345,
+    ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    parentPid: process.pid,
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
     meta: {},
     ...(params.devTarget ? { devTarget: params.devTarget } : {}),
     ...(params.env ? { env: params.env } : {}),
   });
+  expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
   const spawnCall = spawnMock.mock.calls[0] as unknown as
     | [string, string[], { env?: NodeJS.ProcessEnv }]
     | undefined;
@@ -75,22 +112,46 @@ async function startHandoffAndReadCommand(params: {
   tempDirs.add(path.dirname(paramsPath));
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
+    parentExitTimeoutMs: number;
+    parentExitDeadlineAt: number;
   };
   const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
   const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
-    meta?: { root?: string };
+    meta?: { root?: string; runId?: string };
   };
   expect(metaFile.meta?.root).toBe(
-    await fs.realpath("/tmp/openclaw").catch(() => path.resolve("/tmp/openclaw")),
+    await fs.realpath(MOCK_INSTALL_ROOT).catch(() => path.resolve(MOCK_INSTALL_ROOT)),
   );
+  expect(metaFile.meta?.runId).toBe(params.runId);
   return {
     command: result.command,
     commandArgv: helperParams.commandArgv,
+    parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
+    parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
   };
 }
 
 describe("managed service update handoff command", () => {
+  it.each([
+    { drain: 300_000, expected: 390_000 },
+    { drain: Number.MAX_SAFE_INTEGER, expected: 2_147_483_647 },
+  ])(
+    "serializes a bounded timer-safe restart deadline for drain $drain",
+    async ({ drain, expected }) => {
+      const startedAt = Date.now();
+      const result = await startHandoffAndReadCommand({
+        channel: "beta",
+        restartDelayMs: 60_000,
+        restartDrainTimeoutMs: drain,
+      });
+
+      expect(result.parentExitTimeoutMs).toBe(expected);
+      expect(result.parentExitDeadlineAt).toBeGreaterThanOrEqual(startedAt + expected);
+      expect(result.parentExitDeadlineAt).toBeLessThanOrEqual(Date.now() + expected);
+    },
+  );
+
   it("serializes extended-stable into the detached CLI command", async () => {
     const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
 
@@ -110,6 +171,7 @@ describe("managed service update handoff command", () => {
     const result = await startHandoffAndReadCommand({
       channel: "beta",
       tag: "2.0.0-beta.1",
+      acceptCapabilities: true,
     });
 
     expect(result.commandArgv).toEqual([
@@ -118,6 +180,7 @@ describe("managed service update handoff command", () => {
       "update",
       "--yes",
       "--json",
+      "--accept-capabilities",
       "--channel",
       "beta",
       "--tag",
@@ -125,10 +188,15 @@ describe("managed service update handoff command", () => {
     ]);
     expect(result.command).toContain("--tag 2.0.0-beta.1");
     expect(result.command).toContain("--channel beta");
+    expect(result.command).toContain("--accept-capabilities");
+    expect(result.command).toContain("--yes");
+    expect(result.command).not.toContain("--json");
   });
 
   it("merges a tracked target into the child environment without replacing caller fields", async () => {
+    const runId = "970895bf-61e5-48e6-b0f6-468ce6f8e33a";
     const result = await startHandoffAndReadCommand({
+      runId,
       channel: "beta",
       env: {
         KEEP: "value",
@@ -142,6 +210,7 @@ describe("managed service update handoff command", () => {
     });
 
     expect(result.spawnEnv?.KEEP).toBe("value");
+    expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
     expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
       status: "valid",
       target: {

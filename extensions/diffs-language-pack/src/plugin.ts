@@ -37,6 +37,7 @@ function createDiffsLanguagePackHttpHandler() {
       asset.contentType,
       parsed.pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
     );
+    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -60,6 +61,9 @@ function parseRequestUrl(rawUrl?: string): URL | null {
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so error responses keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("content-length", String(Buffer.byteLength(body)));
   res.end(body);
 }
 

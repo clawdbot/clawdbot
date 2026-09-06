@@ -12,6 +12,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -484,6 +485,11 @@ export async function applyClawAddPlan(
       configCommitted = true;
       return nextConfig;
     });
+    try {
+      recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
+    } catch (error) {
+      throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
+    }
     if (options.resumePlan && installRecord.schemaVersion === "openclaw.clawInstallRecord.v1") {
       installRecord = persistRecord(plan, {
         ...options,

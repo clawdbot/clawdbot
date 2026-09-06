@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
@@ -24,7 +25,6 @@ afterEach(async () => {
 
 describe("cua-computer recording actions", () => {
   it("maps each recording tool while projecting only opaque resource handles", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-recording-");
     const active = driver();
     let nativeRecordingRoot = "";
     active.callTool.mockImplementation(async (name, args) => {
@@ -51,7 +51,7 @@ describe("cua-computer recording actions", () => {
           return cuaToolResult({});
       }
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
 
     const startedJson = await computer.act(
       JSON.stringify({ action: "start_recording", recordVideo: false }),
@@ -89,10 +89,12 @@ describe("cua-computer recording actions", () => {
         undefined,
       ],
     ]);
+
+    await computer.close("cancel");
+    await expect(fs.access(nativeRecordingRoot)).rejects.toThrow();
   });
 
   it("rejects malformed, absolute, traversal, and symlink-escaped replay resources", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-resource-security-");
     const outside = await tempRoot("openclaw-cua-resource-outside-");
     const active = driver();
     let nativeRecordingRoot = "";
@@ -106,7 +108,7 @@ describe("cua-computer recording actions", () => {
       }
       return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.replay);
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
 
     for (const resourceHandle of [
       "../outside",
@@ -149,32 +151,38 @@ describe("cua-computer recording actions", () => {
       ),
     ).rejects.toThrow("COMPUTER_INVALID_RESOURCE");
     expect(active.callTool).toHaveBeenCalledTimes(callsBeforeReplay);
+
+    await fs.rm(nativeRecordingRoot);
+    await computer.close("cancel");
+    expect((await fs.stat(outside)).isDirectory()).toBe(true);
   });
 
   it("finalizes an in-flight recording once on every execution close", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-recording-close-");
     const active = driver();
-    let releaseStart: (() => void) | undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    active.callTool.mockImplementation(async (name) => {
+    let nativeRecordingRoot = "";
+    const startEntered = createDeferred<void>();
+    const startGate = createDeferred<void>();
+    active.callTool.mockImplementation(async (name, args) => {
       if (name === "start_recording") {
-        await startGate;
+        nativeRecordingRoot = String(args.output_dir);
+        startEntered.resolve();
+        await startGate.promise;
         return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingActive);
       }
       return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingStopped);
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
+    onTestFinished(async () => {
+      startGate.resolve();
+      await computer.close("cancel");
+    });
 
     const start = computer.act(JSON.stringify({ action: "start_recording" }));
-    await vi.waitFor(() =>
-      expect(active.callTool).toHaveBeenCalledWith("start_recording", expect.anything(), undefined),
-    );
+    // Close only after the driver is in flight, regardless of resource-creation latency.
+    await Promise.race([startEntered.promise, start]);
     const close = computer.close("cancel");
-    releaseStart?.();
-    await start;
-    await close;
+    startGate.resolve();
+    await Promise.all([start, close]);
     await computer.close("cancel");
 
     expect(active.callTool.mock.calls.map(([name]) => name)).toEqual([
@@ -182,6 +190,6 @@ describe("cua-computer recording actions", () => {
       "stop_recording",
     ]);
     expect(active.dispose).toHaveBeenCalledOnce();
-    expect(await fs.readdir(resourceRoot)).toEqual([]);
+    await expect(fs.access(nativeRecordingRoot)).rejects.toThrow();
   });
 });

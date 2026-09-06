@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import type { CommandOptions } from "../../process/exec.js";
@@ -151,7 +151,10 @@ export async function prepareWorkerSsh(params: {
     )
     .join("");
   const temporaryDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-"),
+    path.resolve(
+      resolvePreferredOpenClawTmpDir(),
+      params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-",
+    ),
   );
   try {
     const identity = await params.resolveIdentity(params.ssh.keyRef);
@@ -256,23 +259,6 @@ export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
     }
   }
   return lastResult!;
-}
-
-/** Moves a reconnect to the next candidate without overwriting a newer concurrent selection. */
-export function advanceWorkerSshAfterTransportExit(
-  prepared: PreparedWorkerSsh,
-  failedPort: number,
-  exit: { code: number | null; signal: NodeJS.Signals | null },
-): boolean {
-  if (exit.code !== 255 || exit.signal !== null || prepared.port !== failedPort) {
-    return false;
-  }
-  const nextPort = workerSshCandidatePorts(prepared)[1];
-  if (nextPort === undefined) {
-    return false;
-  }
-  prepared.selectPort(nextPort);
-  return true;
 }
 
 /** Pinned SSH options shared by bootstrap, tunnel control, and workspace transfer. */

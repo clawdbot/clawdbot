@@ -18,7 +18,7 @@ type WorkerSessionPlacementTransition = {
 };
 
 const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
-  local: ["requested"],
+  local: ["requested", "failed"],
   requested: ["provisioning", "failed"],
   provisioning: ["syncing", "failed"],
   syncing: ["starting", "failed"],

@@ -11,11 +11,18 @@ import type {
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
-import { requireSessionMutationAccess } from "./session-organizer-batch-mutations.ts";
+import {
+  requireSessionMutationAccess,
+  type SessionActionHost,
+} from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
+export type SessionGroupActionHost = SessionActionHost & {
+  knownSessionGroups(): string[];
+};
+
 export async function rememberSessionGroup(
-  host: SessionOrganizerControllerHost,
+  host: SessionGroupActionHost,
   name: string,
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
@@ -100,12 +107,16 @@ export async function deleteSessionGroup(
     message: t("sessionsView.deleteGroupConfirm"),
     confirmLabel: t("common.delete"),
     danger: true,
+    signal: scope.signal,
   });
-  if (!confirmed) {
-    return false;
-  }
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
+    return false;
+  }
+  if (!confirmed) {
     return false;
   }
   try {

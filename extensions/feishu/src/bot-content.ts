@@ -1,5 +1,6 @@
 // Feishu plugin module implements bot content behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -178,6 +179,10 @@ export function parseMessageContent(content: string, messageType: string): strin
 const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
 
 function formatFeishuMediaContent(parsed: Record<string, unknown>, messageType: string): string {
+  if (messageType === "sticker") {
+    const fileKey = normalizeFeishuExternalKey(parsed?.file_key);
+    return fileKey ? `<sticker key="${escapeHtml(fileKey)}"/>` : "[Sticker]";
+  }
   const speechToText =
     messageType === "audio" && typeof parsed.speech_to_text === "string"
       ? parsed.speech_to_text.trim()
@@ -207,7 +212,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "video":
         return "[Video]";
       case "sticker":
-        return "[Sticker]";
+        return formatFeishuMediaContent(parsed, contentType);
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
@@ -295,7 +300,7 @@ export function normalizeMentions(
   }
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let result = text;
+  const replacements = new Map<string, string>();
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
     const replacement =
@@ -304,9 +309,11 @@ export function normalizeMentions(
         : mentionId
           ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
           : `@${mention.name}`;
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
+    replacements.set(mention.key, replacement);
   }
-  return result;
+  // Longest keys win; a single pass keeps placeholder-like display names literal.
+  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escaped);
+  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
@@ -333,7 +340,6 @@ function parseMediaKeys(
         return { imageKey, fileName: parsed.file_name };
       case "file":
       case "audio":
-      case "sticker":
         return { fileKey, fileName: parsed.file_name };
       case "video":
       case "media":
@@ -383,8 +389,6 @@ function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
     case "video":
     case "media":
       return "video";
-    case "sticker":
-      return "sticker";
     default:
       return "document";
   }
@@ -400,72 +404,56 @@ export async function resolveFeishuMediaList(params: {
   accountId?: string;
 }): Promise<FeishuMediaInfo[]> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
+  // Sticker keys are reusable, but Feishu does not expose their resource bytes.
+  const mediaTypes = ["image", "file", "audio", "video", "media", "post"];
   if (!mediaTypes.includes(messageType)) {
     return [];
   }
 
   const out: FeishuMediaInfo[] = [];
   if (messageType === "post") {
-    const { imageKeys, mediaKeys } = parsePostContent(content);
-    if (imageKeys.length === 0 && mediaKeys.length === 0) {
+    const { attachments } = parsePostContent(content);
+    if (attachments.length === 0) {
       return [];
     }
-    if (imageKeys.length > 0) {
-      log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
-    }
-    if (mediaKeys.length > 0) {
-      log?.(`feishu: post message contains ${mediaKeys.length} embedded media file(s)`);
-    }
-
-    for (const imageKey of imageKeys) {
-      try {
-        const result = await saveMessageResourceFeishu({
-          cfg,
-          messageId,
-          fileKey: imageKey,
-          type: "image",
-          accountId,
-          maxBytes,
-        });
-        const saved = await resolveSavedFeishuMedia({ result, maxBytes });
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          kind: "image",
-        });
-        log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
-      } catch (err) {
-        out.push({ kind: "image" });
-        log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
+    log?.(`feishu: post message contains ${attachments.length} embedded attachment(s)`);
+    const seenAttachments = new Set<string>();
+    for (const attachment of attachments) {
+      const identity = `${attachment.kind}:${attachment.key}`;
+      if (seenAttachments.has(identity)) {
+        continue;
       }
-    }
-
-    for (const media of mediaKeys) {
+      seenAttachments.add(identity);
+      const fileName = attachment.kind === "file" ? attachment.fileName : undefined;
+      const mediaKind = attachment.kind === "image" ? "image" : "video";
       try {
         const result = await saveMessageResourceFeishu({
           cfg,
           messageId,
-          fileKey: media.fileKey,
-          type: "file",
+          fileKey: attachment.key,
+          type: attachment.kind,
           accountId,
           maxBytes,
-          originalFilename: media.fileName,
+          ...(fileName ? { originalFilename: fileName } : {}),
         });
         const saved = await resolveSavedFeishuMedia({
           result,
           maxBytes,
-          originalFilename: media.fileName,
+          ...(fileName ? { originalFilename: fileName } : {}),
         });
         out.push({
           path: saved.path,
           contentType: saved.contentType,
-          kind: "video",
+          kind: mediaKind,
         });
-        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
+        log?.(
+          `feishu: downloaded embedded ${attachment.kind} ${attachment.key}, saved to ${saved.path}`,
+        );
       } catch (err) {
-        out.push({ kind: "video" });
-        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
+        out.push({ kind: mediaKind });
+        log?.(
+          `feishu: failed to download embedded ${attachment.kind} ${attachment.key}: ${String(err)}`,
+        );
       }
     }
     return out;

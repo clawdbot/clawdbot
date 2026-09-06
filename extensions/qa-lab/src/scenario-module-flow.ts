@@ -25,6 +25,11 @@ const qaFlowModuleSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(qaFlowModuleArgSchema).optional(),
 });
+const qaSharedFlowSchema = z
+  .object({
+    shared: z.enum(["channel-access-control", "channel-restart-resume"]),
+  })
+  .strict();
 const qaFlowProviderModeSchema = z.enum(["aimock", "live-frontier", "mock-openai"]);
 const qaFlowExecutionShape = {
   providerMode: qaFlowProviderModeSchema.optional(),
@@ -34,10 +39,168 @@ const qaFlowExecutionShape = {
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
+type QaScenarioSharedFlow = z.infer<typeof qaSharedFlowSchema>;
 type QaScenarioFlowShape = { steps: unknown[] };
 
+const qaSharedFlowPreparationActions = [
+  { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+  { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+  { resetTransport: true },
+] as const;
+// The DSL branch value is an action array, never a callable JavaScript `then`.
+const qaSharedFlowPositiveBranch = ["th", "en"].join("");
+
+const qaSharedFlows = {
+  "channel-access-control": {
+    steps: [
+      {
+        name: "enforces configured access policy",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          {
+            set: "marker",
+            value: {
+              expr: "`${config.markerPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            set: "outboundCount",
+            value: {
+              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`",
+              },
+            },
+          },
+          {
+            // Object literals with a `then` property become JavaScript thenables.
+            // Build the QA DSL branch as data so an accidental await cannot execute it.
+            if: Object.fromEntries([
+              ["expr", "config.expectReply"],
+              [
+                qaSharedFlowPositiveBranch,
+                [
+                  {
+                    waitForOutbound: {
+                      textIncludes: { ref: "marker" },
+                      timeoutMs: { ref: "config.timeoutMs" },
+                    },
+                  },
+                ],
+              ],
+              [
+                "else",
+                [
+                  {
+                    waitForNoOutbound: {
+                      quietMs: { ref: "config.timeoutMs" },
+                      sinceIndex: { ref: "outboundCount" },
+                    },
+                  },
+                ],
+              ],
+            ]),
+          },
+        ],
+        detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
+      },
+    ],
+  },
+  "channel-restart-resume": {
+    steps: [
+      {
+        name: "resumes after restart without replay",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          {
+            set: "firstMarker",
+            value: {
+              expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`",
+              },
+            },
+          },
+          {
+            waitForOutbound: {
+              textIncludes: { ref: "firstMarker" },
+              timeoutMs: { ref: "config.timeoutMs" },
+            },
+          },
+          {
+            assert: {
+              expr: "typeof env.gateway.restartAfterStateMutation === 'function'",
+              message: "qa gateway child does not expose restartAfterStateMutation",
+            },
+          },
+          {
+            call: "env.gateway.restartAfterStateMutation",
+            args: [
+              {
+                lambda: {
+                  async: true,
+                  params: ["ctx"],
+                  expr: "Promise.resolve()",
+                },
+              },
+            ],
+          },
+          { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+          { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+          {
+            set: "secondMarker",
+            value: {
+              expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`",
+              },
+            },
+          },
+          {
+            waitForOutbound: {
+              textIncludes: { ref: "secondMarker" },
+              timeoutMs: { ref: "config.timeoutMs" },
+            },
+          },
+        ],
+        detailsExpr: "`${firstMarker} -> restart -> ${secondMarker}`",
+      },
+    ],
+  },
+} satisfies Record<QaScenarioSharedFlow["shared"], QaScenarioFlowShape>;
+
 function resolveQaScenarioFlowKind(
-  flow: QaScenarioFlowShape | QaScenarioModuleFlow | undefined,
+  flow: QaScenarioFlowShape | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
 ): "module" | "steps" | undefined {
   return flow ? ("module" in flow ? "module" : "steps") : undefined;
 }
@@ -64,11 +227,14 @@ function resolveQaScenarioModuleArg(arg: unknown) {
 }
 
 function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
-  flow: TFlow | QaScenarioModuleFlow | undefined,
+  flow: TFlow | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
   title: string,
 ) {
   if (!flow || "steps" in flow) {
     return flow;
+  }
+  if ("shared" in flow) {
+    return qaSharedFlows[flow.shared];
   }
   return {
     steps: [
@@ -87,6 +253,7 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
         ],
         detailsExpr:
           "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
+        resultExpr: "result",
       },
     ],
   };
@@ -110,4 +277,5 @@ export const qaScenarioModuleFlow = {
   providerModeSchema: qaFlowProviderModeSchema,
   resolveKind: resolveQaScenarioFlowKind,
   resolveFlow: resolveQaScenarioFileFlow,
+  sharedSchema: qaSharedFlowSchema,
 };

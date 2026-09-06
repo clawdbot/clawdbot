@@ -214,6 +214,25 @@ describe("discord native /status", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("delivers an embed-only direct status reply without reporting it unavailable", async () => {
+    const embeds = [{ title: "Status", description: "All systems operational" }];
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      channelData: { discord: { embeds } },
+    });
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledOnce();
+    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
+      embeds,
+      ephemeral: true,
+    });
+  });
+
   it("prioritizes direct status replies over matching plugin commands", async () => {
     const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
     const cfg = createConfig();

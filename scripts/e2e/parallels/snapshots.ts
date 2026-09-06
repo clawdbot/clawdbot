@@ -1,8 +1,7 @@
 // Snapshots script supports OpenClaw repository automation.
 import { expectDefined } from "@openclaw/normalization-core";
 import { die, run } from "./host-command.ts";
-import type { Mode } from "./types.ts";
-import type { SnapshotInfo } from "./types.ts";
+import type { Mode, SnapshotInfo } from "./types.ts";
 
 const SNAPSHOT_LIST_TIMEOUT_MS = 120_000;
 export const SKIP_SNAPSHOT_RESTORE_ENV = "OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE";

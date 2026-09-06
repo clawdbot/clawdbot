@@ -4,7 +4,10 @@ import type {
   TurnAdoptionLifecycle,
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigResult,
+  DispatchReplyFromConfig,
+} from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
@@ -80,6 +83,7 @@ export type ConversationFacts = {
   parentId?: string;
   threadId?: string;
   nativeChannelId?: string;
+  avatar?: string;
   routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;
@@ -160,10 +164,11 @@ export type ChannelDeliveryInfo = ReplyDispatchRuntimeInfo;
 
 type ChannelCoreManagedDeliveryInfo = Omit<
   ChannelDeliveryInfo,
-  "bindPendingFinalDelivery" | "onPlatformSendDispatch"
+  "assertPlatformSendAuthorized" | "bindPendingFinalDelivery" | "onPlatformSendDispatch"
 >;
 
 type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
+  assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
 };
 
@@ -327,6 +332,8 @@ export type AssembledChannelTurn = {
   toolsAllow?: string[];
   replyOptions?: ChannelTurnReplyOptions;
   replyResolver?: GetReplyFromConfig;
+  /** Instance-bound reply dispatcher supplied by the owning plugin runtime. */
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   sessionInitRetry?: {
     delaysMs: readonly number[];
     signal?: AbortSignal;

@@ -1,7 +1,10 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
+import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
@@ -14,13 +17,14 @@ const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="
 
 export type BrowserPanelDock = "bottom" | "right";
 
-function renderTabStrip(controller: BrowserPanelController) {
+function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
   return renderBrowserPanelTabs({
     tabs: controller.tabs,
     activeTargetId: controller.activeTargetId,
     onSelect: (targetId) => void controller.selectTab(targetId),
     onClose: (targetId) => controller.closeTab(targetId),
     onNew: () => controller.beginNewTab(),
+    hideNewControl: embedded,
   });
 }
 
@@ -33,27 +37,30 @@ function renderHeaderActions(
   const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
   return html`
     <div class="rail-header__actions bp-actions">
-      <button
-        class="rail-header__action bp-icon ${dock === "bottom" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockBottom")}
-        aria-label=${t("browser.dockBottom")}
-        @click=${() => onDockChange("bottom")}
-      >
-        ${icons.panelBottomOpen}
-      </button>
-      <button
-        class="rail-header__action bp-icon ${dock === "right" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockRight")}
-        aria-label=${t("browser.dockRight")}
-        @click=${() => onDockChange("right")}
-      >
-        ${icons.panelRightOpen}
-      </button>
+      ${renderDockDestinations({
+        current: dock,
+        groupClass: "bp-dock-modes",
+        groupLabel: t("browser.title"),
+        destinations: [
+          {
+            dock: "bottom",
+            label: t("browser.dockBottom"),
+            icon: icons.panelBottomOpen,
+            className: "bp-icon",
+          },
+          {
+            dock: "right",
+            label: t("browser.dockRight"),
+            icon: icons.panelRightOpen,
+            className: "bp-icon",
+          },
+        ],
+        onSelect: onDockChange,
+      })}
       <button
         class="rail-header__action bp-icon"
         type="button"
+        data-new-tab-action
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
         ?disabled=${!activeUrl}
@@ -78,10 +85,33 @@ function renderHeaderActions(
   `;
 }
 
-function renderToolbar(controller: BrowserPanelController) {
+function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
+      ${
+        controller.operations.route
+          ? html`<span
+              class="bp-profile"
+              title=${t("browser.profile", { profile: controller.operations.route.profile })}
+              >${controller.operations.route.profile}</span
+            >`
+          : nothing
+      }
+      ${
+        embedded
+          ? html`<button
+              class="bp-icon"
+              type="button"
+              data-new-tab-action
+              title=${t("browser.newTab")}
+              aria-label=${t("browser.newTab")}
+              @click=${() => controller.beginNewTab()}
+            >
+              ${icons.plus}
+            </button>`
+          : nothing
+      }
       <button
         class="bp-icon"
         type="button"
@@ -150,9 +180,9 @@ function renderToolbar(controller: BrowserPanelController) {
       <button
         class="bp-icon ${controller.mode === "inspect" ? "is-active" : ""}"
         type="button"
-        title=${controller.evaluateUnavailable
-          ? t("browser.inspectUnavailable")
-          : t("browser.inspect")}
+        title=${
+          controller.evaluateUnavailable ? t("browser.inspectUnavailable") : t("browser.inspect")
+        }
         aria-label=${t("browser.inspect")}
         ?disabled=${!hasView || controller.evaluateUnavailable}
         @click=${() => controller.setMode("inspect")}
@@ -225,16 +255,20 @@ function renderInspectTooltip(controller: BrowserPanelController) {
           >${Math.round(node.rect.width)} × ${Math.round(node.rect.height)}</span
         >
       </div>
-      ${node.name
-        ? html`<div class="bp-tooltip__row">
-            <span>${t("browser.inspectName")}</span><span>${node.name}</span>
-          </div>`
-        : nothing}
-      ${node.role
-        ? html`<div class="bp-tooltip__row">
-            <span>${t("browser.inspectRole")}</span><span>${node.role}</span>
-          </div>`
-        : nothing}
+      ${
+        node.name
+          ? html`<div class="bp-tooltip__row">
+              <span>${t("browser.inspectName")}</span><span>${node.name}</span>
+            </div>`
+          : nothing
+      }
+      ${
+        node.role
+          ? html`<div class="bp-tooltip__row">
+              <span>${t("browser.inspectRole")}</span><span>${node.role}</span>
+            </div>`
+          : nothing
+      }
       <div class="bp-tooltip__row">
         <span>${t("browser.inspectFocusable")}</span><span>${node.focusable ? "✓" : "–"}</span>
       </div>
@@ -244,25 +278,28 @@ function renderInspectTooltip(controller: BrowserPanelController) {
 
 function renderViewportContent(controller: BrowserPanelController) {
   if (controller.running === false) {
-    return html`
-      <div class="bp-status">
-        <span>${t("browser.notRunning")}</span>
-        <button
-          class="bp-btn bp-btn--primary"
-          type="button"
-          @click=${() => void controller.startBrowserNow()}
-        >
+    return renderPanelEmptyState({
+      icon: icons.globe,
+      heading: t("chat.sidePanel.browser"),
+      description: t("browser.notRunning"),
+      action: html`
+        <button class="bp-btn" type="button" @click=${() => void controller.startBrowserNow()}>
           ${t("browser.start")}
         </button>
-      </div>
-    `;
+      `,
+    });
+  }
+  if (!controller.view && controller.unavailableTabText) {
+    return html`<div class="bp-status" role="status">${controller.unavailableTabText}</div>`;
   }
   if (!controller.view) {
-    return html`
-      <div class="bp-status">
-        <span>${controller.loading ? t("browser.loading") : t("browser.empty")}</span>
-      </div>
-    `;
+    return controller.loading
+      ? renderPanelLoadingSkeleton("browser", t("browser.loading"))
+      : renderPanelEmptyState({
+          icon: icons.globe,
+          heading: t("chat.sidePanel.browser"),
+          description: t("chat.sidePanel.browserEmpty"),
+        });
   }
   const overlayMode =
     controller.mode === "annotate"
@@ -282,8 +319,9 @@ function renderViewportContent(controller: BrowserPanelController) {
         @click=${(event: MouseEvent) => controller.handleStageClick(event)}
         @pointerdown=${(event: PointerEvent) => controller.handleOverlayPointerDown(event)}
         @pointermove=${(event: PointerEvent) => controller.handleOverlayPointerMove(event)}
-        @pointerup=${() => controller.handleOverlayPointerUp()}
-        @pointercancel=${() => controller.handleOverlayPointerUp()}
+        @pointerup=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @pointercancel=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @lostpointercapture=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
       ></canvas>
       ${renderInspectTooltip(controller)}
     </div>
@@ -297,17 +335,20 @@ function renderViewport(controller: BrowserPanelController) {
       class="bp-viewport"
       name=${controller.activeTargetId ?? "browser"}
       active
-      aria-labelledby=${controller.activeTargetId
-        ? `browser-tab-${controller.activeTargetId}`
-        : nothing}
+      aria-labelledby=${
+        controller.activeTargetId ? `browser-tab-${controller.activeTargetId}` : nothing
+      }
       tabindex="0"
       @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
       @keydown=${(event: KeyboardEvent) => controller.handleViewportKeydown(event)}
+      aria-busy=${controller.loading ? "true" : "false"}
     >
-      ${controller.loading && controller.view
-        ? html`<span class="bp-loading">${t("browser.loading")}</span>`
-        : nothing}
       ${renderViewportContent(controller)}
+      ${
+        controller.loading && controller.view
+          ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
+          : nothing
+      }
     </wa-tab-panel>
   `;
 }
@@ -320,21 +361,32 @@ export function renderBrowserPanelChrome(
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
   resizer: TemplateResult | typeof nothing,
+  embedded = false,
 ) {
-  const style = dock === "bottom" ? `height:${height}px` : `width:${width}px`;
+  const style = embedded ? nothing : dock === "bottom" ? `height:${height}px` : `width:${width}px`;
   return html`
-    <section class="bp bp--${dock}" style=${style} aria-label=${t("browser.title")}>
-      ${resizer}
-      <header class="rail-header bp-header">
-        ${renderTabStrip(controller)}
-        ${renderHeaderActions(controller, dock, onDockChange, onClose)}
-      </header>
-      ${renderToolbar(controller)} ${renderAnnotateBar(controller)}
-      ${controller.errorText
-        ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
-        : controller.noticeText
-          ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
-          : nothing}
+    <section
+      class="bp bp--${embedded ? "embedded" : dock}"
+      style=${style}
+      aria-label=${t("browser.title")}
+    >
+      ${embedded ? nothing : resizer}
+      ${
+        embedded && controller.tabs.length === 0
+          ? nothing
+          : html`<header class="rail-header bp-header">
+              ${renderTabStrip(controller, embedded)}
+              ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
+            </header>`
+      }
+      ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
+      ${
+        controller.errorText
+          ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
+          : controller.noticeText
+            ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
+            : nothing
+      }
       ${renderViewport(controller)}
     </section>
   `;

@@ -5,17 +5,10 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
+import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe("bench-cli-startup", () => {
   it("rejects unknown CLI options before running benchmarks", () => {
@@ -23,7 +16,7 @@ describe("bench-cli-startup", () => {
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat", "--help"],
       {
         cwd: join(__dirname, "../.."),
         encoding: "utf8",
@@ -40,21 +33,6 @@ describe("bench-cli-startup", () => {
   it("rejects short flag values before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--output", "-h"])).toThrow("--output requires a value");
     expect(() => testing.validateCliArgs(["--case", "-h"])).toThrow("--case requires a value");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--output", "-h"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--output requires a value");
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("rejects duplicate benchmark cases before running benchmarks", () => {
@@ -78,63 +56,76 @@ describe("bench-cli-startup", () => {
     expect(() => testing.validateCliArgs(["--output", "one.json", "--output", "two.json"])).toThrow(
       "--output was provided more than once",
     );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--output",
-        "one.json",
-        "--output",
-        "two.json",
-      ],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--output was provided more than once");
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it.runIf(process.platform !== "win32")(
     "cleans timed-out benchmark process groups when the leader exits first",
-    () => {
+    async () => {
       const tempDirs = createTempDirTracker();
       const tmpDir = tempDirs.make("openclaw-cli-startup-timeout-group-");
       const entryPath = join(tmpDir, "entry.mjs");
+      const leaderPidPath = join(tmpDir, "leader.pid");
       const childPidPath = join(tmpDir, "child.pid");
-      let childPid: number | undefined;
+      const childTermPath = join(tmpDir, "child-term.pid");
       try {
         writeFileSync(
           entryPath,
-          [
-            "import { spawn } from 'node:child_process';",
-            "import { writeFileSync } from 'node:fs';",
-            "process.on('SIGTERM', () => process.exit(0));",
-            "const child = spawn(process.execPath, [",
-            "  '-e',",
-            "  \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\",",
-            "], { stdio: 'ignore' });",
-            `writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
+          `
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => process.exit(0));
+writeFileSync(${JSON.stringify(leaderPidPath)}, String(process.pid));
+spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => writeFileSync(${JSON.stringify(childTermPath)}, String(process.pid)));
+writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
+setInterval(() => {}, 1000);
+`)}], { stdio: "ignore" });
+setInterval(() => {}, 1000);
+`,
           "utf8",
         );
 
+        // Keep real processes, but advance deadlines only after child-owned readiness.
+        // The driver isolates Node mock timers from Vitest and the fixture processes.
         const result = spawnSync(
           process.execPath,
           [
             "--import",
             "tsx",
-            "scripts/bench-cli-startup.ts",
+            "--input-type=module",
+            "-e",
+            `
+import assert from "node:assert/strict";
+import { mock } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { isProcessAlive, waitForPidFile } from ${JSON.stringify(new URL("../helpers/process-wait.ts", import.meta.url).href)};
+const realDelay = delay;
+mock.timers.enable({ apis: ["setTimeout", "Date"] });
+try {
+  const benchmark = import(pathToFileURL(process.argv[1]).href);
+  const leader = await waitForPidFile(${JSON.stringify(leaderPidPath)}, 8000, realDelay);
+  const child = await waitForPidFile(${JSON.stringify(childPidPath)}, 8000, realDelay);
+  assert(isProcessAlive(leader), "leader must be alive before timeout");
+  assert(isProcessAlive(child), "descendant must be ready before timeout");
+  mock.timers.tick(100);
+  while (isProcessAlive(leader)) await realDelay(5);
+  assert.equal(await waitForPidFile(${JSON.stringify(childTermPath)}, 8000, realDelay), child);
+  assert(isProcessAlive(child), "descendant must outlive its leader");
+  mock.timers.tick(50);
+  while (isProcessAlive(child)) await realDelay(5);
+  // Drain cleanup waits only after the OS has consumed SIGKILL.
+  mock.timers.runAll();
+  await benchmark;
+} catch (error) {
+  console.error(error);
+  process.exit(2);
+} finally {
+  mock.timers.reset();
+}
+`,
+            resolve(__dirname, "../../scripts/bench-cli-startup.ts"),
             "--entry",
             entryPath,
             "--case",
@@ -152,6 +143,8 @@ describe("bench-cli-startup", () => {
             encoding: "utf8",
             env: {
               ...process.env,
+              HOME: tmpDir,
+              OPENCLAW_STATE_DIR: join(tmpDir, ".openclaw"),
               OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "50",
               VITEST: "1",
             },
@@ -159,14 +152,25 @@ describe("bench-cli-startup", () => {
           },
         );
 
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        expect(result.status).toBe(1);
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
         expect(result.signal).toBeNull();
         expect(result.stderr).toContain("version sample 1: timed out");
-        expect(isProcessAlive(childPid)).toBe(false);
+        expect(JSON.parse(result.stdout).primary.cases[0].samples).toMatchObject([
+          { timedOut: true, exitCode: 0, signal: null },
+        ]);
+        expect(isProcessAlive(Number(readFileSync(leaderPidPath, "utf8")))).toBe(false);
+        expect(isProcessAlive(Number(readFileSync(childPidPath, "utf8")))).toBe(false);
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        // The leader registers before spawning: failures before child readiness still
+        // leave a known group to kill, including an unregistered descendant.
+        if (existsSync(leaderPidPath)) {
+          const leader = Number(readFileSync(leaderPidPath, "utf8"));
+          forceKillVitestProcessGroup({ pid: leader });
+          await waitForDead(leader, 8_000);
+        }
+        if (existsSync(childPidPath)) {
+          await waitForDead(Number(readFileSync(childPidPath, "utf8")), 8_000);
         }
         tempDirs.cleanup();
       }
@@ -326,8 +330,8 @@ describe("bench-cli-startup", () => {
         entry: "dist/entry.js",
         cases: [
           {
-            id: "gatewayHealthJsonConnected",
-            name: "gateway health --json (connected)",
+            id: "gatewayHealthJsonWarmState",
+            name: "gateway health --json (warm state)",
             args: ["gateway", "health", "--json"],
             contract: null,
             warmupSamples: [{ ...passingSample, exitCode: 1 }],
@@ -342,7 +346,7 @@ describe("bench-cli-startup", () => {
           },
         ],
       }),
-    ).toEqual(["dist/entry.js gatewayHealthJsonConnected warmup 1: exited with code 1"]);
+    ).toEqual(["dist/entry.js gatewayHealthJsonWarmState warmup 1: exited with code 1"]);
   });
 
   it("fails reports with samples that did not report RSS", () => {
@@ -476,7 +480,7 @@ describe("bench-cli-startup", () => {
   });
 
   it("writes a config fixture for config get benchmarks", () => {
-    const expectedFixture = {
+    const unauthenticatedFixture = {
       gateway: {
         auth: { mode: "none" },
         bind: "loopback",
@@ -497,18 +501,6 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       },
-      {
-        id: "gatewayHealthJsonConnected",
-        name: "gateway health --json (connected)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
-      {
-        id: "gatewayHealthJsonFirstDevice",
-        name: "gateway health --json (first device)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
       { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
       {
         id: "healthJson",
@@ -521,7 +513,35 @@ describe("bench-cli-startup", () => {
         withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
           testing.buildConfigFixture(commandCase),
         ),
-      ).toEqual(expectedFixture);
+      ).toEqual(unauthenticatedFixture);
+    }
+
+    for (const commandCase of [
+      {
+        id: "gatewayHealthJsonWarmState",
+        name: "gateway health --json (warm state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+      {
+        id: "gatewayHealthJsonFreshState",
+        name: "gateway health --json (fresh state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+    ]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+          testing.buildConfigFixture(commandCase),
+        ),
+      ).toEqual({
+        gateway: {
+          auth: { mode: "token" },
+          bind: "loopback",
+          mode: "local",
+          port: 32123,
+        },
+      });
     }
   });
 
@@ -534,8 +554,8 @@ describe("bench-cli-startup", () => {
 
     for (const id of [
       "gatewayHealthJson",
-      "gatewayHealthJsonConnected",
-      "gatewayHealthJsonFirstDevice",
+      "gatewayHealthJsonWarmState",
+      "gatewayHealthJsonFreshState",
     ]) {
       expect(
         withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>

@@ -11,7 +11,7 @@ import {
   type NonClawHubInstallSourceClass,
 } from "../plugins/install-provenance.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
-import type { ManagedPluginSourceInstallRequest } from "../plugins/management-service.js";
+import type { ManagedPluginSourceInstallRequest } from "../plugins/management-install.js";
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
@@ -70,6 +70,7 @@ export function resolvePluginInstallSourcePlan(params: {
         path: resolved,
         recordSource,
         mode: params.mode,
+        ...(bundled ? { bundledOrigin: true } : {}),
         ...(params.link ? { link: true } : {}),
       },
       params.raw,
@@ -146,10 +147,11 @@ export function resolvePluginInstallSourcePlan(params: {
     return sourcePlan(
       {
         source: "official",
-        spec: official.npmSpec,
+        spec: official.spec,
+        installSources: official.installSources,
+        expectedPluginId: official.pluginId,
         pluginId: official.pluginId,
         mode: params.mode,
-        ...(official.expectedIntegrity ? { expectedIntegrity: official.expectedIntegrity } : {}),
         ...(params.pin ? { pin: true } : {}),
       },
       params.raw,

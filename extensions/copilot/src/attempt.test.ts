@@ -4,16 +4,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
+import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   abortAgentHarnessRun,
+  applyEmbeddedAttemptToolsAllow,
   attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
+  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessV2,
   type AgentMessage,
+  type AnyAgentTool,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -63,6 +67,53 @@ const gatewayQuestionMock = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  type QuestionDispatcher = Exclude<
+    Parameters<typeof actual.runAgentHarnessGatewayQuestion>[0]["gatewayCall"],
+    AgentHarnessQuestionGatewayCall | undefined
+  >;
+  const questionDispatcher: QuestionDispatcher = {
+    version: 2,
+    call: async ({ method, params: rawParams, signal, authority }) => {
+      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+      const id = params?.id ?? "";
+      // No awaited preparation: this is the synthetic transport's dispatch boundary.
+      signal?.throwIfAborted();
+      if (authority.kind === "source-bound") {
+        authority.assertCurrent();
+      }
+      if (method === "question.request") {
+        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+      }
+      if (method === "question.waitAnswer") {
+        if (gatewayQuestionMock.waiters.has(id)) {
+          throw new Error("question fixture already has a waiter");
+        }
+        return await new Promise<unknown>((resolve, reject) => {
+          const cleanup = () => {
+            signal?.removeEventListener("abort", onAbort);
+            gatewayQuestionMock.waiters.delete(id);
+          };
+          const onAbort = () => {
+            cleanup();
+            reject(toLintErrorObject(signal?.reason, "question wait aborted"));
+          };
+          gatewayQuestionMock.waiters.set(id, (value) => {
+            cleanup();
+            resolve(value);
+          });
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      if (method === "question.resolve") {
+        const result = params?.cancel
+          ? { status: "cancelled" as const }
+          : { status: "answered" as const, answers: params?.answers };
+        gatewayQuestionMock.waiters.get(id)?.(result);
+        return result;
+      }
+      throw new Error(`unexpected question fixture RPC: ${method}`);
+    },
+  };
   return {
     ...actual,
     embeddedAgentLog: { ...actual.embeddedAgentLog, warn: gatewayQuestionMock.warn },
@@ -82,26 +133,16 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       gatewayQuestionMock.claimPendingAgentQuestionAnswer
         ? await gatewayQuestionMock.claimPendingAgentQuestionAnswer(...args)
         : await actual.claimPendingAgentQuestionAnswer(...args),
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          gatewayQuestionMock.waiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        gatewayQuestionMock.waiters.get(params?.id ?? "")?.(result);
-        gatewayQuestionMock.waiters.delete(params?.id ?? "");
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
+    // Keep the real question owner; only its public transport override is synthetic.
+    runAgentHarnessGatewayQuestion: (
+      params: Parameters<typeof actual.runAgentHarnessGatewayQuestion>[0],
+    ) =>
+      actual.runAgentHarnessGatewayQuestion({
+        ...params,
+        gatewayCall: params.gatewayCall === undefined ? questionDispatcher : params.gatewayCall,
+      }),
+    callGatewayTool: async (method: string) => {
+      throw new Error(`unexpected direct SDK Gateway call: ${method}`);
     },
     setActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.setActiveEmbeddedRun>
@@ -113,6 +154,28 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
+
+function createStubToolBridge(
+  sdkTools: SdkTool[] = [],
+  sourceTools: AnyAgentTool[] = [],
+  extras: { cleanup?: () => void; codeModeEngaged?: boolean } = {},
+) {
+  return {
+    ...extras,
+    promptToolPolicy: {
+      apply: (params: { toolsAllow?: string[]; forceToolNames?: readonly string[] } = {}) => {
+        const allowed = applyEmbeddedAttemptToolsAllow(sdkTools, params.toolsAllow);
+        const names = new Set([
+          ...allowed.map((tool) => tool.name),
+          ...(params.forceToolNames ?? []),
+        ]);
+        const tools = sdkTools.filter((tool) => names.has(tool.name));
+        return { tools, callableToolNames: tools.map((tool) => tool.name) };
+      },
+    },
+    sourceTools,
+  };
+}
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -385,27 +448,36 @@ function makeFakePool(sdk: FakeSdk) {
 }
 
 function makeFakeSdk(
-  options: {
-    onCreateSession?: (session: FakeSession, cfg: Record<string, unknown>) => void | Promise<void>;
-    onResumeSession?: (
-      session: FakeSession,
-      sessionId: string,
-      cfg: Record<string, unknown>,
-    ) => void | Promise<void>;
-  } = {},
+  options:
+    | ((session: FakeSession, cfg: Record<string, unknown>) => void | Promise<void>)
+    | {
+        onCreateSession?: (
+          session: FakeSession,
+          cfg: Record<string, unknown>,
+        ) => void | Promise<void>;
+        onResumeSession?: (
+          session: FakeSession,
+          sessionId: string,
+          cfg: Record<string, unknown>,
+        ) => void | Promise<void>;
+      } = {},
 ) {
   const sessions: FakeSession[] = [];
+  const sessionHooks =
+    typeof options === "function"
+      ? { onCreateSession: options, onResumeSession: undefined }
+      : options;
 
   const createSession = vi.fn(async (cfg: Record<string, unknown>) => {
     const session = createFakeSession(cfg, `sess-${sessions.length + 1}`);
-    await options.onCreateSession?.(session, cfg);
+    await sessionHooks.onCreateSession?.(session, cfg);
     sessions.push(session);
     return session;
   });
 
   const resumeSession = vi.fn(async (sessionId: string, cfg: Record<string, unknown>) => {
     const session = createFakeSession(cfg, sessionId);
-    await options.onResumeSession?.(session, sessionId, cfg);
+    await sessionHooks.onResumeSession?.(session, sessionId, cfg);
     sessions.push(session);
     return session;
   });
@@ -518,10 +590,8 @@ afterEach(() => {
 
 describe("runCopilotAttempt", () => {
   it("happy path", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
     const pool = makeFakePool(sdk);
 
@@ -536,9 +606,22 @@ describe("runCopilotAttempt", () => {
     expect(getSdkSessionId(result)).toBe("sess-1");
   });
 
+  it("hands the foreground prompt context to agent-end side effects", async () => {
+    const runAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
+    const params = makeParams({
+      memberRoleIds: ["maintainer-role"],
+      messageChannel: "discord",
+    });
+
+    await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
+
+    const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
+    expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
+  });
+
   it("retains the host terminal error after an unrelated successful tool", async () => {
     const terminalError = {
-      actionFingerprint: "message:send:room-1",
       error: "delivery failed",
       mutatingAction: true,
       toolName: "message",
@@ -553,6 +636,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: observation.toolName === "message",
+          effectReceipt: {
+            state: observation.toolName === "message" ? "uncertain" : "read_completed",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
@@ -569,12 +655,10 @@ describe("runCopilotAttempt", () => {
         arguments: { summary: "ok" },
         outcome: "success",
       });
-      return { sdkTools: [], sourceTools: [] };
+      return createStubToolBridge();
     });
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
 
     const result = await runCopilotAttempt(makeParams({ observeToolTerminal }), {
@@ -587,10 +671,8 @@ describe("runCopilotAttempt", () => {
   });
 
   it("reports code-mode engagement through the real tool bridge", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
 
     // No `createToolBridge` override: this runs the production bridge, so the
@@ -608,18 +690,12 @@ describe("runCopilotAttempt", () => {
   });
 
   it("reports the tool bridge's code-mode engagement on the attempt result", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
 
     const result = await runCopilotAttempt(makeParams(), {
-      createToolBridge: vi.fn(async () => ({
-        codeModeEngaged: true,
-        sdkTools: [],
-        sourceTools: [],
-      })),
+      createToolBridge: vi.fn(async () => createStubToolBridge([], [], { codeModeEngaged: true })),
       pool: makeFakePool(sdk),
     });
 
@@ -628,7 +704,6 @@ describe("runCopilotAttempt", () => {
 
   it("clears the host terminal error after matching tool recovery", async () => {
     const terminalError = {
-      actionFingerprint: "message:send:room-1",
       error: "delivery failed",
       mutatingAction: true,
       toolName: "message",
@@ -641,6 +716,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: true,
+          effectReceipt: {
+            state: observation.outcome === "success" ? "mutation_committed" : "uncertain",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
@@ -658,12 +736,10 @@ describe("runCopilotAttempt", () => {
         arguments: args,
         outcome: "success",
       });
-      return { sdkTools: [], sourceTools: [] };
+      return createStubToolBridge();
     });
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
 
     const result = await runCopilotAttempt(makeParams({ observeToolTerminal }), {
@@ -676,6 +752,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
+    const params = makeParams({
+      agentAccountId: "account-a",
+      sandboxSessionKey: "agent:agent-1:policy",
+    });
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",
       appendContext: "Finish with the current test status.",
@@ -694,10 +774,8 @@ describe("runCopilotAttempt", () => {
         { hookName: "agent_end", handler: agentEnd },
       ]),
     );
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
       await input.onToolCompleted?.({
@@ -707,10 +785,10 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       });
-      return { sdkTools: [], sourceTools: [] };
+      return createStubToolBridge();
     });
 
-    await runCopilotAttempt(makeParams(), {
+    await runCopilotAttempt(params, {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -718,7 +796,12 @@ describe("runCopilotAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        accountId: "account-a",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     const cfg = sdk.createSession.mock.calls[0]?.[0] as {
       systemMessage?: { content?: string };
@@ -737,7 +820,11 @@ describe("runCopilotAttempt", () => {
         provider: "github-copilot",
         runId: "run-1",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -745,11 +832,11 @@ describe("runCopilotAttempt", () => {
         model: "gpt-4o",
         provider: "github-copilot",
       }),
-      expect.objectContaining({ runId: "run-1" }),
+      expect.objectContaining({ runId: "run-1", sessionKey: params.sessionKey }),
     );
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),
-      expect.objectContaining({ sessionId: "session-1" }),
+      expect.objectContaining({ sessionId: "session-1", sessionKey: params.sessionKey }),
     );
     expect(afterToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -757,7 +844,11 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
   });
 
@@ -767,7 +858,7 @@ describe("runCopilotAttempt", () => {
     let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
       computerContextEpoch = input.computerContextEpoch;
-      return { sdkTools: [], sourceTools: [] };
+      return createStubToolBridge();
     });
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -776,18 +867,16 @@ describe("runCopilotAttempt", () => {
       ]),
     );
     let activeSession: FakeSession | undefined;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        activeSession = session;
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      activeSession = session;
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        return makeAssistantMessageEvent("done");
+      });
     });
 
-    const attempt = runCopilotAttempt(makeParams(), {
+    const attempt = runCopilotAttempt(makeParams({ agentAccountId: "account-a" }), {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -815,7 +904,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -823,7 +912,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
@@ -835,14 +924,12 @@ describe("runCopilotAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_compaction", handler: beforeCompaction }]),
     );
     let activeSession: FakeSession | undefined;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        activeSession = session;
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("session.compaction_start", {});
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      activeSession = session;
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("session.compaction_start", {});
+        return makeAssistantMessageEvent("done");
+      });
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -863,14 +950,12 @@ describe("runCopilotAttempt", () => {
 
   it("returns a successful turn while background compaction remains observed", async () => {
     vi.useFakeTimers();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        return makeAssistantMessageEvent("done");
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -891,13 +976,11 @@ describe("runCopilotAttempt", () => {
 
   it("does not delete a fresh session when its SDK user was never validated", async () => {
     vi.useFakeTimers();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("session.compaction_start", {});
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("session.compaction_start", {});
+        return makeAssistantMessageEvent("done");
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -946,16 +1029,14 @@ describe("runCopilotAttempt", () => {
     const controller = new AbortController();
     const onDeferredCompaction = vi.fn();
     let activeSession: FakeSession | undefined;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        activeSession = session;
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          setTimeout(() => controller.abort(), 0);
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      activeSession = session;
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        setTimeout(() => controller.abort(), 0);
+        return makeAssistantMessageEvent("done");
+      });
     });
 
     const attempt = runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
@@ -983,17 +1064,15 @@ describe("runCopilotAttempt", () => {
     const controller = new AbortController();
     const cancellation = createDeferred<{ cancelled: boolean }>();
     let activeSession: FakeSession | undefined;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        activeSession = session;
-        session.rpc.history.cancelBackgroundCompaction.mockImplementationOnce(
-          () => cancellation.promise,
-        );
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("session.compaction_start", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      activeSession = session;
+      session.rpc.history.cancelBackgroundCompaction.mockImplementationOnce(
+        () => cancellation.promise,
+      );
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("session.compaction_start", {});
+        return undefined;
+      });
     });
 
     const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
@@ -1022,22 +1101,17 @@ describe("runCopilotAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
     );
-    const sdk = makeFakeSdk({
-      onCreateSession: (session, cfg) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          const hooks = cfg.hooks as {
-            onUserPromptSubmitted?: (
-              input: { prompt: string },
-              invocation: { sessionId: string },
-            ) => Promise<unknown>;
-          };
-          await hooks.onUserPromptSubmitted?.(
-            { prompt: "hello" },
-            { sessionId: session.sessionId },
-          );
-          return makeAssistantMessageEvent("done");
-        });
-      },
+    const sdk = makeFakeSdk((session, cfg) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        const hooks = cfg.hooks as {
+          onUserPromptSubmitted?: (
+            input: { prompt: string },
+            invocation: { sessionId: string },
+          ) => Promise<unknown>;
+        };
+        await hooks.onUserPromptSubmitted?.({ prompt: "hello" }, { sessionId: session.sessionId });
+        return makeAssistantMessageEvent("done");
+      });
     });
 
     await runCopilotAttempt(makeParams({ hooksConfig: { onUserPromptSubmitted } } as never), {
@@ -1106,10 +1180,8 @@ describe("runCopilotAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
 
     let settled = false;
@@ -1350,13 +1422,11 @@ describe("runCopilotAttempt", () => {
         });
       });
     });
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockReturnValue(sendDeferred.promise);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockReturnValue(sendDeferred.promise);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const runPromise = runCopilotAttempt(makeParams({ onAssistantDelta }), {
       createToolBridge,
@@ -1387,13 +1457,11 @@ describe("runCopilotAttempt", () => {
 
   it("deltas forwarded even when no consumer", async () => {
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockReturnValue(sendDeferred.promise);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockReturnValue(sendDeferred.promise);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const runPromise = runCopilotAttempt(makeParams(), { createToolBridge, pool });
     await flushAsync();
@@ -1431,6 +1499,7 @@ describe("runCopilotAttempt", () => {
     expect(
       (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
+    expect(requireResumeSessionConfig(sdk)).not.toHaveProperty("suppressResumeEvent");
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(result.replayMetadata.replaySafe).toBe(true);
     expect(
@@ -1529,21 +1598,19 @@ describe("runCopilotAttempt", () => {
   });
 
   it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("tool.execution_start", {
-            toolCallId: "tool-1",
-            toolName: "write",
-          });
-          session.emit("tool.execution_complete", {
-            result: { content: "wrote file" },
-            success: true,
-            toolCallId: "tool-1",
-          });
-          return makeAssistantMessageEvent("done");
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("tool.execution_start", {
+          toolCallId: "tool-1",
+          toolName: "write",
         });
-      },
+        session.emit("tool.execution_complete", {
+          result: { content: "wrote file" },
+          success: true,
+          toolCallId: "tool-1",
+        });
+        return makeAssistantMessageEvent("done");
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -1582,17 +1649,15 @@ describe("runCopilotAttempt", () => {
     const controller = new AbortController();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const sessionCreated = createDeferred<FakeSession>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockReturnValue(sendDeferred.promise);
-        session.abort.mockImplementationOnce(async () => {
-          sendDeferred.resolve(undefined);
-        });
-        sessionCreated.resolve(session);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockReturnValue(sendDeferred.promise);
+      session.abort.mockImplementationOnce(async () => {
+        sendDeferred.resolve(undefined);
+      });
+      sessionCreated.resolve(session);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const runPromise = runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
       createToolBridge,
@@ -1617,14 +1682,12 @@ describe("runCopilotAttempt", () => {
     gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const sessionCreated = createDeferred<FakeSession>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockReturnValue(sendDeferred.promise);
-        sessionCreated.resolve(session);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockReturnValue(sendDeferred.promise);
+      sessionCreated.resolve(session);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const runPromise = runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1704,7 +1767,7 @@ describe("runCopilotAttempt", () => {
         parameters: { type: "object" },
       },
     ];
-    const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
     await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
@@ -1733,7 +1796,7 @@ describe("runCopilotAttempt", () => {
     expect(
       ((sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as { tools?: unknown[] })
         .tools,
-    ).toBe(sdkTools);
+    ).toStrictEqual(sdkTools);
   });
 
   it("applies before_prompt_build toolsAllow to the submitted SDK tool surface", async () => {
@@ -1746,21 +1809,23 @@ describe("runCopilotAttempt", () => {
       ]),
     );
     const sdk = makeFakeSdk();
-    const sdkTools: SdkTool[] = [
-      {
-        description: "Fake SDK tool",
-        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
-        name: "fake_sdk_tool",
-        parameters: { type: "object" },
-      },
-    ];
 
-    await runCopilotAttempt(makeParams(), {
-      createToolBridge: vi.fn(async () => ({ sdkTools, sourceTools: [] })),
+    await runCopilotAttempt(makeParams({ agentId: "main", sessionKey: "agent:main:main" }), {
+      createToolBridge: vi.fn(async () => ({
+        codeModeEngaged: true,
+        promptToolPolicy: {
+          apply: () => ({ tools: [], callableToolNames: [] }),
+        },
+        sourceTools: [],
+      })),
       pool: makeFakePool(sdk),
     });
 
     expect((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools).toEqual([]);
+    const content = (requireCreateSessionConfig(sdk) as { systemMessage?: { content?: string } })
+      .systemMessage?.content;
+    expect(content).not.toContain("## Delegation");
+    expect(content).not.toContain("## Skill Workshop");
   });
 
   it("preserves the required message tool through before_prompt_build toolsAllow", async () => {
@@ -1781,10 +1846,9 @@ describe("runCopilotAttempt", () => {
     });
 
     await runCopilotAttempt(makeParams({ sourceReplyDeliveryMode: "message_tool_only" }), {
-      createToolBridge: vi.fn(async () => ({
-        sdkTools: [makeTool("message"), makeTool("read")],
-        sourceTools: [],
-      })),
+      createToolBridge: vi.fn(async () =>
+        createStubToolBridge([makeTool("message"), makeTool("read")]),
+      ),
       pool: makeFakePool(sdk),
     });
 
@@ -1793,6 +1857,10 @@ describe("runCopilotAttempt", () => {
         (tool) => tool.name,
       ),
     ).toEqual(["message"]);
+    expect(
+      (requireCreateSessionConfig(sdk) as { systemMessage?: { content?: string } }).systemMessage
+        ?.content,
+    ).toContain("Visible source replies are not automatically delivered");
   });
 
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {
@@ -1802,7 +1870,7 @@ describe("runCopilotAttempt", () => {
     const createToolBridge = vi.fn(
       async (input: { sessionRef?: { current: { abort?: () => unknown } | undefined } }) => {
         capturedRef = input.sessionRef;
-        return { sdkTools: [], sourceTools: [] };
+        return createStubToolBridge();
       },
     );
 
@@ -1822,7 +1890,7 @@ describe("runCopilotAttempt", () => {
     const createToolBridge = vi.fn(
       async (input: { sessionRef?: { current: { abort?: () => unknown } | undefined } }) => {
         capturedRef = input.sessionRef;
-        return { sdkTools: [], sourceTools: [] };
+        return createStubToolBridge();
       },
     );
 
@@ -1844,7 +1912,7 @@ describe("runCopilotAttempt", () => {
     let capturedParams: unknown;
     const createToolBridge = vi.fn(async (input: { attemptParams?: unknown }) => {
       capturedParams = input.attemptParams;
-      return { sdkTools: [], sourceTools: [] };
+      return createStubToolBridge();
     });
 
     const params = makeParams({
@@ -1859,18 +1927,43 @@ describe("runCopilotAttempt", () => {
     expect(capturedParams).toBe(params);
   });
 
-  it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
+  it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async (input: { onYieldDetected?: (msg?: string) => void }) => {
-      // Simulate a wrapped tool invoking sessions_yield before the
-      // attempt settles. The bridge is responsible for notifying the
-      // caller via onYieldDetected so the final result can carry the
-      // flag (parent runner uses it to mark liveness paused /
-      // stop_reason end_turn). Mirrors PI/codex parity.
-      input.onYieldDetected?.("paused by tool");
-      return { sdkTools: [], sourceTools: [] };
-    });
+    const createToolBridge = vi.fn(
+      async (input: {
+        onToolCompleted?: (completion: {
+          args: Record<string, unknown>;
+          result: unknown;
+          startedAt: number;
+          toolCallId: string;
+          toolName: string;
+        }) => void | Promise<void>;
+        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
+      }) => {
+        await input.onToolCompleted?.({
+          args: { task: "review" },
+          result: {
+            details: {
+              status: "accepted",
+              runId: "run-copilot-child",
+              childSessionKey: "agent:main:subagent:copilot-child",
+              expectsCompletionMessage: true,
+            },
+          },
+          startedAt: Date.now(),
+          toolCallId: "spawn-1",
+          toolName: "sessions_spawn",
+        });
+        // Simulate a wrapped tool invoking sessions_yield before the
+        // attempt settles. The bridge is responsible for notifying the
+        // caller via onYieldDetected so the final result can carry the
+        // flag (parent runner uses it to mark liveness paused /
+        // stop_reason end_turn). Mirrors PI/codex parity.
+        input.onYieldDetected?.("private continuation", "Research started; results will follow.");
+        return createStubToolBridge();
+      },
+    );
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1878,6 +1971,14 @@ describe("runCopilotAttempt", () => {
     });
 
     expect(result.yieldDetected).toBe(true);
+    expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
+    expect(result.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-copilot-child",
+        childSessionKey: "agent:main:subagent:copilot-child",
+        expectsCompletionMessage: true,
+      },
+    ]);
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {
@@ -1886,7 +1987,7 @@ describe("runCopilotAttempt", () => {
     // Default createToolBridge in deps falls back to the real one,
     // which only fires onYieldDetected when a wrapped tool yields. We
     // pass a bridge that never yields and assert the flag stays false.
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1932,7 +2033,7 @@ describe("runCopilotAttempt", () => {
     );
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const result = await runCopilotAttempt(
       makeParams({
@@ -1990,72 +2091,78 @@ describe("runCopilotAttempt", () => {
   });
 
   it("registers ask_user and resolves it from the active OpenClaw queue", async () => {
+    const controller = new AbortController();
     const onBlockReply = vi.fn();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session, cfg) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-          const handler = cfg.onUserInputRequest;
-          if (typeof handler !== "function") {
-            throw new Error("expected onUserInputRequest handler");
-          }
-          const response = await handler(
-            {
-              question: "Pick a mode",
-              choices: ["Fast", "Deep"],
-              allowFreeform: false,
-            },
-            { sessionId: session.sessionId },
-          );
-          return makeAssistantMessageEvent(`selected ${response.answer}`);
-        });
-      },
+    const sdk = makeFakeSdk((session, cfg) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+        const handler = cfg.onUserInputRequest;
+        if (typeof handler !== "function") {
+          throw new Error("expected onUserInputRequest handler");
+        }
+        const response = await handler(
+          {
+            question: "Pick a mode",
+            choices: ["Fast", "Deep"],
+            allowFreeform: false,
+          },
+          { sessionId: session.sessionId },
+        );
+        return makeAssistantMessageEvent(`selected ${response.answer}`);
+      });
     });
     const pool = makeFakePool(sdk);
 
     const toolAuthorityFingerprint = "ask-user-authority";
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
-      pool,
-    });
-
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
-    expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
-    await waitForEventLoopTurn();
-    expect(
-      queueAgentHarnessMessage("session-1", "2", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint,
-      }),
-    ).toBe(true);
-    const result = await attempt;
-
-    const cfg = requireCreateSessionConfig(sdk);
-    expect(typeof cfg.onUserInputRequest).toBe("function");
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ text: expect.stringContaining("Pick a mode") }),
+    const attempt = runCopilotAttempt(
+      makeParams({ abortSignal: controller.signal, onBlockReply, toolAuthorityFingerprint }),
+      { pool },
     );
-    expect(result.assistantTexts).toEqual(["selected Deep"]);
-    expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+    const settledAttempt = attempt.catch(() => undefined);
+
+    try {
+      await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+      expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
+      await waitForEventLoopTurn();
+      expect(
+        queueAgentHarnessMessage("session-1", "2", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint,
+        }),
+      ).toBe(true);
+      const result = await vi.waitFor(() => attempt);
+
+      const cfg = requireCreateSessionConfig(sdk);
+      expect(typeof cfg.onUserInputRequest).toBe("function");
+      expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ text: expect.stringContaining("Pick a mode") }),
+      );
+      expect(result.assistantTexts).toEqual(["selected Deep"]);
+      expect(requireSession(sdk).send).toHaveBeenCalledExactlyOnceWith({ prompt: "tool progress" });
+      expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+    } finally {
+      controller.abort();
+      await vi.waitFor(() => settledAttempt);
+      expect(gatewayQuestionMock.waiters.size).toBe(0);
+    }
   });
 
   it("injects active-run steering and waits for its canonical transcript receipt", async () => {
     const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-          return initialTurn.promise;
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+        return initialTurn.promise;
+      });
+      session.send.mockImplementationOnce(async (options) => {
+        const prompt = (options as { prompt?: string }).prompt;
+        session.emit("user.message", {
+          __eventId: "steered-user",
+          content: prompt,
+          delivery: "steering",
         });
-        session.send.mockImplementationOnce(async (options) => {
-          const prompt = (options as { prompt?: string }).prompt;
-          session.emit("user.message", {
-            __eventId: "steered-user",
-            content: prompt,
-            delivery: "steering",
-          });
-          return "steered-user";
-        });
-      },
+        return "steered-user";
+      });
     });
     const attempt = runCopilotAttempt(makeParams({ taskSuggestionDeliveryMode: "gateway" }), {
       pool: makeFakePool(sdk),
@@ -2104,27 +2211,25 @@ describe("runCopilotAttempt", () => {
 
   it("holds a steering receipt until pending tool results and the user turn persist", async () => {
     const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-          session.emit("assistant.message", {
-            __eventId: "assistant-tools",
-            content: "checking",
-            messageId: "assistant-tools",
-            toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
-          });
-          return initialTurn.promise;
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+        session.emit("assistant.message", {
+          __eventId: "assistant-tools",
+          content: "checking",
+          messageId: "assistant-tools",
+          toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
         });
-        session.send.mockImplementationOnce(async (options) => {
-          session.emit("user.message", {
-            __eventId: "steered-user",
-            content: (options as { prompt?: string }).prompt,
-            delivery: "steering",
-          });
-          return "steered-user";
+        return initialTurn.promise;
+      });
+      session.send.mockImplementationOnce(async (options) => {
+        session.emit("user.message", {
+          __eventId: "steered-user",
+          content: (options as { prompt?: string }).prompt,
+          delivery: "steering",
         });
-      },
+        return "steered-user";
+      });
     });
     const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
@@ -2178,25 +2283,23 @@ describe("runCopilotAttempt", () => {
       ]),
     );
     const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-          return initialTurn.promise;
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+        return initialTurn.promise;
+      });
+      session.send.mockImplementation(async (options) => {
+        const prompt = (options as { prompt?: string }).prompt ?? "";
+        const eventId = prompt.includes("fire and forget")
+          ? "suppressed-steer-unobserved"
+          : "suppressed-steer-waited";
+        session.emit("user.message", {
+          __eventId: eventId,
+          content: prompt,
+          delivery: "steering",
         });
-        session.send.mockImplementation(async (options) => {
-          const prompt = (options as { prompt?: string }).prompt ?? "";
-          const eventId = prompt.includes("fire and forget")
-            ? "suppressed-steer-unobserved"
-            : "suppressed-steer-waited";
-          session.emit("user.message", {
-            __eventId: eventId,
-            content: prompt,
-            delivery: "steering",
-          });
-          return eventId;
-        });
-      },
+        return eventId;
+      });
     });
     const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
@@ -2243,10 +2346,8 @@ describe("runCopilotAttempt", () => {
   it("rejects active steering before the initial SDK user event is validated", async () => {
     gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
     const initialTurn = createDeferred<SessionEventShape | undefined>();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(() => initialTurn.promise);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(() => initialTurn.promise);
     });
     const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
@@ -2282,13 +2383,11 @@ describe("runCopilotAttempt", () => {
     const questionClaim = createDeferred<boolean>();
     const claimPendingAgentQuestionAnswer = vi.fn(() => questionClaim.promise);
     gatewayQuestionMock.claimPendingAgentQuestionAnswer = claimPendingAgentQuestionAnswer;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
-          return initialTurn.promise;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+        return initialTurn.promise;
+      });
     });
     try {
       const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -2437,6 +2536,56 @@ describe("runCopilotAttempt", () => {
         systemMessage?: { content?: string };
       };
       expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
+    });
+
+    it("sends the final appended developer instructions to the SDK and llm_input", async () => {
+      const sdk = makeFakeSdk();
+      const llmInput = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+      );
+      const makeTool = (name: string): SdkTool => ({
+        description: name,
+        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+        name,
+        parameters: { type: "object" },
+      });
+      const toolNames = [
+        "message",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "skill_workshop",
+        "subagents",
+      ];
+
+      await runCopilotAttempt(
+        makeParams({
+          agentId: "main",
+          disableTools: false,
+          sessionKey: "agent:main:main",
+        }),
+        {
+          createToolBridge: vi.fn(async () => createStubToolBridge(toolNames.map(makeTool))),
+          pool: makeFakePool(sdk),
+        },
+      );
+      await waitForEventLoopTurn();
+
+      const content = expectDefined(
+        (requireCreateSessionConfig(sdk) as { systemMessage?: { content?: string } }).systemMessage
+          ?.content,
+        "Copilot appended developer instructions",
+      );
+      expect(content).toContain("You are a personal agent running inside OpenClaw.");
+      expect(content).toContain("## Skill Workshop");
+      expect(content).toContain("## Delegation");
+      expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
+      expect(content).toContain("You can participate in the conversation throughout your work.");
+      expect(llmInput).toHaveBeenCalledWith(
+        expect.objectContaining({ systemPrompt: content }),
+        expect.any(Object),
+      );
     });
 
     it("forwards extraSystemPrompt into SDK SessionConfig.systemMessage", async () => {
@@ -2651,10 +2800,8 @@ describe("runCopilotAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(undefined);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockResolvedValueOnce(undefined);
     });
     const pool = makeFakePool(sdk);
 
@@ -2681,14 +2828,12 @@ describe("runCopilotAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        return undefined;
+      });
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -2717,19 +2862,15 @@ describe("runCopilotAttempt", () => {
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
     let activeSession: FakeSession | undefined;
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        activeSession = session;
-        session.sendAndWait.mockRejectedValueOnce(
-          new Error("Timeout after 60000ms waiting for session.idle"),
-        );
-      },
+    const sdk = makeFakeSdk((session) => {
+      activeSession = session;
+      session.sendAndWait.mockRejectedValueOnce(
+        new Error("Timeout after 60000ms waiting for session.idle"),
+      );
     });
-    const createToolBridge = vi.fn(async () => ({
-      cleanup: cleanupToolBridge,
-      sdkTools: [],
-      sourceTools: [],
-    }));
+    const createToolBridge = vi.fn(async () =>
+      createStubToolBridge([], [], { cleanup: cleanupToolBridge }),
+    );
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -2759,15 +2900,13 @@ describe("runCopilotAttempt", () => {
   });
 
   it("does not mark a timeout after SDK compaction has completed as active compaction", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("session.compaction_start", {});
-          session.emit("session.compaction_complete", { success: true });
-          session.emit("session.idle", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("session.compaction_start", {});
+        session.emit("session.compaction_complete", { success: true });
+        session.emit("session.idle", {});
+        return undefined;
+      });
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -2777,14 +2916,12 @@ describe("runCopilotAttempt", () => {
 
   it("bounds deferred cleanup when SDK compaction never completes", async () => {
     vi.useFakeTimers();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        return undefined;
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -2803,14 +2940,12 @@ describe("runCopilotAttempt", () => {
 
   it("cancels deferred cleanup when the timed-out caller aborts", async () => {
     const controller = new AbortController();
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("session.compaction_start", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        return undefined;
+      });
     });
 
     const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
@@ -2830,13 +2965,11 @@ describe("runCopilotAttempt", () => {
   });
 
   it("keeps the compaction timeout classification after deferred completion", async () => {
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("session.compaction_start", {});
-          return undefined;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("session.compaction_start", {});
+        return undefined;
+      });
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -2855,13 +2988,11 @@ describe("runCopilotAttempt", () => {
     // the catch and surfaced as a generic prompt error with
     // timedOut=false — the replay metadata then incorrectly treated
     // the attempt as side-effect-safe.
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          throw new Error("Timeout after 60000ms waiting for session.idle");
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        throw new Error("Timeout after 60000ms waiting for session.idle");
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -2900,13 +3031,11 @@ describe("runCopilotAttempt", () => {
     const onAssistantDelta = vi.fn(async (_payload: { delta: string }) => {
       await release.promise;
     });
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockReturnValue(sendDeferred.promise);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockReturnValue(sendDeferred.promise);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+    const createToolBridge = vi.fn(async () => createStubToolBridge());
 
     const runPromise = runCopilotAttempt(makeParams({ onAssistantDelta }), {
       createToolBridge,
@@ -2980,10 +3109,8 @@ describe("runCopilotAttempt", () => {
   it("release failure after a primary prompt error warns without masking the error", async () => {
     const primaryError = new Error("send failed");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockRejectedValueOnce(primaryError);
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockRejectedValueOnce(primaryError);
     });
     const pool = makeFakePool(sdk);
     pool.release = vi.fn(async () => {
@@ -3029,13 +3156,11 @@ describe("runCopilotAttempt", () => {
 
   it("cleanup on send error", async () => {
     const error = new Error("send failed");
-    const sdk = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          throw error;
-        });
-      },
+    const sdk = makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        throw error;
+      });
     });
     const pool = makeFakePool(sdk);
 
@@ -3053,22 +3178,18 @@ describe("runCopilotAttempt", () => {
 
   it("cleanup on disconnect throw", async () => {
     const primaryError = new Error("send failed");
-    const sdkWithPrimaryError = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-        session.sendAndWait.mockRejectedValueOnce(primaryError);
-      },
+    const sdkWithPrimaryError = makeFakeSdk((session) => {
+      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+      session.sendAndWait.mockRejectedValueOnce(primaryError);
     });
     const poolWithPrimaryError = makeFakePool(sdkWithPrimaryError);
 
     const first = await runCopilotAttempt(makeParams(), { pool: poolWithPrimaryError });
     expect(projectAgentRunAttemptTerminal(first.terminal).promptError).toBe(primaryError);
 
-    const sdkWithoutPrimaryError = makeFakeSdk({
-      onCreateSession: (session) => {
-        session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-      },
+    const sdkWithoutPrimaryError = makeFakeSdk((session) => {
+      session.disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
     const poolWithoutPrimaryError = makeFakePool(sdkWithoutPrimaryError);
 
@@ -3442,13 +3563,11 @@ describe("runCopilotAttempt", () => {
           return { appended: true, message: message as object, messageId: "user-event" };
         },
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
-            order.push("dispatch");
-            return makeAssistantMessageEvent("done");
-          });
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          order.push("dispatch");
+          return makeAssistantMessageEvent("done");
+        });
       });
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -3742,31 +3861,29 @@ describe("runCopilotAttempt", () => {
       const appendError = new Error("tool append failed");
       transcriptRuntimeMock.append.mockImplementationOnce(appendPreparedTranscriptMessage);
       transcriptRuntimeMock.appendBatch.mockRejectedValueOnce(appendError);
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
-            session.emit("assistant.message", {
-              content: "",
-              messageId: "tools",
-              toolRequests: [{ name: "read", toolCallId: "call-1" }],
-            });
-            session.emit("tool.execution_start", {
-              toolCallId: "call-1",
-              toolName: "read",
-            });
-            session.emit("tool.execution_complete", {
-              result: { content: "done" },
-              success: true,
-              toolCallId: "call-1",
-            });
-            session.emit("assistant.message", {
-              __eventId: "assistant-final",
-              content: "final after tool",
-              messageId: "final",
-            });
-            return undefined;
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("assistant.message", {
+            content: "",
+            messageId: "tools",
+            toolRequests: [{ name: "read", toolCallId: "call-1" }],
           });
-        },
+          session.emit("tool.execution_start", {
+            toolCallId: "call-1",
+            toolName: "read",
+          });
+          session.emit("tool.execution_complete", {
+            result: { content: "done" },
+            success: true,
+            toolCallId: "call-1",
+          });
+          session.emit("assistant.message", {
+            __eventId: "assistant-final",
+            content: "final after tool",
+            messageId: "final",
+          });
+          return undefined;
+        });
       });
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -3796,24 +3913,22 @@ describe("runCopilotAttempt", () => {
           messageId: (message.eventId as string | undefined) ?? "transcript-message",
         })),
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
-            session.emit("assistant.message", {
-              content: "checking",
-              messageId: "tools",
-              toolRequests: [{ name: "read", toolCallId: "call-1" }],
-            });
-            session.emit("tool.execution_complete", {
-              result: { content: "done" },
-              success: true,
-              toolCallId: "call-1",
-            });
-            const final = makeAssistantMessageEvent("final after tool");
-            session.emit("assistant.message", { __eventId: "assistant-final", ...final.data });
-            return final;
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("assistant.message", {
+            content: "checking",
+            messageId: "tools",
+            toolRequests: [{ name: "read", toolCallId: "call-1" }],
           });
-        },
+          session.emit("tool.execution_complete", {
+            result: { content: "done" },
+            success: true,
+            toolCallId: "call-1",
+          });
+          const final = makeAssistantMessageEvent("final after tool");
+          session.emit("assistant.message", { __eventId: "assistant-final", ...final.data });
+          return final;
+        });
       });
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -3839,21 +3954,19 @@ describe("runCopilotAttempt", () => {
           },
         ]),
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
-            const assistant = makeAssistantMessageEvent("", {
-              toolRequests: [{ name: "read", toolCallId: "blocked-call" }],
-            });
-            session.emit("assistant.message", assistant.data);
-            session.emit("tool.execution_complete", {
-              result: { content: "must stay suppressed" },
-              success: true,
-              toolCallId: "blocked-call",
-            });
-            return assistant;
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          const assistant = makeAssistantMessageEvent("", {
+            toolRequests: [{ name: "read", toolCallId: "blocked-call" }],
           });
-        },
+          session.emit("assistant.message", assistant.data);
+          session.emit("tool.execution_complete", {
+            result: { content: "must stay suppressed" },
+            success: true,
+            toolCallId: "blocked-call",
+          });
+          return assistant;
+        });
       });
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -3877,25 +3990,23 @@ describe("runCopilotAttempt", () => {
           },
         ]),
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
-            session.emit("assistant.message", {
-              content: "",
-              messageId: "tools",
-              toolRequests: [{ name: "read", toolCallId: "policy-call" }],
-            });
-            session.emit("tool.execution_complete", {
-              result: { content: "blocked by policy" },
-              success: true,
-              toolCallId: "policy-call",
-            });
-            session.emit("session.compaction_start", {});
-            const final = { ...makeAssistantMessageEvent("done"), id: "final" };
-            session.emit("assistant.message", { __eventId: "final", ...final.data });
-            return final;
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("assistant.message", {
+            content: "",
+            messageId: "tools",
+            toolRequests: [{ name: "read", toolCallId: "policy-call" }],
           });
-        },
+          session.emit("tool.execution_complete", {
+            result: { content: "blocked by policy" },
+            success: true,
+            toolCallId: "policy-call",
+          });
+          session.emit("session.compaction_start", {});
+          const final = { ...makeAssistantMessageEvent("done"), id: "final" };
+          session.emit("assistant.message", { __eventId: "final", ...final.data });
+          return final;
+        });
       });
 
       const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
@@ -4045,13 +4156,11 @@ describe("runCopilotAttempt", () => {
     }
 
     it("forwards sandbox=null when resolveSandboxContext returns null", async () => {
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => null);
 
       await runCopilotAttempt(makeParams(), {
@@ -4072,13 +4181,11 @@ describe("runCopilotAttempt", () => {
     });
 
     it("sandbox=null: SDK session workingDirectory matches original workspace", async () => {
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => null);
 
       await runCopilotAttempt(makeParams(), {
@@ -4094,13 +4201,11 @@ describe("runCopilotAttempt", () => {
     });
 
     it("uses task cwd for SDK workingDirectory and bridged tools when unsandboxed", async () => {
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => null);
 
       await runCopilotAttempt(
@@ -4135,13 +4240,11 @@ describe("runCopilotAttempt", () => {
       const workspaceDir = path.join(stateDir, "workspace");
       const taskDir = path.join(workspaceDir, "task-repo");
       await fsp.mkdir(taskDir, { recursive: true });
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => null);
 
       try {
@@ -4177,13 +4280,11 @@ describe("runCopilotAttempt", () => {
 
     it("forwards rw sandbox: bridge sees original workspace and no spawn override", async () => {
       const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => sandbox);
 
       await runCopilotAttempt(makeParams(), {
@@ -4205,13 +4306,11 @@ describe("runCopilotAttempt", () => {
 
     it("forwards rw sandbox: SDK session workingDirectory stays on the original workspace", async () => {
       const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => sandbox);
 
       await runCopilotAttempt(makeParams(), {
@@ -4229,13 +4328,11 @@ describe("runCopilotAttempt", () => {
     it("forwards ro sandbox: bridge sees sandbox copy, spawn keeps original workspace", async () => {
       const sandboxDir = `${tmpdir()}/copilot-sandbox-${Date.now()}`;
       const sandbox = makeSandboxStub({ workspaceAccess: "ro", workspaceDir: sandboxDir });
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => sandbox);
 
       const workspaceDir = `${tmpdir()}/copilot-orig-${Date.now()}`;
@@ -4296,7 +4393,7 @@ describe("runCopilotAttempt", () => {
       } as never);
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => sandbox);
 
       try {
@@ -4338,7 +4435,7 @@ describe("runCopilotAttempt", () => {
       );
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => sandbox);
 
       const result = await runCopilotAttempt(
@@ -4367,13 +4464,11 @@ describe("runCopilotAttempt", () => {
       initializeGlobalHookRunner(
         createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const resolveSandboxContextOverride = vi.fn(async () => {
         throw new Error("sandbox provisioning boom");
       });
@@ -4397,13 +4492,11 @@ describe("runCopilotAttempt", () => {
     });
 
     it("fails closed when creating the sandbox copy workspace fails", async () => {
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
       const blockingFile = path.join(tmpdir(), `copilot-sandbox-block-${Date.now()}`);
       await fsp.writeFile(blockingFile, "not a directory");
       const sandbox = makeSandboxStub({
@@ -4434,7 +4527,7 @@ describe("runCopilotAttempt", () => {
   describe("settled tool finalization isolation", () => {
     it("requires an existing SDK session before constructing any capability surface", async () => {
       const sdk = makeFakeSdk();
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
 
       const result = await runCopilotAttempt(makeFinalizationParams(), {
         createToolBridge,
@@ -4463,8 +4556,41 @@ describe("runCopilotAttempt", () => {
         ]),
       );
       const sdk = makeFakeSdk({
-        onResumeSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("final answer"));
+        onResumeSession: (session, _sessionId, config) => {
+          session.sendAndWait.mockImplementationOnce(async (options) => {
+            const systemMessage = (config.systemMessage as { content?: unknown } | undefined)
+              ?.content;
+            if (typeof systemMessage === "string") {
+              session.emit("system.message", {
+                __eventId: "finalization-system",
+                content: systemMessage,
+              });
+            }
+            if (config.suppressResumeEvent !== true) {
+              session.emit("assistant.message", {
+                __eventId: "prior-tool-assistant",
+                content: "",
+                messageId: "prior-tool-message",
+                toolRequests: [{ arguments: {}, name: "read", toolCallId: "prior-tool-call" }],
+              });
+              session.emit("tool.execution_start", {
+                toolCallId: "prior-tool-call",
+                toolName: "read",
+              });
+              session.emit("tool.execution_complete", {
+                result: { content: "prior tool result" },
+                success: true,
+                toolCallId: "prior-tool-call",
+              });
+            }
+            const prompt = (options as { prompt?: unknown } | undefined)?.prompt;
+            session.emit("user.message", {
+              __eventId: "finalization-user",
+              content: typeof prompt === "string" ? prompt : "",
+              transformedContent: `sdk-wrapped:${typeof prompt === "string" ? prompt : ""}`,
+            });
+            return makeAssistantMessageEvent("final answer");
+          });
         },
       });
       const permissivePolicy = vi.fn(async () => ({ kind: "approved" }) as never);
@@ -4479,7 +4605,7 @@ describe("runCopilotAttempt", () => {
         name: "unsafe_tool",
         parameters: { type: "object" },
       } satisfies SdkTool;
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [sdkTool], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge([sdkTool]));
       const workspaceBootstrapCalls =
         workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls.length;
 
@@ -4508,7 +4634,21 @@ describe("runCopilotAttempt", () => {
         content: [{ type: "text", text: "final answer" }],
         stopReason: "stop",
       });
-      expect(result.toolMetas).toEqual([]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: false,
+        replaySafe: true,
+      });
+      expect({
+        itemLifecycle: result.itemLifecycle,
+        toolMetas: result.toolMetas,
+      }).toEqual({
+        itemLifecycle: {
+          activeCount: 0,
+          completedCount: 0,
+          startedCount: 0,
+        },
+        toolMetas: [],
+      });
       expect(sdk.createSession).not.toHaveBeenCalled();
       expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
       expect(pool.acquire).toHaveBeenCalledWith(
@@ -4521,6 +4661,7 @@ describe("runCopilotAttempt", () => {
         coauthorEnabled: false,
         continuePendingWork: false,
         customAgents: [],
+        suppressResumeEvent: true,
         customAgentsLocalOnly: true,
         embeddingCacheStorage: "in-memory",
         enableConfigDiscovery: false,
@@ -4631,7 +4772,7 @@ describe("runCopilotAttempt", () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("read"), makeFakeSdkTool("edit")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
@@ -4646,7 +4787,7 @@ describe("runCopilotAttempt", () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("read")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
         createToolBridge,
@@ -4660,7 +4801,7 @@ describe("runCopilotAttempt", () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("read"), makeFakeSdkTool("ask_user")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
         createToolBridge,
@@ -4678,7 +4819,7 @@ describe("runCopilotAttempt", () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("openclaw")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(makeParams({ toolsAllow: ["openclaw"] }), {
         createToolBridge,
@@ -4698,7 +4839,7 @@ describe("runCopilotAttempt", () => {
       // Whatever the upstream reason, `availableTools` must be the same
       // ask_user-only list so the SDK cannot fall back to its native
       // catalog while the registered user-input handler remains usable.
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
@@ -4715,7 +4856,7 @@ describe("runCopilotAttempt", () => {
         makeFakeSdkTool("exec"),
         makeFakeSdkTool("message"),
       ];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
@@ -4745,7 +4886,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("read")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(
         makeParams({ initialReplayState: { sdkSessionId: "sess-resume-1" } } as never),
@@ -4765,7 +4906,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("read")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(
         makeParams({
@@ -4786,7 +4927,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const sdkTools = [makeFakeSdkTool("openclaw")];
-      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
       await runCopilotAttempt(
         makeParams({
@@ -4812,7 +4953,7 @@ describe("runCopilotAttempt", () => {
         },
       });
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const createToolBridge = vi.fn(async () => createStubToolBridge());
 
       await runCopilotAttempt(
         makeParams({ initialReplayState: { sdkSessionId: "sess-resume-2" } } as never),
@@ -4873,7 +5014,7 @@ describe("runCopilotAttempt", () => {
           // Bypass the real plugin-bridge wiring; with a sandbox in play
           // attempt.ts would otherwise call the real createToolBridge which
           // requires plugin SDK fixtures we do not stand up here.
-          createToolBridge: vi.fn(async () => ({ sdkTools: [], sourceTools: [] })),
+          createToolBridge: vi.fn(async () => createStubToolBridge()),
           // Drive the sandbox resolution branch deterministically so the
           // test asserts the exact wiring rather than the orchestrator's
           // real sandbox discovery path. Include every SandboxContext

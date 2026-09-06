@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
@@ -25,7 +26,6 @@ import {
 } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationPathMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   resolveLegacyMigrationRelativePath,
@@ -101,7 +101,7 @@ export function detectLegacyMcpOAuthStores(params: {
     const sourcePaths = listLegacySourcePaths(sourceDir);
     return { sourceDir, sourcePaths, hasLegacy: sourcePaths.length > 0 };
   } catch {
-    return { sourceDir, sourcePaths: [], hasLegacy: legacyMigrationPathMayExist(sourceDir) };
+    return { sourceDir, sourcePaths: [], hasLegacy: pathMayExistSync(sourceDir) };
   }
 }
 

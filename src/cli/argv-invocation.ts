@@ -5,12 +5,8 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
 } from "./argv.js";
+import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 import { resolveParentAwareCommandPath } from "./parent-command-path.js";
-
-/** Resolves startup policy paths while consuming known parent-command option values. */
-export function resolveCliStartupCommandPath(argv: string[]): string[] {
-  return resolveParentAwareCommandPath(argv) ?? getCommandPathWithRootOptions(argv, 2);
-}
 
 type CliArgvInvocation = {
   argv: string[];
@@ -24,7 +20,10 @@ type CliArgvInvocation = {
 export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
   return {
     argv,
-    commandPath: resolveCliStartupCommandPath(argv),
+    commandPath:
+      resolveGatewayCatalogCommandPath(argv) ??
+      resolveParentAwareCommandPath(argv) ??
+      getCommandPathWithRootOptions(argv, 2),
     primary: getPrimaryCommand(argv),
     hasHelpOrVersion: isHelpOrVersionInvocation(argv),
     isRootHelpInvocation: isRootHelpInvocation(argv),

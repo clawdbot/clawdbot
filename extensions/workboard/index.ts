@@ -1,9 +1,16 @@
 // Workboard plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
+import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
-import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import {
+  createWorkboardLifecycleService,
+  readWorkboardLifecycleSessions,
+  syncWorkboardAgentEnded,
+  syncWorkboardSubagentEnded,
+} from "./src/lifecycle-sync.js";
+import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -17,6 +24,37 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    const changeEvents = createWorkboardChangeEventService(store);
+    const automationNudge = createWorkboardAutomationNudgeService({
+      store,
+      gateway: api.runtime.gateway,
+    });
+    const lifecycleSync = createWorkboardLifecycleService({
+      store,
+      worktrees: api.runtime.worktrees,
+      readSessions: async (options) =>
+        await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+    });
+    registerWorkboardStoreLifecycle(api, store, () => {
+      changeEvents.stop();
+      automationNudge.stop();
+      lifecycleSync.stop();
+    });
+    api.session.controls.registerControlUiDescriptor({
+      surface: "tab",
+      id: "workboard",
+      label: "Workboard",
+      placement: "route:workboard",
+      icon: "kanban",
+      group: "control",
+      requiredScopes: ["operator.read"],
+    });
+    api.session.controls.registerControlUiDescriptor({
+      surface: "widget",
+      id: "board",
+      label: "Workboard board",
+      requiredScopes: ["operator.read"],
+    });
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "card",
@@ -31,16 +69,31 @@ export default definePluginEntry({
     });
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
-    api.registerService(createWorkboardChangeEventService(store));
-    api.on("subagent_ended", async (event) => {
-      if (event.runId) {
-        await cleanupWorkboardRunWorktree({
+    api.registerService(changeEvents);
+    api.registerService(automationNudge);
+    api.registerService(lifecycleSync);
+    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
+    api.on("subagent_ended", (event) =>
+      store.runOperation(async () => {
+        await syncWorkboardSubagentEnded({
           store,
           worktrees: api.runtime.worktrees,
-          runId: event.runId,
+          event,
+          onMatched: automationNudge.nudge,
         });
-      }
-    });
+      }),
+    );
+    api.on("agent_end", (event, context) =>
+      store.runOperation(async () => {
+        await syncWorkboardAgentEnded({
+          store,
+          event,
+          context,
+          onMatched: automationNudge.nudge,
+        });
+      }),
+    );
     api.registerCli(
       async ({ program }) => {
         const { registerWorkboardCli } = await import("./src/cli.js");
@@ -59,7 +112,7 @@ export default definePluginEntry({
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(
-          createWorkboardTools({ api, context, store }),
+          createWorkboardTools({ context, store }),
           context,
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),

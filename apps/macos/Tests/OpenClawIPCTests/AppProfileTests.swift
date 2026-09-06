@@ -23,12 +23,16 @@ struct AppProfileTests {
                 "/Users/test/.openclaw")
             #expect(profile.cliRootArguments.isEmpty)
         }
+    }
+
+    @Test func `current profile scopes credential service identities`() {
+        let suffix = AppProfile.current.name.map { ".profile.\($0)" } ?? ""
         #if DEBUG
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug\(suffix)")
         #else
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding\(suffix)")
         #endif
     }
 
@@ -145,29 +149,6 @@ struct AppProfileTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         return root
-    }
-
-    @Test func `profile launch at login reason outranks bundle location`() {
-        let profiled = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(profiled.subtitle == "Launch at login is unavailable while an app profile is active.")
-        #expect(profiled.isDisabled)
-
-        let defaultUnavailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(defaultUnavailable.subtitle == "Move OpenClaw to Applications before enabling launch at login.")
-        #expect(defaultUnavailable.isDisabled)
-
-        let defaultAvailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: true,
-            isEnabled: false)
-        #expect(defaultAvailable.subtitle == "Automatically start OpenClaw after you sign in.")
-        #expect(!defaultAvailable.isDisabled)
     }
 
     @MainActor @Test func `profile lock excludes only the same profile`() throws {

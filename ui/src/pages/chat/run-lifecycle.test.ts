@@ -4,16 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
-  CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
+  hasDirectSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
 type TestRow = {
@@ -22,6 +27,7 @@ type TestRow = {
   hasActiveSubagentRun?: boolean;
   activeRunIds?: string[];
   status?: string;
+  lastRunId?: string;
   startedAt?: number;
 };
 
@@ -59,7 +65,7 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     ...over,
   };
 }
@@ -69,6 +75,8 @@ describe("handleAbortChat", () => {
     const request = vi.fn(async () => ({ status: "aborted" }));
     const host = makeAbortHost({
       client: { request } as unknown as GatewayBrowserClient,
+      chatMessage: "@Alex interrupted draft",
+      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
       sessionsResult: makeSessionsResult([
         {
           key: "agent:main",
@@ -79,6 +87,7 @@ describe("handleAbortChat", () => {
       ]),
     });
 
+    expect(hasDirectSessionRun(host)).toBe(false);
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host);
 
@@ -86,6 +95,25 @@ describe("handleAbortChat", () => {
       key: "agent:main",
       clearQueued: true,
     });
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMentions).toEqual([]);
+  });
+
+  it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
+    const request = vi.fn(async () => ({ status: "aborted" }));
+    const host = makeAbortHost({
+      client: createTestGatewayClient(request),
+      chatRunId: "run-embedded-recovered",
+      chatRunSessionAbortable: true,
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      runId: "run-embedded-recovered",
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
@@ -117,7 +145,8 @@ describe("handleAbortChat", () => {
       client,
       connected: false,
       chatRunId: "run-main",
-      chatMessage: "keep this draft",
+      chatMessage: "@Alex keep this draft",
+      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
     });
 
     await handleAbortChat(host, { preserveDraft: true });
@@ -127,7 +156,8 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
       runId: "run-main",
     });
-    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessage).toBe("@Alex keep this draft");
+    expect(host.chatMentions).toEqual([{ profileId: "alex-profile", start: 0, end: 5 }]);
     expect(host.chatError ?? null).toBeNull();
     expect(request).not.toHaveBeenCalled();
   });
@@ -285,9 +315,6 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
         sessionKey: "s1",
         occurredAt: 1,
       },
-      planStatus: {
-        steps: [{ step: "Wait for child completion", status: "in_progress" }],
-      },
     });
 
     reconcileChatRunLifecycle(host, {
@@ -301,7 +328,6 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(host.chatRunStatus).toBeNull();
-    expect(host.planStatus).toBeNull();
     expect(host.lastLocalTerminalReconcile).toBeNull();
     expect(host.sessionsResult?.sessions[0]).toMatchObject({
       activeRunIds: [],
@@ -312,16 +338,13 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
 });
 
 describe("reconcileChatRunLifecycle indicators", () => {
-  it("clears plan status on terminal run end", () => {
+  it("clears run-owned transient indicators on terminal run end", () => {
     const host = makeHost({
       chatRunId: "r1",
       knownAgentRunIds: new Set(["r1", "r2"]),
       waitingApprovalStatuses: new Map([
         ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
       ]),
-      planStatus: {
-        steps: [{ step: "Finish the run", status: "in_progress" }],
-      },
     });
 
     reconcileChatRunLifecycle(host, {
@@ -330,7 +353,6 @@ describe("reconcileChatRunLifecycle indicators", () => {
       clearLocalRun: true,
     });
 
-    expect(host.planStatus).toBeNull();
     expect(host.knownAgentRunIds).toEqual(new Set(["r2"]));
     expect(host.waitingApprovalStatuses?.size).toBe(0);
   });
@@ -352,27 +374,78 @@ describe("reconcileChatRunLifecycle indicators", () => {
 
     expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
   });
+});
 
-  it("preserves an owned plan when another run terminates", () => {
+describe("reconcileChatRunFromSessionRow transient projections", () => {
+  it("clears only the terminal run's tool stream", () => {
+    const runId = "r1";
+    const siblingRunId = "r2";
+    const toolIdentity = buildToolStreamIdentity(runId, "tool-1");
+    const siblingToolIdentity = buildToolStreamIdentity(siblingRunId, "tool-2");
+    const toolMessage = { role: "assistant", runId, toolCallId: "tool-1" };
+    const siblingToolMessage = {
+      role: "assistant",
+      runId: siblingRunId,
+      toolCallId: "tool-2",
+    };
     const host = makeHost({
-      chatRunId: "r1",
-      planStatus: {
-        runId: "r1",
-        steps: [{ step: "Finish the run", status: "in_progress" }],
-      },
+      chatRunId: runId,
+      chatStream: "Final reply",
+      chatStreamSegments: [
+        { text: "run one", ts: 1, runId },
+        { text: "run two", ts: 2, runId: siblingRunId },
+      ],
+      chatToolMessages: [toolMessage, siblingToolMessage],
+      toolStreamById: new Map([
+        [
+          toolIdentity,
+          {
+            message: toolMessage,
+            name: "exec",
+            receivedAt: 1,
+            runId,
+            startedAt: 1,
+            toolCallId: "tool-1",
+          },
+        ],
+        [
+          siblingToolIdentity,
+          {
+            message: siblingToolMessage,
+            name: "read",
+            receivedAt: 2,
+            runId: siblingRunId,
+            startedAt: 2,
+            toolCallId: "tool-2",
+          },
+        ],
+      ]),
+      toolStreamOrder: [toolIdentity, siblingToolIdentity],
+      toolStreamSyncTimer: null,
+      knownAgentRunIds: new Set([runId, siblingRunId]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: siblingRunId }],
+      ]),
     });
 
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      runId: "r2",
-      clearIndicators: true,
-      clearLocalRun: false,
-    });
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        status: "done",
+      }),
+    ).toBe(true);
 
-    expect(host.planStatus).toEqual({
-      runId: "r1",
-      steps: [{ step: "Finish the run", status: "in_progress" }],
-    });
+    expect(host.chatStreamSegments).toEqual([{ text: "run two", ts: 2, runId: siblingRunId }]);
+    expect(host.chatToolMessages).toEqual([siblingToolMessage]);
+    expect(host.toolStreamById?.has(toolIdentity)).toBe(false);
+    expect(host.toolStreamById?.has(siblingToolIdentity)).toBe(true);
+    expect(host.toolStreamOrder).toEqual([siblingToolIdentity]);
+    expect(host.knownAgentRunIds).toEqual(new Set([siblingRunId]));
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
   });
 });
 
@@ -427,6 +500,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
   it("suppresses a stale completed run published under an equivalent alias", () => {
     const host = makeHost({
       sessionKey: "main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionsResult: makeSessionsResult([
         {
           key: "agent:main:main",
@@ -574,9 +648,33 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.lastLocalTerminalReconcile).toBeNull();
   });
 
+  it("rejects terminal global rows owned by another agent", () => {
+    const host = makeHost({
+      sessionKey: "global",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "same-run-id",
+      chatStream: "still streaming",
+    });
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "global",
+        agentId: "work",
+        kind: "global",
+        updatedAt: 1,
+        lastRunId: "same-run-id",
+        hasActiveRun: false,
+        status: "done",
+      }),
+    ).toBe(false);
+    expect(host.chatRunId).toBe("same-run-id");
+    expect(host.chatStream).toBe("still streaming");
+  });
+
   it("clears selected agent-main alias runs from canonical global history rows", () => {
     const host = makeHost({
       sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       chatRunId: "run-global",
       chatStream: "streaming",
       sessionsResult: makeSessionsResult([
@@ -595,7 +693,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBeNull();
   });
 
-  it("clears selected agent-global alias runs from canonical global history rows", () => {
+  it("keeps a qualified global-named conversation separate from literal global", () => {
     const host = makeHost({
       sessionKey: "agent:work:global",
       chatRunId: "run-global",
@@ -611,15 +709,15 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       { publishRunStatus: false },
     );
 
-    expect(reconciled).toBe(true);
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatStream).toBeNull();
+    expect(reconciled).toBe(false);
+    expect(host.chatRunId).toBe("run-global");
+    expect(host.chatStream).toBe("streaming");
   });
 
   it("clears configured agent-main alias runs from canonical global history rows", () => {
     const host = makeHost({
       sessionKey: "agent:work:inbox",
-      agentsList: { mainKey: "inbox" },
+      agentsList: { mainKey: "inbox", scope: "global" },
       chatRunId: "run-global",
       chatStream: "streaming",
       sessionsResult: makeSessionsResult([
@@ -642,6 +740,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     const reconcileRunTerminal = vi.fn();
     const host = makeHost({
       sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       chatRunId: "run-global",
       chatStream: "streaming",
       sessionsResult: makeSessionsResult([
@@ -654,7 +753,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       ]),
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 
@@ -684,12 +782,12 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     const reconcileRunTerminal = vi.fn();
     const host = makeHost({
       sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       chatRunId: "run-global",
       chatStream: "streaming",
       sessionsResult: null,
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 
@@ -803,9 +901,40 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
     });
 
-    expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
   });
+
+  it("recovers a missed terminal event from the exact settled session row", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "complete reply",
+      sessionsResult: makeSessionsResult([
+        { key: "s1", hasActiveRun: false, lastRunId: "r1", status: "done" },
+      ]),
+    });
+
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
+  it.each([undefined, "older-run"])(
+    "does not settle a live run from a %s terminal row identity",
+    (lastRunId) => {
+      const host = makeHost({
+        chatRunId: "r1",
+        chatStream: "still running",
+        sessionsResult: makeSessionsResult([
+          { key: "s1", hasActiveRun: false, lastRunId, status: "done" },
+        ]),
+      });
+
+      expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(false);
+      expect(host.chatRunId).toBe("r1");
+      expect(host.chatStream).toBe("still running");
+    },
+  );
 
   it("keeps suppressing repeated stale active refreshes for the completed run", () => {
     const host = makeHost({

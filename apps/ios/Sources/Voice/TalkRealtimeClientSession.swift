@@ -22,10 +22,15 @@ struct TalkRealtimeClientSession: Decodable {
     let model: String?
     let voice: String?
     let expiresAt: Double?
+    let clientControl: TalkRealtimeClientControl?
 
     var isWebRTC: Bool {
         self.transport.caseInsensitiveCompare("webrtc") == .orderedSame
     }
+}
+
+struct TalkRealtimeClientControl: Decodable {
+    let owner: String
 }
 
 enum TalkRealtimeTranscriptRole: String, Encodable {
@@ -50,6 +55,8 @@ struct TalkRealtimeClientCloseParams: Encodable {
 struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?
+    let agentId: String?
+    let agentSessionKey: String?
 }
 
 struct TalkRealtimeServerEvent: Decodable {

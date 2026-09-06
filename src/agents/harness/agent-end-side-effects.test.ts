@@ -1,5 +1,5 @@
-// Verifies agent-end side effects keep plugin hooks independent from experience review.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as transcriptAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
@@ -20,15 +20,30 @@ vi.mock("./lifecycle-hook-helpers.js", () => ({
 const mockExperienceReview = vi.mocked(scheduleSkillExperienceReview);
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);
+const skillExperienceReviewSource = {
+  agentId: "main",
+  sessionId: "session-1",
+  sessionKey: "agent:main:main",
+  storePath: "/session-store",
+  entryId: "completed-message",
+  generation: "generation-1",
+  rawSeq: 1,
+  effectiveParentId: null,
+  activeMessagePosition: 0,
+};
 
 describe("agent end side effects", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
+    vi.spyOn(transcriptAnchor, "readActiveTranscriptEntryAnchor").mockReturnValue(
+      skillExperienceReviewSource,
+    );
     mockExperienceReview.mockReset();
     mockAwaitAgentEndHook.mockReset();
     mockRunAgentEndHook.mockReset();
   });
 
-  it("fires plugin agent_end hooks alongside experience review scheduling", async () => {
+  it("schedules experience review synchronously alongside plugin agent_end hooks", () => {
     recordRunSkillUsage({
       runId: "run-1",
       name: "release-runbook",
@@ -36,6 +51,7 @@ describe("agent end side effects", () => {
       activation: "read",
     });
     runAgentEndSideEffects({
+      skillExperienceReviewSource,
       event: {
         messages: [],
         success: true,
@@ -45,6 +61,13 @@ describe("agent end side effects", () => {
         sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
         trigger: "user",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/agent",
+          workspaceDir: "/workspace",
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+        },
         config: {
           skills: {
             workshop: {
@@ -58,19 +81,51 @@ describe("agent end side effects", () => {
     });
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(mockExperienceReview).toHaveBeenCalledTimes(1));
+    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
     expect(mockExperienceReview).toHaveBeenCalledWith(
       expect.objectContaining({
         usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        source: skillExperienceReviewSource,
       }),
     );
   });
 
-  it("still runs agent_end hooks when experience review scheduling fails", async () => {
-    mockExperienceReview.mockImplementationOnce(() => {
-      throw new Error("scheduling failed");
-    });
+  it.each(["scheduling", "anchor read"])(
+    "still runs agent_end hooks when %s fails",
+    async (phase) => {
+      const fail =
+        phase === "scheduling"
+          ? mockExperienceReview
+          : vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchor);
+      fail.mockImplementationOnce(() => {
+        throw new Error(`${phase} failed`);
+      });
 
+      await awaitAgentEndSideEffects({
+        skillExperienceReviewSource,
+        event: {
+          messages: [],
+          success: true,
+        },
+        ctx: {
+          runId: "run-1",
+          workspaceDir: "/workspace",
+          foregroundPromptContext: {
+            agentId: "main",
+            agentDir: "/agent",
+            workspaceDir: "/workspace",
+            sandboxSessionKey: "agent:main:main",
+            trigger: "user",
+          },
+        },
+      });
+
+      expect(mockExperienceReview).toHaveBeenCalledTimes(phase === "scheduling" ? 1 : 0);
+      expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("skips experience review for CLI hook contexts", async () => {
     await awaitAgentEndSideEffects({
       event: {
         messages: [],
@@ -82,7 +137,7 @@ describe("agent end side effects", () => {
       },
     });
 
-    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
+    expect(mockExperienceReview).not.toHaveBeenCalled();
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
   });
 });

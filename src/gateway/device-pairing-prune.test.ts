@@ -1,12 +1,12 @@
 // Covers gateway-side cleanup when silent pairing supersedes stale sibling records.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   listNodePairing,
   requestNodePairing,
 } from "../infra/device-pairing-node.js";
 import {
-  approveDevicePairing,
   listDevicePairing,
   removePairedDeviceRole,
   requestDevicePairing,

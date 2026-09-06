@@ -94,6 +94,25 @@ async function seedCompiledDigest(params: {
       })),
     },
     claims: [],
+    dashboards: {
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
+      overview: {
+        totalItems: 0,
+        totalPages: 0,
+        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [],
+        truncated: false,
+      },
+    },
   };
   const publicationId = createMemoryWikiCompiledCachePublicationId();
   const reservationId = createMemoryWikiCompiledCachePublicationId();
@@ -183,6 +202,68 @@ describe("Memory Wiki prompt section", () => {
     );
     expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
   });
+
+  it.each([
+    {
+      name: "oversized structured claims without splitting UTF-16 surrogate pairs",
+      pages: [
+        {
+          title: "Alpha",
+          kind: "entity" as const,
+          claimCount: 1,
+          topClaims: [{ text: `${"c".repeat(699)}🤖${"c".repeat(20_000)}` }],
+        },
+      ],
+      retained: "c".repeat(699),
+      omitted: "🤖",
+    },
+    {
+      name: "oversized page titles without splitting UTF-16 surrogate pairs",
+      pages: [
+        {
+          title: `${"t".repeat(159)}🤖${"t".repeat(20_000)}`,
+          kind: "entity" as const,
+          claimCount: 1,
+          topClaims: [{ text: "The claim remains visible after its page title." }],
+        },
+      ],
+      retained: "The claim remains visible after its page title.",
+      omitted: "🤖",
+    },
+    {
+      name: "the complete digest across multiple independently bounded claims",
+      pages: Array.from({ length: 4 }, (_, pageIndex) => ({
+        title: `Page ${pageIndex}`,
+        kind: "entity" as const,
+        claimCount: 2,
+        topClaims: Array.from({ length: 2 }, (_claim, claimIndex) => ({
+          text: `claim ${pageIndex}-${claimIndex} ${"x".repeat(680)}`,
+        })),
+      })),
+      retained: "claim 0-0",
+      omitted: "claim 3-1",
+    },
+  ])(
+    "hard-bounds $name before model-context injection",
+    async ({ name, pages, retained, omitted }) => {
+      const config = resolveMemoryWikiConfig({
+        vault: { path: path.join(suiteRoot, `digest-bounded-${name.replaceAll(" ", "-")}`) },
+        context: { includeCompiledDigestPrompt: true },
+      });
+      await seedCompiledDigest({ config, claimCount: pages.length * 2, pages });
+
+      const lines = await createStaticPreparer(config)({ availableTools: new Set() });
+      const prompt = lines.join("\n");
+
+      expect(prompt).toContain("## Compiled Wiki Snapshot");
+      expect(prompt).toContain(retained);
+      expect(prompt).not.toContain(omitted);
+      expect(prompt.length).toBeLessThanOrEqual(2_800);
+      expect(prompt).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    },
+  );
 
   it("keeps the digest disabled by default", async () => {
     const config = resolveMemoryWikiConfig({

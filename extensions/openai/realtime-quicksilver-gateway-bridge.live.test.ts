@@ -1,13 +1,16 @@
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
 import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
@@ -42,7 +45,7 @@ async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
+    const profile = await resolveOpenAIChatGptSubscriptionAuth({}, openAIRealtimeHost);
     if (profile) {
       return profile;
     }
@@ -56,7 +59,7 @@ async function resolveLiveOAuthProfile(): Promise<
     return undefined;
   }
   const accountId =
-    credential.accountId ?? resolveCodexAuthIdentity({ accessToken: credential.access }).accountId;
+    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 
@@ -83,26 +86,29 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       const failureResult = new Promise<never>((_resolve, reject) => {
         fail = (error) => reject(new Error(`${error.message}; events=${eventTypes.join(",")}`));
       });
-      const bridge = new OpenAIQuicksilverGatewayBridge({
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "marin",
-        instructions:
-          "This is a live transport check. Immediately say: OpenClaw gateway relay test OK.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: (audio) => {
-          if (audio.length > 0) {
-            audioObserved("decoded-pcm");
-          }
+      const bridge = new OpenAIQuicksilverGatewayBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-codex",
+          voice: "spruce",
+          instructions:
+            "This is a live transport check. Immediately say: OpenClaw gateway relay test OK.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+          onAudio: (audio) => {
+            if (audio.length > 0) {
+              audioObserved("decoded-pcm");
+            }
+          },
+          onClearAudio: () => undefined,
+          onEvent: (event) => eventTypes.push(event.type),
+          onReady: ready,
+          onError: fail,
+          runAgentConsult: async () => ({ text: "The live transport check is complete." }),
+          logger: { debug: () => undefined, warn: () => undefined },
+          resolveAuth: async () => auth,
         },
-        onClearAudio: () => undefined,
-        onEvent: (event) => eventTypes.push(event.type),
-        onReady: ready,
-        onError: fail,
-        runAgentConsult: async () => ({ text: "The live transport check is complete." }),
-        logger: { debug: () => undefined, warn: () => undefined },
-        resolveAuth: async () => auth,
-      });
+        openAIRealtimeHost,
+      );
 
       try {
         await bridge.connect();
@@ -159,39 +165,42 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       let closeNotifications = 0;
       let closed = false;
       let lateAudioBytes = 0;
-      const bridge = new OpenAIQuicksilverGatewayBridge({
-        providerConfig: {},
-        model: "gpt-live-1-boulder-alpha",
-        voice: "marin",
-        instructions: "Listen to the user. Do not speak or delegate.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: (audio) => {
-          if (closed) {
-            lateAudioBytes += audio.length;
-          }
+      const bridge = new OpenAIQuicksilverGatewayBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-codex",
+          voice: "spruce",
+          instructions: "Listen to the user. Do not speak or delegate.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+          onAudio: (audio) => {
+            if (closed) {
+              lateAudioBytes += audio.length;
+            }
+          },
+          onClearAudio: () => undefined,
+          onEvent: (event) => eventTypes.push(event.type),
+          onReady: () => undefined,
+          onTranscript: (role, text, final) => {
+            if (role === "user" && final) {
+              finalUserTranscripts.push(text);
+            }
+          },
+          onClose: () => {
+            closeNotifications += 1;
+          },
+          onError: (error) => errors.push(error),
+          runAgentConsult: async () => ({ text: "Unexpected delegation." }),
+          logger: { debug: () => undefined, warn: () => undefined },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+          createPeer: async (callbacks, signal): Promise<OpenAIQuicksilverAudioPeerContract> => {
+            const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
+            peerCreated();
+            await peerAdoption;
+            return peer;
+          },
         },
-        onClearAudio: () => undefined,
-        onEvent: (event) => eventTypes.push(event.type),
-        onReady: () => undefined,
-        onTranscript: (role, text, final) => {
-          if (role === "user" && final) {
-            finalUserTranscripts.push(text);
-          }
-        },
-        onClose: () => {
-          closeNotifications += 1;
-        },
-        onError: (error) => errors.push(error),
-        runAgentConsult: async () => ({ text: "Unexpected delegation." }),
-        logger: { debug: () => undefined, warn: () => undefined },
-        resolveAuth: async () => ({ type: "api-key", token: apiKey }),
-        createPeer: async (callbacks, signal): Promise<OpenAIQuicksilverAudioPeerContract> => {
-          const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
-          peerCreated();
-          await peerAdoption;
-          return peer;
-        },
-      });
+        openAIRealtimeHost,
+      );
       const testBridge = bridge as unknown as TestableGatewayBridge;
 
       try {

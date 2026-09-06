@@ -4,7 +4,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
-import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
 import {
@@ -61,7 +61,7 @@ function readSessionStoreTargetSnapshot(params: {
       (database) => {
         const scopedAgentIds = new Set<string>();
         let hasUnscopedRow = false;
-        for (const sessionKey of readSessionEntryKeys(database)) {
+        for (const sessionKey of iterateSessionEntryKeys(database)) {
           const parsed = parseAgentSessionKey(sessionKey);
           if (parsed) {
             scopedAgentIds.add(normalizeAgentId(parsed.agentId));
@@ -149,11 +149,12 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
     agentId: requested,
     storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: requested, env }),
   };
-  const targets = dedupeTargetsByStorePath([
+  const candidates = dedupeTargetsByStorePath([
     configuredTarget,
     ...resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env }),
   ]);
-  for (const target of targets) {
+  const targets: SessionStoreTarget[] = [];
+  for (const target of candidates) {
     const defaultAgentId = resolveReadDefaultAgentId(cfg, target.agentId);
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
@@ -167,8 +168,22 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
       sqlitePath: resolved.path,
     });
     if (!snapshot.available) {
+      // The configured template may point at a store that has not been
+      // created yet (fresh config, store migration window) while the agent's
+      // real sessions live in a discovered store. A missing candidate must
+      // not poison the readable siblings — treating it as whole-agent
+      // unavailability made session-evidence consumers report "absent" and
+      // destroy live worker placements. Broken-but-present stores still fail
+      // the whole agent: partial visibility must never prove absence.
+      if (snapshot.reason === "database-missing") {
+        continue;
+      }
       return snapshot;
     }
+    targets.push(target);
+  }
+  if (targets.length === 0) {
+    return { available: false, reason: "database-missing" };
   }
   return { available: true, targets };
 }

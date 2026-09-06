@@ -1,11 +1,14 @@
+import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromAttempt,
+  type AgentRunAttemptFailureSource,
+} from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
   type FailoverReason,
-  isFailoverErrorMessage,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
@@ -13,8 +16,10 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -78,7 +83,11 @@ export async function handleEmbeddedPromptFailure(input: {
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
   }) => Promise<void>;
-  maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
+  maybeRetryTransient: (retry: {
+    reason: FailoverReason;
+    retryAfterMs?: number;
+  }) => Promise<boolean>;
+  getTransientRetryCount: () => number;
   attemptedThinking: Set<ThinkLevel>;
   thinkLevel: ThinkLevel;
   // Profile rotation resets thinking inside the runtime; read it after advancing.
@@ -86,20 +95,42 @@ export async function handleEmbeddedPromptFailure(input: {
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
 }): Promise<PromptFailureOutcome> {
+  // Only the local precheck owns this recovery; provider text cannot request it.
+  if (
+    input.promptErrorSource === "precheck" &&
+    input.promptError instanceof CompactionReplayRefreshRequiredError
+  ) {
+    const text = new CompactionReplayRefreshRequiredError().message;
+    return completeBlockedPromptFailure(input, {
+      text,
+      errorKind: "compaction_replay_refresh_required",
+      errorMessage: text,
+    });
+  }
   const promptAuthMode = input.authProfileId
     ? input.authProfileStore.profiles?.[input.authProfileId]?.type
     : undefined;
-  const normalizedPromptFailover = coerceToFailoverError(input.promptError, {
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
+    terminal: input.attempt.terminal,
+    promptTimeoutOutcome: input.attempt.promptTimeoutOutcome,
+  });
+  const failoverContext = {
     provider: input.activeErrorContext.provider,
     model: input.activeErrorContext.model,
     profileId: input.authProfileId,
     authMode: promptAuthMode,
     sessionId: input.sessionIdUsed,
     lane: input.lane,
-  });
-  const promptErrorDetails = normalizedPromptFailover
-    ? describeFailoverError(normalizedPromptFailover)
-    : describeFailoverError(input.promptError);
+    timeout:
+      terminalOutcome.status === "timeout"
+        ? {
+            timeoutPhase: terminalOutcome.timeoutPhase,
+            providerStarted: terminalOutcome.providerStarted,
+          }
+        : undefined,
+  };
+  const normalizedPromptFailover = coerceToFailoverError(input.promptError, failoverContext);
+  const promptErrorDetails = describeFailoverError(normalizedPromptFailover ?? input.promptError);
   if (normalizedPromptFailover?.suspend) {
     input.suspendForFailure({
       cfg: input.runParams.config,
@@ -111,7 +142,14 @@ export async function handleEmbeddedPromptFailure(input: {
     });
   }
   const errorText = promptErrorDetails.message || formatErrorMessage(input.promptError);
-  if (await input.maybeRefreshRuntimeAuthForAuthError(errorText, input.runtimeAuthRetry)) {
+  // A recorded CLI terminal stop outranks every text-derived recovery below:
+  // its message repeats a backend-controlled reason, so an auth-shaped value
+  // would otherwise refresh and retry a turn whose tool effects already ran.
+  const recordedTerminalStop = isCliTerminalStopCode(promptErrorDetails.code);
+  if (
+    !recordedTerminalStop &&
+    (await input.maybeRefreshRuntimeAuthForAuthError(errorText, input.runtimeAuthRetry))
+  ) {
     return {
       action: "retry",
       thinkLevel: input.thinkLevel,
@@ -120,9 +158,11 @@ export async function handleEmbeddedPromptFailure(input: {
     };
   }
 
-  const blockedResult = resolveBlockedPromptResult(input, errorText);
+  const blockedResult = recordedTerminalStop
+    ? undefined
+    : resolveBlockedPromptResult(input, errorText);
   if (blockedResult) {
-    return { action: "complete", result: blockedResult };
+    return blockedResult;
   }
 
   const promptFailoverReason =
@@ -132,9 +172,6 @@ export async function handleEmbeddedPromptFailure(input: {
     transientRateLimit:
       promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
   });
-  const promptFailoverFailure =
-    promptFailoverReason !== null ||
-    isFailoverErrorMessage(errorText, { provider: input.provider });
   const promptTimeoutFallbackSafe =
     input.promptErrorSource === "prompt" &&
     promptFailoverReason === "timeout" &&
@@ -155,20 +192,48 @@ export async function handleEmbeddedPromptFailure(input: {
     profileId: failedProfileId,
     fallbackConfigured: input.fallbackConfigured,
     aborted: input.aborted,
+    retryCount: input.getTransientRetryCount(),
+    attemptCount: input.traceAttempts.length + 1,
   });
-  let failoverDecision = resolveRunFailoverDecision({
-    stage: "prompt",
-    aborted: input.aborted,
-    externalAbort: input.externalAbort,
-    fallbackConfigured: input.fallbackConfigured,
-    failoverCode: promptErrorDetails.code,
-    failoverFailure: promptFailoverFailure,
-    failoverReason: promptFailoverReason,
-    harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    promptTimeoutFallbackSafe,
-    timedOutByRunBudget: input.timedOutByRunBudget,
-    profileRotated: false,
-  });
+  const resolveDecision = (profileRotated: boolean) =>
+    resolveRunFailoverDecision({
+      stage: "prompt",
+      externalAbort: input.externalAbort,
+      fallbackConfigured: input.fallbackConfigured,
+      failoverCode: promptErrorDetails.code,
+      failoverFailure: promptFailoverReason !== null,
+      failoverReason: promptFailoverReason,
+      harnessOwnsTransport: input.pluginHarnessOwnsTransport,
+      promptTimeoutFallbackSafe,
+      timedOutByRunBudget: input.timedOutByRunBudget,
+      profileRotated,
+    });
+  let failoverDecision = resolveDecision(false);
+  const canRetryRateLimit =
+    promptFailoverReason !== "rate_limit" || isShortWindowRateLimitMessage(errorText);
+  if (
+    !recordedTerminalStop &&
+    !input.externalAbort &&
+    canRetryRateLimit &&
+    promptFailoverReason &&
+    (await input.maybeRetryTransient({
+      reason: promptFailoverReason,
+      retryAfterMs: resolveRetryAfterMs(errorText),
+    }))
+  ) {
+    logFailoverDecision("retry_same_model", {
+      retryCount: input.getTransientRetryCount(),
+    });
+    return {
+      action: "retry",
+      thinkLevel: input.thinkLevel,
+      authRetryPending: false,
+      lastRetryFailoverReason: mergeRetryFailoverReason({
+        previous: input.previousRetryFailoverReason,
+        failoverReason: promptFailoverReason,
+      }),
+    };
+  }
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
     if (promptFailoverReason === "rate_limit") {
@@ -180,10 +245,12 @@ export async function handleEmbeddedPromptFailure(input: {
     } else {
       rotated = await input.advanceAuthProfile();
     }
+    if (!rotated) {
+      failoverDecision = resolveDecision(true);
+    }
   }
-  if (rotated) {
-    if (promptProfileFailureReason) {
-      void input
+  const markFailedProfilePromise = promptProfileFailureReason
+    ? input
         .maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
@@ -191,8 +258,10 @@ export async function handleEmbeddedPromptFailure(input: {
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);
-        });
-    }
+        })
+    : undefined;
+  if (rotated) {
+    // A selected replacement can retry while the failed profile's record settles.
     input.traceAttempts.push({
       provider: input.provider,
       model: input.modelId,
@@ -204,8 +273,10 @@ export async function handleEmbeddedPromptFailure(input: {
       previous: input.previousRetryFailoverReason,
       failoverReason: promptFailoverReason,
     });
-    logFailoverDecision("rotate_profile");
-    await input.maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+    logFailoverDecision("rotate_profile", {
+      retryCount: input.getTransientRetryCount(),
+      profileRotationCount: 1,
+    });
     return {
       action: "retry",
       thinkLevel: input.getThinkLevel(),
@@ -213,40 +284,19 @@ export async function handleEmbeddedPromptFailure(input: {
       lastRetryFailoverReason,
     };
   }
-  if (failoverDecision.action === "rotate_profile") {
-    failoverDecision = resolveRunFailoverDecision({
-      stage: "prompt",
-      aborted: input.aborted,
-      externalAbort: input.externalAbort,
-      fallbackConfigured: input.fallbackConfigured,
-      failoverCode: promptErrorDetails.code,
-      failoverFailure: promptFailoverFailure,
-      failoverReason: promptFailoverReason,
-      harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-      promptTimeoutFallbackSafe,
-      timedOutByRunBudget: input.timedOutByRunBudget,
-      profileRotated: true,
-    });
+  if (markFailedProfilePromise) {
+    await markFailedProfilePromise;
   }
-  if (promptProfileFailureReason) {
-    try {
-      await input.maybeMarkAuthProfileFailure({
-        profileId: failedProfileId,
-        reason: promptProfileFailureReason,
-        modelId: input.modelId,
-      });
-    } catch (error) {
-      log.warn(`prompt profile failure mark failed: ${String(error)}`);
-    }
-  }
-  const fallbackThinking = pickFallbackThinkingLevel({
-    message: errorText,
-    attempted: input.attemptedThinking,
-  });
+  const fallbackThinking = recordedTerminalStop
+    ? undefined
+    : pickFallbackThinkingLevel({ message: errorText, attempted: input.attemptedThinking });
   if (fallbackThinking) {
     log.warn(
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
+    logFailoverDecision("retry_thinking_level", {
+      retryCount: input.getTransientRetryCount(),
+    });
     return {
       action: "retry",
       thinkLevel: fallbackThinking,
@@ -255,7 +305,7 @@ export async function handleEmbeddedPromptFailure(input: {
     };
   }
   if (failoverDecision.action === "fallback_model") {
-    const fallbackReason = failoverDecision.reason ?? "unknown";
+    const fallbackReason = failoverDecision.reason;
     const status = resolveFailoverStatus(fallbackReason);
     input.traceAttempts.push({
       provider: input.provider,
@@ -265,18 +315,18 @@ export async function handleEmbeddedPromptFailure(input: {
       stage: "prompt",
       ...(typeof status === "number" ? { status } : {}),
     });
-    logFailoverDecision("fallback_model", { status });
-    await input.maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+    logFailoverDecision("fallback_model", {
+      status,
+      retryCount: input.getTransientRetryCount(),
+      profileRotationCount: 0,
+    });
     throw (
       (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
+        ...failoverContext,
         reason: fallbackReason,
         provider: input.provider,
         model: input.modelId,
-        profileId: input.authProfileId,
-        authMode: promptAuthMode,
-        sessionId: input.sessionIdUsed,
-        lane: input.lane,
         status,
       })
     );
@@ -289,7 +339,20 @@ export async function handleEmbeddedPromptFailure(input: {
       ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
       stage: "prompt",
     });
-    logFailoverDecision("surface_error");
+    logFailoverDecision("surface_error", {
+      retryCount: input.getTransientRetryCount(),
+      profileRotationCount: 0,
+    });
+  }
+  if (failoverContext.timeout) {
+    throw (
+      normalizedPromptFailover ??
+      new FailoverError(errorText, {
+        ...failoverContext,
+        reason: "timeout",
+        cause: input.promptError,
+      })
+    );
   }
   throw toErrorObject(input.promptError, "Prompt failed");
 }
@@ -297,7 +360,7 @@ export async function handleEmbeddedPromptFailure(input: {
 function resolveBlockedPromptResult(
   input: Parameters<typeof handleEmbeddedPromptFailure>[0],
   errorText: string,
-): EmbeddedAgentRunResult | undefined {
+): PromptFailureOutcome | undefined {
   let text: string;
   let errorKind: "role_ordering" | "image_size";
   if (/incorrect role information|roles must alternate/i.test(errorText)) {
@@ -318,16 +381,27 @@ function resolveBlockedPromptResult(
       "Please compress or resize the image and try again.";
     errorKind = "image_size";
   }
+  return completeBlockedPromptFailure(input, { text, errorKind, errorMessage: errorText });
+}
+
+function completeBlockedPromptFailure(
+  input: Parameters<typeof handleEmbeddedPromptFailure>[0],
+  copy: Pick<
+    Parameters<typeof buildEmbeddedRunBlockedResult>[0],
+    "text" | "errorKind" | "errorMessage"
+  >,
+): PromptFailureOutcome {
   const replayInvalid = input.resolveReplayInvalid();
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-  return buildEmbeddedRunBlockedResult({
-    text,
-    errorKind,
-    errorMessage: errorText,
-    durationMs: Date.now() - input.startedAtMs,
-    agentMeta: input.buildErrorAgentMeta(),
-    attempt: input.attempt,
-    replayInvalid,
-    finalPromptText: input.attempt.finalPromptText,
-  });
+  return {
+    action: "complete",
+    result: buildEmbeddedRunBlockedResult({
+      ...copy,
+      durationMs: Date.now() - input.startedAtMs,
+      agentMeta: input.buildErrorAgentMeta(),
+      attempt: input.attempt,
+      replayInvalid,
+      finalPromptText: input.attempt.finalPromptText,
+    }),
+  };
 }

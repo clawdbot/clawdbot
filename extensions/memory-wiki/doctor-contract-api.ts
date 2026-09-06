@@ -8,15 +8,13 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS } from "./src/compiled-cache.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfiguredAgentIds,
   type MemoryWikiPluginConfig,
 } from "./src/config.js";
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   countMemoryWikiImportRunStateRows,
   createMemoryWikiImportRunStateStore,
@@ -36,6 +34,12 @@ import {
   resolveMemoryWikiSourceSyncStatePath,
   writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+
+const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
+  ".openclaw-wiki/cache/agent-digest.json",
+  ".openclaw-wiki/cache/claims.jsonl",
+] as const;
 
 function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
@@ -90,6 +94,7 @@ function resolveConfiguredVaultRoots(params: {
   const homeDir = resolveHomeDir(params.env);
   const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
     homedir: homeDir,
+    env: params.env,
   });
   if (resolved.vault.scope === "global") {
     return [resolved.vault.path];

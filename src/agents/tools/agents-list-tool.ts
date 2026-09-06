@@ -3,7 +3,7 @@
  *
  * Lists configured or allowed agent ids plus model/runtime metadata for subagent spawn decisions.
  */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
@@ -11,6 +11,7 @@ import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
+import { describeAgentsListTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -54,24 +55,7 @@ const AgentsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type AgentListEntry = {
-  id: string;
-  name?: string;
-  configured: boolean;
-  model?: string;
-  agentRuntime?: {
-    id: string;
-    source:
-      | "env"
-      | "agent"
-      | "defaults"
-      | "model"
-      | "provider"
-      | "implicit"
-      | "session"
-      | "session-key";
-  };
-};
+type AgentListEntry = Static<typeof AgentsListOutputSchema>["agents"][number];
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;
@@ -81,8 +65,7 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description:
-      'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.',
+    description: describeAgentsListTool(false),
     parameters: AgentsListToolSchema,
     outputSchema: AgentsListOutputSchema,
     execute: async () => {

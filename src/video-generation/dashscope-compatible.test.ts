@@ -21,6 +21,7 @@ const invalidGeneratedVideos = [
   { name: "HTML error", contentType: "text/html; charset=utf-8", body: "<html>error</html>" },
   { name: "image", contentType: "image/png", body: "image-bytes" },
   { name: "audio", contentType: "audio/mp4", body: "audio-bytes" },
+  { name: "empty video", contentType: "video/mp4", body: "" },
 ] as const;
 
 function neverChunkingVideoResponse(): Response {
@@ -333,6 +334,39 @@ describe("downloadDashscopeGeneratedVideos", () => {
     expect(video?.mimeType).toBe("video/mp4");
   });
 
+  it("rejects a malformed response while a debug-capture clone still holds the body tee", async () => {
+    let captured: Response | undefined;
+    const fetchFn = vi.fn(async () => {
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"denied"'));
+            // The body never ends, so only an explicit cancel can settle it.
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+      // Debug capture keeps an unread clone; the tee leaves the source branch
+      // pending, so awaiting the cancel of the rejected body would never settle.
+      captured = response.clone();
+      return response;
+    });
+
+    try {
+      await expect(
+        downloadDashscopeGeneratedVideos({
+          providerLabel: "Alibaba Wan",
+          urls: ["https://example.com/invalid.mp4"],
+          timeoutMs: 5_000,
+          fetchFn,
+          maxBytes: 10 * 1024 * 1024,
+        }),
+      ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
+    } finally {
+      void captured?.body?.cancel().catch(() => undefined);
+    }
+  }, 2_000);
+
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const startedAt = Date.now();
@@ -360,7 +394,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
   it("releases the guarded fetch when the remaining-budget resolver throws", async () => {
     vi.useFakeTimers();
     try {
+      const initialTimerCount = vi.getTimerCount();
       let requestSignal: AbortSignal | undefined;
+      let abortedAtFetch: boolean | undefined;
       const cancelBody = vi.fn();
       const timeoutMs = vi
         .fn<() => number>()
@@ -370,6 +406,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
         });
       const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         requestSignal = init?.signal ?? undefined;
+        abortedAtFetch = requestSignal?.aborted;
         return new Response(new ReadableStream({ cancel: cancelBody }), {
           status: 200,
           headers: { "content-type": "video/mp4" },
@@ -391,9 +428,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
       expect(cancelBody.mock.calls[0]?.[0]).toMatchObject({
         message: "remaining-budget resolver failed",
       });
-      expect(requestSignal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(requestSignal?.aborted).toBe(false);
+      expect(abortedAtFetch).toBe(false);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(initialTimerCount);
     } finally {
       vi.useRealTimers();
     }

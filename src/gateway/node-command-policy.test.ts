@@ -8,15 +8,21 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
+  listDangerousPluginNodeCommands,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
+  retainFulfilledNodeCapabilities,
 } from "./node-command-policy.js";
 import {
   filterLegacyNodeProtocolFeatures,
@@ -372,71 +378,97 @@ describe("gateway/node-command-policy", () => {
     },
   );
 
-  it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands.push(
-      {
-        pluginId: "remote",
-        pluginName: "Remote",
-        source: "/extensions/remote/index.ts",
-        rootDir: "/extensions/remote",
-        command: {
-          command: "remote.echo",
-          agentTool: {
-            name: "remote_echo",
-            description: "Echo from a node host",
-            defaultPlatforms: ["linux"],
-          },
-          handle: async () => "{}",
-        },
-      },
-      {
-        pluginId: "remote",
-        pluginName: "Remote",
-        source: "/extensions/remote/index.ts",
-        rootDir: "/extensions/remote",
-        command: {
-          command: "remote.manual",
-          agentTool: {
-            name: "remote_manual",
-            description: "Manual allowlist node-host tool",
-          },
-          handle: async () => "{}",
-        },
-      },
-      {
-        pluginId: "remote",
-        pluginName: "Remote",
-        source: "/extensions/remote/index.ts",
-        rootDir: "/extensions/remote",
-        command: {
-          command: "remote.dangerous",
-          dangerous: true,
-          agentTool: {
-            name: "remote_dangerous",
-            description: "Dangerous node-host tool",
-            defaultPlatforms: ["linux"],
-          },
-          handle: async () => "{}",
-        },
-      },
-    );
-    setActivePluginRegistry(registry);
-
-    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
-      platform: "linux",
-      deviceFamily: "Linux",
+  it("preserves registered node command order, opt-in policy, and registry replacement", () => {
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
     });
-
-    expect(allowlist.has("remote.echo")).toBe(true);
-    expect(allowlist.has("remote.manual")).toBe(false);
-    expect(allowlist.has("remote.dangerous")).toBe(false);
+    const api = builder.createApi(
+      createPluginRecord({
+        id: "remote",
+        source: "/plugins/remote/index.ts",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      }),
+      { config: {} },
+    );
+    const handle = async () => {
+      throw new Error("collecting node command metadata must not invoke a handler");
+    };
+    for (const [command, dangerous, defaults] of [
+      [" remote.echo ", false, ["linux"]],
+      ["remote.shared", false, ["linux"]],
+      ["remote.manual", false, []],
+      ["remote.dangerous", true, ["linux"]],
+    ] as const) {
+      api.registerNodeHostCommand({
+        command,
+        dangerous,
+        agentTool: {
+          name: command.trim().replaceAll(".", "_"),
+          description: "Registered node-host command",
+          ...(defaults.length ? { defaultPlatforms: [...defaults] } : {}),
+        },
+        handle,
+      });
+    }
+    const commands = [" remote.policy ", "remote.shared", "remote.policy"];
+    api.registerNodeInvokePolicy({ commands, defaultPlatforms: ["linux"], handle });
+    api.registerNodeInvokePolicy({
+      commands: ["remote.policy-danger", "remote.dangerous"],
+      dangerous: true,
+      defaultPlatforms: ["linux"],
+      handle,
+    });
+    expect(builder.registry.diagnostics).toEqual([]);
+    setActivePluginRegistry(builder.registry);
+    const node = { platform: "linux", deviceFamily: "Linux" };
+    const allowlist = resolveNodeCommandAllowlist({}, node);
+    expect([...allowlist]).toEqual([
+      "system.notify",
+      "computer.act",
+      "remote.policy",
+      "remote.shared",
+      "remote.echo",
+    ]);
     expect(
       normalizeDeclaredNodeCommands({
         declaredCommands: ["remote.echo", "remote.dangerous"],
         allowlist,
       }),
     ).toEqual(["remote.echo"]);
+    const dangerous = listDangerousPluginNodeCommands();
+    expect(dangerous).toEqual(["remote.dangerous", "remote.policy-danger"]);
+    dangerous.push("remote.returned-array-mutation");
+    commands.push("remote.registration-input-mutation");
+    expect(listDangerousPluginNodeCommands()).toEqual(["remote.dangerous", "remote.policy-danger"]);
+    expect(resolveNodeCommandAllowlist({}, node)).toEqual(allowlist);
+    expect([
+      ...resolveNodeCommandAllowlist(
+        {
+          gateway: {
+            nodes: {
+              commands: {
+                allow: ["remote.policy-danger", "remote.dangerous"],
+                deny: ["remote.shared", "remote.policy-danger"],
+              },
+            },
+          },
+        },
+        node,
+      ),
+    ]).toEqual([
+      "system.notify",
+      "computer.act",
+      "remote.policy",
+      "remote.echo",
+      "remote.dangerous",
+    ]);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect(listDangerousPluginNodeCommands()).toEqual([]);
+    expect([...resolveNodeCommandAllowlist({}, node)]).toEqual(["system.notify", "computer.act"]);
   });
 
   it("does not allow connected node plugin tools without a registry default or config allowlist", () => {
@@ -782,50 +814,53 @@ describe("gateway/node-command-policy", () => {
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
   });
 
-  it("requires an explicit allow for the dangerous cua-computer plugin command", () => {
+  it("scopes a plugin dangerous flag to plugin surfaces, not core platform defaults", () => {
+    // A bundled computer-use provider plugin registers computer.act as dangerous
+    // so it needs a registered invoke policy. That flag must not revoke the core
+    // desktop platform default, whose grant is node enablement plus pairing.
     const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands.push({
-      pluginId: "cua-computer",
-      pluginName: "CUA Computer",
-      source: "/extensions/cua-computer/index.ts",
-      rootDir: "/extensions/cua-computer",
-      command: {
-        command: "computer.act",
-        cap: "computer",
-        dangerous: true,
-        handle: async () => "{}",
-      },
-    });
-    registry.nodeInvokePolicies.push({
-      pluginId: "cua-computer",
-      pluginName: "CUA Computer",
-      source: "/extensions/cua-computer/index.ts",
-      rootDir: "/extensions/cua-computer",
-      pluginConfig: {},
-      policy: {
-        commands: ["computer.act"],
-        dangerous: true,
-        handle: async (ctx) => await ctx.invokeNode(),
-      },
-    });
+    for (const command of ["computer.act", "cua.driver.reset"]) {
+      registry.nodeHostCommands.push({
+        pluginId: "cua-computer",
+        pluginName: "CUA Computer",
+        source: "/extensions/cua-computer/index.ts",
+        rootDir: "/extensions/cua-computer",
+        command: {
+          command,
+          cap: "computer",
+          dangerous: true,
+          agentTool: {
+            name: command.replaceAll(".", "_"),
+            description: "Computer surface",
+            defaultPlatforms: ["windows"],
+          },
+          handle: async () => "{}",
+        },
+      });
+      registry.nodeInvokePolicies.push({
+        pluginId: "cua-computer",
+        pluginName: "CUA Computer",
+        source: "/extensions/cua-computer/index.ts",
+        rootDir: "/extensions/cua-computer",
+        pluginConfig: {},
+        policy: {
+          commands: [command],
+          dangerous: true,
+          handle: async (ctx) => await ctx.invokeNode(),
+        },
+      });
+    }
     setActivePluginRegistry(registry);
 
     const node = {
       platform: "windows",
       deviceFamily: "Windows",
-      commands: ["computer.act"],
-      approvedCommands: ["computer.act"],
+      commands: ["computer.act", "cua.driver.reset"],
+      approvedCommands: ["computer.act", "cua.driver.reset"],
     };
-    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("computer.act")).toBe(false);
-
-    const allowlist = resolveNodeCommandAllowlist(
-      {
-        gateway: {
-          nodes: { commands: { allow: ["computer.act"] } },
-        },
-      } as OpenClawConfig,
-      node,
-    );
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, node);
+    expect(allowlist.has("computer.act")).toBe(true);
+    expect(allowlist.has("cua.driver.reset")).toBe(false);
     expect(
       isNodeCommandAllowed({
         command: "computer.act",
@@ -833,6 +868,54 @@ describe("gateway/node-command-policy", () => {
         allowlist,
       }),
     ).toEqual({ ok: true });
+
+    const opted = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["cua.driver.reset"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(opted.has("cua.driver.reset")).toBe(true);
+  });
+
+  it("drops a capability whose declared commands all failed the allowlist", () => {
+    const denied = resolveNodePairingCommandAllowlist(
+      { gateway: { nodes: { commands: { deny: ["computer.act"] } } } } as OpenClawConfig,
+      { platform: "macos", deviceFamily: "Mac", commands: ["computer.act", "screen.snapshot"] },
+    );
+    expect(
+      retainFulfilledNodeCapabilities({
+        caps: ["canvas", "screen", "computer"],
+        withheldCommands: ["computer.act"],
+        admittedCommands: normalizeDeclaredNodeCommands({
+          declaredCommands: ["computer.act", "screen.snapshot"],
+          allowlist: denied,
+        }),
+      }),
+    ).toEqual(["canvas", "screen"]);
+
+    // A capability the node never backed with a core-owned command is untouched.
+    expect(
+      retainFulfilledNodeCapabilities({
+        caps: ["computer"],
+        admittedCommands: [],
+        withheldCommands: [],
+      }),
+    ).toEqual(["computer"]);
+  });
+
+  it("keeps policy-withheld declared commands unauthorized", () => {
+    expect(
+      resolveRequiredNodeCommandAuthority({
+        requiredCommands: ["screen.snapshot", "computer.act"],
+        declaredCommands: ["screen.snapshot", "computer.act"],
+        effectiveCommands: [],
+        withheldCommands: ["computer.act"],
+        allowlist: new Set(["screen.snapshot", "computer.act"]),
+      }),
+    ).toEqual({ command: "computer.act", state: "unauthorized" });
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

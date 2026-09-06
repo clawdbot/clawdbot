@@ -45,6 +45,15 @@ const SHARED_SANITIZER_CHANNEL_IDS = [
 const MESSAGE_TOOL_ARTIFACT_PLUGIN_IDS = ["imessage", "slack"] as const;
 const SESSION_CONVERSATION_ARTIFACT_PLUGIN_IDS = ["feishu", "telegram"] as const;
 const THREAD_BINDING_ARTIFACT_PLUGIN_IDS = ["discord", "matrix"] as const;
+const PROVIDER_OWNED_READ_GATE_PLUGINS = [
+  ["discord", true],
+  ["feishu", true],
+  ["matrix", true],
+  ["msteams", true],
+  ["slack", true],
+  ["mattermost", ["read"]],
+  ["telegram", ["react", "edit", "delete", "emoji-list"]],
+] as const;
 
 type ExplicitSessionKeyNormalizer = (
   sessionKey: string,
@@ -182,6 +191,13 @@ describe("bundled channel plugin shape coherence", () => {
       expect(["current", "child"]).toContain(artifactPlacement);
       expect(["current", "child"]).toContain(pluginPlacement);
       expect(artifactPlacement).toBe(pluginPlacement);
+    },
+  );
+
+  it.each(PROVIDER_OWNED_READ_GATE_PLUGINS)(
+    "keeps the %s provider-owned read gate declaration on its registered plugin surface",
+    (id, expected) => {
+      expect(plugins.get(id)?.actions?.providerOwnedReadGates).toEqual(expected);
     },
   );
 

@@ -1,9 +1,11 @@
 // File Transfer tests cover dir fetch plugin behavior.
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTarArchive } from "./dir-fetch-archive.js";
 import { handleDirFetch } from "./dir-fetch.js";
 
 let tmpRoot: string;
@@ -56,6 +58,43 @@ describe("handleDirFetch — fs errors", () => {
 });
 
 describe("handleDirFetch — happy path", () => {
+  it.runIf(process.platform !== "win32")(
+    "binds tar to the canonical directory after changing its working directory",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.symlink(second, link);
+
+      const firstStats = await fs.stat(first, { bigint: true });
+      await expect(
+        createTarArchive(link, first, String(firstStats.dev), String(firstStats.ino), 1024 * 1024),
+      ).resolves.toBe("CANONICAL_PATH_CHANGED");
+    },
+  );
+
+  it.runIf(HAS_TAR)("rejects a same-path replacement before tar starts", async () => {
+    const target = path.join(tmpRoot, "target");
+    const moved = path.join(tmpRoot, "moved");
+    await fs.mkdir(target);
+    const targetStats = await fs.stat(target, { bigint: true });
+    await fs.rename(target, moved);
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, "secret.txt"), "secret");
+
+    await expect(
+      createTarArchive(
+        target,
+        target,
+        String(targetStats.dev),
+        String(targetStats.ino),
+        1024 * 1024,
+      ),
+    ).resolves.toBe("CANONICAL_PATH_CHANGED");
+  });
+
   it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
     await fs.mkdir(path.join(tmpRoot, ".ssh"));
@@ -76,6 +115,69 @@ describe("handleDirFetch — happy path", () => {
     expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
     expect(r.fileCount).toBe(r.entries?.length);
   });
+
+  it.runIf(HAS_TAR && process.platform !== "win32")(
+    "rejects a retargeted path before creating an archive",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.writeFile(path.join(first, "approved.txt"), "approved");
+      await fs.writeFile(path.join(second, "not-approved.txt"), "not approved");
+      await fs.symlink(first, link);
+
+      const preflight = await handleDirFetch({
+        path: link,
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleDirFetch({
+        path: link,
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+        canonicalPath: second,
+      });
+    },
+  );
+
+  it.runIf(HAS_TAR)(
+    "rejects a replacement at the same canonical pathname before creating an archive",
+    async () => {
+      const target = path.join(tmpRoot, "target");
+      const moved = path.join(tmpRoot, "moved");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "approved.txt"), "approved");
+      const preflight = await handleDirFetch({ path: target, preflightOnly: true });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.rename(target, moved);
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "secret.txt"), "secret");
+
+      const result = await handleDirFetch({
+        path: target,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
+    },
+  );
 
   it.runIf(HAS_TAR && process.platform !== "win32")(
     "preflights symlinks without following their targets",
@@ -100,6 +202,9 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, "b.txt"), "beta\n");
     await fs.mkdir(path.join(tmpRoot, "sub"));
     await fs.writeFile(path.join(tmpRoot, "sub", "c.txt"), "gamma\n");
+    await fs.writeFile(path.join(tmpRoot, ".root-note"), "hidden root\n");
+    await fs.mkdir(path.join(tmpRoot, ".hidden"));
+    await fs.writeFile(path.join(tmpRoot, ".hidden", "note.txt"), "hidden member\n");
 
     const r = await handleDirFetch({ path: tmpRoot });
     if (!r.ok) {
@@ -119,13 +224,19 @@ describe("handleDirFetch — happy path", () => {
     expect(buf[0]).toBe(0x1f);
     expect(buf[1]).toBe(0x8b);
 
-    // file count covers the regular files we created (3); BSD tar may also
+    // file count covers the regular files we created (5); BSD tar may also
     // list directory entries, so be generous.
-    expect(r.fileCount).toBeGreaterThanOrEqual(3);
+    expect(r.fileCount).toBeGreaterThanOrEqual(5);
     expect(r.entries).toContain("a.txt");
     expect(r.entries).toContain("b.txt");
     expect(r.entries).toContain("sub");
     expect(r.entries).toContain("sub/c.txt");
+    const archiveEntries = execFileSync("/usr/bin/tar", ["-tzf", "-"], {
+      input: buf,
+      encoding: "utf8",
+    }).split("\n");
+    expect(archiveEntries).toEqual(expect.arrayContaining(["./.root-note", "./.hidden/note.txt"]));
+    expect(r.entries).toEqual(expect.arrayContaining([".root-note", ".hidden/note.txt"]));
     expect(r.fileCount).toBe(r.entries?.length);
   });
 });

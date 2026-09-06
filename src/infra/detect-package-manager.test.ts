@@ -6,6 +6,8 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 
+const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
+
 async function withPackageManagerRoot<T>(
   files: Array<{ path: string; content: string }>,
   run: (root: string) => Promise<T>,
@@ -27,7 +29,7 @@ async function writePublishedOpenClawRoot(
   await fs.mkdir(root, { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+    JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
     "utf8",
   );
   if (options.shrinkwrap) {
@@ -39,7 +41,7 @@ describe("detectPackageManager", () => {
   it("prefers packageManager from package.json when supported", async () => {
     await withPackageManagerRoot(
       [
-        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
         { path: "package-lock.json", content: "" },
       ],
       async (root) => {
@@ -76,7 +78,7 @@ describe("detectPackageManager", () => {
   it("uses npm-shrinkwrap as npm evidence for published npm package roots", async () => {
     await withPackageManagerRoot(
       [
-        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
         { path: "npm-shrinkwrap.json", content: "{}" },
       ],
       async (root) => {
@@ -88,7 +90,7 @@ describe("detectPackageManager", () => {
   it("keeps pnpm source roots when npm-shrinkwrap is present next to pnpm-lock", async () => {
     await withPackageManagerRoot(
       [
-        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
         { path: "npm-shrinkwrap.json", content: "{}" },
         { path: "pnpm-lock.yaml", content: "lockfileVersion: '9.0'" },
       ],
@@ -136,7 +138,43 @@ describe("detectPackageManager", () => {
     },
   );
 
-  it("keeps pnpm 11 ownership through markerless global virtual-store symlinks", async () => {
+  it.each([
+    { name: "missing Bun install environment", installEnv: "missing", customGlobalDir: false },
+    {
+      name: "conflicting Bun install environment",
+      installEnv: "conflicting",
+      customGlobalDir: false,
+    },
+    {
+      name: "explicit custom Bun global directory",
+      installEnv: "conflicting",
+      customGlobalDir: true,
+    },
+  ] as const)(
+    "detects lockless Bun ownership with $name",
+    async ({ installEnv, customGlobalDir }) => {
+      await withTestDir({ prefix: "openclaw-detect-pm-bun-owner-" }, async (base) => {
+        const bunInstall = path.join(base, "owning-bun");
+        const globalProject = customGlobalDir
+          ? path.join(base, "custom-global-project")
+          : path.join(bunInstall, "install", "global");
+        const packageRoot = path.join(globalProject, "node_modules", "openclaw");
+        await writePublishedOpenClawRoot(packageRoot, { shrinkwrap: false });
+
+        await withEnvAsync(
+          {
+            BUN_INSTALL: installEnv === "missing" ? undefined : path.join(base, "unrelated-bun"),
+            BUN_INSTALL_GLOBAL_DIR: customGlobalDir ? globalProject : undefined,
+          },
+          async () => {
+            await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
+          },
+        );
+      });
+    },
+  );
+
+  it("keeps pnpm ownership through markerless global v11 virtual-store symlinks", async () => {
     await withTestDir({ prefix: "openclaw-detect-pm-pnpm-global-store-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const installRoot = path.join(globalRoot, "install-openclaw");

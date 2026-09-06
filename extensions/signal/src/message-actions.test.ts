@@ -164,6 +164,19 @@ describe("signalMessageActions", () => {
         expectedOptions: { accountId: "default" },
       },
       {
+        name: "preserves UUID case while stripping mixed-case Signal and UUID prefixes",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        params: {
+          to: " SiGnAl: UuId:123E4567-E89B-12D3-A456-426614174000 ",
+          messageId: "123",
+          emoji: "🔥",
+        },
+        expectedRecipient: "123E4567-E89B-12D3-A456-426614174000",
+        expectedTimestamp: 123,
+        expectedEmoji: "🔥",
+        expectedOptions: { accountId: "default" },
+      },
+      {
         name: "passes groupId and targetAuthor for group reactions",
         cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
         params: {
@@ -230,7 +243,7 @@ describe("signalMessageActions", () => {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
 
-    await signalMessageActions.handleAction?.({
+    const added = await signalMessageActions.handleAction?.({
       channel: "signal",
       action: "react",
       params: {
@@ -248,8 +261,9 @@ describe("signalMessageActions", () => {
       "✅",
       expect.objectContaining({ accountId: "default" }),
     );
+    expect(added?.details).toEqual({ ok: true, added: "✅" });
 
-    await signalMessageActions.handleAction?.({
+    const removed = await signalMessageActions.handleAction?.({
       channel: "signal",
       action: "react",
       params: {
@@ -268,6 +282,7 @@ describe("signalMessageActions", () => {
       "✅",
       expect.objectContaining({ accountId: "default" }),
     );
+    expect(removed?.details).toEqual({ ok: true, removed: "✅" });
   });
 
   it.each([
@@ -328,6 +343,17 @@ describe("signalMessageActions", () => {
       }),
     ).rejects.toThrow(/Invalid messageId/);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
+
+    for (const remove of [false, true]) {
+      await expect(
+        signalMessageActions.handleAction?.({
+          channel: "signal",
+          action: "react",
+          params: { to: "+15559999999", messageId: "123", remove },
+          cfg,
+        }),
+      ).rejects.toThrow(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
+    }
 
     await expect(
       signalMessageActions.handleAction?.({

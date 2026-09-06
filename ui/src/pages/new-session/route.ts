@@ -8,5 +8,5 @@ export const page = definePage({
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: async (context: ApplicationContext, { location }) =>
     (await import("./route-loader.ts")).load(context, location.search),
-  component: () => import("./new-session-page.ts"),
+  component: () => import("./new-session-page-entry.ts"),
 });

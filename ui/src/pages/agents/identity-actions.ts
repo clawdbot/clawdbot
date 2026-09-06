@@ -120,7 +120,7 @@ export async function saveIdentityDraft(params: {
     }
   } catch (err) {
     if (params.isCurrent()) {
-      host.identityError = String(err);
+      host.identityError = formatUiError(err);
     }
   } finally {
     if (params.isCurrent()) {

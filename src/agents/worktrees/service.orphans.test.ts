@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { listGitWorktrees } from "./git.js";
-import { ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,16 +119,31 @@ describe("ManagedWorktreeService orphan reconciliation", () => {
     await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("defers cleanup when checkout metadata cannot be inspected", async () => {
-    const target = path.join(stateDir, "worktrees", "fingerprint", "broken-checkout");
+  it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
+    let now = Date.now();
+    service = new ManagedWorktreeService({ env, now: () => now });
+    const expired = await service.create({ repoRoot: repo, name: "expired-snapshot" });
+    await service.remove({ id: expired.id, reason: "retention" });
+    now += SNAPSHOT_RETENTION_MS + 1;
+
+    const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
+    const target = path.join(fingerprint, "a-broken-checkout");
+    const debris = path.join(fingerprint, "z-plain-debris");
     await fs.mkdir(path.join(target, "payload"), { recursive: true });
     await fs.writeFile(path.join(target, ".git"), "gitdir: /missing/openclaw-worktree-control\n");
     await fs.writeFile(path.join(target, "payload", "keep.txt"), "uncertain\n");
+    await fs.mkdir(debris, { recursive: true });
+    await fs.writeFile(path.join(debris, "remove.txt"), "debris\n");
 
-    await expect(service.gc()).rejects.toThrow("git worktree list");
+    const result = await service.gc();
+
+    expect(result.orphansDeleted).toBe(1);
+    expect(result.snapshotsPruned).toBe(1);
     await expect(fs.readFile(path.join(target, "payload", "keep.txt"), "utf8")).resolves.toBe(
       "uncertain\n",
     );
+    await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(service.listRegistryRecords().some((record) => record.id === expired.id)).toBe(false);
   });
 
   it.skipIf(process.platform === "win32")(

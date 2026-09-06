@@ -1,27 +1,25 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
 } from "../../shared/worker-bundle-archive.js";
 import {
+  compareWorkerBundlePaths,
   hashWorkerBundleManifest,
+  WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_MANIFEST_VERSION,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
-import {
-  collectWorkerBundleManifest,
-  comparePaths,
-  type WorkerBundleManifestEntry,
-} from "./bundle-staging.js";
+import { collectWorkerBundleManifest, type WorkerBundleManifestEntry } from "./bundle-staging.js";
 
 export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -77,7 +75,7 @@ function normalizeProtocolFeatures(features: readonly string[]): string[] {
   if (normalized.some((feature) => feature.length === 0)) {
     throw new Error("Worker protocol features must be non-empty strings");
   }
-  return [...new Set(normalized)].toSorted(comparePaths);
+  return [...new Set(normalized)].toSorted(compareWorkerBundlePaths);
 }
 
 function resolveBundleCacheDir(cacheDir: string | undefined): string {
@@ -198,7 +196,9 @@ async function verifyPublishedNpmRelease(params: {
   runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<string> {
   const runCommand = params.runCommand ?? runCommandWithTimeout;
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-npm-proof-"));
+  const temporaryRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-npm-proof-"),
+  );
   try {
     const published = parseNpmPackageIdentity(
       unwrapNpmJsonEntry(
@@ -359,6 +359,11 @@ async function writeTarball(params: {
         noMtime: true,
         portable: true,
         strict: true,
+        onWriteEntry: ({ stat }) => {
+          if (stat) {
+            stat.mode = (stat.mode & ~0o777) | WORKER_BUNDLE_ARTIFACT_MODE;
+          }
+        },
       },
       params.entries.map((entry) => entry.path),
     );
@@ -410,7 +415,9 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
-  for (const entry of entries.toSorted((left, right) => comparePaths(left.name, right.name))) {
+  for (const entry of entries.toSorted((left, right) =>
+    compareWorkerBundlePaths(left.name, right.name),
+  )) {
     const tarball = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name);
     const removableTarball = tarball && !retained.has(tarball[1]!);
     const removableStaging = BUNDLE_STAGING_NAME_PATTERN.test(entry.name);

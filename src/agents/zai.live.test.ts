@@ -42,7 +42,7 @@ async function expectModelReturnsAssistantText(
       {
         messages: createSingleUserPromptMessage(),
       },
-      { apiKey: ZAI_KEY, maxTokens },
+      { apiKey: ZAI_KEY, maxTokens, reasoning: modelId === "glm-5.3" ? "max" : undefined },
     );
 
   // A small probe cap can occasionally yield only hidden reasoning even though

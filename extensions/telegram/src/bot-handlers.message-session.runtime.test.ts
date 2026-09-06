@@ -35,8 +35,7 @@ describe("createTelegramMessageSessionRuntime", () => {
     const state = resolveTelegramSessionState({
       chatId: 12345,
       isGroup: false,
-      isForum: false,
-      messageThreadId: 99,
+      threadSpec: { id: 99, scope: "dm" },
       botHasTopicsEnabled: true,
       senderId: 12345,
       runtimeCfg: {},

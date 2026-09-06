@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
@@ -9,31 +8,37 @@ import {
 } from "./cua-driver-contract.test-fixtures.js";
 import type { CuaToolResult } from "./driver-client.js";
 
-const tempRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("cua-computer browser actions", () => {
   it("maps every browser action to the pinned driver tool contract", async () => {
-    const resourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-browser-"));
-    tempRoots.push(resourceRoot);
     const { session, callTool } = driver();
     let downloadedFile = "";
+    const binding = {
+      ...CUA_DRIVER_CONTRACT_FIXTURES.browserBinding,
+      tabs: CUA_DRIVER_CONTRACT_FIXTURES.browserBinding.tabs.map((tab) => ({
+        ...tab,
+        title: "",
+        active: false,
+        nativeSession: "private-native-browser-session",
+      })),
+    };
+    const snapshot = {
+      ...CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot,
+      refs: CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot.refs.map((ref) => ({
+        ...ref,
+        value: "",
+        states: [],
+        nativeSession: "private-native-browser-session",
+      })),
+      content_refs: [{ ref: "p7:0", label: "duplicate action reference" }],
+    };
     callTool.mockImplementation(async (name, args) => {
       switch (name) {
         case "list_windows":
           return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
         case "get_browser_state":
-          return cuaToolResult(
-            "target_id" in args
-              ? CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot
-              : CUA_DRIVER_CONTRACT_FIXTURES.browserBinding,
-            { image: "target_id" in args },
-          );
+          return cuaToolResult("target_id" in args ? snapshot : binding, {
+            image: "target_id" in args,
+          });
         case "browser_prepare":
           return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserPrepare);
         case "browser_navigate":
@@ -60,7 +65,7 @@ describe("cua-computer browser actions", () => {
           return cuaToolResult({});
       }
     });
-    const computer = await execution(session, { resourceRoot });
+    const computer = await execution(session);
     const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
       details: { windows: Array<{ windowRef: string }> };
     };
@@ -79,11 +84,15 @@ describe("cua-computer browser actions", () => {
     );
     expect(boundJson).not.toContain("native-browser-target-1");
     expect(boundJson).not.toContain("native-page-1");
+    expect(boundJson).not.toContain("private-native-browser-session");
     const bound = JSON.parse(boundJson) as {
       details: { browserRef: string; pages: Array<{ pageRef: string }> };
     };
     expect(bound.details.browserRef).toMatch(/^cua:v2:browser:/);
     expect(bound.details.pages[0]!.pageRef).toMatch(/^cua:v2:page:/);
+    expect(bound.details.pages).toEqual([
+      { pageRef: expect.any(String), title: "", url: "https://example.com/", active: false },
+    ]);
     const browserRef = bound.details.browserRef;
     const pageRef = bound.details.pages[0]!.pageRef;
 
@@ -91,11 +100,32 @@ describe("cua-computer browser actions", () => {
       JSON.stringify({ action: "get_browser_state", browserRef, pageRef }),
     );
     expect(observedJson).not.toContain("p7:0");
+    expect(observedJson).not.toContain("private-native-browser-session");
     const observed = JSON.parse(observedJson) as {
       observation: { kind: string; observationId: string };
       details: { elements: Array<{ elementRef: string }> };
     };
     expect(observed.observation.kind).toBe("browser");
+    expect(observed.details.elements).toEqual([
+      {
+        elementRef: expect.any(String),
+        kind: "action",
+        node: "BUTTON",
+        label: "Continue",
+        value: "",
+        states: [],
+        frame: "main",
+      },
+      {
+        elementRef: expect.any(String),
+        kind: "action",
+        node: "INPUT",
+        label: "Name",
+        value: "",
+        states: [],
+        frame: "main",
+      },
+    ]);
     const observationId = observed.observation.observationId;
     const [firstElement, secondElement] = observed.details.elements.map(
       (element) => element.elementRef,
@@ -144,7 +174,7 @@ describe("cua-computer browser actions", () => {
         elementRef: firstElement,
       }),
     );
-    expect(downloadJson).not.toContain(resourceRoot);
+    expect(downloadJson).not.toContain(path.dirname(downloadedFile));
     const download = JSON.parse(downloadJson) as {
       details: { fileResourceHandles: string[]; resourceHandle: string };
     };
@@ -276,6 +306,9 @@ describe("cua-computer browser actions", () => {
         undefined,
       ],
     ]);
+
+    await computer.close("cancel");
+    await expect(fs.access(downloadedFile)).rejects.toThrow();
   });
 
   it("invalidates browser capabilities across navigation, generation, and execution", async () => {

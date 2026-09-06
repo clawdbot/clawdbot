@@ -6,10 +6,12 @@ import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
   inferSignalStatus,
   isExactUnknownNoDetailsError,
+  isReplayInvalidErrorMessage,
 } from "../failover/classification-rules.js";
 import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
 import { isContextOverflowErrorFromTables } from "../failover/context-overflow.js";
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
 export type ProviderRuntimeFailureKind =
   | "auth_scope"
@@ -49,10 +51,6 @@ const PROXY_ERROR_RE =
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
 const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
-const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
-const THINKING_SIGNATURE_ERROR_RE =
-  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 function stripErrorPrefix(raw: string): string {
@@ -121,20 +119,18 @@ function isProxyErrorMessage(raw: string, status?: number): boolean {
 function isDnsTransportErrorMessage(raw: string): boolean {
   return DNS_ERROR_RE.test(raw);
 }
-function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
-}
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
-function isSchemaErrorMessage(raw: string): boolean {
+function isSchemaErrorMessage(
+  raw: string,
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
+): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowErrorFromTables(raw)) {
     return false;
   }
-  return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
+  // Schema copy requires message evidence, not a generic HTTP 400 classification.
+  return classifyFailoverReason(raw, opts) === "format" || matchesFormatErrorPattern(raw);
 }
 function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   if (!raw) {
@@ -169,6 +165,7 @@ function isOAuthCallbackValidationMessage(raw: string): boolean {
 }
 export function classifyProviderRuntimeFailureKind(
   signal: FailoverSignal | string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): ProviderRuntimeFailureKind {
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
@@ -211,11 +208,10 @@ export function classifyProviderRuntimeFailureKind(
     }
     return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
-  const failoverClassification = classifyFailoverSignal({
-    ...normalizedSignal,
-    status,
-    message: message || undefined,
-  });
+  const failoverClassification = classifyFailoverSignal(
+    { ...normalizedSignal, status, message: message || undefined },
+    opts,
+  );
   const failoverReason =
     failoverClassification?.kind === "reason" ? failoverClassification.reason : undefined;
   switch (failoverReason) {
@@ -235,7 +231,7 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
   }
-  if (message && isSchemaErrorMessage(message)) {
+  if (message && isSchemaErrorMessage(message, { ...opts, provider: normalizedSignal.provider })) {
     return "schema";
   }
   // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the

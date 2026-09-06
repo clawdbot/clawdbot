@@ -122,15 +122,15 @@ describe("program routes", () => {
   it("passes parsed agents list flags through", async () => {
     await expect(expectRoute(["agents"]).run(routeArgv("agents"))).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
-      { json: false, bindings: false },
+      { json: false, bindings: false, tree: false },
       defaultRuntime,
     );
 
     await expect(
-      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings")),
+      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings --tree")),
     ).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenLastCalledWith(
-      { json: true, bindings: true },
+      { json: true, bindings: true, tree: true },
       defaultRuntime,
     );
   });
@@ -307,6 +307,13 @@ describe("program routes", () => {
 
   it("returns false for sessions route when --store value is missing", async () => {
     await expectRunFalse(["sessions"], routeArgv("sessions --store"));
+  });
+
+  it.each([
+    ["separate empty value", ["node", "openclaw", "sessions", "--store", ""]],
+    ["empty assigned value", routeArgv("sessions --store=")],
+  ])("falls back to Commander for a sessions --store $0", async (_name, argv) => {
+    await expectRunFalse(["sessions"], argv);
   });
 
   it("returns false for sessions route when --active value is missing", async () => {

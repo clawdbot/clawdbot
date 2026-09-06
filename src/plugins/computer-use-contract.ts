@@ -56,9 +56,6 @@ export const COMPUTER_USE_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(0
 
 export const COMPUTER_ACT_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 
-export const COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES =
-  [] as const satisfies readonly ComputerUseV2ActionName[];
-
 export const COMPUTER_CONTRACT_MISMATCH = "COMPUTER_CONTRACT_MISMATCH";
 export const COMPUTER_STALE_OBSERVATION = "COMPUTER_STALE_OBSERVATION";
 
@@ -548,6 +545,7 @@ export type ComputerUseProvider = {
   label: string;
   capabilities(): ComputerUseCapabilityDescriptor;
   isAvailable(): boolean;
+  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   watchAvailability?: (
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
@@ -640,6 +638,7 @@ export function registerComputerUseProvider(
     command: "screen.snapshot",
     cap: "screen",
     dangerous: false,
+    prepare: (context) => provider.prepare?.(context),
     isAvailable: () => provider.isAvailable(),
     watchAvailability: (context, onChange) => {
       const stopWatching = provider.watchAvailability?.(context, onChange);

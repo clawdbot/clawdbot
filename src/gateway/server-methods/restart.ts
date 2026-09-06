@@ -1,5 +1,4 @@
 // Gateway RPC handlers for safe gateway restart requests and preflight state.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
@@ -8,8 +7,11 @@ import {
   createSafeGatewayRestartPreflight,
   scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
+import {
+  parseTargetedGatewayRestart,
+  parseTargetedGatewayRestartIntent,
+} from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
@@ -28,70 +30,6 @@ function normalizeSkipDeferral(value: unknown): boolean {
   // Only an explicit boolean may bypass deferral; truthy strings from loose
   // clients must not skip the safe-restart preflight queue.
   return value === true;
-}
-
-type TargetedGatewayRestart = {
-  pid: number;
-  ownerId: string;
-  port: number;
-};
-
-function parseTargetedGatewayRestart(value: unknown): TargetedGatewayRestart | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const target = value as { pid?: unknown; ownerId?: unknown; port?: unknown };
-  if (
-    typeof target.pid !== "number" ||
-    !Number.isSafeInteger(target.pid) ||
-    target.pid <= 0 ||
-    typeof target.ownerId !== "string" ||
-    !target.ownerId.trim() ||
-    typeof target.port !== "number" ||
-    !Number.isInteger(target.port) ||
-    target.port <= 0 ||
-    target.port > 65_535
-  ) {
-    return null;
-  }
-  return {
-    pid: target.pid,
-    ownerId: target.ownerId.trim(),
-    port: target.port,
-  };
-}
-
-function parseTargetedRestartIntent(
-  value: unknown,
-  reason: string | undefined,
-): GatewayRestartIntent | null {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    return null;
-  }
-  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown };
-  const force = raw.force === true;
-  const waitMs =
-    typeof raw.waitMs === "number" &&
-    Number.isSafeInteger(raw.waitMs) &&
-    raw.waitMs >= 0 &&
-    raw.waitMs <= MAX_TIMER_TIMEOUT_MS
-      ? raw.waitMs
-      : undefined;
-  if (
-    (raw.force !== undefined && typeof raw.force !== "boolean") ||
-    (raw.waitMs !== undefined && waitMs === undefined) ||
-    (force && waitMs !== undefined)
-  ) {
-    return null;
-  }
-  return {
-    ...(reason ? { reason } : {}),
-    ...(force ? { force: true } : {}),
-    ...(waitMs !== undefined ? { waitMs } : {}),
-  };
 }
 
 /** Gateway request handlers for safe restart coordination. */
@@ -141,7 +79,7 @@ export const restartHandlers: GatewayRequestHandlers = {
         respond(true, result);
         return;
       }
-      const intent = parseTargetedRestartIntent(params.restartIntent, reason);
+      const intent = parseTargetedGatewayRestartIntent(params.restartIntent, reason);
       if (!intent) {
         respond(
           false,

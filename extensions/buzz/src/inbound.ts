@@ -1,16 +1,21 @@
+import { normalizeURL } from "nostr-tools/utils";
 import {
   buildChannelInboundEventContext,
+  logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { BuzzBus } from "./buzz-bus.js";
+import type { BuzzConfigInput } from "./config-schema.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   formatBuzzMessageForAgent,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { recordBuzzPendingHistory, snapshotBuzzPendingHistory } from "./pending-history.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -23,6 +28,8 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  assertCurrent: () => void;
+  historyMap: Map<string, HistoryEntry[]>;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
@@ -67,8 +74,8 @@ export async function handleBuzzInbound(params: {
       inboundEventKind: "user_request",
     },
     mentionFacts: { canDetectMention: true, wasMentioned },
-    groupPolicy: account.config.groupPolicy,
-    groupAllowFrom: account.config.groupAllowFrom,
+    groupPolicy: groupConfig?.groupPolicy ?? account.config.groupPolicy,
+    groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
     policy: {
       activation: {
         requireMention: groupConfig?.requireMention ?? true,
@@ -82,9 +89,46 @@ export async function handleBuzzInbound(params: {
         }
       : undefined,
   });
+  // Admission awaits policy; only the transport owner can confirm membership is still current.
+  params.assertCurrent();
+  const historyKey = JSON.stringify([channelId, message.threadId ?? null]);
+  const historyLimit = account.config.historyLimit ?? 0;
   if (access.ingress.admission !== "dispatch") {
+    if (access.ingress.reasonCode === "activation_skipped") {
+      // SAFETY: Buzz's manifest schema validates this plugin-owned channel section before startup.
+      const buzzConfig = cfg.channels?.buzz as BuzzConfigInput | undefined;
+      const groupsPath = buzzConfig?.accounts?.[account.accountId]
+        ? `channels.buzz.accounts[${JSON.stringify(account.accountId)}].groups`
+        : "channels.buzz.groups";
+      logInboundDrop({
+        log: log.info,
+        channel: "buzz",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention.`,
+      });
+      await recordBuzzPendingHistory({
+        historyMap: params.historyMap,
+        key: historyKey,
+        limit: historyLimit,
+        message,
+        text: textForAgent,
+        shouldRecord: () =>
+          !signal.aborted && bus.directory.isMember(channelId, message.senderPubkey),
+      });
+    }
     return;
   }
+
+  const history = snapshotBuzzPendingHistory({
+    historyMap: params.historyMap,
+    key: historyKey,
+    limit: historyLimit,
+    channelId,
+    directory: bus.directory,
+    currentMessage: textForAgent,
+  });
 
   const senderName = bus.directory.resolveSenderName(message.senderPubkey);
   const roomName = bus.directory.resolveRoomName(channelId);
@@ -125,7 +169,7 @@ export async function handleBuzzInbound(params: {
     },
     message: {
       body,
-      bodyForAgent: textForAgent,
+      bodyForAgent: history.bodyForAgent,
       rawBody: message.text,
       commandBody: supportsTextInterpretation ? message.text : "",
     },
@@ -138,8 +182,13 @@ export async function handleBuzzInbound(params: {
       BuzzEventKind: message.kind,
     },
   });
+  const replyTarget = {
+    channelId,
+    threadId: account.config.replyToMode === "off" ? undefined : message.threadId,
+    replyToId: account.config.replyToMode === "off" ? undefined : (message.threadId ?? message.id),
+  };
 
-  await runtime.channel.inbound.dispatch({
+  const result = await runtime.channel.inbound.dispatch({
     cfg,
     channel: "buzz",
     accountId: account.accountId,
@@ -149,6 +198,24 @@ export async function handleBuzzInbound(params: {
       sessionKey: route.sessionKey,
     },
     ctxPayload,
+    botLoopProtection: bus.directory.isBotMember(channelId, message.senderPubkey)
+      ? {
+          // Reciprocal accounts share the relay/room pair budget. Threads and
+          // sender timestamps must not let a bot reset or evade that budget.
+          scopeId: `buzz:${normalizeURL(account.relayUrl)}`,
+          conversationId: channelId,
+          senderId: message.senderPubkey,
+          receiverId: bus.publicKey,
+          eventId: message.id,
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+        }
+      : undefined,
+    log: (event) => {
+      if (event.reason === "bot-loop-protection") {
+        log.warn(`[${account.accountId}] Buzz bot-pair loop suppressed in ${channelId}`);
+      }
+    },
     delivery: {
       deliver: async (payload) => {
         const text =
@@ -158,12 +225,7 @@ export async function handleBuzzInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await bus.sendText({
-          channelId,
-          text,
-          threadId: message.threadId,
-          replyToId: message.id,
-        });
+        await bus.sendText({ ...replyTarget, text });
       },
       onError: (error) => {
         throw error instanceof Error ? error : new Error(String(error));
@@ -175,11 +237,7 @@ export async function handleBuzzInbound(params: {
     replyPipeline: {
       typing: {
         start: async () => {
-          await bus.sendTyping({
-            channelId,
-            threadId: message.threadId,
-            replyToId: message.id,
-          });
+          await bus.sendTyping(replyTarget);
         },
         keepaliveIntervalMs: 3_000,
         onStartError: (error: unknown) => {
@@ -195,4 +253,7 @@ export async function handleBuzzInbound(params: {
       },
     },
   });
+  if (result.dispatched) {
+    history.consume();
+  }
 }

@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import {
+  createPreparedModelCatalogWorkerInput,
+  fingerprintPreparedModelWorkerRequest,
+} from "./prepared-model-catalog-worker.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
 }));
 
 describe("prepared model catalog worker input", () => {
-  it("preserves SecretRef identity beside materialized literals", () => {
+  it("preserves captured auth identity and distinguishes source from built artifacts", () => {
     const authStore = {
       version: 1,
       profiles: {
@@ -40,15 +43,22 @@ describe("prepared model catalog worker input", () => {
       order: { shared: ["shared:named"] },
       lastGood: { shared: "shared:named" },
     };
-    const workerInput = createPreparedModelCatalogWorkerInput({
+    const params = {
       agentFacts: {
-        input: { agentDir: "/tmp/agent", config: {}, workspaceDir: "/tmp/workspace" },
+        input: {
+          agentDir: "/tmp/agent",
+          config: {},
+          workspaceDir: "/tmp/workspace",
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+        },
         env: {},
         authStore,
         credentials: { shared: { ...authStore.profiles["shared:named"] } },
         providerIds: ["configured"],
         configuredModelRefs: [],
         configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
         configuredGeneratedCatalogPluginIds: [],
         templateAuthStorage: {} as never,
       } satisfies PreparedModelRuntimeAgentFacts,
@@ -58,7 +68,8 @@ describe("prepared model catalog worker input", () => {
         index: {} as never,
         plugins: [],
       } as unknown as PluginMetadataSnapshot,
-    });
+    };
+    const workerInput = createPreparedModelCatalogWorkerInput(params);
 
     const cloned = structuredClone(workerInput);
     expect(cloned.authStore.profiles).toEqual({
@@ -74,5 +85,35 @@ describe("prepared model catalog worker input", () => {
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
+    expect(cloned.input.runtimePluginSelections).toEqual([
+      { provider: "selected", modelId: "model" },
+    ]);
+    expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
+    expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
+    const builtInput = structuredClone(
+      createPreparedModelCatalogWorkerInput({ ...params, preferBuiltPluginArtifacts: true }),
+    );
+    expect(cloned.preferBuiltPluginArtifacts).toBe(false);
+    expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
+    expect(builtInput.generationFingerprint).not.toBe(cloned.generationFingerprint);
+    const request = {
+      kind: "catalog" as const,
+      syntheticAuth: [
+        {
+          providerRef: "native",
+          result: { apiKey: "native-login-not-real", source: "fixture", mode: "oauth" as const },
+        },
+      ],
+    };
+    const fingerprint = fingerprintPreparedModelWorkerRequest(cloned, request);
+    expect(fingerprintPreparedModelWorkerRequest(cloned, structuredClone(request))).toBe(
+      fingerprint,
+    );
+    expect(
+      fingerprintPreparedModelWorkerRequest(cloned, {
+        ...request,
+        syntheticAuth: [{ ...request.syntheticAuth[0]!, result: null }],
+      }),
+    ).not.toBe(fingerprint);
   });
 });

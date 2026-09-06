@@ -6,16 +6,22 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TASKS_LIST_CURSOR_MAX_LENGTH } from "../../../packages/gateway-protocol/src/index.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
-  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
@@ -28,20 +34,20 @@ import {
   setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { tasksHandlers } from "./tasks.js";
-import type { RespondFn } from "./types.js";
+import {
+  createContext,
+  createSnapshotTask,
+  identifiedClient,
+  runTaskHandler,
+} from "./tasks.test-helpers.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
-const killSubagentRunAdminMock = vi.fn();
-type TaskResponsePayload = {
-  tasks?: Array<Record<string, unknown>>;
-  task?: Record<string, unknown>;
-  found?: boolean;
-  cancelled?: boolean;
-  nextCursor?: string;
-  results?: Array<{ taskId?: string; ok?: boolean; reason?: string }>;
-};
+const mainSessionTaskScope = {
+  requesterSessionKey: "agent:main:main",
+  ownerKey: "agent:main:main",
+  scopeKind: "session",
+} as const;
 
 let stateDir: string;
 
@@ -58,13 +64,14 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
   cancelSessionMock.mockReset();
-  killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),
-    killSubagentRunAdmin: async (params) => killSubagentRunAdminMock(params),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation in task handler fixture");
+    },
   });
 });
 
@@ -72,64 +79,10 @@ afterEach(async () => {
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryForTests();
   stateDirEnvSnapshot.restore();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
-
-function captureRespond() {
-  const calls: Parameters<RespondFn>[] = [];
-  const respond: RespondFn = (...args) => {
-    calls.push(args);
-  };
-  return { calls, respond };
-}
-
-function createContext(config: Record<string, unknown> = {}) {
-  return {
-    getRuntimeConfig: () => config,
-  } as never;
-}
-
-function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
-  return {
-    taskId: "task-snapshot",
-    runtime: "cli",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    runId: "run-snapshot",
-    task: "Snapshot task",
-    status: "running",
-    deliveryStatus: "pending",
-    notifyPolicy: "done_only",
-    createdAt: 1_000,
-    startedAt: 1_010,
-    lastEventAt: 1_010,
-    ...overrides,
-  };
-}
-
-async function runTaskHandler(
-  method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
-  params: Record<string, unknown>,
-  config: Record<string, unknown> = {},
-) {
-  const { calls, respond } = captureRespond();
-  await expectDefined(
-    tasksHandlers[method],
-    "tasksHandlers[method] test invariant",
-  )({
-    req: { type: "req", id: `req-${method}`, method },
-    params,
-    respond,
-    context: createContext(config),
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return {
-    calls,
-    payload: calls[0]?.[1] as TaskResponsePayload | undefined,
-  };
-}
 
 async function getTaskPayload(taskId: string) {
   const { calls, payload } = await runTaskHandler("tasks.get", { taskId });
@@ -220,49 +173,6 @@ describe("tasks gateway handlers", () => {
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
   });
 
-  it("does not use the executor as the requester owner for a legacy bare task", () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      childSessionKey: "agent:research:subagent:child",
-      agentId: "research",
-      runId: "run-legacy-owner",
-      task: "Owned by ops, executed by research",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    expect(task.requesterAgentId).toBeUndefined();
-    const cfg = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "ops",
-        cfg,
-      }).tasks.map((entry) => entry.taskId),
-    ).toEqual([task.taskId]);
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "research",
-        cfg,
-      }).tasks,
-    ).toEqual([]);
-  });
-
   it("orders the ledger by last activity, not creation time", async () => {
     // The registry lists newest-created first; the wire must page by last
     // activity so an old task that just finished is not hidden behind
@@ -296,7 +206,88 @@ describe("tasks gateway handlers", () => {
     );
   });
 
-  it("preserves activity ordering across cursor pages", async () => {
+  it("ranks terminal tasks by completion time when the progress timestamp is stale", async () => {
+    const base = Date.now();
+    const justFinished = createSnapshotTask({
+      taskId: "task-just-finished",
+      runId: "run-just-finished",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 10_000,
+      startedAt: base - 9_000,
+      lastEventAt: base - 5_000,
+      endedAt: base - 1_000,
+    });
+    const finishedEarlier = createSnapshotTask({
+      taskId: "task-finished-earlier",
+      runId: "run-finished-earlier",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 8_000,
+      startedAt: base - 7_000,
+      lastEventAt: base - 2_000,
+      endedAt: base - 3_000,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [justFinished.taskId, justFinished],
+        [finishedEarlier.taskId, finishedEarlier],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
+      justFinished.taskId,
+      finishedEarlier.taskId,
+    ]);
+  });
+
+  it("ranks a terminal task by its later activity when completion trails it", async () => {
+    const base = Date.now();
+    const laterActivity = createSnapshotTask({
+      taskId: "task-later-activity",
+      runId: "run-later-activity",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 10_000,
+      startedAt: base - 9_000,
+      lastEventAt: base - 100,
+      endedAt: base - 2_000,
+    });
+    const laterCompletion = createSnapshotTask({
+      taskId: "task-later-completion",
+      runId: "run-later-completion",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      createdAt: base - 8_000,
+      startedAt: base - 7_000,
+      lastEventAt: base - 4_000,
+      endedAt: base - 500,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterActivity.taskId, laterActivity],
+        [laterCompletion.taskId, laterCompletion],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+    const byId = new Map(payload?.tasks?.map((task) => [task.taskId, task]));
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
+      laterActivity.taskId,
+      laterCompletion.taskId,
+    ]);
+    expect(byId.get("task-later-activity")?.updatedAt).toBe(base - 100);
+    expect(byId.get("task-later-completion")?.updatedAt).toBe(base - 500);
+  });
+
+  it("preserves activity ordering across unchanged cursor pages", async () => {
     const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
       createTaskRecord({
         runtime: "cli",
@@ -319,19 +310,85 @@ describe("tasks gateway handlers", () => {
         return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
       })
       .map((task) => task.taskId);
+    const context = createContext();
+    const client = identifiedClient(["operator.read"]);
 
-    const page1 = await runTaskHandler("tasks.list", { limit: 2 });
-    expect(page1.calls[0]?.[0]).toBe(true);
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 }, {}, client, context);
     expect(page1.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(0, 2));
-    expect(page1.payload?.nextCursor).toBe("2");
+    expect(page1.payload?.nextCursor).toEqual(expect.any(String));
+    expect(page1.payload?.nextCursor?.length).toBeLessThanOrEqual(TASKS_LIST_CURSOR_MAX_LENGTH);
 
-    const page2 = await runTaskHandler("tasks.list", { limit: 2, cursor: "2" });
+    const page2 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
     expect(page2.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(2, 4));
-    expect(page2.payload?.nextCursor).toBe("4");
 
-    const page3 = await runTaskHandler("tasks.list", { limit: 2, cursor: "4" });
+    const page3 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page2.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
     expect(page3.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(4));
     expect(page3.payload?.nextCursor).toBeUndefined();
+
+    const priorContext = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      createContext(),
+    );
+    expect(priorContext.calls[0]?.[2]?.code).toBe("INVALID_REQUEST");
+  });
+
+  it("rejects a continuation after task activity changes", async () => {
+    const created = [400, 300, 200, 100].map((lastEventAt, index) =>
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: `run-stale-page-${index}`,
+        task: `Stale page task ${index}`,
+        status: "running",
+        deliveryStatus: "pending",
+        lastEventAt,
+      }),
+    );
+    const context = createContext();
+    const client = identifiedClient(["operator.read"]);
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 }, {}, client, context);
+    expect(page1.payload?.tasks?.map((task) => task.id)).toEqual([
+      created[0]?.taskId,
+      created[1]?.taskId,
+    ]);
+
+    recordTaskProgressByRunId({
+      runId: created[3]?.runId ?? "",
+      lastEventAt: 500,
+    });
+
+    const page2 = await runTaskHandler(
+      "tasks.list",
+      { limit: 2, cursor: page1.payload?.nextCursor },
+      {},
+      client,
+      context,
+    );
+    expect(page2.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+      },
+    ]);
   });
 
   it("uses task id as the stable activity-order tie break", async () => {
@@ -378,38 +435,107 @@ describe("tasks gateway handlers", () => {
       const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
 
       expect(payload?.tasks).toHaveLength(2);
-      expect(payload?.nextCursor).toBe("2");
+      expect(payload?.nextCursor).toEqual(expect.any(String));
       expect(cloneSpy).toHaveBeenCalledTimes(2);
     } finally {
       cloneSpy.mockRestore();
     }
   });
 
-  it("returns page records isolated from the registry", () => {
-    const created = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Isolated task",
-      status: "running",
-      deliveryStatus: "pending",
-      detail: { nested: { value: "original" } },
-    });
-
-    const page = listTaskRecordPage({ offset: 0, limit: 1 });
-    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
-    expect(detail).toBeDefined();
-    if (detail) {
-      detail.nested.value = "mutated";
-    }
-
-    const current = expectDefined(
-      getTaskById(created.taskId),
-      "page mutation must not change the registry record",
-    );
-    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
-  });
+  it.each(["incognito", "none", "view"] as const)(
+    "enforces %s session access on indirect task selectors",
+    async (access) => {
+      const profileId =
+        access === "incognito"
+          ? "viewer@example.com"
+          : ensureProfileForEmail("viewer@example.com").id;
+      const foreignKey = `agent:main:dashboard:${access === "incognito" ? "incognito-" : ""}foreign`;
+      const ownKey = "agent:main:own-task";
+      for (const [sessionKey, actorId] of [
+        [foreignKey, "owner@example.com"],
+        [ownKey, profileId],
+      ] satisfies [string, string][]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-${sessionKey}`,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: actorId },
+            visibility: "shared",
+            ...(access === "incognito" && sessionKey === foreignKey ? { incognito: true } : {}),
+          },
+        );
+      }
+      const createTask = (sessionKey: string, lastEventAt: number) =>
+        createTaskRecord({
+          runtime: "cli",
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          ownerKey: sessionKey,
+          scopeKind: "session",
+          task: sessionKey,
+          status: "running",
+          deliveryStatus: "pending",
+          lastEventAt,
+        });
+      const foreign = createTask(foreignKey, 2_000);
+      const own = createTask(ownKey, 1_000);
+      const guest: GatewayOperatorRoleDefinition = {
+        sessions: { others: access === "none" ? "none" : "view" },
+        agents: "*",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const config: OpenClawConfig =
+        access === "incognito"
+          ? {}
+          : { gateway: { roles: { default: "guest", definitions: { guest } } } };
+      const viewer = identifiedClient(["operator.read", "operator.write"], profileId);
+      const taskId = foreign.taskId;
+      const selection = { taskIds: [taskId] };
+      const list = await runTaskHandler("tasks.list", { limit: 1 }, config, viewer);
+      const visibleForeign = access === "view";
+      expect(list.payload?.tasks?.map((task) => task.taskId)).toEqual([
+        visibleForeign ? taskId : own.taskId,
+      ]);
+      expect(list.payload?.nextCursor).toEqual(visibleForeign ? expect.any(String) : undefined);
+      const get = await runTaskHandler("tasks.get", { taskId }, config, viewer);
+      if (visibleForeign) {
+        expect(get.payload?.task?.taskId).toBe(taskId);
+      } else {
+        expect(get.calls[0]).toMatchObject([
+          false,
+          undefined,
+          { message: `task not found: ${taskId}` },
+        ]);
+      }
+      const cancel = await runTaskHandler("tasks.cancel", { taskId }, config, viewer);
+      expect(cancel.payload).toMatchObject({ found: false, cancelled: false });
+      for (const method of ["tasks.retry", "tasks.dismiss"] as const) {
+        const result = await runTaskHandler(method, selection, config, viewer);
+        expect(result.payload?.results).toEqual([{ taskId, ok: false, reason: "task not found" }]);
+      }
+      if (visibleForeign) {
+        addSessionMember(
+          { agentId: "main", sessionKey: foreignKey },
+          {
+            identityId: profileId,
+            addedBy: "owner@example.com",
+            expectedSessionId: `session-${foreignKey}`,
+          },
+        );
+        const invited = await runTaskHandler("tasks.retry", selection, config, viewer);
+        expect(invited.payload?.results?.[0]?.reason).not.toBe("task not found");
+      }
+      const admin = await runTaskHandler(
+        "tasks.get",
+        { taskId },
+        config,
+        identifiedClient(["operator.admin"], profileId),
+      );
+      expect(admin.calls[0]?.[0]).toBe(true);
+      expect(admin.payload?.task?.taskId).toBe(taskId);
+    },
+  );
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
@@ -439,9 +565,7 @@ describe("tasks gateway handlers", () => {
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-completed",
       task: "Done task",
       status: "succeeded",
@@ -455,12 +579,104 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.prompt).toBe("Done task");
   });
 
-  it("keeps bounded prompts lookup-only", async () => {
-    const task = createTaskRecord({
+  const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
+
+  it.each([
+    {
+      label: "subagent completion",
+      runtime: "subagent",
+      progressSummary: "Subagent canonical result",
+      terminalSummary: "Subagent terminal status",
+      expected: "Subagent canonical result",
+    },
+    {
+      label: "ACP completion",
+      runtime: "acp",
+      progressSummary: "ACP canonical result",
+      terminalSummary: "ACP terminal status",
+      expected: "ACP canonical result",
+    },
+    {
+      label: "cron completion",
+      runtime: "cron",
+      progressSummary: "Cron stale progress",
+      terminalSummary: "Cron canonical result",
+      expected: "Cron canonical result",
+    },
+    {
+      label: "CLI completion",
+      ...cliStaleResult,
+      terminalSummary: "CLI canonical result",
+      expected: "CLI canonical result",
+    },
+    {
+      label: "CLI sanitized terminal result",
+      ...cliStaleResult,
+      terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
+      expected: "Command did not run: approval timed out.",
+    },
+    {
+      label: "CLI blocked media references",
+      ...cliStaleResult,
+      terminalSummary: 'Delivery failed.\nRetained media: path="/tmp/proof.png"',
+      expected: 'Delivery failed. Retained media: path="/tmp/proof.png"',
+    },
+    {
+      label: "cron progress fallback",
+      runtime: "cron",
+      progressSummary: "Cron fallback result",
+      terminalSummary: undefined,
+      expected: "Cron fallback result",
+    },
+    {
+      label: "cron blank-terminal fallback",
+      runtime: "cron",
+      progressSummary: "Cron blank-terminal fallback result",
+      terminalSummary: "",
+      preserveTerminalSummary: true,
+      expected: "Cron blank-terminal fallback result",
+    },
+    {
+      label: "CLI progress fallback",
       runtime: "cli",
+      progressSummary: "CLI fallback result",
+      terminalSummary: undefined,
+      expected: "CLI fallback result",
+    },
+  ] as const)("returns the runtime-owned result for $label", async (fixture) => {
+    const task = createTaskRecord({
+      runtime: fixture.runtime,
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
+      task: fixture.label,
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      progressSummary: fixture.progressSummary,
+      terminalSummary: fixture.terminalSummary,
+    });
+    if ("preserveTerminalSummary" in fixture) {
+      expectDefined(
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status: "succeeded",
+          endedAt: Date.now(),
+          terminalSummary: fixture.terminalSummary,
+          preserveTerminalSummary: fixture.preserveTerminalSummary,
+        }),
+        "expected preserved terminal summary task",
+      );
+    }
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.result).toBe(fixture.expected);
+  });
+
+  it("keeps bounded prompts lookup-only", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      ...mainSessionTaskScope,
       task: `Inspect the task prompt ${"x".repeat(5_000)}`,
       status: "running",
       deliveryStatus: "pending",
@@ -486,9 +702,7 @@ describe("tasks gateway handlers", () => {
     ].join("\n");
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
       status: "running",
       deliveryStatus: "pending",
@@ -502,9 +716,7 @@ describe("tasks gateway handlers", () => {
   it("sanitizes task text before exposing SDK summaries", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
         "Compile artifact\nOpenClaw runtime context (internal): Keep internal details private.",
@@ -595,6 +807,8 @@ describe("tasks gateway handlers", () => {
       deliveryStatus: "not_applicable",
     });
     const longLastLine = `Updating   files ${"x".repeat(220)}`;
+    const emitPrimaryTool = (data: Record<string, unknown>) =>
+      emitAgentEvent({ runId: primary.runId!, stream: "tool", data });
 
     emitAgentEvent({
       runId: primary.runId!,
@@ -616,80 +830,53 @@ describe("tasks gateway handlers", () => {
       stream: "thinking",
       data: { text: "Later thinking must not replace assistant activity" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "edit",
-        toolCallId: "edit-1",
-        args: {
-          path: "src/a.ts",
-          edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
-        },
+    emitPrimaryTool({
+      phase: "start",
+      name: "edit",
+      toolCallId: "edit-1",
+      args: {
+        path: "src/a.ts",
+        edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
       },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "edit", toolCallId: "edit-1", isError: false },
+    emitPrimaryTool({ phase: "result", name: "edit", toolCallId: "edit-1", isError: false });
+    emitPrimaryTool({
+      phase: "start",
+      name: "write",
+      toolCallId: "write-1",
+      args: { file_path: "src/b.ts", content: "alpha\nbeta" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "write",
-        toolCallId: "write-1",
-        args: { file_path: "src/b.ts", content: "alpha\nbeta" },
+    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-1", isError: false });
+    emitPrimaryTool({
+      phase: "start",
+      name: "apply_patch",
+      toolCallId: "patch-1",
+      args: {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: src/a.ts",
+          "@@",
+          "-old",
+          "+new",
+          "+newer",
+          "*** Delete File: src/c.ts",
+          "*** End Patch",
+        ].join("\n"),
       },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
+    emitPrimaryTool({
+      phase: "result",
+      name: "apply_patch",
+      toolCallId: "patch-1",
+      isError: false,
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "apply_patch",
-        toolCallId: "patch-1",
-        args: {
-          input: [
-            "*** Begin Patch",
-            "*** Update File: src/a.ts",
-            "@@",
-            "-old",
-            "+new",
-            "+newer",
-            "*** Delete File: src/c.ts",
-            "*** End Patch",
-          ].join("\n"),
-        },
-      },
+    emitPrimaryTool({
+      phase: "start",
+      name: "write",
+      toolCallId: "write-failed",
+      args: { path: "src/ignored.ts", content: "not\ncounted" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "write",
-        toolCallId: "write-failed",
-        args: { path: "src/ignored.ts", content: "not\ncounted" },
-      },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "write", toolCallId: "write-failed", isError: true },
-    });
+    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-failed", isError: true });
 
     const primaryGet = await getTaskPayload(primary.taskId);
     const secondaryGet = await getTaskPayload(secondary.taskId);
@@ -712,7 +899,7 @@ describe("tasks gateway handlers", () => {
     expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("does not report cancellation for an ordinary task without a live owner", async () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
@@ -731,10 +918,10 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.cancelled).toBe(true);
+    expect(payload?.cancelled).toBe(false);
     expect(payload?.task?.id).toBe(task.taskId);
-    expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(payload?.task?.status).toBe("running");
+    expect(payload?.task?.error).toBeUndefined();
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {
@@ -776,7 +963,9 @@ describe("tasks gateway handlers", () => {
     expect(cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
       sessionKey: "agent:codex:acp:child",
+      agentId: "codex",
       reason: "operator requested stop",
+      expectedRunId: "run-cancel-acp-gateway",
     });
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);

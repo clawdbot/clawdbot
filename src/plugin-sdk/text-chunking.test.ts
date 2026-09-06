@@ -2,7 +2,28 @@
  * Tests text and Markdown chunking helpers exported by the plugin SDK.
  */
 import { describe, expect, it } from "vitest";
-import { chunkTextForOutbound, chunkTextRanges, tokenizeHtmlTags } from "./text-chunking.js";
+import {
+  chunkTextForOutbound,
+  chunkTextRanges,
+  findCodeRegions,
+  isInsideCode,
+  tokenizeHtmlTags,
+  type CodeRegion,
+} from "./text-chunking.js";
+
+it("accepts positional plugin ranges while retaining discovered block metadata", () => {
+  const ranges: CodeRegion[] = [{ start: 1, end: 5 }];
+  expect([0, 1, 4, 5].map((offset) => isInsideCode(offset, ranges))).toEqual([
+    false,
+    true,
+    true,
+    false,
+  ]);
+  const blockKinds: boolean[] = findCodeRegions("`inline`\n\n    indented\n").map(
+    (region) => region.block,
+  );
+  expect(blockKinds).toEqual([false, true]);
+});
 
 describe("tokenizeHtmlTags", () => {
   it("keeps quoted attribute delimiters inside one tag token", () => {

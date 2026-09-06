@@ -7,17 +7,22 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
+import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
+  type LaunchctlResult,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
+import {
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  readLaunchAgentProgramArgumentsFromFile,
+} from "./launchd-plist.js";
 import {
   resolveLaunchAgentPlistPath,
-  readLaunchAgentProgramArguments,
+  resolveLaunchAgentEnvironmentReadOptions,
 } from "./launchd-service-files.js";
 import {
   formatSystemLaunchDaemonOwnershipSummary,
@@ -25,7 +30,36 @@ import {
 } from "./launchd-system.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import type { GatewayServiceEnv, GatewayServiceEnvArgs } from "./service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+  GatewayServiceReadOptions,
+} from "./service-types.js";
+
+export async function readLaunchAgentProgramArguments(
+  env: GatewayServiceEnv,
+  options?: GatewayServiceReadOptions,
+): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel(env);
+  const command = await readLaunchAgentProgramArgumentsFromFile(resolveLaunchAgentPlistPath(env), {
+    ...resolveLaunchAgentEnvironmentReadOptions(env, label),
+    ...options,
+  });
+  if (!command && options?.requireEffective) {
+    // A removed plist can leave its job registered; only launchd can prove absence.
+    const timeoutMs =
+      options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
+    const probe = await probeLaunchAgentState(
+      `${resolveLaunchAgentGuiDomain()}/${label}`,
+      timeoutMs,
+    ).catch(() => null);
+    if (probe?.state !== "not-loaded") {
+      throw new Error("Effective LaunchAgent service command could not be inspected.");
+    }
+  }
+  return command;
+}
 
 // launchd reserves the label until the outgoing job actually exits, and it
 // SIGKILLs that job once ExitTimeOut elapses. Bound the bootstrap retry by that
@@ -36,6 +70,10 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   port: number | null;
   probeHosts: readonly string[];
 }> {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return { port: null, probeHosts: [] };
+  }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
@@ -122,7 +160,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         actionHint: params.actionHint,
       });
     }
-    if (isLaunchctlOperationAlreadyInProgress(detail)) {
+    if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
       const state = await probeLaunchAgentState(params.serviceTarget);
       if (state.state === "running" || state.state === "stopped") {
         params.onMutation?.("bootstrap");
@@ -208,7 +246,7 @@ export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise
 export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
-  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  const probe = await probeLaunchAgentState(`${domain}/${label}`, args.timeoutMs);
   if (probe.state === "running" || probe.state === "stopped") {
     return true;
   }
@@ -230,12 +268,13 @@ export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<bo
 
 export async function readLaunchAgentRuntime(
   env: Record<string, string | undefined>,
+  opts?: Pick<GatewayServiceEnvArgs, "timeoutMs">,
 ): Promise<GatewayServiceRuntime> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const [probe, systemOwnership] = await Promise.all([
-    probeLaunchAgentState(`${domain}/${label}`),
-    inspectSystemLaunchDaemonOwnership(label, { scanInstalledPlists: false }),
+    probeLaunchAgentState(`${domain}/${label}`, opts?.timeoutMs),
+    inspectSystemLaunchDaemonOwnership(label, { ...opts, scanInstalledPlists: false }),
   ]);
   if (systemOwnership.status !== "absent") {
     return {
@@ -277,13 +316,11 @@ export async function readLaunchAgentRuntime(
   };
 }
 
-export function isLaunchctlAlreadyLoaded(res: {
-  stdout: string;
-  stderr: string;
-  code: number;
-}): boolean {
+export function isLaunchctlAlreadyLoaded(res: LaunchctlResult): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
-  return res.code === 130 || detail.includes("already exists in domain");
+  return (
+    res.termination === "exit" && (res.code === 130 || detail.includes("already exists in domain"))
+  );
 }
 
 export function isUnsupportedGuiDomain(detail: string): boolean {
@@ -303,11 +340,7 @@ function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
   );
 }
 
-function isLaunchctlBootstrapPendingTeardown(res: {
-  stdout: string;
-  stderr: string;
-  code: number;
-}): boolean {
+function isLaunchctlBootstrapPendingTeardown(res: LaunchctlResult): boolean {
   // `bootout` returns once launchd accepts the request, not once the job is gone,
   // so bootstrapping the same label mid-teardown answers EIO. The plist is valid
   // here, so this is a timing conflict to retry rather than a real I/O fault.
@@ -315,7 +348,7 @@ function isLaunchctlBootstrapPendingTeardown(res: {
   // launchd answers the same EIO for a label that is simply still registered
   // ("already exists in domain"). That job is not tearing down, so waiting for a
   // teardown that never comes only delays the failure.
-  if (isLaunchctlAlreadyLoaded(res)) {
+  if (res.termination !== "exit" || isLaunchctlAlreadyLoaded(res)) {
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
@@ -329,10 +362,11 @@ type LaunchAgentProbeResult =
 
 export async function probeLaunchAgentState(
   serviceTarget: string,
+  timeoutMs?: number,
 ): Promise<LaunchAgentProbeResult> {
   // `launchctl print` output is not a stable API. Keep expected absence and
   // unexpected failures distinct so every caller applies one classification.
-  const probe = await execLaunchctl(["print", serviceTarget]);
+  const probe = await execLaunchctl(["print", serviceTarget], timeoutMs);
   if (probe.code !== 0) {
     if (isLaunchctlNotLoaded(probe)) {
       return { state: "not-loaded" };

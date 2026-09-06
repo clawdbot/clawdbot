@@ -9,14 +9,18 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathStrictlyInside,
+  root as openSafeFilesystemRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexAppServerThreadBinding,
+import {
+  assertCodexBindingMayBeReplaced,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
 // Codex owns proactive auto-compaction, but OpenClaw must not resume a native
@@ -96,15 +100,7 @@ async function listCodexAppServerRolloutFilesForThread(
     path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
   ];
   const rolloutRoot = rolloutPath
-    ? roots.find((root) => {
-        const relativePath = path.relative(root, rolloutPath);
-        return (
-          relativePath !== "" &&
-          relativePath !== ".." &&
-          !relativePath.startsWith(`..${path.sep}`) &&
-          !path.isAbsolute(relativePath)
-        );
-      })
+    ? roots.find((root) => isPathStrictlyInside(root, rolloutPath))
     : undefined;
   if (
     rolloutPath &&
@@ -278,9 +274,11 @@ async function readCodexAppServerRolloutTokenSnapshot(
         bytesRead += result.bytesRead;
       }
       let lineEnd = bytesRead;
-      for (let index = bytesRead - 1; index >= 0; index -= 1) {
-        if (chunk[index] !== 0x0a) {
-          continue;
+      // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.
+      while (lineEnd > 0) {
+        const index = chunk.lastIndexOf(0x0a, lineEnd - 1);
+        if (index < 0) {
+          break;
         }
         const lineFragment = chunk.subarray(index + 1, lineEnd);
         const line =
@@ -412,6 +410,7 @@ function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThread
 
 /** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
+  assertCurrent?: () => void;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
@@ -421,6 +420,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
+  expectedSessionRuntimeOwnership?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
@@ -465,6 +465,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           await file.handle?.close();
         }),
       );
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "rotating an oversized native transcript",
+        params.expectedSessionRuntimeOwnership,
+      );
       embeddedAgentLog.warn(
         "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
         {
@@ -473,10 +478,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await params.bindingStore.mutate(params.identity, {
-        kind: "clear",
-        threadId: binding.threadId,
-      });
+      await params.bindingStore.mutate(
+        params.identity,
+        {
+          kind: "clear",
+          threadId: binding.threadId,
+        },
+        params.assertCurrent,
+      );
       return { binding: undefined };
     }
   }
@@ -516,6 +525,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       : undefined;
   const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
   if (tokenCount !== undefined && tokenCount >= maxTokens) {
+    assertCodexBindingMayBeReplaced(
+      binding,
+      "rotating a full native context",
+      params.expectedSessionRuntimeOwnership,
+    );
     embeddedAgentLog.warn(
       "codex app-server native transcript exceeded active token limit; starting a fresh thread",
       {
@@ -530,10 +544,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await params.bindingStore.mutate(params.identity, {
-      kind: "clear",
-      threadId: binding.threadId,
-    });
+    await params.bindingStore.mutate(
+      params.identity,
+      {
+        kind: "clear",
+        threadId: binding.threadId,
+      },
+      params.assertCurrent,
+    );
     return { binding: undefined };
   }
   // Session metadata has no source provenance and may contain a catalog fallback.

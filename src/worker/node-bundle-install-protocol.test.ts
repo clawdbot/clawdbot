@@ -9,7 +9,7 @@ import {
 const build = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.8.1",
-  protocolFeatures: ["worker-execution-context-v1"],
+  protocolFeatures: ["worker-execution-context-v2"],
 };
 const input = {
   gatewayNamespace: "gateway-test",
@@ -28,6 +28,14 @@ describe("node worker bundle install protocol", () => {
     expect(nodeWorkerBundleTransferPath(build.bundleHash)).toBe(
       `/__openclaw__/worker-bundle/v1/bundles/${build.bundleHash}`,
     );
+  });
+
+  it("accepts only the mutually supported prewarm form", () => {
+    const prewarmInput = { ...input, bundlePrewarm: 1 };
+    expect(parseNodeWorkerBundleInstallInput(JSON.stringify(prewarmInput))).toEqual(prewarmInput);
+    expect(() =>
+      parseNodeWorkerBundleInstallInput(JSON.stringify({ ...input, bundlePrewarm: 2 })),
+    ).toThrow("INVALID_REQUEST");
   });
 
   it.each([

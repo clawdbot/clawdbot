@@ -43,6 +43,146 @@ function firstMockArg(mock: unknown): unknown {
 }
 
 describe("cron service timer regressions", () => {
+  it("restarts the watchdog from the effective agent heartbeat timeout at handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-09-02T12:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "heartbeat-watchdog-handoff",
+        name: "heartbeat watchdog handoff",
+        scheduledAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt - 60_000 },
+        payload: { kind: "heartbeat" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.sessionTarget = "main";
+      cronJob.agentId = "   ";
+      cronJob.sessionKey = "agent:ops:main";
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      const heartbeatStarted = createDeferred();
+      let abortObserved = false;
+      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => Date.now(),
+        defaultAgentId: "main",
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        resolveHeartbeatTimeoutMs,
+        requestHeartbeatAndWait: vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
+          async (_wake, { abortSignal }) => {
+            heartbeatStarted.resolve();
+            await new Promise<void>((resolve) => {
+              if (abortSignal?.aborted) {
+                abortObserved = true;
+                resolve();
+                return;
+              }
+              abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  abortObserved = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return { status: "failed", reason: "aborted" };
+          },
+        ),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      const timerPromise = onTimer(state);
+      await heartbeatStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(abortObserved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await timerPromise;
+
+      expect(abortObserved).toBe(true);
+      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "interval",
+          intent: "scheduled",
+          agentId: "ops",
+        }),
+      );
+      expect(requireJob(state, cronJob.id).state.lastError).toContain("job execution timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts a main system-event watchdog when its immediate heartbeat begins", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-09-02T12:15:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "system-event-heartbeat-watchdog",
+        name: "system event heartbeat watchdog",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "systemEvent", text: "check heartbeat work" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.sessionTarget = "main";
+      cronJob.wakeMode = "now";
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      const heartbeatStarted = createDeferred();
+      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => Date.now(),
+        defaultAgentId: "main",
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        resolveHeartbeatTimeoutMs,
+        runHeartbeatOnce: vi.fn(() => {
+          heartbeatStarted.resolve();
+          return new Promise<never>(() => {});
+        }),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      const timerPromise = onTimer(state);
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
+      await heartbeatStarted.promise;
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(timerSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await timerPromise;
+
+      expect(timerSettled).toBe(true);
+      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "cron",
+          intent: "immediate",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
     vi.useFakeTimers();
     try {
@@ -403,7 +543,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
+  it("lets isolated setup progress use the configured job timeout (#93912)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -451,13 +591,23 @@ describe("cron service timer regressions", () => {
               sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
               phase: "runner_entered",
             });
-            onExecutionPhase?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "context_engine",
-            });
+            for (const phase of [
+              "workspace",
+              "runtime_plugins",
+              "before_agent_reply",
+              "runtime_plugins",
+              "model_resolution",
+              "auth",
+              "context_engine",
+            ] as const) {
+              onExecutionPhase?.({
+                jobId: "isolated-pre-model-timeout-74803",
+                agentId: "main",
+                sessionId: "cron-run-session",
+                sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
+                phase,
+              });
+            }
             started.resolve();
             abortSignal?.addEventListener(
               "abort",
@@ -476,16 +626,21 @@ describe("cron service timer regressions", () => {
       await started.promise;
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_139_900);
+      now += 1_139_900;
       await timerPromise;
 
       const job = requireJob(state, "isolated-pre-model-timeout-74803");
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(job.state.lastError).toContain("job execution timed out");
       expect(job.state.lastError).toContain("context-engine");
       expect(abortReason).toMatchObject({
         name: "TimeoutError",
-        message: expect.stringContaining("context-engine"),
+        message: expect.stringContaining("job execution timed out"),
       });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
@@ -691,7 +846,7 @@ describe("cron service timer regressions", () => {
     },
   );
 
-  it("re-arms the pre-execution watchdog when before_agent_reply does not claim (#82811)", async () => {
+  it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -753,6 +908,13 @@ describe("cron service timer regressions", () => {
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "before_agent_reply",
             });
+            onExecutionStarted?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "runner_entered",
+              isFallback: true,
+              provider: "fallback-provider",
+              model: "fallback-model",
+            });
             onExecutionPhase?.({
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "runtime_plugins",
@@ -807,6 +969,8 @@ describe("cron service timer regressions", () => {
         mode: "announce",
         accountId: undefined,
         threadId: undefined,
+        inheritSessionThread: false,
+        onDeliverySettled: expect.any(Function),
       });
     } finally {
       vi.useRealTimers();
