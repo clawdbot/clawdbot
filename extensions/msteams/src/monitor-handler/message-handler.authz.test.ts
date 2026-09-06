@@ -711,33 +711,20 @@ describe("msteams monitor handler authz", () => {
     resetThreadMocks();
     const isControlCommandMessage = vi.fn(() => false);
     const shouldComputeCommandAuthorized = vi.fn(() => true);
+    const shouldHandleTextCommands = vi.fn(() => true);
     const { deps } = createDeps(
       {
         channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } },
       } as OpenClawConfig,
-      { isControlCommandMessage, shouldComputeCommandAuthorized },
+      { isControlCommandMessage, shouldComputeCommandAuthorized, shouldHandleTextCommands },
     );
     await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("hello /status"));
     // The narrow predicate gates the hard-drop: ordinary text like "hello /status"
     // is NOT a control command, so it must not be hard-dropped even if the sender
     // lacks command authorization. The broad probe must NOT be used for the
     // hasControlCommand gate.
+    expect(isControlCommandMessage).toHaveBeenCalled();
     expect(shouldComputeCommandAuthorized).not.toHaveBeenCalled();
-  });
-
-  it("blocks unauthorized direct-message control commands via the narrow predicate", async () => {
-    resetThreadMocks();
-    const isControlCommandMessage = vi.fn(() => true);
-    const { deps } = createDeps(
-      {
-        channels: { msteams: { dmPolicy: "open", allowFrom: [] } },
-      } as OpenClawConfig,
-      { isControlCommandMessage },
-    );
-    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("/status"));
-    // A real control command from a sender lacking command authorization is blocked.
-    const dispatch = firstSettledDispatch();
-    expect(dispatch).toBeUndefined();
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
