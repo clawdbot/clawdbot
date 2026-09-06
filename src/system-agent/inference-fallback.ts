@@ -1,10 +1,8 @@
-// Provider-neutral live inference ladder for OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -84,10 +82,7 @@ export async function verifySystemAgentInferenceWithFallback(
   const routePolicy = params.routePolicy;
   const config = await (deps.readConfig ?? readCurrentConfig)();
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
-  const candidateAgentIds = new Set([
-    requestedAgentId,
-    ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
-  ]);
+  const candidateAgentIds = new Set([requestedAgentId, ...listAgentIds(config)]);
   const resolveRoute = deps.resolveRoute ?? resolveSystemAgentConfiguredRouteFromConfig;
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =
     [];
@@ -139,8 +134,8 @@ export async function verifySystemAgentInferenceWithFallback(
     // JSON-encode the tuple so unrestricted field values cannot collide.
     const ownerKey = JSON.stringify([
       candidate.provider,
-      candidate.route.authProfileId ?? null,
-      candidate.route.agentDir ?? null,
+      candidate.route.authProfileId,
+      candidate.route.agentDir,
       ...(routePolicy ? [candidate.route.model] : []),
     ]);
     if (attemptedOwners.has(ownerKey)) {
