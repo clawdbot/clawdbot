@@ -3,10 +3,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
 const CHILD_READY_TIMEOUT_MS = 45_000;
 const TEST_TIMEOUT_MS = 60_000;
@@ -42,20 +43,21 @@ async function cleanupFixtures() {
 
 afterEach(cleanupFixtures);
 
-const moduleUrl = (relativePath: string) => pathToFileURL(path.resolve(relativePath)).href;
+const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+  resolveRuntimeWorkerUrl(entry).href;
 
 const childScript = `
   import fs from "node:fs";
   import path from "node:path";
-  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-drain.ts"))};
-  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl("src/channels/message/ingress-queue.ts"))};
+  import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressDrain))};
+  import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressQueue))};
   import {
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
-  } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/runs.ts"))};
-  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl("src/agents/embedded-agent-runner/active-run-projections.ts"))};
-  import { runGatewayLoop } from ${JSON.stringify(moduleUrl("src/cli/gateway-cli/run-loop.ts"))};
-  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl("src/process/gateway-work-admission.ts"))};
+  } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
+  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.activeRunProjections))};
+  import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
+  import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.workAdmission))};
 
   const tracePath = process.argv[1];
   const stateDir = process.argv[2];
