@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
+import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,6 +34,48 @@ function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
 }
 
 describe("resolveCronAgentConfig model policy preservation", () => {
+  it.each([
+    { models: {}, expectedRuntime: "openclaw" },
+    { models: { "openai/other": { alias: "other" } }, expectedRuntime: "openclaw" },
+    {
+      models: { "openai/test-model": { agentRuntime: { id: "test-runtime" } } },
+      expectedRuntime: "test-runtime",
+    },
+  ])(
+    "preserves inherited model policy with agent catalog $models",
+    ({ models, expectedRuntime }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/test-model",
+            models: { "openai/test-model": { agentRuntime: { id: "openclaw" } } },
+            params: { temperature: 0.2, maxTokens: 2048 },
+          },
+          entries: { worker: { models, params: { maxTokens: 1024 } } },
+        },
+      };
+      const cronCfg = buildCronConfig(cfg, "worker");
+      expect(
+        resolveModelRuntimePolicy({
+          config: cronCfg,
+          agentId: "worker",
+          provider: "openai",
+          modelId: "test-model",
+        }).policy?.id,
+      ).toBe(expectedRuntime);
+      const sources = resolveModelExtraParamSources({
+        config: cronCfg,
+        agentId: "worker",
+        provider: "openai",
+        modelId: "test-model",
+      });
+      expect({ ...sources.defaultParams, ...sources.modelParams, ...sources.agentParams }).toEqual({
+        temperature: 0.2,
+        maxTokens: 1024,
+      });
+    },
+  );
+
   it("keeps the inherited default restriction when the per-agent policy is empty", () => {
     const cfg: OpenClawConfig = {
       agents: {
