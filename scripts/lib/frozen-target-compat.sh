@@ -46,7 +46,9 @@ openclaw_frozen_target_source_has_path() {
 
 openclaw_frozen_target_source_contains() {
   local source_root="${1:?missing selected source root}" relative_path="${2:?missing relative path}" needle="${3:?missing text}"
-  git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -Fq "$needle"
+  # Do not use grep -q here: every caller has pipefail enabled, and a matching
+  # early exit can turn git show's SIGPIPE into a false "capability absent".
+  git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -F -- "$needle" >/dev/null
 }
 
 openclaw_resolve_frozen_plugin_harness_capabilities() {
@@ -98,26 +100,21 @@ openclaw_resolve_frozen_core_harness_capabilities() {
 
   # The pre-consent onboarding flow does not accept the wizard record or the
   # newer guided case. Run its own established non-interactive coverage.
-  if ! git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/config/zod-schema.ts" 2>/dev/null |
-    grep -Fq 'securityAcknowledgedAt:' &&
-    git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/config/zod-schema.ts" 2>/dev/null |
-      grep -Fq 'lastRunAt:'; then
+  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'securityAcknowledgedAt:' &&
+    openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'lastRunAt:'; then
     export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
   fi
 
   # Before default-hook onboarding, quickstart offered only the hooks it found
   # in the workspace. A successful old quickstart therefore cannot promise a
   # session-memory entry when that workspace shipped no hook definition.
-  if git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null &&
-    git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null |
-      grep -Fq 'setupInternalHooks' &&
-    ! git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/commands/onboard-hooks.ts" 2>/dev/null |
-      grep -Fq 'enableDefaultOnboardingInternalHooks'; then
+  if openclaw_frozen_target_source_has_path "$source_root" src/commands/onboard-hooks.ts &&
+    openclaw_frozen_target_source_contains "$source_root" src/commands/onboard-hooks.ts 'setupInternalHooks' &&
+    ! openclaw_frozen_target_source_contains "$source_root" src/commands/onboard-hooks.ts 'enableDefaultOnboardingInternalHooks'; then
     export OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="interactive"
   fi
 
-  if git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/agents/memory-search.ts" 2>/dev/null |
-    grep -Fq 'cfg.agents?.defaults?.memorySearch'; then
+  if openclaw_frozen_target_source_contains "$source_root" src/agents/memory-search.ts 'cfg.agents?.defaults?.memorySearch'; then
     export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="agent"
   fi
 
