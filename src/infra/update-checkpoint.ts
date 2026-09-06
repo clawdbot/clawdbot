@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import type { BackupAsset } from "../commands/backup-shared.js";
@@ -19,6 +20,7 @@ import {
   copyCheckpointFile,
   inspectCheckpointFile,
   syncCheckpointTree,
+  type CheckpointFileState,
 } from "./update-checkpoint-files.js";
 import { createUpdateCheckpointSqliteSnapshot } from "./update-checkpoint-sqlite.js";
 
@@ -222,9 +224,11 @@ export async function captureUpdateCheckpoint(
     exclusions: [...params.exclusions],
     resources: [],
   };
+  const sourceStates = new Map<string, CheckpointFileState | null>();
   for (const [index, resource] of params.resources.entries()) {
     params.assertQuiescent();
     const before = await inspectCheckpointFile(resource.sourcePath);
+    sourceStates.set(resource.sourcePath, before);
     const artifact = before ? `resource-${index}` : null;
     let captured = before;
     let userVersion: number | null = null;
@@ -248,6 +252,15 @@ export async function captureUpdateCheckpoint(
     }
     manifest.resources.push({ ...resource, artifact, captured, userVersion });
   }
+  // An earlier preimage can become stale while later resources are copied.
+  // Bind absence and physical identity as well as bytes before publishing any
+  // manifest; matching artifact hashes alone only prove that the copy is intact.
+  for (const [sourcePath, expected] of sourceStates) {
+    params.assertQuiescent();
+    if (!isDeepStrictEqual(await inspectCheckpointFile(sourcePath), expected)) {
+      throw new Error(`Resource changed before checkpoint seal: ${sourcePath}`);
+    }
+  }
   params.assertQuiescent();
   const bytes = JSON.stringify(manifest);
   const manifestPath = path.join(directory, "manifest.json");
@@ -256,6 +269,7 @@ export async function captureUpdateCheckpoint(
   requireDirectorySync(await syncDirectory(params.artifactRoot), "Checkpoint artifact root");
   const ref = { checkpointId, manifestPath, manifestSha256: sha256Hex(bytes) };
   await reopenUpdateCheckpoint(ref, params);
+  params.assertQuiescent();
   return ref;
 }
 

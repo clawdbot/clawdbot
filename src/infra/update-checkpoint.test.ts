@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   inspectUpdateCheckpointRestoreResource,
@@ -20,6 +20,7 @@ import {
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -118,6 +119,42 @@ describe("update checkpoint artifacts and publication", () => {
     expect(await fs.readFile(path.join(plugin, "index.js"), "utf8")).toBe("before");
     expect(await fs.readFile(work, "utf8")).toBe("new agent work");
   });
+
+  it.each(["edited", "recreated", "newly created"])(
+    "does not seal a checkpoint when an earlier service resource is %s during capture",
+    async (change) => {
+      const f = await fixture();
+      const service = path.join(f.stateDir, "gateway.env");
+      if (change !== "newly created") {
+        await fs.writeFile(service, "OPERATOR=before\n");
+      }
+      // Service preimages precede the slower database/config capture. A later
+      // real copy gives the lifecycle owner time to invalidate that preimage.
+      f.resources.unshift({ sourcePath: service, kind: "service", restore: "replace" });
+      const copy = fs.cp.bind(fs);
+      vi.spyOn(fs, "cp").mockImplementation(async (source, target, options) => {
+        await copy(source, target, options);
+        if (source === f.configPath) {
+          if (change === "recreated") {
+            await fs.rename(service, `${service}.retained`);
+            await fs.copyFile(`${service}.retained`, service);
+          } else {
+            await fs.writeFile(service, "OPERATOR=after\n");
+          }
+        }
+      });
+      await expect(f.capture()).rejects.toThrow(/changed before checkpoint seal/u);
+      const directories = await fs.readdir(f.access.artifactRoot);
+      for (const directory of directories) {
+        await expect(
+          fs.stat(path.join(f.access.artifactRoot, directory, "manifest.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(await fs.readFile(service, "utf8")).toBe(
+        change === "recreated" ? "OPERATOR=before\n" : "OPERATOR=after\n",
+      );
+    },
+  );
 
   it("rejects edited checkpoint bytes and an unrelated current binding", async () => {
     const f = await fixture(),
