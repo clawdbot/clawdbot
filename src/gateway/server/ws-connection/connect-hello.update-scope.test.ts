@@ -351,6 +351,7 @@ describe("sendGatewayHello update detail scope", () => {
           "gateway.suspend.handoff",
           "update.report",
           "skills.workshop.read",
+          "claws.monitors",
         ]);
         expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
           "https://gateway.tailnet.ts.net/",
