@@ -60,13 +60,30 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceResult = this.persist(
-      canonicalEntry,
-      copyCodeModeSourceAppendOptions(options, {
-        ...options,
-        ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
-      }),
-    );
+    const persistenceOptions = copyCodeModeSourceAppendOptions(options, {
+      ...options,
+      ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
+    });
+    let persistenceResult;
+    try {
+      persistenceResult = this.persist(canonicalEntry, persistenceOptions);
+    } catch (error) {
+      const canRebasePreparedAppend =
+        canonicalEntry.type !== "message" || canonicalEntry.message.role === "user";
+      if (
+        !activeBranchAppend ||
+        !canRebasePreparedAppend ||
+        !(error instanceof Error) ||
+        error.name !== "SqliteTranscriptMutationConflictError"
+      ) {
+        throw error;
+      }
+      // User ingress and control metadata can follow a concurrent additive tail. Prepared
+      // assistant replies cannot: rebasing one could attach an answer to the wrong user turn.
+      this.reloadPersistedTranscript();
+      canonicalEntry.parentId = this.appendParentId;
+      persistenceResult = this.persist(canonicalEntry, persistenceOptions);
+    }
     if (persistenceResult?.adoptedMessageId) {
       this.reloadPersistedTranscript();
       // Context-excluded users have no payload in byId. The exact SQLite replay
