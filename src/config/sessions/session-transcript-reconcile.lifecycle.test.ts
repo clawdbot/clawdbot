@@ -350,7 +350,9 @@ describe("session transcript reconcile worker lifecycle", () => {
         const worker = new Worker(filename, options);
         workers.push(worker);
         worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-          if (message.type !== "done" || !injectPending || injectedPending >= 6) return;
+          if (message.type !== "done" || !injectPending || injectedPending >= 6) {
+            return;
+          }
           markDirty.run(scope.sessionId);
           injectedPending += 1;
           startSessionTranscriptIndexReconcile({
