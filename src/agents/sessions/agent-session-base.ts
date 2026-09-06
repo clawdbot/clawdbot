@@ -258,10 +258,10 @@ export abstract class AgentSessionBase {
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
       // Normalize adapted failures before middleware, which may explicitly recover.
-      isError ||= isToolResultError(result);
+      const resultIsError = isError || isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return { isError };
+        return { isError: resultIsError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -273,7 +273,7 @@ export abstract class AgentSessionBase {
             input: args as Record<string, unknown>,
             content: result.content,
             details: result.details,
-            isError,
+            isError: resultIsError,
             ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
@@ -284,7 +284,7 @@ export abstract class AgentSessionBase {
 
       return {
         ...hookResult,
-        isError: hookResult?.isError ?? isError,
+        isError: hookResult?.isError ?? resultIsError,
       };
     };
     // Pre-execution failures skip afterToolCall and its recovery handlers.
