@@ -1536,7 +1536,7 @@ describe("loadGatewayPlugins", () => {
 
   test("names the refused plugin when it is not bundled or trusted official", async () => {
     loadOpenClawPlugins.mockReturnValue(
-      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "external" }),
+      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
     );
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
@@ -1544,21 +1544,24 @@ describe("loadGatewayPlugins", () => {
 
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
-        { pluginId: "community-plugin", pluginOrigin: "external" },
+        { pluginId: "community-plugin", pluginOrigin: "global" },
         () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
       ),
     ).rejects.toThrow(/community-plugin/);
   });
 
-  test("reports a missing plugin runtime scope distinctly from an untrusted plugin", async () => {
+  test("reports a missing plugin identity distinctly from an untrusted plugin", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-unscoped"));
     const runtime = createRuntimeFromLastGatewayLoad();
+    const attempt = () => runtime.gateway.request("voicecall.start", { to: "+15550001234" });
 
-    await expect(
-      runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
-    ).rejects.toThrow(/no plugin runtime scope is active/i);
+    await expect(attempt()).rejects.toThrow(/carries no plugin identity/i);
+    // Plugin authors install from npm and have no docs/ directory, so cite the published page.
+    await expect(attempt()).rejects.toThrow(
+      /https:\/\/docs\.openclaw\.ai\/plugins\/sdk-runtime#api-runtime-gateway/,
+    );
   });
 
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
