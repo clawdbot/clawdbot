@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -1688,6 +1689,30 @@ describe("plugin sdk alias helpers", () => {
     });
 
     expect(second).toBe(first);
+  });
+
+  it("retains missing SDK targets until a new generation, including deferred complete maps", () => {
+    const { fixture, distPluginEntryPath } = createPluginSdkAliasTargetFixture();
+    const owner = createPluginCache();
+    const other = createPluginCache();
+    const params = {
+      modulePath: writePluginEntry(fixture.root, bundledDistPluginFile("demo", "index.js")),
+      pluginSdkResolution: "dist" as const,
+    };
+    fs.unlinkSync(distPluginEntryPath);
+    fs.unlinkSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts"));
+    const prepared = withPluginCache(owner, () => preparePluginLoaderAliases(params));
+    expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+    fs.writeFileSync(distPluginEntryPath, "export const marker = 'new-generation';\n", "utf8");
+
+    withPluginCache(other, () => {
+      expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+      expect(prepared.getAliasMap()["openclaw/plugin-sdk/plugin-entry"]).toBeUndefined();
+      const fresh = preparePluginLoaderAliases(params);
+      expect(fs.realpathSync(fresh.resolveAlias("openclaw/plugin-sdk/plugin-entry") ?? "")).toBe(
+        fs.realpathSync(distPluginEntryPath),
+      );
+    });
   });
 
   it("scopes prepared alias authority by effective resolution", () => {

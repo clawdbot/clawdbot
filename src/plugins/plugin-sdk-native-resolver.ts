@@ -279,41 +279,28 @@ function resolveAliasTargetForParentPath(
 ): string | undefined {
   const native = getPluginCache().sdk.native;
   if (parentFilename && isPluginSdkAliasSpecifier(request)) {
-    for (const [root, prepare] of native.sdkProviders) {
-      if (isWithinRoot(parentFilename, root)) {
-        prepare();
+    let first: { target: string; order: number } | undefined;
+    for (const [root, provider] of native.sdkProviders) {
+      if (!isWithinRoot(parentFilename, root)) {
+        continue;
+      }
+      // Eager registration used the first SDK demand, not installation order,
+      // to break ties between overlapping roots. Preserve that order lazily.
+      provider.order ??= native.nextSdkProviderOrder++;
+      const target = provider.resolveAlias(
+        request.endsWith(".js") ? request.slice(0, -3) : request,
+      );
+      if (target && isNativeLoadableSdkTarget(target) && (!first || provider.order < first.order)) {
+        first = { target, order: provider.order };
       }
     }
+    return first?.target;
   }
   const entries = native.aliases.get(request);
   if (!entries || !parentFilename) {
     return undefined;
   }
   return entries.find((entry) => isWithinRoot(parentFilename, entry.parentRoot))?.target;
-}
-
-function listPluginSdkNativeAliases(
-  aliasMap: Record<string, string>,
-): Array<readonly [string, string]> {
-  const pluginSdkNativeAliasesByMap = getPluginCache().sdk.native.aliasesByMap;
-  const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
-  if (cached) {
-    return cached;
-  }
-  const aliases = Object.entries(aliasMap)
-    .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
-    .filter(([, target]) => isNativeLoadableSdkTarget(target))
-    .flatMap(([specifier, target]) => {
-      if (specifier.endsWith(".js")) {
-        return [[specifier, target]] as Array<readonly [string, string]>;
-      }
-      return [
-        [specifier, target],
-        [`${specifier}.js`, target],
-      ] as Array<readonly [string, string]>;
-    });
-  pluginSdkNativeAliasesByMap.set(aliasMap, aliases);
-  return aliases;
 }
 
 function listInternalCorePackageNativeAliases(
@@ -456,13 +443,7 @@ export function installOpenClawPluginSdkNativeResolver(
   });
   const native = getPluginCache().sdk.native;
   for (const parentRoot of parentRoots) {
-    native.sdkProviders.set(parentRoot, () => {
-      const resolved = listPluginSdkNativeAliases(aliases.getAliasMap());
-      native.sdkProviders.delete(parentRoot);
-      for (const [request, target] of resolved) {
-        registerNativeAlias({ request, target, parentRoots: [parentRoot] });
-      }
-    });
+    native.sdkProviders.set(parentRoot, { resolveAlias: aliases.resolveAlias });
   }
   registerInternalCorePackageNativeAliases(options);
   installResolver();
