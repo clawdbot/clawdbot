@@ -3,7 +3,7 @@
 // of HTML islands (see agentPrompt.inboundFormattingHints "markdown_telegram_rich");
 // this module owns the tolerant parser and inline (RichText-level) mapping,
 // while rich-blocks-html-map.ts owns block-level island mapping.
-import { tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
+import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
 import { decodeTelegramHtmlEntities } from "./format-html.js";
 import type { RichText } from "./rich-block-model.js";
 
@@ -57,10 +57,12 @@ export function parseHtmlAttrs(raw: string): Map<string, string> {
 }
 
 /** Parse an HTML fragment into a light node tree; unmatched tags stay text. */
-export function parseHtmlFragment(
-  text: string,
-  literalRanges: readonly { start: number; end: number }[] = [],
-): HtmlNode[] {
+export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
+  const text = ir.text;
+  const literalRanges = [
+    ...ir.styles.filter((span) => span.style === "code" || span.style === "code_block"),
+    ...(ir.annotations ?? []),
+  ];
   const root: HtmlNode[] = [];
   const stack: Array<{ name: string; node: Extract<HtmlNode, { kind: "element" }> }> = [];
   const childrenOf = () => (stack.length > 0 ? stack[stack.length - 1]!.node.children : root);
@@ -70,7 +72,7 @@ export function parseHtmlFragment(
       childrenOf().push({ kind: "text", text: text.slice(from, to), start: from, end: to });
     }
   };
-  for (const tag of tokenizeHtmlTags(text)) {
+  for (const tag of ir.htmlTags ?? []) {
     const parent = stack.at(-1);
     // Code examples are text, including tag-shaped examples inside a disclosure.
     // Keep them out of matching so they cannot close or create an authored container.
@@ -146,39 +148,66 @@ function serializeHtmlNodes(nodes: readonly HtmlNode[]): string {
     .join("");
 }
 
-/** Convert island children into RichText, honoring documented inline tags. */
-export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
+type HtmlRichTextRenderer = {
+  text: (node: Extract<HtmlNode, { kind: "text" }>) => RichText;
+  literal: (range: { start: number; end: number }, serialize: () => string) => RichText;
+  wrap: (
+    range: { start: number; end: number },
+    wrap: (text: RichText) => RichText,
+    children: () => RichText,
+  ) => RichText;
+  atom: (range: { start: number; end: number }, value: RichText) => RichText;
+};
+
+const defaultHtmlRenderer: HtmlRichTextRenderer = {
+  text: (node) => decodeTelegramHtmlEntities(node.text.replace(/\s+/g, " ")),
+  literal: (_range, serialize) => serialize(),
+  wrap: (_range, wrap, children) => wrap(children()),
+  atom: (_range, value) => value,
+};
+
+/** The same tag mapping serves standalone HTML and Markdown source-range composition. */
+export function htmlNodesToRichText(
+  nodes: readonly HtmlNode[],
+  renderer: HtmlRichTextRenderer = defaultHtmlRenderer,
+): RichText {
   const parts: RichText[] = [];
   for (const node of nodes) {
     if (node.kind === "text") {
-      const value = decodeTelegramHtmlEntities(node.text.replace(/\s+/g, " "));
+      const value = renderer.text(node);
       if (value) {
         parts.push(value);
       }
       continue;
     }
-    if (!node.closed) {
-      parts.push(node.raw, htmlNodesToRichText(node.children));
-      continue;
-    }
+    const children = () => htmlNodesToRichText(node.children, renderer);
+    const emit = (build: () => RichText): RichText =>
+      node.closed
+        ? build()
+        : [
+            renderer.atom({ start: node.start, end: node.start + node.raw.length }, node.raw),
+            children(),
+          ];
+    const wrap = (build: (text: RichText) => RichText) =>
+      emit(() => renderer.wrap(node, build, children));
+    const atom = (value: RichText) => emit(() => renderer.atom(node, value));
     const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
     if (style) {
-      parts.push({ type: style, text: htmlNodesToRichText(node.children) });
+      parts.push(wrap((text) => ({ type: style, text })));
       continue;
     }
     if (node.name === "a") {
       const href = parseHtmlAttrs(node.raw).get("href");
-      const inner = htmlNodesToRichText(node.children);
       if (href?.startsWith("#")) {
         // In-message fragments are RichTextAnchorLink, not RichTextUrl.
-        parts.push({ type: "anchor_link", text: inner, anchor_name: href.slice(1) });
+        parts.push(wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) })));
       } else {
-        parts.push(href ? { type: "url", text: inner, url: href } : inner);
+        parts.push(href ? wrap((text) => ({ type: "url", text, url: href })) : emit(children));
       }
       continue;
     }
     if (node.name === "tg-math") {
-      parts.push({ type: "mathematical_expression", expression: nodeText(node.children) });
+      parts.push(atom({ type: "mathematical_expression", expression: nodeText(node.children) }));
       continue;
     }
     if (node.name === "tg-emoji") {
@@ -187,33 +216,30 @@ export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
       // Wire contract: custom_emoji_id must be a valid Number (live-verified
       // 400 otherwise); unknown-but-numeric IDs degrade server-side.
       if (emojiId && /^\d+$/.test(emojiId) && alternative) {
-        parts.push({
-          type: "custom_emoji",
-          custom_emoji_id: emojiId,
-          alternative_text: alternative,
-        });
+        parts.push(
+          atom({
+            type: "custom_emoji",
+            custom_emoji_id: emojiId,
+            alternative_text: alternative,
+          }),
+        );
         continue;
       }
-      parts.push(alternative);
+      parts.push(atom(alternative));
       continue;
     }
     if (node.name === "br") {
-      parts.push("\n");
+      parts.push(atom("\n"));
       continue;
     }
     if (node.name === "p" || node.name === "span" || node.name === "div") {
       // Transparent containers: content only.
-      parts.push(htmlNodesToRichText(node.children));
+      parts.push(emit(children));
       continue;
     }
-    // Unsupported element: its ENTIRE subtree stays literal so agent mistakes
-    // remain visible; converting recognized descendants would mix typed nodes
-    // into a literal wrapper and lose their markup from the plain projection.
-    const selfContained = VOID_TAGS.has(node.name) || node.raw.trimEnd().endsWith("/>");
-    parts.push(node.raw, serializeHtmlNodes(node.children));
-    if (!selfContained) {
-      parts.push(`</${node.name}>`);
-    }
+    // Unsupported HTML and its HTML descendants stay literal, but independently
+    // authored Markdown spans must still apply inside that text range.
+    parts.push(renderer.literal(node, () => serializeHtmlNodes([node])));
   }
   if (parts.length === 0) {
     return "";
@@ -223,21 +249,3 @@ export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
   }
   return parts;
 }
-
-/** Parse inline islands (<sup>, <tg-math>, <tg-emoji>, …) out of a text leaf. */
-export function parseInlineHtmlIslands(leaf: string): RichText {
-  if (!leaf.includes("<")) {
-    return leaf;
-  }
-  const nodes = parseHtmlFragment(leaf);
-  const hasElement = (children: readonly HtmlNode[]): boolean =>
-    children.some((node) => node.kind === "element" && (node.closed || hasElement(node.children)));
-  if (!hasElement(nodes)) {
-    return leaf;
-  }
-  // Preserve raw whitespace when no islands parse; only island-bearing leaves
-  // go through the normalizing HTML text model.
-  return htmlNodesToRichText(nodes);
-}
-
-// Prompt contract: media islands are https-only.

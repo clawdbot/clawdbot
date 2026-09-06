@@ -14,6 +14,7 @@ export type TelegramUserbotUpdate = {
   botApiMessageId?: number;
   chatId: number;
   contentType?: string;
+  richMessage?: Record<string, unknown>;
   kind: "edit" | "message";
   messageId: number;
   replyToMessageId?: number;
@@ -79,6 +80,16 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
   if (typeof value.text !== "string") {
     throw new Error("Telegram userbot update has invalid text.");
   }
+  const richMessage = value.contentType === "messageRichMessage" ? value.richMessage : undefined;
+  if (
+    value.contentType === "messageRichMessage" &&
+    (!isRecord(richMessage) ||
+      !Array.isArray(richMessage.blocks) ||
+      typeof richMessage.is_full !== "boolean" ||
+      typeof richMessage.is_rtl !== "boolean")
+  ) {
+    throw new Error("Telegram userbot update has an invalid rich message.");
+  }
   return {
     kind,
     chatId,
@@ -87,6 +98,8 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     timestamp,
     text: value.text,
     entities: parseTextEntities(value.entities, value.text),
+    // Keep TDLib's observed tree and completeness flag; text alone loses URL/style evidence.
+    ...(isRecord(richMessage) ? { richMessage } : {}),
     ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }

@@ -17,6 +17,33 @@ const listItems = (count: number) =>
   Array.from({ length: count }, (_, index) => `L${String(index + 1).padStart(3, "0")}`);
 
 describe("Telegram rich message edits", () => {
+  it.each([false, true])(
+    "retains styled HTML links on edits (plain recovery: %s)",
+    async (plain) => {
+      const text =
+        '<details><summary>More</summary><p><a href="https://example.com">**Download**</a></p></details>';
+      if (plain) {
+        botRawApi.editMessageText.mockRejectedValueOnce(
+          new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+        );
+        botApi.editMessageText.mockResolvedValueOnce(editedMessage);
+      } else {
+        botRawApi.editMessageText.mockResolvedValueOnce(editedMessage);
+      }
+
+      await editMessageTelegram("123", 321, text, { cfg: richConfig, token: "tok" });
+
+      const richMessage = botRawApi.editMessageText.mock.calls[0]?.[0].rich_message;
+      expect(JSON.stringify(richMessage)).toContain('"type":"url"');
+      expect(JSON.stringify(richMessage)).toContain('"url":"https://example.com"');
+      if (plain) {
+        expect(botApi.editMessageText.mock.calls[0]?.[2]).toBe("More\nDownload");
+      } else {
+        expect(botApi.editMessageText).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     { name: "501 paragraphs", tokens: paragraphs(501), separator: "\n\n", prefix: "" },
     { name: "251 list items", tokens: listItems(251), separator: "\n", prefix: "- " },

@@ -45,6 +45,25 @@ function markdownToTaskIR(markdown: string): MarkdownIR {
   return markdownToIR(markdown, { enableTaskLists: true });
 }
 
+it("preserves authored tags through projection and list-marker removal", () => {
+  const parsed = markdownToIR("- **<b>x</b>**");
+  const native = applyConstructFallbacks(parsed, ALL_NATIVE);
+  const stripped = applyConstructFallbacks(parsed, withSupport("bulletList", "strip"));
+
+  expect(native.htmlTags).toEqual([
+    { start: 2, end: 5, raw: "<b>", name: "b", closing: false, selfClosing: false },
+    { start: 6, end: 10, raw: "</b>", name: "b", closing: true, selfClosing: false },
+  ]);
+  expect(stripped.text).toBe("<b>x</b>");
+  expect(stripped.styles).toEqual([{ start: 0, end: 8, style: "bold" }]);
+  expect(stripped.htmlTags).toEqual([
+    { start: 0, end: 3, raw: "<b>", name: "b", closing: false, selfClosing: false },
+    { start: 4, end: 8, raw: "</b>", name: "b", closing: true, selfClosing: false },
+  ]);
+  expect(Object.keys(native)).not.toContain("htmlTags");
+  expect(Object.keys(stripped)).not.toContain("htmlTags");
+});
+
 type FallbackCase = {
   name: string;
   construct: FormatConstruct;

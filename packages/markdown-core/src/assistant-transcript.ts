@@ -5,6 +5,7 @@ import {
   type AssistantTranscriptRoleHeaderSpan,
 } from "./assistant-transcript-headers.js";
 import { tokenizeHtmlTags } from "./html-tags.js";
+import { appendHtmlTags, copyHtmlTags, RAW_HTML_TOKEN_TYPE } from "./ir-metadata.js";
 
 export const ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE = "assistant_transcript_role_text";
 
@@ -74,7 +75,7 @@ function visibleTokenProjection(
   if (token.type === "html_inline" && options.isStructuralHtmlInline?.(token) === true) {
     return null;
   }
-  if (token.type === "text" || token.type === "html_inline") {
+  if (token.type === "text" || token.type === "html_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
     return { text: token.content, excludedRanges: [] };
   }
   if (token.type === "code_inline") {
@@ -112,7 +113,8 @@ function visibleTokensProjection(
 function cloneToken(
   TokenType: StateCore["Token"],
   source: Token,
-  content: string,
+  start: number,
+  end: number,
   type: string = source.type,
 ): Token {
   const token = new TokenType(
@@ -122,18 +124,19 @@ function cloneToken(
   );
   Object.assign(token, source);
   token.type = type;
-  token.content = content;
+  token.content = source.content.slice(start, end);
   token.children = null;
-  return token;
+  return copyHtmlTags(source, token, start, end);
 }
 
 function annotatedToken(
   TokenType: StateCore["Token"],
   source: Token,
-  content: string,
+  start: number,
+  end: number,
   span: AssistantTranscriptRoleHeaderSpan,
 ): Token {
-  const token = cloneToken(TokenType, source, content, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
+  const token = cloneToken(TokenType, source, start, end, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
   token.meta = {
     ...(source.meta && typeof source.meta === "object" ? source.meta : {}),
     assistantTranscriptRoleHeader: {
@@ -171,24 +174,15 @@ function splitVisibleToken(params: {
     const overlapStart = Math.max(span.start, visibleStart) - visibleStart;
     const overlapEnd = Math.min(span.end, visibleEnd) - visibleStart;
     if (overlapStart > localCursor) {
-      result.push(
-        cloneToken(params.TokenType, token, token.content.slice(localCursor, overlapStart)),
-      );
+      result.push(cloneToken(params.TokenType, token, localCursor, overlapStart));
     }
     if (overlapEnd > overlapStart) {
-      result.push(
-        annotatedToken(
-          params.TokenType,
-          token,
-          token.content.slice(overlapStart, overlapEnd),
-          span,
-        ),
-      );
+      result.push(annotatedToken(params.TokenType, token, overlapStart, overlapEnd, span));
     }
     localCursor = overlapEnd;
   }
   if (localCursor < token.content.length) {
-    result.push(cloneToken(params.TokenType, token, token.content.slice(localCursor)));
+    result.push(cloneToken(params.TokenType, token, localCursor, token.content.length));
   }
   return result;
 }
@@ -222,7 +216,11 @@ function annotateInlineChildren(
       }
       spanCursor += 1;
     }
-    if (token.type === "text" || token.type === "html_inline") {
+    if (
+      token.type === "text" ||
+      token.type === "html_inline" ||
+      token.type === RAW_HTML_TOKEN_TYPE
+    ) {
       result.push(
         ...splitVisibleToken({
           TokenType,
@@ -301,6 +299,7 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
       previous?.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE &&
       token.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE
     ) {
+      appendHtmlTags(previous, token, previous.content.length);
       previous.content += token.content;
       continue;
     }

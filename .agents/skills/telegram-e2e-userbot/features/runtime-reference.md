@@ -116,7 +116,10 @@ not the model.
 
 ## Runtime facts
 
-- TDLib ids are shifted: raw TDLib message id equals Bot API id `<< 20`; compare `botApiMessageId`.
+- `botApiMessageId` is the recorder's historical name for the observing account's server message ID (`messageId >> 20`). Keep that artifact field, but do not equate it with another account's Bot API receipt in a DM or basic group: those message ID sequences are account-specific. Channels/supergroups share their sequence. See [Telegram's message-ID contract](https://core.telegram.org/api/updates#message-id-sequences).
+- Correlate a DM send with a unique run marker in the observed content. Keep the bot receipt for bot-side edits; use the original raw observer `messageId`, edit kind, and a fresh marker to prove the observer saw that same message change. Formatting assertions must still inspect the full native tree; a marker alone is not formatting proof.
+- Uploaded QA artifacts are not private. Retain raw identities only in memory; export run-local labels and measured relationships. Export bounded, metadata-free trees only for marker-correlated synthetic fixtures, and counts/types only for unmatched observations.
+- Serve-mode observations stay within the selected chat and fetch incomplete content with `getFullRichMessage` using the observing account's chat/message pair before emitting a complete snapshot. Intervening updates remain queued; the response has no revision token, so this is not a revision-perfect historical snapshot. Raw recording and transcript normalization preserve the original partial content instead of fetching or relabeling it.
 - TDLib replays cached updates after connect; judge only events after the run's sent action.
 - The driver pins `@prebuilt-tdlib` `0.1008067.0`, which reports TDLib `1.8.67`.
 - TDLib 1.8.6 and later take the existing base64 database key in `setTdlibParameters`; re-encoding changes the key.
