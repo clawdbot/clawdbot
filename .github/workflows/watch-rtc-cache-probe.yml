@@ -82,7 +82,7 @@ jobs:
           skip-decompress: true
           digest-mismatch: error
 
-      - name: Verify independent inputs and measure restored Cargo build
+      - name: Attribute restored freshness and compare same-consumer cold build
         shell: bash
         env:
           PROBE_ARCHIVE: ${{ runner.temp }}/watch-rtc-transfer/${{ needs.produce.outputs.archive_name }}
