@@ -3,6 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  chromeStoreInstallRequests,
+  type ChromeStoreInstallRequest,
+  FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
+  FOUNDATION_CHROME_WEB_STORE_URL,
+  requestChromeStoreInstall,
+} from "./extension-install-external.js";
+import {
   assertOwnedPath,
   chromeProductRoots,
   type ChromeProduct,
@@ -25,11 +32,10 @@ const BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS = 30_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS = 1_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MAX_MS = 120_000;
 const NATIVE_HOST_DESCRIPTION = "OpenClaw browser extension bootstrap";
-// Chrome authorizes native messaging by extension ID. This trust grant intentionally
-// includes user-loaded unpacked builds that preserve the Store ID; those builds must be trusted.
-// The ID is never proof that an arbitrary extension path is OpenClaw-owned.
-const FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
-export const FOUNDATION_CHROME_WEB_STORE_URL = `https://chromewebstore.google.com/detail/openclaw/${FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID}`;
+export {
+  FOUNDATION_CHROME_WEB_STORE_URL,
+  removeChromeStoreInstallRequests,
+} from "./extension-install-external.js";
 
 type NativeHostRegistrationStatus = {
   product: ChromeProduct;
@@ -48,6 +54,7 @@ type BrowserExtensionStatus = {
   approvedPaths: string[];
   discovered: DiscoveredChromeExtension[];
   storeDiscovered: DiscoveredChromeStoreExtension[];
+  storeInstallRequests: ChromeStoreInstallRequest[];
   registrations: NativeHostRegistrationStatus[];
   manualSetupRequired: boolean;
   issues: string[];
@@ -100,6 +107,8 @@ function launcherPathForManifest(manifestPath: string, deps: ExtensionInstallDep
 }
 
 function expectedExtensionIds(extensionIds: string[]): string[] {
+  // The Store ID also authorizes trusted unpacked builds that preserve it;
+  // it never proves that an arbitrary extension path is OpenClaw-owned.
   return [...new Set([...extensionIds, FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID])].toSorted();
 }
 
@@ -426,6 +435,7 @@ export async function installChromeExtensionBootstrap(params: {
   bundledDir: string;
   pluginRoot: string;
   waitMs?: number;
+  requestStoreInstall?: boolean;
   deps?: ExtensionInstallDeps;
   onProgress?: (message: string) => void;
 }): Promise<BrowserExtensionStatus> {
@@ -460,6 +470,22 @@ export async function installChromeExtensionBootstrap(params: {
     } catch (error) {
       preRegistrationIssues.push(
         `${root.label}: native host pre-registration refused (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    try {
+      const request =
+        params.requestStoreInstall === false
+          ? undefined
+          : await requestChromeStoreInstall(root, deps);
+      if (request) {
+        params.onProgress?.(
+          `Requested the OpenClaw Store extension for ${root.label}. Restart Chrome if needed, then approve OpenClaw in chrome://extensions.`,
+        );
+      }
+    } catch (error) {
+      preRegistrationIssues.push(
+        `${root.label}: Store installation request refused (${error instanceof Error ? error.message : String(error)}). Add OpenClaw directly: ${FOUNDATION_CHROME_WEB_STORE_URL}`,
       );
     }
   }
@@ -546,6 +572,7 @@ export async function browserExtensionStatus(params: {
       discovery.storeDiscovered.some((entry) => entry.product === registration.product);
     return productWasDiscovered && (registration.state !== "owned" || Boolean(registration.issue));
   });
+  const storeInstallRequests = await chromeStoreInstallRequests(deps);
   return {
     platform,
     platformSupport: platform === "win32" ? "manual_required" : "automatic",
@@ -554,11 +581,13 @@ export async function browserExtensionStatus(params: {
     approvedPaths,
     discovered: discovery.discovered,
     storeDiscovered: discovery.storeDiscovered,
+    storeInstallRequests,
     registrations,
     manualSetupRequired:
       platform === "win32" ||
       (installedCopy.present && !installedCopy.owned) ||
-      (discovery.discovered.length === 0 && discovery.storeDiscovered.length === 0) ||
+      (discovery.discovered.length === 0 &&
+        !discovery.storeDiscovered.some((entry) => entry.enabled)) ||
       discovery.identityMismatches.length > 0 ||
       unavailableRegistration,
     issues: [
@@ -566,6 +595,9 @@ export async function browserExtensionStatus(params: {
         ? [`Chrome extension copy is not OpenClaw-owned: ${installedPath}`]
         : []),
       ...discovery.issues,
+      ...storeInstallRequests.flatMap((entry) =>
+        entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
+      ),
       ...registrations.flatMap((entry) =>
         entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
       ),

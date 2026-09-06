@@ -3114,32 +3114,44 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   it.each([
     {
       intent: "floating",
+      installedVersion: "2026.5.6",
+      coreVersion: VERSION,
       priorSpec: "@openclaw/codex",
       expectedSpec: "@openclaw/codex",
       expectedIntegrity: undefined,
     },
     {
       intent: "exact",
+      installedVersion: "2026.5.6",
+      coreVersion: VERSION,
       priorSpec: "@openclaw/codex@2026.5.6",
       expectedSpec: `@openclaw/codex@${VERSION}`,
       expectedIntegrity: "sha512-new-codex",
     },
+    {
+      intent: "post-core floating",
+      installedVersion: VERSION,
+      coreVersion: `${Number(VERSION.split(".")[0]) + 1}.1.1`,
+      priorSpec: "@openclaw/codex",
+      expectedSpec: "@openclaw/codex",
+      expectedIntegrity: undefined,
+    },
   ])(
     "preserves $intent npm selector intent when refreshing a stale Codex runtime plugin",
-    async ({ priorSpec, expectedSpec, expectedIntegrity }) => {
+    async ({ priorSpec, expectedSpec, expectedIntegrity, installedVersion, coreVersion }) => {
       const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
       fs.writeFileSync(
         path.join(installDir, "package.json"),
-        JSON.stringify({ name: "@openclaw/codex", version: "2026.5.6" }),
+        JSON.stringify({ name: "@openclaw/codex", version: installedVersion }),
       );
       const records = {
         codex: {
           source: "npm",
           spec: priorSpec,
           resolvedName: "@openclaw/codex",
-          resolvedSpec: "@openclaw/codex@2026.5.6",
-          resolvedVersion: "2026.5.6",
-          version: "2026.5.6",
+          resolvedSpec: `@openclaw/codex@${installedVersion}`,
+          resolvedVersion: installedVersion,
+          version: installedVersion,
           integrity: "sha512-old-codex",
           installPath: installDir,
         },
@@ -3149,7 +3161,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         plugins: [
           {
             id: "codex",
-            packageVersion: "2026.5.6",
+            packageVersion: installedVersion,
             providers: ["codex"],
           },
         ],
@@ -3159,7 +3171,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             "codex",
             {
               id: "codex",
-              packageVersion: "2026.5.6",
+              packageVersion: installedVersion,
               providers: ["codex"],
             },
           ],
@@ -3169,7 +3181,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         successfulInstall({
           pluginId: "codex",
           npmSpec: "@openclaw/codex",
-          version: VERSION,
+          version: coreVersion,
           resolution: {
             integrity: "sha512-new-codex",
           },
@@ -3197,13 +3209,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             },
           },
         },
-        env: testEnv,
+        env: { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: coreVersion },
       });
 
       expect(mocks.resolveDirectBundledProviderPolicySurface).toHaveBeenCalledWith("openai");
       expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
       expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-        spec: expectedCodexInstallSpec(),
+        spec: `@openclaw/codex@${coreVersion}`,
         expectedPluginId: "codex",
         trustedSourceLinkedOfficialInstall: true,
         mode: "update",
@@ -3212,22 +3224,22 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(prepareManagedPluginArtifactConsentHandler).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "npm",
-          spec: expectedCodexInstallSpec(),
+          spec: `@openclaw/codex@${coreVersion}`,
           expectedIntegrity,
         }),
       );
       expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
       expect(result.changes).toEqual([
-        `Refreshed stale configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
+        `Refreshed stale configured plugin "codex" from @openclaw/codex@${coreVersion}.`,
       ]);
       expectRecordFields(result.records.codex, {
         source: "npm",
         spec: expectedSpec,
         installPath: "/tmp/openclaw-plugins/codex",
-        version: VERSION,
+        version: coreVersion,
         resolvedName: "@openclaw/codex",
-        resolvedVersion: VERSION,
-        resolvedSpec: `@openclaw/codex@${VERSION}`,
+        resolvedVersion: coreVersion,
+        resolvedSpec: `@openclaw/codex@${coreVersion}`,
         integrity: "sha512-new-codex",
       });
     },

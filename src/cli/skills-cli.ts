@@ -576,7 +576,7 @@ export function registerSkillsCli(program: Command) {
     );
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);
-  setCommandJsonMode(skills, "output", ({ argv }) => isSkillsMachineOutput(argv));
+  setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
   registerSkillsLibraryCli(skills);
 
   skills

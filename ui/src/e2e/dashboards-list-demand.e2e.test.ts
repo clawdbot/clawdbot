@@ -228,9 +228,19 @@ suite.define(() => {
 
       await Promise.all(
         tabs.map(async ({ gateway, page }) => {
-          await page.goto(suite.server.baseUrl);
+          // Chat hydrates its own Swarm child roster; start without that unrelated demand.
+          await page.goto(`${suite.server.baseUrl}new`);
           const canonical = await gateway.waitForRequest("sessions.list");
-          expect(isDashboardRequest(canonical)).toBe(false);
+          expect(canonical.params).toEqual({
+            agentId: "main",
+            configuredAgentsOnly: true,
+            includeDerivedTitles: true,
+            includeGlobal: true,
+            includeLastMessage: true,
+            includeUnknown: true,
+            limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          });
+          await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {
             const app = document.querySelector("openclaw-app") as HTMLElement & {
               runtime?: { context: { agents: { state: { agentsList: unknown } } } };

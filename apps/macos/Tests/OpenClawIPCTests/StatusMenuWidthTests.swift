@@ -156,9 +156,6 @@ struct StatusMenuWidthTests {
             sessionId: nil,
             thinkingLevel: nil,
             verboseLevel: nil,
-            systemSent: false,
-            abortedLastRun: false,
-            tokens: SessionTokenStats(input: 10000, output: 10000, total: 20000, contextTokens: 200_000),
-            model: nil)
+            tokens: SessionTokenStats(total: 20000, contextTokens: 200_000))
     }
 }

@@ -209,8 +209,6 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
   /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
-  /** Restrict Skill Workshop to one atomic collection reconciliation. */
-  skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
@@ -231,6 +229,10 @@ export type RunEmbeddedAgentParams = {
   bootstrapWorkspaceDir?: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
+  /** Require file tools to stay within the task workspace without changing exec policy. */
+  requireWorkspaceOnly?: true;
+  /** Refuse an enabled sandbox that would redirect a review away from its workspace. */
+  requireWritableSandbox?: true;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
   agentDir?: string;

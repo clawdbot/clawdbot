@@ -191,51 +191,61 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
 });
 
 describe("redactSystemAgentConfig", () => {
-  it("refreshes sensitive hints when config selects another owner in the same metadata snapshot", () => {
-    pluginMetadata?.restore();
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: ["core", "plus"].map((id) => ({
-        id,
-        origin: "config",
-        channels: ["proofchat"],
-        channelConfigs: {
-          proofchat: {
-            ...(id === "plus" ? { preferOver: ["core"] } : {}),
-            schema: {
-              type: "object",
-              properties: { core: { type: "string" }, plus: { type: "string" } },
+  it.each(["plus", "core"])(
+    "redacts retained owner credentials with %s selected first",
+    (first) => {
+      pluginMetadata?.restore();
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: ["core", "plus"].map((id) => ({
+          id,
+          origin: "config",
+          channels: ["proofchat"],
+          channelConfigs: {
+            proofchat: {
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { core: { type: "string" }, plus: { type: "string" } },
+              },
+              uiHints: { [id]: { sensitive: true } },
             },
-            uiHints: { [id]: { sensitive: true } },
           },
-        },
-      })),
-    });
-    const preferred: OpenClawConfig = {
-      plugins: { entries: { plus: { enabled: true } } },
-      channels: { proofchat: { plus: "synthetic-plus" } },
-    };
-    const fallback: OpenClawConfig = {
-      plugins: { entries: { plus: { enabled: false }, core: { enabled: true } } },
-      channels: { proofchat: { core: "synthetic-core" } },
-    };
-    const lease = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
-      config: preferred,
-      compatibleConfigs: [preferred, fallback],
-    });
-    try {
-      for (const [config, owner] of [
-        [preferred, "plus"],
-        [fallback, "core"],
-        [preferred, "plus"],
-      ] as const) {
-        expect(redactSystemAgentConfig(config, { config })).toMatchObject({
-          channels: { proofchat: { [owner]: "<redacted>" } },
-        });
+        })),
+      });
+      const preferred: OpenClawConfig = {
+        plugins: { entries: { plus: { enabled: true } } },
+        channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
+      };
+      const fallback: OpenClawConfig = {
+        plugins: { entries: { plus: { enabled: false }, core: { enabled: true } } },
+        channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
+      };
+      const lease = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
+        config: preferred,
+        compatibleConfigs: [preferred, fallback],
+      });
+      try {
+        const configs =
+          first === "plus" ? ([preferred, fallback] as const) : ([fallback, preferred] as const);
+        for (const config of [...configs, configs[0]]) {
+          setRuntimeConfigSnapshot(config, config);
+          expect(redactSystemAgentConfig(config, { config })).toMatchObject({
+            channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
+          });
+          for (const owner of ["core", "plus"]) {
+            expect(
+              isSystemAgentSensitiveConfigValue(`channels.proofchat.${owner}`, "synthetic"),
+            ).toBe(true);
+            expect(redactSystemAgentConfigPath(`channels.proofchat.${owner}.synthetic`)).toBe(
+              "<redacted path>",
+            );
+          }
+        }
+      } finally {
+        lease.release();
       }
-    } finally {
-      lease.release();
-    }
-  });
+    },
+  );
 
   it("fails closed for dynamic owner secrets when the exact config is invalid", () => {
     expect(

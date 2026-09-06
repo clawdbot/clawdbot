@@ -651,16 +651,17 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
 }): boolean {
   const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
   const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
-  if (!inputProvider || !runtimeProvider) {
-    return false;
-  }
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
-  return (
-    hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
-    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
-  );
+  // Shared provider objects need no catalog traversal; distinct mutable inputs
+  // still compare their current bytes before reusing runtime SecretRef provenance.
+  return inputProvider && runtimeProvider
+    ? params.inputConfig === params.runtimeConfig ||
+        inputProvider === runtimeProvider ||
+        hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
+          hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
+    : false;
 }
 
 export function sentinelizeConfigSecretRefEnvApiKey(params: {

@@ -132,7 +132,9 @@ For an app-owned local Gateway, the macOS app checks the external CLI against
 its install policy. Onboarding runs managed setup when that CLI is missing or
 incompatible. An attached Gateway uses connection and health checks instead of
 local CLI installation diagnostics. Use **Retry setup** after a failed managed
-installation, or **Recheck** in Connection settings after repairing it.
+installation, or open **Connection… → Connection** from the menu bar and choose
+**Recheck** after repairing it. The Connection window remains available when
+the Dashboard cannot reach the Gateway.
 
 ## State directory on macOS
 

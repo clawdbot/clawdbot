@@ -322,7 +322,7 @@ describe("chat sidebar region", () => {
     expect(handleToggleRequest).toHaveBeenCalledWith(event);
   });
 
-  it("opens a type from the plus menu and shows only established shortcuts", async () => {
+  it("opens a type from the plus menu and shows shortcuts for available panels", async () => {
     const region = await createRegion();
     const dropdown = root(region).querySelector(".side-panel-type-menu");
     dropdown?.dispatchEvent(
@@ -337,7 +337,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S", "Ctrl+Alt+Shift+G"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -385,18 +385,21 @@ describe("chat sidebar region", () => {
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
     ).toEqual([
-      "Review",
+      "Review Ctrl+Alt+Shift+E",
       "Terminal Ctrl+`",
       "Files Ctrl+Shift+B",
       "Side chat Ctrl+Shift+S",
-      "Dashboard",
+      "Dashboard Ctrl+Alt+Shift+G",
     ]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
 
     const dashboard = Array.from(
       root(region).querySelectorAll<HTMLButtonElement>(".side-panel-empty__type"),
-    ).find((button) => button.textContent?.trim() === "Dashboard");
+    ).find(
+      (button) =>
+        button.querySelector(".side-panel-type-option__label")?.textContent === "Dashboard",
+    );
     dashboard?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("dashboard");
   });
@@ -448,13 +451,13 @@ describe("chat sidebar region", () => {
       ),
     ).toEqual([
       "Terminal Ctrl+`",
-      "Browser",
+      "Browser Ctrl+Alt+Shift+U",
       "Files Ctrl+Shift+B",
       "Side chat Ctrl+Shift+S",
-      "Tasks",
-      "Desktop",
-      "Discussion",
-      "Dashboard",
+      "Tasks Ctrl+Alt+Shift+K",
+      "Desktop Ctrl+Alt+Shift+D",
+      "Discussion Ctrl+Alt+Shift+J",
+      "Dashboard Ctrl+Alt+Shift+G",
     ]);
 
     const browserMenuItem = Array.from(
@@ -470,7 +473,9 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
     const browserEmptyItem = Array.from(
       root(region).querySelectorAll<HTMLElement>(".side-panel-empty__type"),
-    ).find((item) => item.textContent?.trim() === "Browser");
+    ).find(
+      (item) => item.querySelector(".side-panel-type-option__label")?.textContent === "Browser",
+    );
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 

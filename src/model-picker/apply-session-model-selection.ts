@@ -331,9 +331,9 @@ export async function applySessionModelSelection(
       ? persistStickyModelSelectionBestEffort({
           agentId: params.agentId,
           model: effectiveModelRef,
-          ...(params.stickyModelSelectionTarget
-            ? { target: params.stickyModelSelectionTarget }
-            : {}),
+          // The shipped SDK opt-in resolves its effective layer inside the config mutation.
+          // Ordinary chat callers supply an authorized target or leave persistence disabled.
+          target: params.stickyModelSelectionTarget ?? "effective",
         })
       : undefined;
   if (changed) {

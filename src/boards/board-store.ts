@@ -11,11 +11,13 @@ import type {
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
+  BOARD_WIDGET_PROPS_MAX_BYTES,
   BoardValidationError,
   insertBoardWidget,
   normalizeBoardLayout,
   type BoardSize,
 } from "./board-layout.js";
+import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
@@ -79,7 +81,6 @@ export interface BoardStore {
 
 const BOARD_MAX_WIDGETS = 48;
 const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
-const BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES = 8 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -207,11 +208,15 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
       "trusted plugin widgets do not accept sandbox capability declarations",
     );
   }
+  if (params.content.pluginKind === BOARD_REPORT_WIDGET_KIND) {
+    parseBoardReport(params.content.props);
+    return;
+  }
   const propsBytes = Buffer.byteLength(JSON.stringify(params.content.props ?? {}), "utf8");
-  if (propsBytes > BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES) {
+  if (propsBytes > BOARD_WIDGET_PROPS_MAX_BYTES) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board plugin widget props exceed ${BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES} UTF-8 bytes`,
+      `board plugin widget props exceed ${BOARD_WIDGET_PROPS_MAX_BYTES} UTF-8 bytes`,
     );
   }
 }

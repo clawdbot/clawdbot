@@ -235,7 +235,6 @@ export function createInitializationContext(): ApplicationContext {
           avatarReason: null,
         },
         serverVersion: null,
-        localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
         terminalEnabled: false,

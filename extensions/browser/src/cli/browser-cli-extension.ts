@@ -11,6 +11,7 @@ import {
   FOUNDATION_CHROME_WEB_STORE_URL,
   installChromeExtensionBootstrap,
   normalizeExtensionInstallWaitMs,
+  removeChromeStoreInstallRequests,
   resolveChromeExtensionLoadPath,
   uninstallChromeExtensionNativeHosts,
 } from "../browser/extension-install.js";
@@ -161,7 +162,11 @@ export function registerBrowserExtensionCommands(
 
   extension
     .command("install")
-    .description("Register the native bootstrap host for Store and development installs")
+    .description("Set up the Chrome extension and request Store installation on macOS")
+    .option(
+      "--no-store",
+      "Prepare native bootstrap and development files without requesting Store installation",
+    )
     .option("--json", "Print a machine-readable status report")
     .option(
       "--wait-ms <ms>",
@@ -176,14 +181,13 @@ export function registerBrowserExtensionCommands(
           const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
           const bundledDir = resolveChromeExtensionDir(pluginRoot);
           if (!json) {
-            defaultRuntime.log(
-              info("Preparing the OpenClaw Chrome native bootstrap. Keep Chrome running…"),
-            );
+            defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
           }
           const status = await installChromeExtensionBootstrap({
             bundledDir,
             pluginRoot: resolveBrowserPluginRoot(pluginRoot),
             waitMs,
+            requestStoreInstall: opts.store !== false,
             onProgress: json ? undefined : (message) => defaultRuntime.log(info(message)),
           });
           if (json) {
@@ -197,10 +201,12 @@ export function registerBrowserExtensionCommands(
                 ? theme.warn(
                     status.platformSupport === "manual_required"
                       ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
-                      : `Automatic setup was not verified. Run install before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}. Use Load unpacked only as a development fallback after pre-registration. If this extension already attempted setup before the host existed, restart Chrome once before retrying.`,
+                      : status.storeInstallRequests.some((entry) => entry.state === "requested")
+                        ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
+                        : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
                   )
                 : info(
-                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). The extension connects automatically.`,
+                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
                   ),
             );
           }
@@ -232,13 +238,41 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.log(
           [
             `Extension copy: ${status.installedCopy.owned ? "installed" : "bundled fallback"}`,
-            `Store:          ${status.storeDiscovered.length > 0 ? status.storeDiscovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "not detected"}`,
+            `Store request:  ${status.storeInstallRequests.length > 0 ? status.storeInstallRequests.map((entry) => `${entry.browser}: ${entry.state}`).join(", ") : "use the Chrome Web Store"}`,
+            `Store:          ${status.storeDiscovered.length > 0 ? status.storeDiscovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile}; ${entry.enabled ? "enabled" : entry.awaitingApproval ? "awaiting approval" : "disabled"})`).join(", ") : "not detected"}`,
             `Development:    ${status.discovered.length > 0 ? status.discovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "none detected"}`,
             `Load unpacked:  ${status.installedCopy.owned ? status.installedCopy.path : status.bundledPath}`,
             `Native hosts:   ${status.registrations.filter((entry) => entry.state === "owned").length} owned`,
             `Setup:          ${status.manualSetupRequired ? "manual action required" : "automatic bootstrap ready"}`,
           ].join("\n"),
         );
+      });
+    });
+
+  extension
+    .command("uninstall-store")
+    .description(
+      "Remove OpenClaw-owned Store install requests; Chrome may remove the extension on restart",
+    )
+    .option("--json", "Print a machine-readable removal report")
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await removeChromeStoreInstallRequests();
+        if (opts.json === true || parentOpts(command).json === true) {
+          defaultRuntime.writeJson(result);
+        } else {
+          defaultRuntime.log(
+            info(
+              `Removed ${result.removed.length} owned Store install request(s). Chrome may remove externally installed copies on its next start. Native hosts are unchanged.`,
+            ),
+          );
+          for (const refused of result.refused) {
+            defaultRuntime.error(theme.warn(`Refused foreign Store registration: ${refused}`));
+          }
+        }
+        if (result.refused.length > 0) {
+          defaultRuntime.exit(1);
+        }
       });
     });
 
