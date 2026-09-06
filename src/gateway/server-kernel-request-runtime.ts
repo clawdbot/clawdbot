@@ -117,6 +117,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  bindGatewayContextResolver(
+    gatewayInstanceRuntime.recovery,
+    gatewayRequestContext.resolveGatewayContext,
+  );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }

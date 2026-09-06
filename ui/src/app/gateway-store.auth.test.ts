@@ -35,6 +35,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   function rejectStaleBuild() {
@@ -53,6 +54,66 @@ describe("createApplicationGateway authentication diagnostics", () => {
       willRetry: false,
     });
   }
+
+  it("automatically recovers a rejected old bundle after the document probe briefly fails", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.gateway.snapshot.phase).toBe("reload-required");
+    expect(replace).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the current connection resume build recovery during the probe retry delay", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.connect();
+    rejectStaleBuild();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+  });
+
+  it("retires automatic build recovery when the connection stops between probes", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.stop();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+  });
 
   it("preserves an unfinished browser handoff across a build recovery reload", async () => {
     const bootstrapToken = "synthetic-owner-bootstrap";

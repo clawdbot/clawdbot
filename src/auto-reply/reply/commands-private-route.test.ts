@@ -11,7 +11,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
-  resolvePrivateCommandApprovalRouteExpiresAtMs,
+  buildPrivateCommandApprovalRequest,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -150,19 +150,20 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-describe("resolvePrivateCommandApprovalRouteExpiresAtMs", () => {
-  it("returns a bounded five-minute route expiry for valid clocks", () => {
-    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(1_800_000_000_000)).toBe(
-      1_800_000_300_000,
-    );
-  });
-
-  it("expires private command routes immediately for invalid clocks", () => {
-    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(Number.NaN)).toBe(0);
-  });
-
-  it("expires private command routes immediately when expiry would exceed Date bounds", () => {
-    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(MAX_DATE_TIMESTAMP_MS)).toBe(0);
+describe("buildPrivateCommandApprovalRequest", () => {
+  it.each([
+    ["a valid clock", 1_800_000_000_000, 1_800_000_300_000],
+    ["an invalid clock", Number.NaN, 0],
+    ["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0],
+  ])("bounds private route expiry with %s", (_label, createdAtMs, expiresAtMs) => {
+    const request = buildPrivateCommandApprovalRequest({
+      commandParams: buildCommandParams({}),
+      id: "diagnostics-private-route",
+      command: "openclaw gateway diagnostics export --json",
+      agentId: "main",
+      createdAtMs,
+    });
+    expect(request.expiresAtMs).toBe(expiresAtMs);
   });
 });
 
