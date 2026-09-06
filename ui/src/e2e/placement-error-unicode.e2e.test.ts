@@ -70,17 +70,18 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.dispatch");
           await waitForCommittedChatRoute(page);
           if (writeFails) {
-            await page.evaluate((prefix) => {
-              const setItem = Storage.prototype.setItem;
+            await page.evaluate((recoveryKeyPrefix) => {
+              const setSessionItem = sessionStorage.setItem.bind(sessionStorage);
+              const setLocalItem = localStorage.setItem.bind(localStorage);
               Storage.prototype.setItem = function (key: string, value: string) {
-                if (
-                  this === sessionStorage &&
-                  key.startsWith(prefix) &&
-                  JSON.parse(value).phase === "paused"
-                ) {
-                  throw new DOMException("quota exceeded", "QuotaExceededError");
+                if (this === sessionStorage) {
+                  if (key.startsWith(recoveryKeyPrefix) && JSON.parse(value).phase === "paused") {
+                    throw new DOMException("quota exceeded", "QuotaExceededError");
+                  }
+                  setSessionItem(key, value);
+                } else {
+                  setLocalItem(key, value);
                 }
-                setItem.call(this, key, value);
               };
             }, storagePrefix);
           }
@@ -161,11 +162,13 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
           if (!writeFails) {
             const saved = await page.evaluate(
-              ({ prefix, sessionKey }) => {
-                const rows = Object.keys(sessionStorage).filter((key) => key.startsWith(prefix));
+              ({ prefix: recoveryKeyPrefix, sessionKey: expectedSessionKey }) => {
+                const rows = Object.keys(sessionStorage).filter((key) =>
+                  key.startsWith(recoveryKeyPrefix),
+                );
                 return rows
                   .map((key) => JSON.parse(sessionStorage.getItem(key) ?? "null"))
-                  .find((row) => row?.sessionKey === sessionKey);
+                  .find((row) => row?.sessionKey === expectedSessionKey);
               },
               { prefix: storagePrefix, sessionKey },
             );
