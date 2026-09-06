@@ -101,12 +101,12 @@ export function normalizeIMessageHandle(raw: string): string {
 
 // iMessage phone handles are real numbers; a value with fewer than 7 digits (a
 // Messages chat row id typo like `5`, or `+123456`) cannot reach an iMessage
-// handle. Whether that is a defect depends on the delivery path: sms and auto
-// hand the handle plus configured region to Messages, which resolves short
-// codes natively, so only iMessage-only delivery can prove the verdict. An
-// unset service keeps the default-path verdict — bare digit strings fail
-// before any send. Both the outbound resolve chain and the send handler apply
-// this.
+// handle. Whether that is a defect depends on the delivery path: sms, auto,
+// and an unset service (the send RPC defaults it to auto, the chat RPCs omit
+// it so the bridge chooses) all hand the handle plus configured region to
+// Messages, which resolves short codes natively. Only delivery pinned to
+// iMessage can prove the verdict. Both the outbound resolve chain and the send
+// handler apply this.
 const MIN_PHONE_HANDLE_DIGITS = 7;
 
 export function assertDeliverableIMessageHandle(params: {
@@ -117,11 +117,11 @@ export function assertDeliverableIMessageHandle(params: {
   if (target.kind !== "handle") {
     return;
   }
-  // Callers pass the effective service: explicit target prefix first, then
-  // the account configuration. Any sms or auto delivery forwards short codes
-  // (and region) to Messages — rejecting them here would break configured
-  // automatic routing that worked before this guard existed.
-  if (service === "sms" || service === "auto") {
+  // Callers pass the effective service: explicit target prefix first, then the
+  // account configuration, then the delivery default. Only iMessage-only
+  // delivery rejects short handles here — rejecting the unset default too
+  // would break the automatic routing that worked before this guard existed.
+  if (service !== "imessage") {
     return;
   }
   const tooShortForAPhone =

@@ -12,8 +12,16 @@ const cfgWithService = (service?: string): OpenClawConfig =>
   }) as OpenClawConfig;
 
 describe("imessage outbound resolveTarget", () => {
-  it("rejects short phone-like handles once the resolved service is not sms", () => {
-    expect(resolveTarget?.({ cfg: cfgWithService(), to: "5" })).toMatchObject({
+  it("keeps unset-service short handles deliverable; delivery defaults them to auto", () => {
+    expect(resolveTarget?.({ cfg: cfgWithService(), to: "5" })).toEqual({ ok: true, to: "5" });
+    expect(resolveTarget?.({ cfg: cfgWithService("auto"), to: "5" })).toEqual({
+      ok: true,
+      to: "5",
+    });
+  });
+
+  it("rejects short phone-like handles when the account pins iMessage", () => {
+    expect(resolveTarget?.({ cfg: cfgWithService("imessage"), to: "5" })).toMatchObject({
       ok: false,
     });
   });

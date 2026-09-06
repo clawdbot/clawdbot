@@ -53,12 +53,17 @@ describe("imessage chat actions", () => {
     );
   });
 
-  it("still rejects bare short codes when no service resolves to sms", async () => {
+  it("lets the unset service default reach bare short codes", async () => {
+    // Chat RPCs omit the service field when none resolves, so the bridge
+    // applies its automatic default; the verdict must not reject a request
+    // delivery would have sent.
     const { client, request } = chatClient();
-    await expect(sendIMessageTyping("12345", true, chatOpts(client))).rejects.toThrow(
-      /not a deliverable handle/,
+    await sendIMessageTyping("12345", true, chatOpts(client));
+    expect(request).toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ to: "12345", typing: true }),
+      expect.anything(),
     );
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("still rejects bare short codes on the default imessage service", async () => {

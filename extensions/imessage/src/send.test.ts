@@ -99,14 +99,24 @@ function createApprovalPrompt(id = "approval-123") {
 describe("sendMessageIMessage receipts", () => {
   let openClawState: OpenClawTestState;
 
-  it("rejects bare short handles only without an sms/auto path and delivers them otherwise (#125461)", async () => {
+  it("rejects bare short handles only for iMessage-only delivery and delivers them otherwise (#125461)", async () => {
     await loadFreshSendModule();
     const client = createClient({ guid: "p:0/imsg-sms-short-code", status: "sent" });
-    // No typed prefix and no configured service: the bare digit string is a
-    // chat row id typo on the default iMessage path, so it fails before any
-    // RPC.
+    // No typed prefix and no configured service: the send RPC still delivers
+    // this as auto (`service || "auto"`), so the guard must not reject a
+    // target delivery would have accepted.
+    await sendMessageIMessage("12345", "hello", { config: IMESSAGE_TEST_CFG, client });
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "12345", service: "auto" }),
+      expect.anything(),
+    );
+    getClientMocks(client).request.mockClear();
+
+    // Delivery pinned to iMessage is the one path that cannot resolve a bare
+    // digit string, so it fails before any RPC.
     await expect(
-      sendMessageIMessage("5", "hello", { config: IMESSAGE_TEST_CFG, client }),
+      sendMessageIMessage("imessage:5", "hello", { config: IMESSAGE_TEST_CFG, client }),
     ).rejects.toThrow(/chat_id/);
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
 

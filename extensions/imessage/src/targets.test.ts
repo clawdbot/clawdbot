@@ -211,7 +211,7 @@ describe("imessage targets", () => {
     expect(parseIMessageTarget("5")).toEqual({ kind: "handle", to: "5", service: "auto" });
   });
 
-  it("reports undeliverable bare numeric handles unless delivery has an sms/auto path (#125461)", () => {
+  it("reports undeliverable bare numeric handles only when delivery is pinned to iMessage (#125461)", () => {
     // A bare digit string looks like a Messages chat row id, not a phone
     // handle; pre-fix it normalized to `+<digits>` and the channel send
     // silently failed (-1728). The error must steer the caller to chat_id /
@@ -220,11 +220,20 @@ describe("imessage targets", () => {
     const shortE164 = parseIMessageTarget("+123456");
     const rejectedAsHandle = (target: IMessageTarget, service: IMessageService | undefined) =>
       expect(() => assertDeliverableIMessageHandle({ target, service }));
-    // The default path (no typed prefix, no account service) keeps the
-    // row-id-typo verdict, as does explicit iMessage-only delivery.
-    rejectedAsHandle(bareTarget, undefined).toThrow(/chat_id/);
-    rejectedAsHandle(bareTarget, undefined).toThrow(/sms:/);
+    // An unset service is delivered as auto (the send RPC defaults it via
+    // `service || "auto"`, the chat RPCs omit the field so the bridge
+    // chooses), so it keeps the short-code routing that worked before this
+    // guard existed.
+    expect(() =>
+      assertDeliverableIMessageHandle({ target: bareTarget, service: undefined }),
+    ).not.toThrow();
+    expect(() =>
+      assertDeliverableIMessageHandle({ target: shortE164, service: undefined }),
+    ).not.toThrow();
+    // Explicit iMessage-only delivery is the one path that can prove the
+    // row-id-typo verdict.
     rejectedAsHandle(bareTarget, "imessage").toThrow(/chat_id/);
+    rejectedAsHandle(bareTarget, "imessage").toThrow(/sms:/);
     rejectedAsHandle(shortE164, "imessage").toThrow(/chat_id/);
     // An SMS short code is a legitimate target once the service resolves to
     // sms, whether from the typed prefix or the account configuration.
@@ -254,6 +263,12 @@ describe("imessage targets", () => {
       assertDeliverableIMessageHandle({
         target: parseIMessageTarget("683 412"),
         service: "auto",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertDeliverableIMessageHandle({
+        target: parseIMessageTarget("683 412"),
+        service: undefined,
       }),
     ).not.toThrow();
     rejectedAsHandle(parseIMessageTarget("683 412"), "imessage").toThrow(/chat_id/);
