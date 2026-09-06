@@ -372,7 +372,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     };
   }
 
-  let removeLoopGuard: () => void;
+  let removeContextEngineLoopHook: (() => void) | undefined;
   if (activeContextEngine?.info.ownsCompaction === true) {
     const selectedContextEngineId = activeContextEngine.info.id;
     const runtimeSettings = buildContextEngineRuntimeSettings({
@@ -386,7 +386,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       fallbackReason: attempt.fallbackReason,
       degradedReason: attempt.degradedReason,
     });
-    const removeContextEngineLoopHook = installContextEngineLoopHook({
+    removeContextEngineLoopHook = installContextEngineLoopHook({
       agent: activeSession.agent,
       contextEngine: activeContextEngine,
       sessionId: attempt.sessionId,
@@ -402,6 +402,15 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      // Only the outer accepted-turn owner may advance an admitted engine.
+      deferredTurn: attempt.onContextEngineTurnCandidate
+        ? {
+            prompt: attempt.prompt,
+            get availableTools() {
+              return new Set(activeSession.agent.state.tools.map((tool) => tool.name));
+            },
+          }
+        : undefined,
       onAfterTurnCheckpoint: (messageCount) => {
         afterTurnCheckpoint = messageCount;
       },
@@ -427,22 +436,12 @@ export function installEmbeddedAttemptContextGuards(input: {
       runtimeSettings,
       isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
-    const removeToolResultGuard = installToolResultContextGuard({
-      agent: activeSession.agent,
-      contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
-    });
-    removeLoopGuard = () => {
-      removeToolResultGuard();
-      removeContextEngineLoopHook();
-    };
-  } else {
-    removeLoopGuard = installToolResultContextGuard({
-      agent: activeSession.agent,
-      contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
-    });
   }
+  const removeToolResultGuard = installToolResultContextGuard({
+    agent: activeSession.agent,
+    contextWindowTokens: contextTokenBudget,
+    ...midTurnPrecheckOptions,
+  });
 
   const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
     activeSession.agent,
@@ -481,7 +480,8 @@ export function installEmbeddedAttemptContextGuards(input: {
     remove: () => {
       activeSession.agent.transformContext = previousComputerFrameTransform;
       removeHistoryImagePruneContextTransform();
-      removeLoopGuard();
+      removeToolResultGuard();
+      removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;
     },
     takePendingMidTurnPrecheckRequest: () => {
