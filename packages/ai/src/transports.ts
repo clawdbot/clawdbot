@@ -10,6 +10,7 @@ export * from "./transports/model-transport-debug.js";
 export * from "./transports/model-transport-url.js";
 export * from "./transports/openai-compatible-conversation-turn.js";
 export * from "./transports/openai-completions-compat.js";
+export { isAzureOpenAICompatibleHost } from "./transports/openai-completions-host.js";
 export * from "./transports/openai-completions-string-content.js";
 export * from "./transports/openai-completions-transport.js";
 export * from "./transports/openai-reasoning-compat.js";

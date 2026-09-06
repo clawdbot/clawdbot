@@ -429,4 +429,46 @@ describe("openai completions params", () => {
 
     expect(params).not.toHaveProperty("reasoning_effort");
   });
+
+  it("emits the native Completions output cap and omits it on explicit proxy routes", () => {
+    const native = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "uncapped-reasoning",
+        name: "Uncapped Reasoning",
+        baseUrl: "https://api.openai.com/v1",
+        maxTokens: 8192,
+      }),
+      emptyContext(),
+      undefined,
+    ) as { max_completion_tokens?: number; max_tokens?: number };
+    expect(native.max_completion_tokens).toBe(8192);
+    expect(native).not.toHaveProperty("max_tokens");
+
+    const implicitNative = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "uncapped-reasoning",
+        name: "Uncapped Reasoning",
+        baseUrl: "",
+        maxTokens: 8192,
+      }),
+      emptyContext(),
+      undefined,
+    ) as { max_completion_tokens?: number; max_tokens?: number };
+    expect(implicitNative.max_completion_tokens).toBe(8192);
+    expect(implicitNative).not.toHaveProperty("max_tokens");
+
+    const proxy = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "uncapped-reasoning",
+        name: "Uncapped Reasoning",
+        provider: "custom",
+        baseUrl: "https://models.example.com/v1",
+        maxTokens: undefined,
+      }),
+      emptyContext(),
+      undefined,
+    ) as { max_completion_tokens?: number; max_tokens?: number };
+    expect(proxy).not.toHaveProperty("max_completion_tokens");
+    expect(proxy).not.toHaveProperty("max_tokens");
+  });
 });
