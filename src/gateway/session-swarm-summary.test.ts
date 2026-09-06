@@ -119,7 +119,7 @@ describe("parent Swarm outcome projection", () => {
     });
     expect(
       buildGatewaySessionEventFields({
-        sessionRow: { key: parent, kind: "direct", swarm: detailed },
+        sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: detailed },
       }).swarm,
     ).toEqual(summary);
   });
@@ -230,24 +230,28 @@ describe("parent Swarm outcome projection", () => {
         includeChildren: true,
       });
       expect(
-        buildGatewaySessionEventFields({ sessionRow: { key: parent, kind: "direct" } }),
+        buildGatewaySessionEventFields({
+          sessionRow: { key: parent, kind: "direct", updatedAt: 0 },
+        }),
       ).not.toHaveProperty("swarm");
       expect(
         buildGatewaySessionEventFields({
-          sessionRow: { key: parent, kind: "direct", swarm: undefined },
+          sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: undefined },
         }),
       ).toHaveProperty("swarm", null);
       expect(
         buildGatewaySessionEventFields({
-          sessionRow: { key, kind: "global", swarm },
+          sessionRow: { key, kind: "global", updatedAt: 0, swarm },
           agentId: "main",
         }),
       ).toMatchObject({ swarm: { groups: [{ done: 1, failed: 0 }] } });
       expect(
-        buildGatewaySessionEventFields({ sessionRow: { key, kind: "global", swarm } }),
+        buildGatewaySessionEventFields({
+          sessionRow: { key, kind: "global", updatedAt: 0, swarm },
+        }),
       ).not.toHaveProperty("swarm");
       const snapshot = buildGatewaySessionSnapshot({
-        sessionRow: { key, kind: "global", swarm },
+        sessionRow: { key, kind: "global", updatedAt: 0, swarm },
         includeSession: true,
       });
       expect(snapshot).not.toHaveProperty("swarm");

@@ -29,7 +29,10 @@ import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
 import "./chat-pane.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -183,7 +186,7 @@ export type TestChatPane = HTMLElement & {
 };
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
-  request?: (method: string, params?: unknown) => unknown;
+  request?: GatewayRequestHandler;
 };
 
 export function createGatewayBrowserClientFixture(
