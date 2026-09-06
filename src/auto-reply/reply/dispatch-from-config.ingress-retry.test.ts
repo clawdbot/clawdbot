@@ -23,7 +23,12 @@ import {
   type DispatchProcessedNote,
 } from "./dispatch-processed-outcome.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
-import { clearSessionQueues, enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -72,7 +77,9 @@ describe("dispatch retry after queued ingress abandonment", () => {
         let dispatcher = createDispatcher();
         const outcomes: Array<DispatchProcessedNote | undefined> = [];
         const lifecycles: ChannelIngressDispatchLifecycle[] = [];
-        const unexpectedFollowup = vi.fn(async () => {});
+        const finishAbortedFollowup = vi.fn(async (run: FollowupRun) => {
+          expect(run.abortSignal?.aborted).toBe(true);
+        });
         const resolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
           if (resolver.mock.calls.length > 1) {
             return { text: "Queued message delivered" };
@@ -134,10 +141,10 @@ describe("dispatch retry after queued ingress abandonment", () => {
             await vi.advanceTimersByTimeAsync(1_000);
             await drain.waitForIdle();
             expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
-            scheduleFollowupDrain(key, unexpectedFollowup);
+            scheduleFollowupDrain(key, finishAbortedFollowup);
             await vi.advanceTimersByTimeAsync(0);
             expect(getExistingFollowupQueue(key)?.items ?? []).toEqual([]);
-            expect(unexpectedFollowup).not.toHaveBeenCalled();
+            expect(finishAbortedFollowup).toHaveBeenCalledOnce();
           }
           expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
           clock += 1_000;
