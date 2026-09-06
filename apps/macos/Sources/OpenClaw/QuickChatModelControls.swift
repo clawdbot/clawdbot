@@ -20,6 +20,39 @@ enum QuickChatModelControlLogic {
         OpenClawChatThinkingLevelOption(id: $0, label: $0)
     }
 
+    @MainActor
+    static func loadSnapshot(
+        target: QuickChatRoutingTarget,
+        connection: GatewayConnection = .shared) async throws -> QuickChatModelControlSnapshot
+    {
+        guard let lease = await connection.captureServerLease() else { throw CancellationError() }
+        let transport = MacGatewayChatTransport(connection: connection, defaultGlobalAgentID: target.agentID)
+        let sessionsRequest = transport.sessionsListRequest(limit: 200, search: target.sessionKey, archived: false)
+        let result: Result<QuickChatModelControlSnapshot, Error>
+        do {
+            async let catalog = transport.loadModelCatalog(
+                sessionKey: target.sessionKey, agentID: target.agentID, ifCurrentServerLease: lease)
+            async let sessionsData = connection.request(
+                method: sessionsRequest.method,
+                params: sessionsRequest.params,
+                timeoutMs: sessionsRequest.timeoutMs,
+                ifCurrentServerLease: lease)
+            async let agentsData = connection.request(
+                method: GatewayConnection.Method.agentsList.rawValue,
+                params: nil,
+                timeoutMs: 15000,
+                ifCurrentServerLease: lease)
+            let models = try await catalog.choices
+            let sessions = try await JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: sessionsData)
+            let agents = try await JSONDecoder().decode(AgentsListResult.self, from: agentsData)
+            result = .success(Self.snapshot(target: target, models: models, sessions: sessions, agents: agents))
+        } catch {
+            result = .failure(error)
+        }
+        guard connection.serverLeaseMatchesCurrentState(lease) else { throw CancellationError() }
+        return try result.get()
+    }
+
     static func snapshot(
         target: QuickChatRoutingTarget,
         models: [OpenClawChatModelChoice],

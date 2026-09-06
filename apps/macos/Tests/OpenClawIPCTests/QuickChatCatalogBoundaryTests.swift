@@ -45,6 +45,7 @@ struct QuickChatCatalogBoundaryTests {
         sessionScoped: Bool?) async throws
     {
         try await self.withFixture(sessionScoped: sessionScoped) { fixture in
+            await fixture.server.setScopedModels(["saved-a"], sessionKey: "agent:a:saved", agentID: "a")
             _ = try await fixture.gateway.request(method: "health", params: nil)
             let transport = MacGatewayChatTransport(connection: fixture.gateway, defaultGlobalAgentID: "b")
             let catalog = try await transport.loadModelCatalog(sessionKey: "agent:a:saved", agentID: nil)
@@ -63,11 +64,18 @@ struct QuickChatCatalogBoundaryTests {
                 #expect(request.method == "models.list")
                 #expect(request.params?.sessionKey == nil)
             }
+            await fixture.server.setScopedModels([], sessionKey: "agent:a:saved", agentID: "a")
+            await fixture.server.setModels([])
+            let empty = try await transport.loadModelCatalog(sessionKey: "agent:a:saved", agentID: nil)
+            #expect(empty.choices.isEmpty)
         }
     }
 
     @Test func `catalog requests distinguish canonical agent and bare global ownership`() async throws {
         try await self.withFixture { fixture in
+            await fixture.server.setScopedModels(["scoped-a"], sessionKey: "agent:a:main", agentID: "a")
+            await fixture.server.setScopedModels(["scoped-b"], sessionKey: "agent:b:main", agentID: "b")
+            await fixture.server.setScopedModels(["scoped-b"], sessionKey: "global", agentID: "b")
             _ = try await fixture.gateway.request(method: "health", params: nil)
             let transport = MacGatewayChatTransport(connection: fixture.gateway, defaultGlobalAgentID: "a")
             let first = try await transport.loadModelCatalog(sessionKey: "agent:a:main", agentID: nil)
@@ -80,6 +88,146 @@ struct QuickChatCatalogBoundaryTests {
             let request = try #require(await fixture.server.requestSnapshot().last)
             #expect(request.params?.sessionKey == "global")
             #expect(request.params?.agentId == "b")
+        }
+    }
+
+    @Test(arguments: ["chat.metadata.changed", "config.changed"])
+    func `open controller consumes repeated wire publications without losing the draft`(event: String) async throws {
+        try await self.withFixture { fixture in
+            let controller = fixture.makeController()
+            let model = controller.model
+            controller.present()
+            try await self.waitForReady(model)
+            let presentationID = try #require(model.activePresentationID)
+            model.text = "Keep the open presentation draft"
+
+            await fixture.server.setModels(["choice-b", "choice-c"])
+            try await fixture.publish(event: event, sequence: 1)
+            try await QuickChatCatalogGatewayFixture.waitForModel {
+                model.modelChoices.map(\.selectionID) == ["fixture/choice-b", "fixture/choice-c"]
+            }
+            await fixture.server.setModels(["choice-c", "choice-d"])
+            try await fixture.publish(event: event, sequence: 2)
+            try await QuickChatCatalogGatewayFixture.waitForModel {
+                model.modelChoices.map(\.selectionID) == ["fixture/choice-c", "fixture/choice-d"]
+            }
+            await fixture.server.setModels([])
+            try await fixture.publish(event: event, sequence: 3)
+            try await QuickChatCatalogGatewayFixture.waitForModel {
+                model.modelChoices.isEmpty && !model.isLoadingModelControls
+            }
+
+            #expect(controller.isVisible)
+            #expect(model.activePresentationID == presentationID)
+            #expect(model.text == "Keep the open presentation draft")
+            #expect(model.modelControlStatusMessage == nil)
+        }
+    }
+
+    @Test(arguments: QuickChatCatalogGatewayServer.CatalogFailure.allCases)
+    func `publication errors retain choices until the current wire catalog recovers`(
+        failure: QuickChatCatalogGatewayServer.CatalogFailure) async throws
+    {
+        try await self.withFixture { fixture in
+            let controller = fixture.makeController()
+            let model = controller.model
+            controller.present()
+            try await self.waitForReady(model)
+            model.text = "Keep the recovery draft"
+            await fixture.server.setFailure(failure, method: "chat.metadata")
+            try await fixture.publish(event: "chat.metadata.changed", sequence: 1)
+            try await QuickChatCatalogGatewayFixture.waitForModel { model.modelControlStatusMessage != nil }
+
+            #expect(model.modelChoices.map(\.selectionID) == ["fixture/choice-a", "fixture/choice-b"])
+            #expect(model.modelControlStatusMessage == "Couldn't load model settings.")
+            await fixture.server.setFailure(nil)
+            await fixture.server.setModels(["choice-b", "choice-c"])
+            try await fixture.publish(event: "chat.metadata.changed", sequence: 2)
+            try await QuickChatCatalogGatewayFixture.waitForModel {
+                model.modelChoices.map(\.selectionID) == ["fixture/choice-b", "fixture/choice-c"] &&
+                    model.modelControlStatusMessage == nil
+            }
+
+            #expect(controller.isVisible)
+            #expect(model.text == "Keep the recovery draft")
+            #expect(await fixture.server.requestSnapshot().allSatisfy { $0.method != "models.list" })
+        }
+    }
+
+    @Test(arguments: ["chat.metadata", "sessions.list", "agents.list"], [false, true])
+    func `retired aggregate outcomes cannot overwrite reconnect publication`(
+        method: String, fails: Bool) async throws
+    {
+        try await self.withFixture { fixture in
+            let controller = fixture.makeController()
+            let model = controller.model
+            controller.present()
+            try await self.waitForReady(model)
+            model.text = "Keep the reconnect draft"
+            let started = AsyncTestGate()
+            await fixture.server.setModels(["choice-b", "choice-c"])
+            if fails { await fixture.server.setFailure(.rpc, method: method) }
+            await fixture.server.holdNext(
+                method: method,
+                target: method == "agents.list" ? nil : "agent:a:main",
+                started: started)
+            try await fixture.publish(event: "chat.metadata.changed", sequence: 1)
+            await started.wait()
+
+            await fixture.gateway.shutdown()
+            try await QuickChatCatalogGatewayFixture.waitForModel { !model.isLoadingModelControls }
+            #expect(model.modelChoices.map(\.selectionID) == ["fixture/choice-a", "fixture/choice-b"])
+            #expect(model.modelControlStatusMessage == nil)
+            await fixture.server.setFailure(nil)
+            await fixture.server.setModels(["choice-d"])
+            _ = try await fixture.gateway.request(method: "health", params: nil)
+            try await QuickChatCatalogGatewayFixture.waitForModel {
+                model.modelChoices.map(\.selectionID) == ["fixture/choice-d"]
+            }
+            await fixture.server.releaseHeldResponse()
+            _ = try await fixture.gateway.request(method: "health", params: nil)
+
+            #expect(model.modelChoices.map(\.selectionID) == ["fixture/choice-d"])
+            #expect(model.modelControlStatusMessage == nil)
+            #expect(model.text == "Keep the reconnect draft")
+        }
+    }
+
+    @Test(arguments: QuickChatCatalogGatewayServer.CatalogFailure.allCases)
+    func `failed target catalog cannot offer choices from the previous agent`(
+        failure: QuickChatCatalogGatewayServer.CatalogFailure) async throws
+    {
+        try await self.withFixture { fixture in
+            await fixture.server.setScopedModels(["only-a"], sessionKey: "agent:a:main", agentID: "a")
+            await fixture.server.setScopedModels(["only-b"], sessionKey: "agent:b:main", agentID: "b")
+            let controller = fixture.makeController()
+            let model = controller.model
+            controller.present()
+            try await self.waitForReady(model)
+            #expect(model.modelChoices.map(\.selectionID) == ["fixture/only-a"])
+            model.text = "Keep the target-change draft"
+            await fixture.server.setFailure(failure, method: "chat.metadata")
+
+            model.selectAgent("b")
+            try await QuickChatCatalogGatewayFixture.waitForModel { !model.isLoadingModelControls }
+
+            #expect(model.modelChoices.isEmpty)
+            #expect(model.modelControlStatusMessage == "Couldn't load model settings.")
+            model.selectModel("fixture/only-a")
+            #expect(model.selectedModelSelectionID == nil)
+            #expect(!model.isUpdatingModel)
+            #expect(await fixture.server.requestSnapshot().allSatisfy { $0.method != "sessions.patch" })
+            #expect(await fixture.server.model(for: "b") == "choice-b")
+
+            await fixture.server.setFailure(nil)
+            let presentationID = try #require(model.activePresentationID)
+            await model.refreshForPresentation(id: presentationID)
+            try await self.waitForReady(model)
+
+            #expect(model.routingTarget == QuickChatRoutingTarget(sessionKey: "agent:b:main", agentID: nil))
+            #expect(model.modelChoices.map(\.selectionID) == ["fixture/only-b"])
+            #expect(model.modelControlStatusMessage == nil)
+            #expect(model.text == "Keep the target-change draft")
         }
     }
 

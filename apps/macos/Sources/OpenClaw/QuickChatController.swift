@@ -80,6 +80,7 @@ final class QuickChatController: NSObject {
     typealias HotkeyRemover = () -> Void
     typealias ChatOpener = @MainActor (_ sessionKey: String?, _ agentID: String?) -> Void
     typealias RecentSessionsProvider = @MainActor () async throws -> [SessionRow]
+    typealias CatalogEventsProvider = @MainActor () async -> AsyncStream<GatewayConnection.PushDelivery>
 
     static let shared = QuickChatController()
 
@@ -97,6 +98,7 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private let hotkeyRemover: HotkeyRemover
     @ObservationIgnored private let chatOpener: ChatOpener
     @ObservationIgnored private let recentSessionsProvider: RecentSessionsProvider
+    @ObservationIgnored private let catalogEventsProvider: CatalogEventsProvider
     @ObservationIgnored private let dictation: QuickChatDictation
     @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
@@ -105,6 +107,7 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private var globalMonitor: Any?
     @ObservationIgnored private var localMonitor: Any?
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogEventsTask: Task<Void, Never>?
     @ObservationIgnored private var visibleFrame = NSRect.zero
     @ObservationIgnored private var contentHeight: CGFloat = 58
     @ObservationIgnored private var transitionID = UUID()
@@ -145,6 +148,9 @@ final class QuickChatController: NSObject {
         recentSessionsProvider: @escaping RecentSessionsProvider = {
             try await SessionLoader.loadSnapshot(limit: 5).rows
         },
+        catalogEventsProvider: @escaping CatalogEventsProvider = {
+            await GatewayConnection.shared.subscribe()
+        },
         replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = {
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: $0.agentID)
             return OpenClawChatViewModel(
@@ -166,6 +172,7 @@ final class QuickChatController: NSObject {
         self.hotkeyRemover = hotkeyRemover
         self.chatOpener = chatOpener
         self.recentSessionsProvider = recentSessionsProvider
+        self.catalogEventsProvider = catalogEventsProvider
         self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
         self.model.onSendDispatched = { [weak self] route in
@@ -259,6 +266,14 @@ final class QuickChatController: NSObject {
             guard let self else { return }
             await self.model.refreshForPresentation(id: presentationID)
         }
+        self.catalogEventsTask?.cancel()
+        self.catalogEventsTask = Task { [weak self] in
+            guard let self else { return }
+            for await delivery in await self.catalogEventsProvider() {
+                guard !Task.isCancelled else { return }
+                await self.model.handleModelCatalogDelivery(delivery, presentationID: presentationID)
+            }
+        }
         let wasVisible = self.isVisible
         self.isVisible = true
         self.installDismissMonitors()
@@ -298,6 +313,8 @@ final class QuickChatController: NSObject {
         self.recentSessionsTask = nil
         self.presentationTask?.cancel()
         self.presentationTask = nil
+        self.catalogEventsTask?.cancel()
+        self.catalogEventsTask = nil
         self.model.endPresentation()
         self.replyBinding.clear()
         self.removeDismissMonitors()

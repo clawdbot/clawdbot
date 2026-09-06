@@ -279,15 +279,7 @@ final class QuickChatModel {
             await QuickChatFocusedTextCaptureService.capture()
         },
         modelControlsProvider: @escaping ModelControlsProvider = { target in
-            let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
-            async let models = transport.listModels(agentID: target.agentID)
-            async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
-            async let agents = GatewayConnection.shared.agentsList()
-            return try await QuickChatModelControlLogic.snapshot(
-                target: target,
-                models: models,
-                sessions: sessions,
-                agents: agents)
+            try await QuickChatModelControlLogic.loadSnapshot(target: target)
         },
         modelPatchProvider: @escaping ModelPatchProvider = { target, model in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
@@ -877,6 +869,10 @@ final class QuickChatModel {
     }
 
     private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
+        if self.routingTarget != target {
+            self.modelChoices = []
+            self.modelControlStatusMessage = nil
+        }
         self.sessionKey = target?.sessionKey ?? ""
         self.sendAgentID = target?.agentID
         self.isUpdatingModel = target.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
@@ -1077,17 +1073,51 @@ extension QuickChatModel {
         return "\(model) · \(thinking)"
     }
 
-    private func refreshModelControls(for target: QuickChatRoutingTarget) {
-        guard self.isPresentationActive else { return }
+    func handleModelCatalogDelivery(_ delivery: GatewayConnection.PushDelivery, presentationID: UUID) async {
+        guard delivery.isCurrent, !Task.isCancelled,
+              self.isCurrentPresentation(presentationID), let push = delivery.push
+        else { return }
+        switch push {
+        case let .event(event):
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
+        case .snapshot, .seqGap:
+            break
+        }
+        guard let target = self.routingTarget else { return }
+        await self.awaitModelPatchSettlement(for: target, whileCurrent: {
+            delivery.isCurrent && !Task.isCancelled &&
+                self.isCurrentPresentation(presentationID) && self.routingTarget == target
+        })
+        guard delivery.isCurrent, !Task.isCancelled,
+              self.isCurrentPresentation(presentationID), self.routingTarget == target
+        else { return }
+        self.refreshModelControls(for: target, isCurrentEvent: { delivery.isCurrent })
+    }
+
+    private func refreshModelControls(
+        for target: QuickChatRoutingTarget,
+        isCurrentEvent: @escaping @Sendable () -> Bool = { true })
+    {
+        guard self.isPresentationActive, isCurrentEvent() else { return }
         let requestID = UUID()
         self.modelControlsRequestID = requestID
         self.modelControlsTask?.cancel()
         self.isLoadingModelControls = true
         let task = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.modelControlsRequestID == requestID {
+                    self.isLoadingModelControls = false
+                    self.modelControlsTask = nil
+                }
+            }
+            guard !Task.isCancelled, isCurrentEvent(),
+                  self.modelControlsRequestID == requestID, self.routingTarget == target
+            else { return }
             do {
                 let snapshot = try await self.modelControlsProvider(target)
                 guard !Task.isCancelled,
+                      isCurrentEvent(),
                       self.modelControlsRequestID == requestID,
                       self.routingTarget == target
                 else { return }
@@ -1102,14 +1132,11 @@ extension QuickChatModel {
             } catch is CancellationError {
                 return
             } catch {
-                guard self.modelControlsRequestID == requestID,
+                guard isCurrentEvent(), self.modelControlsRequestID == requestID,
                       self.routingTarget == target
                 else { return }
                 self.modelControlStatusMessage = String(localized: "Couldn't load model settings.")
             }
-            guard self.modelControlsRequestID == requestID else { return }
-            self.isLoadingModelControls = false
-            self.modelControlsTask = nil
         }
         self.modelControlsTask = task
     }
@@ -1251,11 +1278,14 @@ extension QuickChatModel {
         self.isUpdatingModel = self.routingTarget.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
-    private func awaitModelPatchSettlement(for target: QuickChatRoutingTarget?) async {
-        guard let target,
-              let settlement = self.modelPatchSettlementsByTarget[target]
-        else { return }
-        _ = await settlement.task.value
+    private func awaitModelPatchSettlement(
+        for target: QuickChatRoutingTarget?,
+        whileCurrent: () -> Bool = { true }) async
+    {
+        guard let target else { return }
+        while whileCurrent(), let settlement = self.modelPatchSettlementsByTarget[target] {
+            _ = await settlement.task.value
+        }
     }
 
     private func cancelModelControlRefresh() {

@@ -34,8 +34,9 @@ actor QuickChatCatalogGatewayServer {
 
     private var requests: [Request] = []
     private var frames: [Data] = []
-    private var failure: CatalogFailure?
+    private var failure: (method: String, kind: CatalogFailure)?
     private var modelIDs = ["choice-a", "choice-b"]
+    private var sessionModelIDs: [String: [String: [String]]] = [:]
     private var agentIDs = ["a", "b"]
     private var selectedModels = ["a": "choice-a", "b": "choice-b"]
     private var holdMethod: String?
@@ -48,12 +49,16 @@ actor QuickChatCatalogGatewayServer {
         self.scope = scope
     }
 
-    func setFailure(_ failure: CatalogFailure?) {
-        self.failure = failure
+    func setFailure(_ failure: CatalogFailure?, method: String = "models.list") {
+        self.failure = failure.map { (method: method, kind: $0) }
     }
 
     func setModels(_ modelIDs: [String]) {
         self.modelIDs = modelIDs
+    }
+
+    func setScopedModels(_ modelIDs: [String], sessionKey: String, agentID: String) {
+        self.sessionModelIDs[agentID, default: [:]][sessionKey] = modelIDs
     }
 
     func setAgents(_ agentIDs: [String]) {
@@ -125,14 +130,14 @@ actor QuickChatCatalogGatewayServer {
 
     private func response(to request: Request) throws -> Data {
         let isCatalog = request.method == "models.list" || request.method == "chat.metadata"
-        if isCatalog, self.failure == .rpc {
+        if self.failure?.method == request.method, self.failure?.kind == .rpc {
             return try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": request.id, "ok": false,
                 "error": ["code": "UNAVAILABLE", "message": "Synthetic catalog publication failed"],
             ])
         }
         let payload: [String: Any]
-        if isCatalog, self.failure == .decode {
+        if isCatalog, self.failure?.method == request.method, self.failure?.kind == .decode {
             payload = ["models": "invalid synthetic catalog shape"]
         } else {
             let owner = self.owner(of: request)
@@ -142,9 +147,9 @@ actor QuickChatCatalogGatewayServer {
             case "models.list":
                 payload = ["models": self.modelIDs.map(self.choice)]
             case "chat.metadata":
-                let modelID = request.params?.sessionKey?.hasSuffix(":saved") == true
-                    ? "saved-\(owner)" : "scoped-\(owner)"
-                payload = ["models": [self.choice(modelID)]]
+                let key = try #require(request.params?.sessionKey)
+                let models = self.sessionModelIDs[owner]?[key] ?? self.modelIDs
+                payload = ["models": models.map(self.choice)]
             case "agents.list":
                 payload = [
                     "defaultId": self.agentIDs[0], "mainKey": "main", "scope": self.scope,
@@ -234,18 +239,17 @@ final class QuickChatCatalogGatewayFixture {
             connectionGateProvider: { .available },
             frontmostAppNameProvider: { "Synthetic editor" },
             modelControlsProvider: { target in
-                let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: target.agentID)
-                async let models = transport.listModels(agentID: target.agentID)
-                async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
-                async let agents = gateway.agentsList()
-                return try await QuickChatModelControlLogic.snapshot(
-                    target: target, models: models, sessions: sessions, agents: agents)
+                try await QuickChatModelControlLogic.loadSnapshot(target: target, connection: gateway)
             },
             modelPatchProvider: { target, model in
                 try await MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: target.agentID)
                     .patchSessionModel(sessionKey: target.sessionKey, agentID: target.agentID, model: model)
             })
-        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        let controller = QuickChatController(
+            enableUI: false,
+            model: model,
+            monitoringEnabled: false,
+            catalogEventsProvider: { await gateway.subscribe() })
         self.controllers.append(controller)
         return controller
     }
