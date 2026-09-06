@@ -140,16 +140,29 @@ describe("defaultPersistDigest tri-state contract", () => {
     });
   });
 
-  it.each([undefined, "lifecycle-a"])(
-    "rejects lifecycle %s after reset keeps the session id",
-    async (lifecycleRevision) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it.each([
+    ["default", undefined],
+    ["default", "lifecycle-a"],
+    ["configured", undefined],
+    ["configured", "lifecycle-a"],
+  ] as const)(
+    "%s store rejects lifecycle %s after reset keeps the session id",
+    async (store, lifecycleRevision) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
         const sessionKey = "agent:main:persist-digest-reset";
         const sessionId = "sess-1";
-        await upsertSessionEntryCore(
-          { sessionKey, agentId, env: process.env },
-          { sessionId, lifecycleRevision: "lifecycle-b", updatedAt: 1 },
-        );
+        const scope = {
+          sessionKey,
+          agentId,
+          ...(store === "configured"
+            ? { storePath: fixture.path("observer-sessions", "sessions.json") }
+            : {}),
+        };
+        await upsertSessionEntryCore(scope, {
+          sessionId,
+          lifecycleRevision: "lifecycle-b",
+          updatedAt: 1,
+        });
         const before = readSessionObserverDigestVersion();
         const previousDigest = {
           ...makeDigest(sessionKey, 10),
@@ -157,24 +170,25 @@ describe("defaultPersistDigest tri-state contract", () => {
           lifecycleRevision,
         };
 
-        expect(
-          await defaultPersistDigest({ sessionKey, agentId, sessionId, digest: previousDigest }),
-        ).toBe(false);
+        expect(await defaultPersistDigest({ ...scope, sessionId, digest: previousDigest })).toBe(
+          false,
+        );
         expect(readSessionObserverDigestVersion()).toBe(before);
-        expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest).toBeUndefined();
+        expect(loadSessionEntryReadOnly(scope)?.observerDigest).toBeUndefined();
 
         const currentDigest = {
           ...makeDigest(sessionKey, 1),
           sessionId,
           lifecycleRevision: "lifecycle-b",
         };
-        expect(
-          await defaultPersistDigest({ sessionKey, agentId, sessionId, digest: currentDigest }),
-        ).toBe(true);
-        expect(readSessionObserverDigestVersion()).toBe(before + 1);
-        expect(loadSessionEntryReadOnly({ sessionKey, agentId })?.observerDigest).toEqual(
-          currentDigest,
+        expect(await defaultPersistDigest({ ...scope, sessionId, digest: currentDigest })).toBe(
+          true,
         );
+        expect(readSessionObserverDigestVersion()).toBe(before + 1);
+        expect(loadSessionEntryReadOnly(scope)?.observerDigest).toEqual(currentDigest);
+        if (store === "configured") {
+          expect(loadSessionEntryReadOnly({ sessionKey, agentId })).toBeUndefined();
+        }
       });
     },
   );

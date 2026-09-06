@@ -10,6 +10,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -64,8 +65,14 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const resolveUtilityModelRef = deps.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const prepareModel = deps.prepareModel ?? defaultPrepareModel;
   const completeModel = deps.completeModel ?? defaultCompleteModel;
-  const readSession = deps.readSession ?? defaultReadSession;
-  const persistDigest = deps.persistDigest ?? defaultPersistDigest;
+  const resolveStorePath = (agentId: string) =>
+    resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
+  const readSession: NonNullable<SessionObserverDeps["readSession"]> =
+    deps.readSession ??
+    ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)));
+  const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> =
+    deps.persistDigest ??
+    ((params) => defaultPersistDigest({ ...params, storePath: resolveStorePath(params.agentId) }));
   const contextlessTerminalRuns = new Map<string, number>();
   const terminalRuns = new Map<string, number>();
   const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();

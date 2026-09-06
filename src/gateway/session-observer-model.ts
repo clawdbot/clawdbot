@@ -295,10 +295,14 @@ function sanitizeSessionObserverModelText(value: string, maxChars: number): stri
   return truncateUtf16Safe(normalized, maxChars);
 }
 
-export function defaultReadSession(sessionKey: string, agentId: string): SessionEntry | undefined {
+export function defaultReadSession(
+  sessionKey: string,
+  agentId: string,
+  storePath?: string,
+): SessionEntry | undefined {
   // Read-only: observation must never materialize agent state (dirs, agent DB
   // registration) for agents that are not configured.
-  return loadSessionEntryReadOnly({ sessionKey, agentId });
+  return loadSessionEntryReadOnly({ sessionKey, agentId, ...(storePath ? { storePath } : {}) });
 }
 
 // sessions.list cache fence input. Both production writers (live/preamble
@@ -316,6 +320,7 @@ export async function defaultPersistDigest(params: {
   sessionKey: string;
   sessionId?: string;
   agentId: string;
+  storePath?: string;
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
@@ -324,7 +329,11 @@ export async function defaultPersistDigest(params: {
   // separately since the result alone can't distinguish the three states.
   let applied = false;
   const result = await patchSessionEntryCore(
-    { sessionKey: params.sessionKey, agentId: params.agentId },
+    {
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+    },
     (entry) => {
       if (params.stillCurrent?.() === false) {
         return null;
