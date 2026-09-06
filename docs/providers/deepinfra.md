@@ -120,6 +120,11 @@ does not append bundled models absent from the response. Without credentials,
 the bundled catalog remains available without fetching. Explicitly configured
 models and costs remain authoritative; onboarding does not pin provider prices.
 
+The plugin's public `buildDeepInfraProvider` API keeps its advisory default:
+it retains bundled choices and uses unknown price estimates when discovery fails.
+OpenClaw's registered catalog hook explicitly selects `discoveryMode: "strict"`
+so failed or empty acquisitions reach the shared publication owner unchanged.
+
 Hosted publication uses the same native parser. It preserves metadata without
 cost for unsupported or absent schedules, retains declared zero prices, and
 leaves the previous hosted catalog intact if the native feed fails validation.

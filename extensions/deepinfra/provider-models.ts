@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -44,11 +43,7 @@ type DeepInfraDiscoveryOptions = {
   hasApiKey?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
-};
-
-type DeepInfraAuthConfig = {
-  secrets?: { defaults?: { env?: string; file?: string; exec?: string } };
-  models?: { providers?: Record<string, { apiKey?: unknown } | undefined> };
+  discoveryMode?: "strict" | "advisory";
 };
 
 type DeepInfraAgentModelPricing = DeepInfraSurfaceModel["pricing"];
@@ -113,7 +108,7 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceM
   return {
     id,
     name: id,
-    description: metadata.description ?? undefined,
+    description: typeof metadata.description === "string" ? metadata.description : undefined,
     tags: metadata.tags,
     contextWindow: asPositiveSafeInteger(metadata.context_length),
     maxTokens: asPositiveSafeInteger(metadata.max_tokens),
@@ -330,36 +325,16 @@ function chatSurfaceModelToModelDefinition(
   };
 }
 
-// Gate dynamic discovery on key presence: pre-auth keeps the picker tight and
-// avoids a useless network call. The endpoint itself is unauthenticated.
-// Accepts env-var keys and auth-profile-store keys via the shared
-// `isProviderApiKeyConfigured` helper (covers SecretRef / `OPENCLAW_LIVE_*`
-// indirection too).
-export function hasDeepInfraApiKey(options?: {
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-  config?: DeepInfraAuthConfig;
-}): boolean {
+function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
+  if (options?.hasApiKey !== undefined) {
+    return options.hasApiKey;
+  }
   const env = options?.env ?? process.env;
   const fromEnv = env.DEEPINFRA_API_KEY;
-  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
-    return true;
-  }
-  const providers = options?.config?.models?.providers;
-  for (const [providerId, provider] of Object.entries(providers ?? {})) {
-    if (
-      providerId.trim().toLowerCase() === "deepinfra" &&
-      hasConfiguredSecretInput(provider?.apiKey, options?.config?.secrets?.defaults)
-    ) {
-      return true;
-    }
-  }
-  return isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir });
-}
-
-function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
-  const env = options?.env ?? process.env;
-  return options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
+  return (
+    (typeof fromEnv === "string" && fromEnv.trim() !== "") ||
+    isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir })
+  );
 }
 
 // Keep pre-auth offline; successful discovery shares the five-minute live catalog cache.
@@ -441,6 +416,7 @@ export async function discoverDeepInfraModels(
   if (!canDiscoverDeepInfra(options)) {
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
+  const strict = options?.discoveryMode !== "advisory";
   // Resolve auth once and load independent public facts concurrently within the discovery deadline.
   // Finish both request releases before publishing; media only loads the projection.
   const [metadata, pricing] = await Promise.allSettled([
@@ -448,20 +424,29 @@ export async function discoverDeepInfraModels(
     discoverDeepInfraPricing(),
   ]);
   if (metadata.status === "rejected") {
-    throw metadata.reason;
+    if (strict) {
+      throw metadata.reason;
+    }
+    if (pricing.status === "rejected") {
+      return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+    }
   }
-  const catalog = metadata.value;
-  const chatModels = catalog.chat.length > 0 ? catalog.chat : catalog.vlm;
+  const catalog = metadata.status === "fulfilled" ? metadata.value : undefined;
+  const chatModels = catalog ? (catalog.chat.length > 0 ? catalog.chat : catalog.vlm) : [];
   // No price schedule is needed to publish an authoritative empty chat inventory.
-  if (chatModels.length === 0) {
+  if (strict && chatModels.length === 0) {
     return [];
   }
-  if (pricing.status === "rejected") {
+  if (strict && pricing.status === "rejected") {
     throw pricing.reason;
   }
-  const prices = pricing.value;
+  const prices = pricing.status === "fulfilled" ? pricing.value : undefined;
   const models = chatModels.map(chatSurfaceModelToModelDefinition);
-  const unknownPrices = models.filter((model) => !prices.has(model.id)).length;
+  if (!strict) {
+    const discovered = new Set(models.map((model) => model.id));
+    models.push(...DEEPINFRA_MODEL_CATALOG.filter((model) => !discovered.has(model.id)));
+  }
+  const unknownPrices = models.filter((model) => !prices?.has(model.id)).length;
   if (unknownPrices > 0) {
     log.warn(
       `Native pricing unavailable or qualified for ${unknownPrices} models; keeping metadata with unknown estimates. Configure explicit model costs if needed.`,
@@ -471,7 +456,7 @@ export async function discoverDeepInfraModels(
   return models.map((model) =>
     buildDeepInfraModelDefinition({
       ...model,
-      cost: prices.get(model.id) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: prices?.get(model.id) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }),
   );
 }

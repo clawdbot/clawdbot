@@ -25,8 +25,12 @@ export async function buildDeepInfraProvider(options?: {
   hasApiKey?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
+  discoveryMode?: "strict";
 }): Promise<ModelProviderConfig> {
-  const models = await discoverDeepInfraModels(options);
+  const models = await discoverDeepInfraModels({
+    ...options,
+    discoveryMode: options?.discoveryMode ?? "advisory",
+  });
   return {
     baseUrl: DEEPINFRA_BASE_URL,
     api: "openai-completions",
@@ -46,6 +50,7 @@ export function buildDeepInfraApiKeyCatalog(
         buildProvider: () =>
           buildDeepInfraProvider({
             hasApiKey: true,
+            discoveryMode: "strict",
             env: ctx.env,
             agentDir: ctx.agentDir,
           }),

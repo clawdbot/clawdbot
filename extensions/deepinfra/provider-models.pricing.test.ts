@@ -1,5 +1,6 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDeepInfraProvider } from "./api.js";
 import { DEEPINFRA_MODEL_CATALOG, discoverDeepInfraModels } from "./provider-models.js";
 
 const DEEPINFRA_MODELS_URL =
@@ -32,6 +33,49 @@ async function withFetchPathTest(mockFetch: ReturnType<typeof vi.fn>, run: () =>
 }
 
 describe("DeepInfra native runtime prices", () => {
+  it.each([
+    { metadata: 503, pricing: 503, empty: false },
+    { metadata: 503, pricing: 200, empty: false },
+    { metadata: 200, pricing: 503, empty: false },
+    { metadata: 200, pricing: 200, empty: true },
+  ])("keeps the public builder advisory for $metadata/$pricing empty=$empty", async (scenario) => {
+    const mockFetch = vi.fn(async (url: string) => {
+      const metadata = url === DEEPINFRA_MODELS_URL;
+      const status = metadata ? scenario.metadata : scenario.pricing;
+      if (status !== 200) {
+        return new Response("unavailable", { status });
+      }
+      return jsonResponse(
+        metadata
+          ? { data: scenario.empty ? [] : [makeAgentModelEntry({ id: "fixture/public-model" })] }
+          : [
+              {
+                model_name: "fixture/public-model",
+                pricing: {
+                  type: "tokens",
+                  cents_per_input_token: 0.0002,
+                  cents_per_output_token: 0.001,
+                },
+              },
+            ],
+      );
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      const provider = await buildDeepInfraProvider({ hasApiKey: true });
+      expect(provider.models.map((model) => model.id)).toEqual(
+        expect.arrayContaining(DEEPINFRA_MODEL_CATALOG.map((model) => model.id)),
+      );
+      if (scenario.metadata === 200 && !scenario.empty) {
+        expect(provider.models.find((model) => model.id === "fixture/public-model")?.cost).toEqual({
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        });
+      }
+    });
+  });
+
   it("rejects failed metadata even when native pricing succeeds", async () => {
     const seedId = DEEPINFRA_MODEL_CATALOG[0]!.id;
     const mockFetch = vi.fn(async (url: string) => {

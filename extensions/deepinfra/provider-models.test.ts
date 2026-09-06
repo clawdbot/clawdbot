@@ -13,7 +13,6 @@ import {
   DEEPINFRA_MODEL_CATALOG,
   discoverDeepInfraModels,
   discoverDeepInfraSurfaces,
-  hasDeepInfraApiKey,
 } from "./provider-models.js";
 
 const DEEPINFRA_MODELS_URL =
@@ -141,64 +140,33 @@ describe("buildDeepInfraModelDefinition", () => {
   });
 });
 
-describe("hasDeepInfraApiKey", () => {
-  it("returns true via env var, false on missing / blank", () => {
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "sk-x" } })).toBe(true);
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "" } })).toBe(false);
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "   " } })).toBe(false);
-    expect(hasDeepInfraApiKey({ env: {} })).toBe(false);
-  });
-
-  it("falls back to the auth-profile store when no env var is set", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-
-    expect(hasDeepInfraApiKey({ env: {}, agentDir: "/tmp/openclaw-agent" })).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledTimes(1);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "deepinfra",
-      agentDir: "/tmp/openclaw-agent",
+describe("DeepInfra pre-auth discovery", () => {
+  it.each([
+    { key: "sk-fixture", live: true },
+    { key: "", live: false },
+    { key: "   ", live: false },
+    { key: undefined, live: false },
+  ])("discovers only with a configured environment key: $live", async ({ key, live }) => {
+    const mockFetch = mockProjectionFetch(() => jsonResponse({ data: [makeAgentModelEntry()] }));
+    await withFetchPathTest(mockFetch, {}, async () => {
+      expect((await discoverDeepInfraSurfaces({ env: { DEEPINFRA_API_KEY: key } })).live).toBe(
+        live,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(live ? 1 : 0);
     });
+    if (live) {
+      expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
+    }
   });
 
-  it("accepts config-backed provider API keys before probing the profile store", () => {
-    expect(
-      hasDeepInfraApiKey({
-        env: {},
-        agentDir: "/tmp/openclaw-agent",
-        config: {
-          models: {
-            providers: {
-              deepinfra: {
-                apiKey: { source: "env", provider: "default", id: "CUSTOM_DEEPINFRA_KEY" },
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
-  });
-
-  it("short-circuits on env var and skips the profile-store probe", () => {
+  it("discovers with a saved profile when the environment has no key", async () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
-
-    expect(
-      hasDeepInfraApiKey({
-        env: { DEEPINFRA_API_KEY: "sk-x" },
-        agentDir: "/tmp/openclaw-agent",
-      }),
-    ).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
-  });
-
-  it("returns false when env is empty and the auth-profile store has no deepinfra profile", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-
-    expect(hasDeepInfraApiKey({ env: {}, agentDir: "/tmp/openclaw-agent" })).toBe(false);
-
+    const mockFetch = mockProjectionFetch(() => jsonResponse({ data: [makeAgentModelEntry()] }));
+    await withFetchPathTest(mockFetch, {}, async () => {
+      expect(
+        (await discoverDeepInfraSurfaces({ env: {}, agentDir: "/tmp/openclaw-agent" })).live,
+      ).toBe(true);
+    });
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
       provider: "deepinfra",
       agentDir: "/tmp/openclaw-agent",
