@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -51,6 +51,7 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -154,7 +155,7 @@ describe("release candidate checklist", () => {
         pluginSdkApi: {},
       };
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
-      const completion = runInNewContext(stripTypeScriptTypes(`${android}\n${main}\nmain();`), {
+      const completion = runInNewContext(stripNodeTypeScriptTypes(`${android}\n${main}\nmain();`), {
         process: { argv: [], cwd: () => targetRoot, env: {} },
         console: { log, warn: log },
         TOOLING_ROOT: "/trusted/tooling",
@@ -356,7 +357,7 @@ describe("release candidate checklist", () => {
       let childOutput = "";
       const execute = () =>
         runInNewContext(
-          stripTypeScriptTypes(
+          stripNodeTypeScriptTypes(
             `${jsonReader}\n${owner}\nrunFromTrustedTooling(argv, { targetRoot, workflowRef: "main" });`,
           ),
           {
@@ -438,7 +439,7 @@ describe("release candidate checklist", () => {
       JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
     );
     const result = runInNewContext(
-      stripTypeScriptTypes(
+      stripNodeTypeScriptTypes(
         `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
       ),
       {
@@ -1719,7 +1720,7 @@ describe("release candidate checklist", () => {
       }));
       // Execute the private owner and its real caller without exporting a test-only API.
       const result = (await runInNewContext(
-        stripTypeScriptTypes(
+        stripNodeTypeScriptTypes(
           `async function fixture() {\n${telegramOwner}\n${telegramCall}\nreturn npmTelegram;\n}\nfixture();`,
         ),
         {

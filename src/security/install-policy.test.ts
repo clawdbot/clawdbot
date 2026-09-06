@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -195,7 +196,7 @@ describe("runInstallPolicy", () => {
         },
       },
       env: {
-        PATH: path.dirname(process.execPath),
+        PATH: path.dirname(requireNodeTool("node")),
       },
       request: baseRequest(sourceDir),
     });

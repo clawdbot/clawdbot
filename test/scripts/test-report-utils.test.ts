@@ -11,6 +11,7 @@ import {
   normalizeTrackedRepoPath,
 } from "../../scripts/test-report-utils.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
@@ -109,6 +110,13 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     onTestFinished(() => lifetime.cleanup());
     await lifetime.run(async () => {
       const root = lifetime.createTempDir("oc-report-cli-");
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.symlinkSync(
+        requireNodeTool("node"),
+        path.join(bin, process.platform === "win32" ? "node.exe" : "node"),
+        "file",
+      );
       const repoRoot = process.cwd();
       const config = path.join(root, "vitest.config.mjs");
       const reportPath = path.join(root, "report.json");
@@ -134,7 +142,7 @@ assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "mis
           ["--import", path.join(repoRoot, "scripts/tsx.mjs"), entry],
           {
             ...process.env,
-            PATH: "",
+            PATH: bin,
             OPENCLAW_LIVE_USE_REAL_HOME: "0",
             TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
           },
