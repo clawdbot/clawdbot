@@ -242,6 +242,77 @@ describe("sandbox exec preparation failures", () => {
     },
   );
 
+  it.each([
+    { mode: "child", usePty: false, loseAt: 1, authority: "revoked", spawns: 0 },
+    { mode: "PTY", usePty: true, loseAt: 1, authority: "replaced", spawns: 0 },
+    { mode: "PTY fallback", usePty: true, loseAt: 2, authority: "revoked", spawns: 1 },
+    { mode: "child construction", usePty: false, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "PTY construction", usePty: true, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "child control", usePty: false, loseAt: 0, authority: "active", spawns: 1 },
+    { mode: "PTY fallback control", usePty: true, loseAt: 0, authority: "active", spawns: 2 },
+  ])(
+    "checks $authority source authority before $mode admission without polling",
+    async ({ usePty, loseAt, authority, spawns }) => {
+      const originalClaim = {};
+      let currentClaim: object | undefined = originalClaim;
+      let checks = 0;
+      const generation = new AbortController();
+      const warnings: string[] = [];
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        // The real supervisor preserves this callback across queued construction.
+        await Promise.resolve();
+        if (loseAt === -1) {
+          currentClaim = undefined;
+        }
+        input.assertCurrent?.();
+        if (input.mode === "pty") {
+          throw new Error("PTY unavailable");
+        }
+        return runtimeManagedRun(input);
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:source-exec-authority",
+          receiptAuthority: () => currentClaim === originalClaim,
+        },
+        () =>
+          runExecProcess({
+            command: "source-authority-command",
+            workdir: process.cwd(),
+            env: {},
+            usePty,
+            warnings,
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            startupSignal: generation.signal,
+            beforeSpawn: async () => {
+              if (++checks === loseAt) {
+                currentClaim = authority === "replaced" ? {} : undefined;
+              }
+              return undefined;
+            },
+          }),
+      );
+      if (authority === "active") {
+        const handle = await pending;
+        await expect(handle.promise).resolves.toMatchObject({ status: "completed" });
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+      }
+      expect(generation.signal.aborted).toBe(false);
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(spawns);
+      expect(warnings).toEqual(
+        usePty && loseAt !== -1 && spawns > 0
+          ? [expect.stringContaining("retrying without PTY")]
+          : [],
+      );
+      expect(listRunningSessions()).toHaveLength(0);
+    },
+  );
+
   it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
     const exit = createDeferred<RunExit>();
     const identity = {

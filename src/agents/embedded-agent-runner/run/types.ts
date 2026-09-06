@@ -36,9 +36,39 @@ import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
-import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
+import type {
+  DeferredEmbeddedRunLifecycleOwner,
+  EmbeddedAttemptDeferredLifecycleOwner,
+} from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
+
+export type EmbeddedAttemptExecutionState = {
+  beforeAgentRunBlockedBy: string | undefined;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
+  terminal: AgentRunAttemptTerminal;
+  trajectoryEndRecorded: boolean;
+};
+
+export type EmbeddedAttemptExternalAbortController = {
+  arm: () => void;
+  dispose: () => void;
+  setActiveSessionAbort: (abort: (reason?: unknown) => Promise<void>) => void;
+  setCompactionState: (state: {
+    isInFlight: () => boolean;
+    isPendingOrRetrying: () => boolean;
+  }) => void;
+  setRunAbort: (abort: (isTimeout?: boolean, reason?: unknown) => void) => void;
+  throwIfFired: () => void;
+  throwIfFiredAfterPrepCleanup: () => Promise<void>;
+};
+
+export type EmbeddedAttemptClientToolCallSlot = {
+  toolCallId: string;
+  name: string;
+  params?: Record<string, unknown>;
+  completed: boolean;
+};
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,

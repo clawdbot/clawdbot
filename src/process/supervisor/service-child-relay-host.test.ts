@@ -235,7 +235,7 @@ it.each(["linux", "win32"] as const)(
     mocks.spawn.mockReturnValue(stub.child);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
-    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
     const pending = supervisor.spawn({
       runId: "rejected-construction",
       mode: "anchored-shell",

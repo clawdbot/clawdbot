@@ -21,7 +21,10 @@ import {
 } from "./kysely-sync.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
+  resolvePreferredOpenClawTmpDirMock: vi.fn(),
+  spawnMock: vi.fn(),
+}));
 
 function createSpawnMock() {
   return Object.assign(new EventEmitter(), {
@@ -56,11 +59,22 @@ vi.mock("node:child_process", async () => {
   });
 });
 
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
 const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Helpers in one fixture share a coordinator without touching the operator's database.
+  const coordinatorDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
+  );
+  tempDirs.add(coordinatorDir);
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   spawnMock.mockReset();
   spawnMock.mockImplementation((_command: string, args: string[]) => {
     const child = createSpawnMock();

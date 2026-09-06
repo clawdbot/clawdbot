@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -72,20 +73,7 @@ describe("SessionManager.open", () => {
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     });
@@ -587,14 +575,7 @@ describe("SessionManager.open", () => {
         api: "openai-responses",
         provider: "openai",
         model: "gpt-5.5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: Date.now(),
       }),
@@ -945,14 +926,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };

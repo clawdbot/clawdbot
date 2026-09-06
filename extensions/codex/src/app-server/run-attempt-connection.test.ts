@@ -14,6 +14,7 @@ import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
   createParams,
+  runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -205,7 +206,9 @@ describe("prepareCodexAttemptConnection", () => {
     "loopback-server",
     "ordinary-loopback-server",
     "forwarded-server",
+    "forwarded-stdio-server",
     "unix-server",
+    "ordinary-unix-server",
     "remote-server",
     "sandbox",
     "remote",
@@ -213,6 +216,7 @@ describe("prepareCodexAttemptConnection", () => {
   ])("handles an installation target for %s execution before native startup", async (placement) => {
     const sessionFile = path.join(tempDir, "installation-target.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-installation-target"));
+    const createToolSurface = vi.fn(params.hostCapabilities.createToolSurface);
     const localProcessEnv = Object.freeze({
       OPENCLAW_STATE_DIR: "/fixture/diagnosed",
       OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
@@ -220,11 +224,12 @@ describe("prepareCodexAttemptConnection", () => {
     });
     params.hostCapabilities = Object.freeze({
       ...params.hostCapabilities,
+      createToolSurface,
       preparedEnvironment: () => ({
         credentialScrubEnv: {},
         localIdentityEnv: {},
         managedLocalIdentity: false,
-        localProcessEnv: placement === "ordinary-loopback-server" ? undefined : localProcessEnv,
+        localProcessEnv: placement.startsWith("ordinary-") ? undefined : localProcessEnv,
       }),
     });
     if (["sandbox", "remote", "remote-only"].includes(placement)) {
@@ -235,15 +240,15 @@ describe("prepareCodexAttemptConnection", () => {
       } as NonNullable<typeof params.sandbox>;
     }
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-    const pending = prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        ...(placement.endsWith("-server")
-          ? {
-              pluginConfig: {
-                appServer:
-                  placement === "unix-server"
+    const options = {
+      bindingStore: testCodexAppServerBindingStore,
+      ...(placement.endsWith("-server")
+        ? {
+            pluginConfig: {
+              appServer:
+                placement === "forwarded-stdio-server"
+                  ? { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" }
+                  : placement.endsWith("unix-server")
                     ? { transport: "unix", homeScope: "user", url: "unix:///fixture/native.sock" }
                     : {
                         transport: "websocket",
@@ -256,22 +261,34 @@ describe("prepareCodexAttemptConnection", () => {
                           ? { remoteWorkspaceRoot: "/remote/workspace" }
                           : {}),
                       },
-              },
-            }
-          : {}),
-      },
-    });
-    if (!["local", "ordinary-loopback-server", "unix-server"].includes(placement)) {
+            },
+          }
+        : {}),
+    };
+    const pending = prepareCodexAttemptConnection({ params, options });
+    if (placement !== "local" && !placement.startsWith("ordinary-")) {
       await expect(pending).rejects.toThrow("saved prompt");
+      const clientFactory = vi.fn(async () => {
+        throw new Error("unexpected app-server admission");
+      });
+      await expect(runCodexAppServerAttempt(params, { ...options, clientFactory })).rejects.toThrow(
+        /owned local Codex stdio.*saved prompt/,
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+      expect(createToolSurface).not.toHaveBeenCalled();
       return;
     }
     const connection = await pending;
-    if (placement === "ordinary-loopback-server") {
+    if (placement.startsWith("ordinary-")) {
+      expect(connection.appServer.start.transport).toBe(
+        placement === "ordinary-unix-server" ? "unix" : "websocket",
+      );
       expect(connection.shellEnvironment).toBeUndefined();
       expect(connection.appServer.start.env ?? {}).not.toHaveProperty("OPENCLAW_STATE_DIR");
       expect(connection.disableLoginShell).toBe(false);
       return;
     }
+    expect(connection.appServer.start.transport).toBe("stdio");
     expect(connection.shellEnvironment).toEqual(localProcessEnv);
     expect(connection.appServer.start.env).toMatchObject(localProcessEnv);
     expect(connection.disableLoginShell).toBe(true);

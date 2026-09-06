@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -32,11 +33,7 @@ suite.define(() => {
     const childResponse = sessionsListResponse([
       sessionRow(childKey, "Recovered child", 40, { spawnedBy: parentKey }),
     ]);
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {

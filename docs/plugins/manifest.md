@@ -213,6 +213,28 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+Bundled plugins declare each state migration in execution order so Doctor can
+plan its owner and receipt without loading plugin code:
+
+```json
+{
+  "doctorContract": {
+    "stateMigrations": [
+      { "id": "legacy-cache-to-state" },
+      { "id": "session-owner-repair", "doctorOnly": true, "phase": "after-session-repair" }
+    ]
+  }
+}
+```
+
+The array must match the migration IDs, order, `doctorOnly` flags, and phases
+exported by the doctor-contract module. The older value `true` still declares
+the dynamic module. Installed external plugin manifests remain outside the
+copied-state and candidate content identity, including when they use the
+descriptor array. Candidate validation must bind those artifacts separately.
+Until then, Doctor records an explicit planning refusal instead of treating an
+installed manifest as write authority.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip
@@ -951,6 +973,8 @@ Each `dangerousFlags` entry supports:
 
 Capability owners fail cold when their provider is unavailable, so a stale credential never remains active. Route owners may retain the last-known-good value while their full plugin config and provider definition stay unchanged.
 
+Declared paths also control Settings redaction, including wildcards and fields behind local schema references. Structured SecretRefs retain `source` and `provider` while `id` is concealed; plaintext secrets are fully concealed. Unrelated Settings saves preserve the original reference. Changing its source or provider requires an explicit identifier.
+
 For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
 
 Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
@@ -1451,18 +1475,9 @@ not change the Gateway's existing refresh and restart lifecycle.
 
 ### OpenClaw Provider Index
 
-The OpenClaw Provider Index is OpenClaw-owned preview metadata for providers whose plugins may not be installed yet. It is not part of a plugin manifest. Plugin manifests remain the installed-plugin authority. The Provider Index is the internal fallback contract that future installable-provider and pre-install model picker surfaces will consume when a provider plugin is not installed.
+The compiled OpenClaw Provider Index is retired. Model metadata comes from plugin manifests, provider-owned discovery, and the hosted model catalog, with configured overrides applied by model resolution. See [Model listing](/cli/models#list) for catalog sources and refresh behavior.
 
-Catalog authority order:
-
-1. User config.
-2. Installed plugin manifest `modelCatalog`.
-3. Model catalog cache from explicit refresh.
-4. OpenClaw Provider Index preview rows.
-
-The Provider Index must not contain secrets, enabled state, runtime hooks, or live account-specific model data. Its preview catalogs use the same `modelCatalog` provider row shape as plugin manifests, but should stay limited to stable display metadata unless runtime adapter fields such as `api`, `baseUrl`, pricing, or compatibility flags are intentionally kept aligned with the installed plugin manifest. Providers with live `/models` discovery should write refreshed rows through the explicit model catalog cache path instead of making normal listing or onboarding call provider APIs.
-
-Provider Index entries may also carry installable-plugin metadata for providers whose plugin has moved out of core or is otherwise not installed yet. This metadata mirrors the channel catalog pattern: package name, npm install spec, expected integrity, and cheap auth-choice labels are enough to show an installable setup option. Once the plugin is installed, its manifest wins and the Provider Index entry is ignored for that provider.
+Provider setup uses installed manifest metadata and the official external plugin catalog. The external catalog supplies install hints and auth-choice labels for plugins that are not installed; installed plugin owners take precedence. Install hints remain in `package.json#openclaw.install`, not in a separate compiled provider index.
 
 `openclaw doctor --fix` migrates a small, closed set of legacy top-level manifest capability keys into `contracts.*`: `speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, and `tools`. None of these (or any other capability list) are read as top-level manifest fields anymore; normal manifest loading only recognizes them under `contracts`.
 

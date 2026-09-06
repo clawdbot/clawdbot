@@ -76,7 +76,6 @@ function appliedProposals(): SkillWorkshopProposal[] {
     ageLabel: `${updatedAt}h`,
     supportFiles: [],
     bodyLoaded: updatedAt !== 1,
-    isNew: false,
   }));
 }
 
@@ -148,6 +147,60 @@ afterEach(() => {
 });
 
 describe("Skill Workshop applied history", () => {
+  it.each(["summary", "skill"])("opens applied history from the Today %s link", async (target) => {
+    const proposals = appliedProposals();
+    proposals.push({ ...proposals[3]!, key: "pending", slug: "pending-skill", status: "pending" });
+    const page = await mountAppliedPage(inspectRequest(), proposals);
+    page.state!.skillWorkshopMode = "today";
+    page.state!.skillWorkshopStatusFilter = "pending";
+    page.state!.skillWorkshopQuery = "pending-skill";
+    page.state!.skillWorkshopSelectedKey = "pending";
+    page.requestUpdate();
+    await page.updateComplete;
+
+    expect.soft(page.querySelectorAll(".sw-today__applied-row")).toHaveLength(1);
+    const selector = target === "skill" ? ".sw-today__applied-row" : ".sw-today__link--muted";
+    page.querySelector<HTMLButtonElement>(selector)?.click();
+    await page.updateComplete;
+
+    expect(page.state?.skillWorkshopMode).toBe("board");
+    expect(page.state?.skillWorkshopStatusFilter).toBe("applied");
+    expect(page.state?.skillWorkshopQuery).toBe("");
+    expect(page.querySelector(".sw-row")?.textContent).toContain("release-sanity");
+  });
+
+  it("renders skill documents as sanitized Markdown", async () => {
+    const proposals = appliedProposals();
+    proposals[3]!.body = [
+      "## Verification",
+      "",
+      "- Check the result.",
+      "- Read the [runbook](https://example.org/runbook).",
+      "",
+      "| Check | Result |",
+      "| --- | --- |",
+      "| Export | Passed |",
+      "",
+      "![Diagram](https://example.org/diagram.png)",
+      "",
+      "[Unsafe](javascript:alert(1))",
+      '<img src="invalid" onerror="alert(1)">',
+    ].join("\n");
+    const page = await mountAppliedPage(inspectRequest(), proposals);
+    modeButton(page, "Full body")?.click();
+    await page.updateComplete;
+
+    const body = page.querySelector(".sw-body-card");
+    expect(body?.querySelectorAll("ul > li")).toHaveLength(2);
+    expect(body?.querySelector('a[href="https://example.org/runbook"]')?.textContent).toBe(
+      "runbook",
+    );
+    expect(body?.querySelector("table tbody td")?.textContent).toBe("Export");
+    expect(body?.querySelector('img[src="https://example.org/diagram.png"]')).toBeNull();
+    expect(body?.querySelector('a[href="https://example.org/diagram.png"]')).not.toBeNull();
+    expect(body?.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
+  });
+
   it("renders one skill row and inspects a selected revision", async () => {
     const request = inspectRequest();
     const page = await mountAppliedPage(request, appliedProposals());

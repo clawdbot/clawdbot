@@ -133,7 +133,6 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     ageLabel: "now",
     supportFiles: [],
     bodyLoaded: true,
-    isNew: false,
     ...overrides,
   };
 }

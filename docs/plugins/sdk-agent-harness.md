@@ -701,6 +701,12 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
+reconstructs saved user attachments under that same host authority and current
+media policy. Include its returned text and images in the native context budget;
+do not append them as an unbounded suffix. See the
+[runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts

@@ -89,7 +89,7 @@ function createShowWidgetToolSchema(
     ),
     pin: pinnedOnly
       ? Type.Literal(true, {
-          description: "Required: this scheduled surface can only author pinned widgets",
+          description: "Required: this surface can only author pinned widgets",
         })
       : Type.Optional(
           Type.Boolean({
@@ -151,7 +151,7 @@ type ShowWidgetToolOptions = {
   callGateway?: InProcessGatewayCaller;
   inlineHostEnabled?: boolean;
   inlineClientAvailable?: boolean;
-  /** Scheduled callers without a rendering client may author only durable dashboard widgets. */
+  /** Admitted callers without a rendering client may author only durable dashboard widgets. */
   pinnedOnly?: boolean;
   presenters?: readonly WidgetPresenter[];
   presenterContext?: WidgetPresenterContext;
@@ -308,7 +308,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       ? " Use presentation.target to choose a registered device surface."
       : "";
   const usageGuidance = pinnedOnly
-    ? "This scheduled surface is pinned-only: set pin=true to create or update a durable session dashboard widget."
+    ? "This surface is pinned-only: set pin=true to create or update a durable session dashboard widget."
     : "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.";
   const destinationGuidance = pinnedOnly
     ? "Author a widget for the current session dashboard. Inline and device presentation are unavailable"
@@ -353,7 +353,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       const shouldPin = params.pin === true;
       if (pinnedOnly && !shouldPin) {
-        throw new WidgetHtmlInputError("pin=true is required for this scheduled widget surface");
+        throw new WidgetHtmlInputError("pin=true is required for this pinned-only widget surface");
       }
       const capabilities = normalizeBoardWidgetDeclared(
         params.capabilities as { netOrigins?: string[]; tools?: string[] } | undefined,
@@ -369,7 +369,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const presentation = asOptionalRecord(params.presentation);
       if (pinnedOnly && presentation?.target !== undefined) {
         throw new WidgetHtmlInputError(
-          "presentation.target is unavailable for this pinned-only scheduled widget surface",
+          "presentation.target is unavailable for this pinned-only widget surface",
         );
       }
       const requestedTarget =

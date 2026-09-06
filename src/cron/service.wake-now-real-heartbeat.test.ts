@@ -11,6 +11,7 @@ import {
   seedMainSessionStore,
   setupTelegramHeartbeatPluginRuntimeForTests,
 } from "../infra/heartbeat-runner.test-utils.js";
+import { setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
@@ -21,11 +22,13 @@ import { CommandLane } from "../process/lanes.js";
 import { resetCronActiveJobs, waitForActiveCronJobs } from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { loadCronJobsStoreSync } from "./store.js";
 
 setupTelegramHeartbeatPluginRuntimeForTests();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  setHeartbeatsEnabled(true);
   resetSystemEventsForTest();
   resetCronActiveJobs();
   vi.restoreAllMocks();
@@ -47,7 +50,13 @@ type WakeNowRunMode = "direct" | "queued" | "scheduled";
 async function runMainCronCase(
   mode: WakeNowRunMode,
   wakeMode: "now" | "next-heartbeat" = "now",
-  options: { heartbeatEvery?: string; deleteAfterRun?: boolean } = {},
+  options: {
+    heartbeatEvery?: string;
+    deleteAfterRun?: boolean;
+    heartbeatPaused?: boolean;
+    disableBeforeRun?: boolean;
+    scheduleKind?: "at" | "every";
+  } = {},
 ) {
   const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
@@ -110,18 +119,30 @@ async function runMainCronCase(
   await cron.start();
 
   try {
+    if (options.heartbeatPaused) {
+      setHeartbeatsEnabled(false);
+    }
     const job = await cron.add({
       enabled: true,
       name: "nightly report",
-      schedule: {
-        kind: "at",
-        at: new Date(Date.now() + (mode === "scheduled" ? 250 : 60 * 60_000)).toISOString(),
-      },
+      schedule:
+        options.scheduleKind === "every"
+          ? { kind: "every", everyMs: 60 * 60_000 }
+          : {
+              kind: "at",
+              at: new Date(Date.now() + (mode === "scheduled" ? 250 : 60 * 60_000)).toISOString(),
+            },
       sessionTarget: "main",
       wakeMode,
       payload: { kind: "systemEvent", text: "Reminder: Send the nightly report" },
       ...(options.deleteAfterRun === undefined ? {} : { deleteAfterRun: options.deleteAfterRun }),
     });
+    const scheduledNextRunAtMs = job.state.nextRunAtMs;
+    if (options.disableBeforeRun) {
+      const disabled = await cron.update(job.id, { enabled: false });
+      expect(disabled.enabled).toBe(false);
+      expect(disabled.state.nextRunAtMs).toBeUndefined();
+    }
 
     if (mode === "direct") {
       await cron.run(job.id, "force");
@@ -142,6 +163,31 @@ async function runMainCronCase(
         );
       }),
     ]).finally(() => clearTimeout(finishTimeout));
+    if (options.heartbeatPaused) {
+      expect(terminal).toMatchObject({ status: "skipped", error: "disabled" });
+      expect(getReplySpy).not.toHaveBeenCalled();
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
+
+      const expectedNextRunAtMs = options.disableBeforeRun
+        ? undefined
+        : mode === "scheduled"
+          ? terminal.runAtMs! + terminal.durationMs! + 30_000
+          : scheduledNextRunAtMs;
+      const persisted = loadCronJobsStoreSync(sandbox.cronStorePath).jobs.find(
+        (entry) => entry.id === job.id,
+      );
+      for (const completed of [cron.getJob(job.id), persisted, terminal.job]) {
+        expect(completed).toMatchObject({
+          enabled: !options.disableBeforeRun,
+          state: { lastRunStatus: "skipped", lastError: "disabled", consecutiveSkipped: 1 },
+        });
+        expect(completed?.state.nextRunAtMs).toBe(expectedNextRunAtMs);
+      }
+      expect(terminal.nextRunAtMs).toBe(expectedNextRunAtMs);
+      return;
+    }
     expect(terminal.status).toBe("ok");
     if (wakeMode === "next-heartbeat") {
       expect(getReplySpy).not.toHaveBeenCalled();
@@ -184,6 +230,30 @@ async function runMainCronCase(
 }
 
 describe("main cron with the real heartbeat runner", () => {
+  it.each([
+    { mode: "direct", scheduleKind: "at" },
+    { mode: "queued", scheduleKind: "at" },
+    { mode: "direct", scheduleKind: "every" },
+    { mode: "queued", scheduleKind: "every" },
+  ] as const)(
+    "keeps an operator-disabled $scheduleKind job disabled after a $mode force run while heartbeats are globally paused",
+    async ({ mode, scheduleKind }) => {
+      await runMainCronCase(mode, "now", {
+        heartbeatPaused: true,
+        disableBeforeRun: true,
+        scheduleKind,
+        deleteAfterRun: false,
+      });
+    },
+  );
+
+  it.each(["direct", "queued", "scheduled"] as const)(
+    "preserves an enabled one-shot's schedule policy after a %s run while heartbeats are globally paused",
+    async (mode) => {
+      await runMainCronCase(mode, "now", { heartbeatPaused: true, deleteAfterRun: false });
+    },
+  );
+
   it("delivers during a direct manual run", async () => {
     await runMainCronCase("direct");
   });

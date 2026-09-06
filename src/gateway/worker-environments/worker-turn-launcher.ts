@@ -121,7 +121,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         currentEnvironment.attachedSessionIds.length !== 1 ||
         currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
         (sandbox.backendId === "node" &&
-          "placementNodeId" in sandbox &&
           currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
       ) {
         throw new Error("Remote-exec environment changed while preparing its sandbox");
@@ -335,6 +334,5 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       }
     },
   };
-  provider satisfies SessionPlacementAdmissionProvider;
   return provider;
 }

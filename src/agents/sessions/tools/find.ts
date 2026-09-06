@@ -122,7 +122,7 @@ function buildFindResult(params: {
   limitNotice: string;
 }): {
   content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails | undefined;
+  details: FindToolDetails;
 } {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
   const rawOutput = params.paths
@@ -141,7 +141,7 @@ function buildFindResult(params: {
     .join("\n");
   const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   let resultOutput = truncation.content;
-  const details: FindToolDetails = {};
+  const details: Omit<FindToolDetails, "content"> = {};
   const notices: string[] = [];
   if (resultLimitReached) {
     notices.push(params.limitNotice);
@@ -156,14 +156,14 @@ function buildFindResult(params: {
   }
   return {
     content: [{ type: "text", text: resultOutput }],
-    details: Object.keys(details).length > 0 ? details : undefined,
+    details: { ...details, content: resultOutput },
   };
 }
 
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
-): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
+): ToolDefinition<typeof findSchema, FindToolDetails> {
   const customOps = options?.operations;
   const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -239,7 +239,7 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
@@ -358,7 +358,7 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
@@ -399,6 +399,6 @@ export function createFindToolDefinition(
 export function createFindTool(
   cwd: string,
   options?: FindToolOptions,
-): AgentTool<typeof findSchema> {
+): AgentTool<typeof findSchema, FindToolDetails> {
   return wrapToolDefinition(createFindToolDefinition(cwd, options));
 }

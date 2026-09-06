@@ -160,7 +160,7 @@ Flags:
     - Removal of retired `gateway.controlUi.toolTitles` config. Tool activity descriptions appear automatically without utility-model requests.
     - Inspection of legacy default HTTPS Tailscale Serve routes from a LAN-bound Gateway. Doctor does not change these routes because status shape cannot prove ownership; after confirming a stale route, clear only its root handler and configure managed loopback ingress manually. Retired named-Service config is removed with managed ingress disabled until the operator chooses a device route; custom external routes receive manual guidance.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
-    - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
+    - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness, with explicit commands for native-bootstrap inspection and repair.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
@@ -387,19 +387,27 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Doctor warns while `browser.extensionRelay.allowLegacyAuth` is enabled. Upgrade paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set the flag to `false`. V2 clients do not downgrade to legacy authentication.
 
-    When a stable Chrome extension copy and owned native-host registration already
-    exist, doctor reports registration drift. `openclaw doctor --fix` may repair
-    that owned registration, but it never installs the host for every OpenClaw
-    user and never overwrites a foreign same-name manifest or launcher. For
-    initial setup, run `openclaw browser extension install` on the machine hosting
-    Chrome. On macOS, this also requests the official Store installation in
-    Google Chrome; reopen Chrome and approve or enable OpenClaw when prompted.
-    Other browsers and platforms need a manual Store install. Doctor's repair
-    does not create a Store request or approve Chrome permissions. Use
-    `openclaw browser extension status` to distinguish a requested installation,
-    Chrome approval, and native-host registration health; these checks do not
-    prove a live relay connection. The unpacked stable path remains a development
-    fallback with `extension install --no-store`.
+    Doctor does not inspect personal browser profiles for optional extension
+    readiness or cookie-import availability. It reports the importable cookie
+    database count as unavailable, not zero. When a stable Chrome extension copy
+    exists, Doctor reports its native-bootstrap status as not inspected;
+    `openclaw doctor --fix` skips native-host registration repair.
+
+    On the machine hosting Chrome, run `openclaw browser extension status --json`
+    to inspect registration explicitly; this may request browser-profile access.
+    If an upgrade leaves stale native-host targets, run
+    `openclaw browser extension install --no-store` to repair through the explicit
+    installer without requesting Store installation. The installer refuses to
+    overwrite a foreign same-name manifest or launcher. Status distinguishes a
+    requested installation, Chrome approval, and native-host registration health;
+    it does not prove a live relay connection.
+
+    For initial setup, run `openclaw browser extension install`. On macOS, this
+    also requests the official Store installation in Google Chrome; reopen Chrome
+    and approve or enable OpenClaw when prompted. Other browsers and platforms
+    need a manual Store install. The unpacked stable path remains a development
+    fallback with `openclaw browser extension install --no-store`. Explicit cookie
+    import still requires its separate consent.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 

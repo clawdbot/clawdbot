@@ -1083,12 +1083,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const command = resolveOpenPathCommand(workspaceRoot);
     try {
-      await execOpenPath(resolveOpenPathCommand(workspaceRoot));
+      await execOpenPath(command);
       respond(true, { ok: true, path: workspaceRoot });
     } catch (error) {
       const errorMessage = formatOpenPathError(error);
-      const detailedError = isHeadlessOpenPathError(errorMessage)
+      const detailedError = isHeadlessOpenPathError(error, command)
         ? `Cannot open path in headless environment. Path: ${workspaceRoot}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to reveal session workspace: ${errorMessage}`;
       context.logGateway.warn(

@@ -82,6 +82,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/fireworks",
     manifestAuth: { applyConfig: applyFireworksConfig },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

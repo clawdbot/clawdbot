@@ -5,10 +5,15 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { runDaemonInstall } from "../daemon-cli/install.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
-import { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
+
+export function isPackageManagerUpdateMode(
+  mode: UpdateRunResult["mode"],
+): mode is "npm" | "pnpm" | "bun" {
+  return mode === "npm" || mode === "pnpm" || mode === "bun";
+}
 
 function formatCommandFailure(stdout: string, stderr: string): string {
   // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
@@ -38,11 +43,9 @@ export async function runUpdatedInstallGatewayCommand(
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
-    if (installing) {
-      if (!isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
-        await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-        return true;
-      }
+    if (installing && !isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
+      await runDaemonInstall({ force: true, json: params.opts.json || undefined });
+      return true;
     }
     throw new Error(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,

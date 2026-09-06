@@ -825,6 +825,11 @@ Calling a global or catalog handle returns the normal tool's JSON `details`
 value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
 guest-visible.
 
+The `ls`, `find`, and `grep` tools include their bounded listing or search text
+in `content`, including empty-result messages and truncation notices. Directory
+pages retain `nextAfter`; search results retain their existing limit and
+truncation metadata.
+
 ## Declared output contracts
 
 OpenClaw tools can declare `outputSchema` for the structured value placed in

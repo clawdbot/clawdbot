@@ -230,7 +230,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     `;
     const supervisor = createProcessSupervisor();
     const runId = "service-secret-construction";
-    const cleanupScope = supervisor.acquireScopeCleanup(runId, { requireProcessTree: true });
+    const cleanupScope = supervisor.acquireScopeCleanup(runId, { processTree: "required-all" });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const pendingRun = supervisor.spawn({
       runId,

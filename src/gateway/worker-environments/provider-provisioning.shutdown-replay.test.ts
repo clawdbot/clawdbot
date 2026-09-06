@@ -143,7 +143,7 @@ describe("worker node provisioning shutdown replay", () => {
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
         resolveWorkspacePath: async () => "/gateway/workspace",
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(

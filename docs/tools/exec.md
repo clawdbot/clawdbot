@@ -155,7 +155,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.
+Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. If a saved target cannot be resolved or no longer advertises execution support, its binding stays selected and is marked **Unavailable**. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
 
 ### Python environments (`uv`)
 
@@ -242,6 +242,19 @@ Send keys (tmux-style):
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Enter"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["C-c"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Up","Up","Enter"]}
+```
+
+For text, use `literal`; for exact input bytes, use `hex`. A mixed request sends literal UTF-8 text, hex bytes, then named keys, in that order:
+
+```json
+{
+  "tool": "process",
+  "action": "send-keys",
+  "sessionId": "<id>",
+  "literal": "hello ",
+  "hex": ["c3", "a9"],
+  "keys": ["Enter"]
+}
 ```
 
 Submit (send CR only):

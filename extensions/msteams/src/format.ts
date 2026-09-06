@@ -147,7 +147,7 @@ function serializeMarkdownDestination(href: string): string {
   return `<${href.replace(/([\\<>])/gu, "\\$1")}>`;
 }
 
-type ImageCandidateScan = { end: number } | { next: number } | undefined;
+type DelimitedMarkdownScan = { end: number } | { next: number } | undefined;
 
 function blankBlockEnd(text: string, index: number): number | undefined {
   const match = /^(?:\r?\n)[ \t]*(?:\r?\n)/u.exec(text.slice(index));
@@ -158,7 +158,7 @@ function scanDelimitedMarkdown(
   text: string,
   start: number,
   nestedOpener: "![" | "@[",
-): ImageCandidateScan {
+): DelimitedMarkdownScan {
   let bracketDepth = 1;
   let altEnd: number | undefined;
   let fallbackNext: number | undefined;
@@ -204,16 +204,21 @@ function scanDelimitedMarkdown(
   return fallbackNext === undefined ? undefined : { next: fallbackNext };
 }
 
-function protectMarkdownImages(text: string, tokenPrefix: string, images: string[]): string {
+function protectDelimitedMarkdown(
+  text: string,
+  opener: "![" | "@[",
+  tokenPrefix: string,
+  values: string[],
+): string {
   let protectedText = "";
   let cursor = 0;
   let searchFrom = 0;
   while (searchFrom < text.length) {
-    const start = text.indexOf("![", searchFrom);
+    const start = text.indexOf(opener, searchFrom);
     if (start < 0) {
       break;
     }
-    const scan = scanDelimitedMarkdown(text, start, "![");
+    const scan = scanDelimitedMarkdown(text, start, opener);
     if (!scan) {
       break;
     }
@@ -222,34 +227,8 @@ function protectMarkdownImages(text: string, tokenPrefix: string, images: string
       continue;
     }
     protectedText += text.slice(cursor, start);
-    const index = images.push(text.slice(start, scan.end)) - 1;
-    protectedText += `${tokenPrefix}i${index}${TOKEN_END}`;
-    cursor = scan.end;
-    searchFrom = scan.end;
-  }
-  return protectedText + text.slice(cursor);
-}
-
-function protectMSTeamsMentions(text: string, tokenPrefix: string, mentions: string[]): string {
-  let protectedText = "";
-  let cursor = 0;
-  let searchFrom = 0;
-  while (searchFrom < text.length) {
-    const start = text.indexOf("@[", searchFrom);
-    if (start < 0) {
-      break;
-    }
-    const scan = scanDelimitedMarkdown(text, start, "@[");
-    if (!scan) {
-      break;
-    }
-    if ("next" in scan) {
-      searchFrom = scan.next;
-      continue;
-    }
-    protectedText += text.slice(cursor, start);
-    const index = mentions.push(text.slice(start, scan.end)) - 1;
-    protectedText += `${tokenPrefix}m${index}${TOKEN_END}`;
+    const index = values.push(text.slice(start, scan.end)) - 1;
+    protectedText += `${tokenPrefix}${index}${TOKEN_END}`;
     cursor = scan.end;
     searchFrom = scan.end;
   }
@@ -518,8 +497,18 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     const index = entities.push(entity) - 1;
     return `${tokenPrefix}h${index}${TOKEN_END}`;
   });
-  const imagesProtected = protectMarkdownImages(entitiesProtected, tokenPrefix, images);
-  const mentionsProtected = protectMSTeamsMentions(imagesProtected, tokenPrefix, mentions);
+  const imagesProtected = protectDelimitedMarkdown(
+    entitiesProtected,
+    "![",
+    `${tokenPrefix}i`,
+    images,
+  );
+  const mentionsProtected = protectDelimitedMarkdown(
+    imagesProtected,
+    "@[",
+    `${tokenPrefix}m`,
+    mentions,
+  );
   const tableInput = convertMarkdownTables(mentionsProtected, tableMode);
   const converted =
     tableMode === "off"

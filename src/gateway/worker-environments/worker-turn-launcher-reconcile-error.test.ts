@@ -90,7 +90,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
         resolveWorkspacePath: async () => root,
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       }),
       (_request, run) => run(),
     );

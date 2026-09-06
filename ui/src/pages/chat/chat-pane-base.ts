@@ -295,15 +295,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       if (!state || this.isCurrentSessionArchived(state)) {
         return undefined;
       }
-      const identity = resolveUiConversationIdentity(state, state.sessionKey);
-      if (identity.agentId) {
-        return identity;
-      }
-      const session = getAcceptedChatHistorySession(state);
-      // Raw retained panes follow their accepted history owner, never the selected assistant.
-      return session && parseAgentSessionKey(session.key)
-        ? resolveUiConversationIdentity(state, session.key)
-        : undefined;
+      return this.resolveChatReadTarget();
     },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
@@ -312,6 +304,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected resolveChatReadTarget(): ReturnType<typeof resolveUiConversationIdentity> | undefined {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    const identity = resolveUiConversationIdentity(state, state.sessionKey);
+    if (identity.agentId) {
+      return identity;
+    }
+    const session = getAcceptedChatHistorySession(state);
+    // Raw retained panes follow their accepted history owner, never the selected assistant.
+    if (session && parseAgentSessionKey(session.key)) {
+      return resolveUiConversationIdentity(state, session.key);
+    }
+    return session?.agentId && (session.key === "global" || session.key === "unknown")
+      ? { sessionKey: session.key, agentId: session.agentId }
+      : undefined;
+  }
 
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (

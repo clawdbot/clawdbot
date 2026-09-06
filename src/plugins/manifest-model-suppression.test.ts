@@ -140,6 +140,80 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
+  it("preserves ordered same-model rules and current route conditions", () => {
+    const config = {
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions" as const,
+            baseUrl: "https://first.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "z-fallback",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [{ provider: "fixture", model: "model", reason: "Fallback." }],
+          },
+        },
+        {
+          id: "a-conditional",
+          providers: ["fixture"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "First route.",
+                when: {
+                  baseUrlHosts: ["FIRST.EXAMPLE.", "shared.example"],
+                  providerConfigApiIn: ["OPENAI-COMPLETIONS"],
+                },
+              },
+              {
+                provider: "fixture",
+                model: "model",
+                reason: "Second route.",
+                retirement: { replacedBy: "successor" },
+                when: { baseUrlHosts: ["second.example", "shared.example"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "fixture", id: "model" };
+
+    expect(resolver({ ...input, baseUrl: "https://shared.example/v1" })).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. First route.",
+    });
+    expect(resolver({ ...input, baseUrl: "https://second.example/v1" })).toMatchObject({
+      retirement: { replacedBy: "successor" },
+    });
+    for (const baseUrl of ["https://other.example/v1", "invalid endpoint"]) {
+      expect(resolver({ ...input, baseUrl })?.errorMessage).toBe(
+        "Unknown model: fixture/model. Fallback.",
+      );
+    }
+    expect(
+      resolver({ ...input, baseUrl: "https://shared.example/v1", unconditionalOnly: true })
+        ?.errorMessage,
+    ).toBe("Unknown model: fixture/model. Fallback.");
+    expect(resolver(input)?.errorMessage).toBe("Unknown model: fixture/model. First route.");
+    config.models.providers.fixture.baseUrl = "https://second.example/v1";
+    expect(resolver(input)).toEqual({
+      suppress: true,
+      errorMessage: "Unknown model: fixture/model. Fallback.",
+    });
+  });
+
   it.each([undefined, "current-model"])(
     "preserves explicit retirement and successor %s only on the selected endpoint",
     (replacedBy) => {

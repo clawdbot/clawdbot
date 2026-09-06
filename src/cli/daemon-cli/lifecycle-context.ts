@@ -63,7 +63,7 @@ export async function waitForGatewayUpdateRecovery(
   });
 }
 
-// The helper rechecks external chat authority after parent exit and service stop.
+// The helper rechecks external chat authority at update admission and activation.
 export async function isManagedUpdateRequesterOwner(
   requester: Parameters<typeof isConfiguredCommandOwner>[1],
 ) {

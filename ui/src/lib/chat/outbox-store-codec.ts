@@ -152,13 +152,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
       return null;
     }
     item.intent = { kind: intent.kind, version: intent.version, issuedAtMs: intent.issuedAtMs };
-    const sessionId = normalizeOptionalString(entry.sessionId);
-    if (sessionId) {
-      item.sessionId = sessionId;
-    }
     if (entry.expectedLeafEntryId === null || typeof entry.expectedLeafEntryId === "string") {
       item.expectedLeafEntryId = entry.expectedLeafEntryId;
     }
+  }
+  const sessionId = normalizeOptionalString(entry.sessionId);
+  if (sessionId) {
+    item.sessionId = sessionId;
   }
   if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
     item.orderKey = entry.orderKey;

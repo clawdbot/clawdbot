@@ -453,7 +453,7 @@ describe("worker turn launcher failure recovery", () => {
       workspaceOperations,
       resolveWorkspacePath: async () => root,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,

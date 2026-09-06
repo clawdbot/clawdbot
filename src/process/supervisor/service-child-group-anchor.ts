@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -52,7 +54,7 @@ export function runServiceChildGroupAnchor(): void {
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
-  let control: Socket | undefined;
+  let control: Socket | WriteStream | undefined;
   let rootSettlementStarted = false;
   let rootResultDelivery: Promise<void> | undefined;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -199,10 +201,21 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     start = next;
-    control = new Socket({ fd: start.controlFd, readable: true, writable: true });
-    control.setEncoding("utf8");
+    let controlInput: Readable;
+    if (process.versions.bun) {
+      // Bun cannot wrap a duplex inherited fd in Socket. The anchor process owns
+      // this shared descriptor until exit; neither stream may close the other direction.
+      controlInput = createReadStream("", { fd: start.controlFd, autoClose: false });
+      control = createWriteStream("", { fd: start.controlFd, autoClose: false });
+    } else {
+      // Node must use nonblocking socket IO: a pending fs read prevents process exit.
+      const socket = new Socket({ fd: start.controlFd, readable: true, writable: true });
+      controlInput = socket;
+      control = socket;
+    }
+    controlInput.setEncoding("utf8");
     let pending = "";
-    control.on("data", (chunk: string) => {
+    controlInput.on("data", (chunk: string) => {
       pending += chunk;
       for (;;) {
         const newline = pending.indexOf("\n");
@@ -219,16 +232,17 @@ export function runServiceChildGroupAnchor(): void {
         }
       }
     });
-    control.once("close", () => {
+    const onControlLoss = () => {
       if (state !== "closed") {
         void requestCleanup("parent-lost");
       }
-    });
-    control.once("error", () => {
-      if (state !== "closed") {
-        void requestCleanup("parent-lost");
-      }
-    });
+    };
+    controlInput.once("end", onControlLoss);
+    controlInput.once("close", onControlLoss);
+    controlInput.once("error", onControlLoss);
+    if (controlInput !== control) {
+      control.once("error", onControlLoss);
+    }
 
     const { stdio, lineageFd } = commandStdio(start);
     try {
@@ -240,6 +254,8 @@ export function runServiceChildGroupAnchor(): void {
         detached: false,
         windowsHide: true,
       });
+      // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
+      await once(command, "spawn");
     } catch (error) {
       await reportStartupFailure(error instanceof Error ? error.message : String(error));
       return;
@@ -314,17 +330,14 @@ export function runServiceChildGroupAnchor(): void {
         void reportStartupFailure(error.message);
       }
     });
-    command.once("spawn", () => {
-      if (!command?.pid || state !== "starting") {
-        return;
-      }
+    if (command.pid && state === "starting") {
       state = "active";
       void send({
         type: "ready",
         commandPid: command.pid,
         anchorPid: process.pid,
       });
-    });
+    }
     command.once("exit", (code, signal) => {
       rootExit = { code, signal };
       // The host gates public settlement on output EOF, so record the authentic root
