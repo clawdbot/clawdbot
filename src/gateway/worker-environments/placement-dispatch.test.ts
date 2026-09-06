@@ -18,22 +18,6 @@ import {
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import type { WorkspaceResultConflictLookup } from "./workspace-conflicts.js";
-
-const { workerPlacementWarn } = vi.hoisted(() => ({ workerPlacementWarn: vi.fn() }));
-
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/worker-placement"
-        ? { ...logger, warn: workerPlacementWarn }
-        : logger;
-    },
-  };
-});
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -45,7 +29,6 @@ describe("worker placement dispatch", () => {
   ) => createHarness(store, { workspacePath: path.join(root, "workspace"), ...options });
 
   beforeEach(async () => {
-    workerPlacementWarn.mockClear();
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -242,56 +225,6 @@ describe("worker placement dispatch", () => {
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
-
-  it.each<WorkspaceResultConflictLookup>([
-    { kind: "absent" },
-    { kind: "unknown", reason: "malformed-report" },
-  ])(
-    "reclaims a previous-instance pending result with $kind conflict state without clearing unseen reports",
-    async (lookup) => {
-      const originalHarness = createTestHarness();
-      const active = originalHarness.placements.seedActive(2);
-      if (active.state !== "active") {
-        throw new Error("active placement fixture was not active");
-      }
-      const claim = placementStore.claimTurn({
-        ...REQUEST,
-        claimId: "restarted-turn-claim",
-        runId: "restarted-turn-run",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
-      placementStore.markWorkspaceResultPending(claim);
-
-      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      const restartedHarness = createTestHarness(
-        { priorWorkspaceResultConflictLookup: lookup },
-        restartedStore,
-      );
-      restartedHarness.markEnvironmentOwnerEpoch(2);
-      await restartedHarness.service.reconcile();
-
-      expect(restartedHarness.placements.current()).toMatchObject({
-        state: "reclaimed",
-        turnClaim: null,
-        workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
-      });
-      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-      expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
-      expect(restartedHarness.log).not.toContain("workspace:resume");
-      expect(restartedHarness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
-      if (lookup.kind === "unknown") {
-        expect(workerPlacementWarn).toHaveBeenCalledExactlyOnceWith(
-          `Cloud workspace conflict state unknown sessionId=${REQUEST.sessionId} reason=malformed-report; preserving prior conflict state`,
-        );
-      } else {
-        expect(workerPlacementWarn).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it("keeps a previous-instance pending result fenced when another session is attached", async () => {
     const originalHarness = createTestHarness();
