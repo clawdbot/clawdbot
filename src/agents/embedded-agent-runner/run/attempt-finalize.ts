@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Finalizes post-turn state, abort resources, and terminal trajectory artifacts.
  * It may assume stream execution and transcript writes are settled.
@@ -6,7 +5,6 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
@@ -612,27 +610,4 @@ export function createEmbeddedAttemptRunAbort(input: {
       });
     }
   };
-}
-
-/**
- * Resolves how long aborted attempts wait for cleanup to settle.
- */
-
-type AbortSettleTimeoutEnv = Partial<
-  Pick<NodeJS.ProcessEnv, "OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS" | "OPENCLAW_TEST_FAST">
->;
-
-/**
- * Resolves how long embedded-run cleanup waits for abort side effects to settle.
- * The explicit env override is strict decimal milliseconds; invalid values fall
- * back to the normal/test defaults instead of silently widening cleanup waits.
- */
-export function resolveEmbeddedAbortSettleTimeoutMs(
-  env: AbortSettleTimeoutEnv = process.env,
-): number {
-  const override = parseStrictPositiveInteger(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
-  if (override !== undefined) {
-    return override;
-  }
-  return isFastTestRuntimeEnv(env) ? 250 : 2_000;
 }

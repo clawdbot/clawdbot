@@ -144,8 +144,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     onSessionCreated: (session) => {
       resources.session = session;
     },
-    onSystemPromptChanged: (systemPromptText) => {
-      state.systemPromptText = systemPromptText;
+    onSystemPromptChanged: (nextSystemPrompt) => {
+      state.systemPromptText = nextSystemPrompt;
     },
     runAbortSignal,
     sessionAgentId,

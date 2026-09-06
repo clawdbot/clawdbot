@@ -40,14 +40,9 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
 vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
-vi.mock("./attempt-finalize.js", async (importOriginal) => {
-  const { resolveEmbeddedAbortSettleTimeoutMs } =
-    await importOriginal<typeof import("./attempt-finalize.js")>();
-  return {
-    createEmbeddedAttemptRunAbort: mocks.createRunAbort,
-    resolveEmbeddedAbortSettleTimeoutMs,
-  };
-});
+vi.mock("./attempt-finalize.js", () => ({
+  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
+}));
 vi.mock("./attempt-history.js", () => ({
   prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));

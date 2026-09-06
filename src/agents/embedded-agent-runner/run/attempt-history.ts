@@ -613,7 +613,7 @@ export async function prepareEmbeddedAttemptHistory(
         tokenBudget: messageBudget,
         availableTools: new Set(capabilityToolNames),
         citationsMode: attempt.config?.memory?.citations,
-        sandboxed: sandboxed,
+        sandboxed,
         modelId: attempt.modelId,
         maxOutputTokens: reserveTokens,
         contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,

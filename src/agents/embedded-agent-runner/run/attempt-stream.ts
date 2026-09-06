@@ -102,7 +102,7 @@ export function installEmbeddedAttemptStreamGuards(
   ) => {
     try {
       const repairParams = {
-        sessionManager: sessionManager,
+        sessionManager,
         sessionFile: attempt.sessionFile,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
@@ -183,7 +183,7 @@ export function installEmbeddedAttemptStreamGuards(
   const replayToolCallIdSanitizerDecision = {
     sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
     toolCallIdMode: transcriptPolicy.toolCallIdMode,
-    isOpenAIResponsesApi: isOpenAIResponsesApi,
+    isOpenAIResponsesApi,
   };
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
