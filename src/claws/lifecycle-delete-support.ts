@@ -480,45 +480,59 @@ export async function removeClawWorkspaceFile(
 export function releaseClawRemoveRows(
   agentId: string,
   files: RemovedWorkspaceFile[],
-  complete: boolean,
+  cleanupErrors: string[],
+  assertCurrent: (database: OpenClawStateDatabase) => void,
   completeDeletion: (database: OpenClawStateDatabase) => void,
   options: OpenClawStateDatabaseOptions,
-): void {
-  if (complete) {
-    // Keep the install record as the retry owner until database discovery is released.
-    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
-  }
-  runOpenClawStateWriteTransaction((database) => {
-    const { db } = database;
-    const query = getNodeSqliteKysely<ClawRemovalDatabase>(db);
-    if (tableExists(db, "claw_workspace_files")) {
-      for (const file of files.filter((candidate) => candidate.action !== "error")) {
+): boolean {
+  const complete = cleanupErrors.length === 0;
+  try {
+    runOpenClawStateWriteTransaction((database) => {
+      assertCurrent(database);
+      if (complete) {
+        // Discovery and owned rows must retire under the same current-operation transaction.
+        unregisterOpenClawAgentDatabases({ agentId, env: options.env, database });
+      }
+      const { db } = database;
+      const query = getNodeSqliteKysely<ClawRemovalDatabase>(db);
+      if (tableExists(db, "claw_workspace_files")) {
+        for (const file of files.filter((candidate) => candidate.action !== "error")) {
+          executeSqliteQuerySync(
+            db,
+            query
+              .deleteFrom("claw_workspace_files")
+              .where("agent_id", "=", agentId)
+              .where("target_path", "=", file.path),
+          );
+        }
+      }
+      // Partial removals keep both the journal fence and install retry owner intact.
+      if (!complete) {
+        return;
+      }
+      if (tableExists(db, "claw_package_refs")) {
         executeSqliteQuerySync(
           db,
-          query
-            .deleteFrom("claw_workspace_files")
-            .where("agent_id", "=", agentId)
-            .where("target_path", "=", file.path),
+          query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
         );
       }
+      if (tableExists(db, "claw_installs")) {
+        executeSqliteQuerySync(
+          db,
+          query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
+        );
+      }
+      // Complete removals release the fence and retry owner in the same transaction.
+      completeDeletion(database);
+    }, options);
+    if (complete) {
+      deleteCachedClawInstallSchemaVersion(agentId, options);
     }
-    // Partial removals keep both the journal fence and install retry owner intact.
-    if (!complete) {
-      return;
+  } catch (error) {
+    if (complete) {
+      throw error;
     }
-    if (tableExists(db, "claw_package_refs")) {
-      executeSqliteQuerySync(
-        db,
-        query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
-      );
-    }
-    if (tableExists(db, "claw_installs")) {
-      executeSqliteQuerySync(db, query.deleteFrom("claw_installs").where("agent_id", "=", agentId));
-    }
-    // Complete removals release the fence and retry owner in the same transaction.
-    completeDeletion(database);
-  }, options);
-  if (complete) {
-    deleteCachedClawInstallSchemaVersion(agentId, options);
+    cleanupErrors.push(coerceErrorMessage(error));
   }
+  return complete;
 }
