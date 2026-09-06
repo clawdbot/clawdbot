@@ -524,26 +524,37 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("evaluates current enablement without retaining removed startup policy", () => {
+  it("retains disabled plugin metadata while evaluating live enablement", () => {
     const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
-    const index = loadInstalledPluginIndex({
-      candidates: [enabledFixture.candidate, disabledFixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            "disabled-demo": {
-              enabled: false,
-            },
+    const config = {
+      plugins: {
+        entries: {
+          "disabled-demo": {
+            enabled: false,
           },
         },
       },
+    };
+    const index = loadInstalledPluginIndex({
+      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      config,
       env: hermeticEnv(),
     });
 
-    expect(index.plugins.find((plugin) => plugin.pluginId === "disabled-demo")?.enabled).toBe(
-      false,
+    const disabled = index.plugins.find((plugin) => plugin.pluginId === "disabled-demo");
+    expect(disabled?.enabled).toBe(false);
+    expect(disabled?.contributions).toEqual(
+      expect.objectContaining({
+        channels: ["demo-chat"],
+        channelConfigs: ["demo-chat"],
+        providers: ["demo"],
+        modelCatalogProviders: ["demo"],
+        commandAliases: ["demo-command"],
+        contracts: { tools: ["demo-tool"] },
+      }),
     );
+    expect(isInstalledPluginEnabled(index, "disabled-demo", config)).toBe(false);
     expect(
       isInstalledPluginEnabled(index, "disabled-demo", {
         plugins: {
@@ -1024,37 +1035,6 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toStrictEqual(
       [],
     );
-  });
-
-  it("marks disabled plugins without dropping their cold contributions", () => {
-    const fixture = createRichPluginFixture();
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(
-      isInstalledPluginEnabled(index, "demo", {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-    expect(index.plugins[0]?.enabled).toBe(false);
   });
 
   it("tracks refresh reason without using the manifest cache", () => {
