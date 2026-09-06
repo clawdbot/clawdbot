@@ -1922,9 +1922,10 @@ describe("talk.session unified handlers", () => {
       createBridge: vi.fn(),
     };
     mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    const providerConfig = { apiKey: "openai-key" };
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: { apiKey: "openai-key" },
+      providerConfig,
     });
     mocks.createTalkRealtimeRelaySession.mockReturnValue({
       provider: "openai",
@@ -2019,6 +2020,8 @@ describe("talk.session unified handlers", () => {
       model: "gpt-realtime",
       voice: "alloy",
     });
+    expect(relayCreateInput.providerConfig).not.toBe(providerConfig);
+    expect(providerConfig).toEqual({ apiKey: "openai-key" });
     expect(relayCreateInput.instructions).toContain(
       "Additional realtime instructions:\nSpeak warmly.",
     );
@@ -2214,9 +2217,10 @@ describe("talk.session unified handlers", () => {
       isConfigured: () => true,
       createBridge: vi.fn(),
     };
+    const providerConfig = {};
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: {},
+      providerConfig,
     });
     mocks.createTalkRealtimeRelaySession.mockReturnValue({
       provider: "openai",
@@ -2270,6 +2274,8 @@ describe("talk.session unified handlers", () => {
         assertCommitAllowed: expect.any(Function),
       }),
     );
+    const relayCreateInput = mocks.createTalkRealtimeRelaySession.mock.calls[0]?.[0];
+    expect(relayCreateInput?.providerConfig).toBe(providerConfig);
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
   });
 

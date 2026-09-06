@@ -426,28 +426,7 @@ function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
   params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceProviderConfig {
-  const overrides: RealtimeVoiceProviderConfig = {};
-  const model = normalizeOptionalString(params.model);
-  const voice = normalizeOptionalString(params.voice);
-  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
-  if (model) {
-    overrides.model = model;
-  }
-  if (voice) {
-    overrides.voice = voice;
-  }
-  if (typeof params.vadThreshold === "number" && Number.isFinite(params.vadThreshold)) {
-    overrides.vadThreshold = params.vadThreshold;
-  }
-  if (typeof params.silenceDurationMs === "number" && Number.isFinite(params.silenceDurationMs)) {
-    overrides.silenceDurationMs = params.silenceDurationMs;
-  }
-  if (typeof params.prefixPaddingMs === "number" && Number.isFinite(params.prefixPaddingMs)) {
-    overrides.prefixPaddingMs = params.prefixPaddingMs;
-  }
-  if (reasoningEffort) {
-    overrides.reasoningEffort = reasoningEffort;
-  }
+  const overrides = pickRealtimeVoiceLaunchOptions(params);
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
 }
 
