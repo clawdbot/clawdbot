@@ -71,6 +71,7 @@ describe("buildSandboxCreateArgs", () => {
       readOnlyRoot: true,
       tmpfs: ["/tmp"],
       network: "none",
+      runtime: "sysbox-runc",
       user: "1000:1000",
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
@@ -95,6 +96,7 @@ describe("buildSandboxCreateArgs", () => {
       scopeKey: "main",
       createdAtMs: 1700000000000,
       labels: { "openclaw.sandboxBrowser": "1" },
+      runtime: cfg.runtime,
     });
 
     expect(args[0]).toBe("create");
@@ -109,6 +111,7 @@ describe("buildSandboxCreateArgs", () => {
     expect(args).toContain("--read-only");
     expectFlagValues(args, "--tmpfs", ["/tmp"]);
     expectFlagValues(args, "--network", ["none"]);
+    expectFlagValues(args, "--runtime", ["sysbox-runc"]);
     expectFlagValues(args, "--user", ["1000:1000"]);
     expectFlagValues(args, "--cap-drop", ["ALL"]);
     expectFlagValues(args, "--security-opt", [
@@ -158,6 +161,18 @@ describe("buildSandboxCreateArgs", () => {
     expect(valuesForFlag(args, "--ulimit")).not.toContain("nofile=NaN:Infinity");
     expect(valuesForFlag(args, "--ulimit")).not.toContain("fsize=NaN");
     expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
+  });
+
+  it("omits the Docker runtime flag when it is not selected for this container", () => {
+    const cfg = createSandboxConfig({ runtime: "sysbox-runc" });
+    const { argv: args } = buildSandboxCreateArgs({
+      name: "openclaw-sbx-default-runtime",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toContain("--runtime");
   });
 
   it("passes explicit configured sandbox env through even when names look sensitive", () => {

@@ -389,6 +389,27 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
   });
 
+  it("does not pass the tool-container Docker runtime to browser containers", async () => {
+    const cfg = buildConfig(false);
+    cfg.docker.runtime = "sysbox-runc";
+
+    expect(
+      resolveSandboxBrowserDockerCreateConfig({
+        docker: cfg.docker,
+        browser: cfg.browser,
+      }).runtime,
+    ).toBeUndefined();
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:browser-runtime",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    expect(collectDockerFlagValues(requireDockerCreateArgs(), "--runtime")).toEqual([]);
+  });
+
   it("serializes concurrent provisioning for the same browser container", async () => {
     let created = false;
     let cdpAuthToken: string | undefined;

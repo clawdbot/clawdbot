@@ -335,6 +335,10 @@ export async function sandboxExplainCommand(
       mode: sandboxCfg.mode,
       scope: sandboxCfg.scope,
       backend: sandboxCfg.backend,
+      dockerRuntime:
+        sandboxCfg.backend.toLowerCase() === "docker"
+          ? (sandboxCfg.docker.runtime ?? "default")
+          : undefined,
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
       effectiveHostWorkspaceRoot,
@@ -402,6 +406,9 @@ export async function sandboxExplainCommand(
       payload.sandbox.runtimeWorkdir ?? "(direct host)",
     )} ${key("workspaceSource:")} ${value(payload.sandbox.workspaceSource)}`,
   );
+  if (payload.sandbox.dockerRuntime) {
+    lines.push(`  ${key("dockerRuntime:")} ${value(payload.sandbox.dockerRuntime)}`);
+  }
   if (payload.sandbox.workspaceMounts.length > 0) {
     lines.push(`  ${key("workspaceMounts:")}`);
     for (const mount of payload.sandbox.workspaceMounts) {

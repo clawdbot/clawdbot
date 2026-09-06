@@ -330,6 +330,7 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
+  runtime?: SandboxDockerConfig["runtime"];
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
@@ -372,6 +373,9 @@ export function buildSandboxCreateArgs(params: {
   }
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);
+  }
+  if (params.runtime) {
+    args.push("--runtime", params.runtime);
   }
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
@@ -488,6 +492,10 @@ async function createSandboxContainer(params: {
     configHash: params.configHash,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    // Docker runtimes govern Docker tool containers only. This argument builder
+    // is also used by Podman and browser provisioning, neither of which should
+    // inherit the configured Docker runtime.
+    runtime: engine.id === "docker" ? cfg.runtime : undefined,
   });
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);

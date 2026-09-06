@@ -162,6 +162,7 @@ const SandboxDockerSchema = z
     readOnlyRoot: z.boolean().optional(),
     tmpfs: z.array(z.string()).optional(),
     network: z.string().optional(),
+    runtime: z.enum(["runc", "sysbox-runc"]).optional(),
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),

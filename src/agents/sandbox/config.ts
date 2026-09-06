@@ -67,8 +67,11 @@ export function resolveSandboxBrowserDockerCreateConfig(params: {
   browser: SandboxBrowserConfig;
 }): SandboxDockerConfig {
   const browserNetwork = params.browser.network.trim();
+  // The runtime setting applies only to Docker tool containers, not browser
+  // containers. Omit it before this config is hashed or converted to argv.
+  const { runtime: _runtime, ...dockerWithoutRuntime } = params.docker;
   const base: SandboxDockerConfig = {
-    ...params.docker,
+    ...dockerWithoutRuntime,
     // Browser container needs network access for Chrome, downloads, etc.
     network: browserNetwork || DEFAULT_SANDBOX_BROWSER_NETWORK,
     // For hashing and consistency, treat browser image as the docker image even though we
@@ -110,6 +113,7 @@ export function resolveSandboxDockerConfig(params: {
     readOnlyRoot: agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true,
     tmpfs: agentDocker?.tmpfs ?? globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
     network: agentDocker?.network ?? globalDocker?.network ?? "none",
+    runtime: agentDocker?.runtime ?? globalDocker?.runtime,
     user: agentDocker?.user ?? globalDocker?.user,
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,

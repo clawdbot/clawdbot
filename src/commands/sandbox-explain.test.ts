@@ -140,6 +140,43 @@ describe("sandbox explain command", () => {
     ]);
   });
 
+  it("reports default and per-agent Docker runtime overrides", async () => {
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", backend: "docker", docker: { runtime: "runc" } },
+        },
+        list: [
+          { id: "main" },
+          { id: "worker", sandbox: { docker: { runtime: "sysbox-runc" } } },
+        ],
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    for (const [agent, expected] of [
+      ["main", "runc"],
+      ["worker", "sysbox-runc"],
+    ]) {
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, agent }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+      expect(JSON.parse(logs.join("")).sandbox.dockerRuntime).toBe(expected);
+    }
+
+    const textLogs: string[] = [];
+    await sandboxExplainCommand({ agent: "worker" }, {
+      log: (msg: string) => textLogs.push(msg),
+      error: (msg: string) => textLogs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+    expect(textLogs.join("")).toContain("dockerRuntime: sysbox-runc");
+  });
+
   it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
     mockCfg = {
       agents: {
