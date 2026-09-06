@@ -178,6 +178,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
   };
 
+  private hasAvailableUpdate() {
+    const update = this.updateAvailable;
+    const gitTarget = this.updateSchedule?.target;
+    return (
+      (update !== null && update.latestVersion !== update.currentVersion) ||
+      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
+      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
+    );
+  }
+
   private compactSummary() {
     if (this.refreshRequired) {
       return {
@@ -205,7 +215,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
     const statusBanner = this.updateRun ? null : this.statusBanner;
-    if (!statusBanner && !isUpdateActionable(this.updateAvailable, this.updateSchedule, busy)) {
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
       return null;
     }
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
@@ -391,7 +401,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
     const statusBanner = this.updateRun ? null : this.statusBanner;
-    if (!statusBanner && !isUpdateActionable(update, this.updateSchedule, busy)) {
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable

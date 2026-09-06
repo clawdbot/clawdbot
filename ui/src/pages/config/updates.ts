@@ -250,6 +250,10 @@ function readUpdatesSettings(
   };
 }
 
+function parseTimestampMs(value: string | null): number | null {
+  return parseDateStringTimestampMs(value) ?? null;
+}
+
 function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
   const relative = formatTimeAgo(Math.max(0, nowMs - timestampMs));
   return renderSettingsValue(
@@ -263,8 +267,8 @@ function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
 function renderBuildFacts(props: UpdatesViewProps) {
   const installKind = props.schedule?.install?.kind;
   const git = props.schedule?.install?.git;
-  const builtAtMs = parseDateStringTimestampMs(props.controlUiBuiltAt) ?? null;
-  const commitAtMs = git?.commitAtMs ?? parseDateStringTimestampMs(props.controlUiCommitAt) ?? null;
+  const builtAtMs = parseTimestampMs(props.controlUiBuiltAt);
+  const commitAtMs = git?.commitAtMs ?? parseTimestampMs(props.controlUiCommitAt);
   return renderSettingsSection({ title: t("updates.page.buildTitle") }, [
     renderSettingsRow({
       title: t("updates.page.gatewayVersion"),

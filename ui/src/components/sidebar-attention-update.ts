@@ -68,7 +68,11 @@ export function resolveSidebarUpdateAttention(
           updateAvailable: snapshot.updateAvailable,
           updateSchedule: snapshot.updateSchedule,
         });
-  const forced = busy || isUpdateAttentionForced(statusBanner?.tone);
+  const forced =
+    snapshot.updateRunning ||
+    snapshot.updateReconciliationPending ||
+    campaign?.state === "applying" ||
+    isUpdateAttentionForced(statusBanner?.tone);
   return {
     actionable: isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy),
     busy,

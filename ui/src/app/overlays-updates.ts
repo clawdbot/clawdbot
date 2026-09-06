@@ -598,7 +598,10 @@ export function createApplicationUpdateOverlays(
       }
       const generation = updateRunGeneration;
       const revision = updateStatusRevision;
-      const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
+      const isCurrent = () =>
+        generation === updateRunGeneration &&
+        isCurrentClient(client) &&
+        readGatewayOperatorAccess(gateway.snapshot).canAdmin;
       updateHoldInFlight = true;
       try {
         const response = await client.request<UpdateHoldResult>("update.hold", {});
@@ -633,7 +636,9 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
-    reportUpdateFailure: (attemptId: string) => updateFailureReporter.report(attemptId),
+    async reportUpdateFailure(this: void, attemptId: string) {
+      await updateFailureReporter.report(attemptId);
+    },
     dispose() {
       disposed = true;
       updateFailureReporter.invalidate();
