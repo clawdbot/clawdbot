@@ -73,9 +73,7 @@ class ToolOutputComponent extends HyperlinkMarkdown {
 }
 
 // Prefer curated display summaries, then fall back to sanitized JSON args.
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
-  const detail = formatToolDetail(display);
+function formatArgs(args: unknown, detail: string | undefined): string {
   if (detail) {
     return tuiFormatters.sanitizeRenderableText(detail);
   }
@@ -183,7 +181,7 @@ export class ToolExecutionComponent extends Container {
     );
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
-    const argLine = formatArgs(this.toolName, this.args);
+    const argLine = formatArgs(this.args, formatToolDetail(display));
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
 
     const raw = extractText(this.result);

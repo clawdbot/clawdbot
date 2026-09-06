@@ -13,6 +13,48 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it.each([
+    {
+      tool: "read",
+      initial: { path: "before.txt", limit: 3 },
+      updated: { path: "after.txt", offset: 8 },
+      before: "first 3 lines of before.txt",
+      after: "from line 8 in after.txt",
+    },
+    {
+      tool: "custom_tool",
+      initial: { custom: "before" },
+      updated: { custom: "after" },
+      before: '{"custom":"before"}',
+      after: '{"custom":"after"}',
+    },
+  ])("keeps $tool arguments current through partial and final results", (fixture) => {
+    const component = new ToolExecutionComponent(fixture.tool, fixture.initial);
+    const render = () => component.render(120).map(normalizeTestText).join("\n");
+    expect(render()).toContain(fixture.before);
+
+    component.setArgs(fixture.updated);
+    component.setPartialResult({ content: [{ type: "text", text: "partial output" }] });
+    expect(render()).toContain(fixture.after);
+    expect(render()).not.toContain(fixture.before);
+    expect(render()).toContain("(running)");
+
+    component.setResult({ content: [{ type: "text", text: "final output" }] });
+    expect(render()).toContain(fixture.after);
+    expect(render()).toContain("final output");
+    expect(render()).not.toContain("(running)");
+  });
+
+  it("retains display redaction when rendering command arguments", () => {
+    const component = new ToolExecutionComponent("exec", {
+      command: "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890",
+    });
+    const rendered = component.render(120).map(normalizeTestText).join("\n");
+
+    expect(rendered).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
+    expect(rendered).toContain("AKIDAB...7890");
+  });
+
   it.each(
     [
       { source: "    # heading\n    command --flag", literal: "# heading" },
