@@ -8976,6 +8976,30 @@ describe("update-cli", () => {
     expectFailedManagedGitRestart("Gateway: restart failed: Error: restart unavailable");
   });
 
+  it("reports a refused installed restart for an already-stopped Git service", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    await setupManagedGitRootRefresh();
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    prepareRestartScript.mockResolvedValue(null);
+    const runFixtureCommand = requireValue(
+      vi.mocked(runCommandWithTimeout).getMockImplementation(),
+      "default command fixture",
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) =>
+      argv[2] === "gateway" && argv[3] === "restart"
+        ? commandResult({ code: 1, stderr: "native owner refused" })
+        : runFixtureCommand(argv, options),
+    );
+
+    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(freshRestartCalls()).toHaveLength(1);
+    expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
+    expect(getErrorOutput()).toContain("native owner refused");
+  });
+
   it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
     const prefix = createCaseDir("openclaw-update-package-root");
     const { nodeModules } = await setupInstalledPackageAtNodeModules(
