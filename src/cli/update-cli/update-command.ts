@@ -681,6 +681,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
+    mutationStarted: execution.mutationStarted,
+    expectedVersion: targetVersion ?? undefined,
     result,
     failure: execution.failure,
     root,
@@ -726,7 +728,9 @@ async function updateCommandInternal(
       progress.pendingSteps,
     );
     if (continued.exitCode !== 0) {
-      throw new UpdateCommandFailure(continued.result, continued.exitCode);
+      throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
+        automaticTriage: continued.automaticTriage,
+      });
     }
     return;
   }

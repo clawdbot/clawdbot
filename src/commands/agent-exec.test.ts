@@ -7,7 +7,10 @@ import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
+import type { AgentCommandOpts } from "../agents/command/types.js";
+import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
@@ -328,6 +331,100 @@ describe("agent exec command composition", () => {
       },
     });
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["current", "revoked", "replaced"])(
+    "keeps source authority through embedded admission without signal cancellation (%s)",
+    async (outcome) => {
+      const { runtime } = createRuntime();
+      const controller = new AbortController();
+      const claim = { current: true };
+      let owner = claim;
+      let effectCount = 0;
+      let stateDir = "";
+      const result = await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
+        abortSignal: controller.signal,
+        assertSourceCurrent: () => {
+          if (owner !== claim || !claim.current) {
+            throw new Error("repair owner closed");
+          }
+        },
+        runAgent: async (invocation) => {
+          stateDir = process.env.OPENCLAW_STATE_DIR!;
+          const admission = prepareAgentCommandExecutionIdentity({
+            opts: invocation as AgentCommandOpts,
+            prepared: {
+              cfg: {},
+              runId: `exec-source-${outcome}`,
+              sessionAgentId: "main",
+              sessionId: "source-session",
+            },
+            ingress: { kind: "local-cli", boundary: "test", state: "present" },
+            lifecycleGeneration: "test-generation",
+          });
+          try {
+            const admitted = await admission.admit("embedded");
+            const host = createAgentHarnessHostCapabilities({
+              pluginId: "test",
+              attempt: {
+                admittedRunContext: admitted,
+                runId: `exec-source-${outcome}`,
+                abortSignal: controller.signal,
+              },
+            });
+            try {
+              const [tool] = host.capabilities.bindToolSurface([
+                {
+                  ...createStubTool("source_effect"),
+                  execute: async () => {
+                    effectCount += 1;
+                    return { content: [], details: {} };
+                  },
+                },
+              ]);
+              await Promise.resolve();
+              if (outcome === "revoked") {
+                claim.current = false;
+              }
+              if (outcome === "replaced") {
+                owner = { current: true };
+              }
+              await tool!.execute!("source-call", {});
+              return successResult();
+            } finally {
+              host.close();
+            }
+          } finally {
+            admission.close();
+          }
+        },
+      });
+      expect(controller.signal.aborted).toBe(false);
+      expect(effectCount).toBe(outcome === "current" ? 1 : 0);
+      expect(result.exitCode).toBe(outcome === "current" ? 0 : 1);
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("cancels a failure-owned turn and removes its temporary state", async () => {
+    const { runtime } = createRuntime();
+    const controller = new AbortController();
+    let stateDir = "";
+    const result = await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
+      abortSignal: controller.signal,
+      runAgent: async (invocation) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        const signal = invocation.abortSignal as AbortSignal;
+        expect(signal.aborted).toBe(false);
+        controller.abort(new Error("operator stopped the Gateway"));
+        expect(signal.reason).toBe(controller.signal.reason);
+        signal.throwIfAborted();
+        return successResult();
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.envelope.error?.message).toContain("operator stopped the Gateway");
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
