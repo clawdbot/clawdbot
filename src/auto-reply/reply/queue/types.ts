@@ -43,6 +43,7 @@ import type {
   TraceLevel,
   VerboseLevel,
 } from "../directives.js";
+import { releaseOwnedInboundDedupe } from "../inbound-dedupe.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
@@ -365,6 +366,7 @@ export function completeFollowupRunLifecycle(
         // identity so the abandonment-triggered ingress retry can re-enqueue
         // instead of being rejected as a recent duplicate and falsely completed.
         releaseRecentQueueMessageId(run);
+        releaseOwnedInboundDedupe(lifecycle);
         lifecycle.onAbandoned?.();
       }
     } finally {

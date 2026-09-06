@@ -138,9 +138,9 @@ async function dispatchReplyFromConfigInner(
       }
       if (inboundDedupeClaim.status === "claimed") {
         if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
-          commitInboundDedupe(inboundDedupeClaim.key);
+          commitInboundDedupe(inboundDedupeClaim);
         } else {
-          releaseInboundDedupe(inboundDedupeClaim.key);
+          releaseInboundDedupe(inboundDedupeClaim);
         }
       }
       if (err instanceof DispatchSessionRefreshRequiredError) {

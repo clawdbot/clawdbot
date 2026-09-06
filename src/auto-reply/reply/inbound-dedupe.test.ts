@@ -2,7 +2,12 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { claimInboundDedupe, commitInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import {
+  claimInboundDedupe,
+  commitInboundDedupe,
+  releaseOwnedInboundDedupe,
+  resetInboundDedupe,
+} from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -15,13 +20,13 @@ const sharedInboundContext: MsgContext = {
   MessageSid: "msg-1",
 };
 
-function claimKey(ctx: MsgContext): string {
-  const result = claimInboundDedupe(ctx, { inFlight: new Set() });
+function claimMessage(ctx: MsgContext, owner?: object) {
+  const result = claimInboundDedupe(ctx, { owner });
   expect(result.status).toBe("claimed");
   if (result.status !== "claimed") {
     throw new Error(`expected claimed inbound dedupe result, got ${result.status}`);
   }
-  return result.key;
+  return result;
 }
 
 describe("inbound dedupe", () => {
@@ -30,9 +35,9 @@ describe("inbound dedupe", () => {
   });
 
   it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
-    expect(claimKey({ ...sharedInboundContext, MessageThreadId: 77 })).toBe(
-      claimKey({ ...sharedInboundContext, MessageThreadId: "77" }),
-    );
+    const key = claimMessage({ ...sharedInboundContext, MessageThreadId: 77 }).key;
+    resetInboundDedupe();
+    expect(claimMessage({ ...sharedInboundContext, MessageThreadId: "77" }).key).toBe(key);
   });
 
   it.each([
@@ -50,7 +55,7 @@ describe("inbound dedupe", () => {
     if (firstClaim.status !== "claimed") {
       throw new Error("expected the first command target to be admitted");
     }
-    commitInboundDedupe(firstClaim.key);
+    commitInboundDedupe(firstClaim);
 
     const secondClaim = claimInboundDedupe({
       ...firstTarget,
@@ -87,7 +92,7 @@ describe("inbound dedupe", () => {
         status: "inflight",
         key: firstClaimKey,
       });
-      inboundB.releaseInboundDedupe(firstClaimKey);
+      inboundB.releaseInboundDedupe(firstClaim);
       expect(inboundA.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "claimed",
         key: firstClaimKey,
@@ -112,20 +117,84 @@ describe("inbound dedupe", () => {
     inboundB.resetInboundDedupe();
 
     try {
-      const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
+      const owner = {};
+      const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext, { owner });
       expect(firstClaim.status).toBe("claimed");
       if (firstClaim.status !== "claimed") {
         throw new Error(`expected claimed inbound dedupe result, got ${firstClaim.status}`);
       }
       const firstClaimKey = firstClaim.key;
-      inboundA.commitInboundDedupe(firstClaimKey);
+      inboundA.commitInboundDedupe(firstClaim);
       expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "duplicate",
         key: firstClaimKey,
       });
+      inboundB.releaseOwnedInboundDedupe(owner);
+      expect(inboundA.claimInboundDedupe(sharedInboundContext).status).toBe("claimed");
     } finally {
       inboundA.resetInboundDedupe();
       inboundB.resetInboundDedupe();
     }
+  });
+
+  it("frees a committed entry for its owner and never for a stale owner after recommit", () => {
+    const owner = {};
+    const firstClaim = claimMessage(sharedInboundContext, owner);
+    commitInboundDedupe(firstClaim);
+    releaseOwnedInboundDedupe(owner);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("claimed");
+
+    // The key expired and a newer dispatch re-committed under a different
+    // owner; the abandoned owner must not free the replacement entry.
+    resetInboundDedupe();
+    const staleOwner = {};
+    const staleClaim = claimMessage(sharedInboundContext, staleOwner);
+    commitInboundDedupe(staleClaim);
+    resetInboundDedupe();
+    const currentOwner = {};
+    const currentClaim = claimMessage(sharedInboundContext, currentOwner);
+    commitInboundDedupe(currentClaim);
+    releaseOwnedInboundDedupe(staleOwner);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("duplicate");
+    releaseOwnedInboundDedupe(currentOwner);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("claimed");
+  });
+
+  it("fences late finalization after abandonment without releasing the retry's claim", () => {
+    const owner = {};
+    const original = claimMessage(sharedInboundContext, owner);
+    releaseOwnedInboundDedupe(owner);
+
+    const retryOwner = {};
+    const retry = claimMessage(sharedInboundContext, retryOwner);
+    commitInboundDedupe(original);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("inflight");
+
+    commitInboundDedupe(retry);
+    commitInboundDedupe(retry);
+    releaseOwnedInboundDedupe(owner);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("duplicate");
+
+    releaseOwnedInboundDedupe(retryOwner);
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("claimed");
+  });
+
+  it.each([
+    { name: "message", context: { MessageSid: "msg-2" } },
+    { name: "peer", context: { OriginatingTo: "channel:c2" } },
+    { name: "thread", context: { MessageThreadId: "thread-2" } },
+    { name: "account", context: { AccountId: "other-account" } },
+    { name: "channel", context: { OriginatingChannel: "telegram" } },
+    { name: "agent", context: { SessionKey: "agent:other:discord:channel:c1" } },
+  ])("does not release a different $name when an owner is abandoned", ({ context }) => {
+    const owner = {};
+    const otherContext = { ...sharedInboundContext, ...context };
+    commitInboundDedupe(claimMessage(sharedInboundContext, owner));
+    commitInboundDedupe(claimMessage(otherContext, {}));
+
+    releaseOwnedInboundDedupe(owner);
+
+    expect(claimInboundDedupe(sharedInboundContext).status).toBe("claimed");
+    expect(claimInboundDedupe(otherContext).status).toBe("duplicate");
   });
 });

@@ -13,6 +13,8 @@ import type { MsgContext } from "../templating.js";
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
 const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
 
+type InboundDedupeClaim = { status: "claimed"; key: string };
+
 /**
  * Keep inbound dedupe shared across bundled chunks so the same provider
  * message cannot bypass dedupe by entering through a different chunk copy.
@@ -26,14 +28,21 @@ const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_
 });
 const inboundDedupeInFlight = resolveGlobalSingleton(
   INBOUND_DEDUPE_INFLIGHT_KEY,
-  () => new Set<string>(),
+  () => new Map<string, InboundDedupeClaim>(),
+);
+
+// Dispatch and queue abandonment can run from different bundled chunks.
+const INBOUND_DEDUPE_OWNERSHIPS_KEY = Symbol.for("openclaw.inboundDedupeOwnerships");
+const inboundDedupeOwnerships = resolveGlobalSingleton(
+  INBOUND_DEDUPE_OWNERSHIPS_KEY,
+  () => new WeakMap<object, InboundDedupeClaim>(),
 );
 
 type InboundDedupeClaimResult =
   | { status: "invalid" }
   | { status: "duplicate"; key: string }
   | { status: "inflight"; key: string }
-  | { status: "claimed"; key: string };
+  | InboundDedupeClaim;
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
@@ -81,7 +90,12 @@ function buildInboundDedupeKey(ctx: MsgContext): string | null {
 
 export function claimInboundDedupe(
   ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+  opts?: {
+    cache?: DedupeCache;
+    now?: number;
+    inFlight?: Map<string, InboundDedupeClaim>;
+    owner?: object;
+  },
 ): InboundDedupeClaimResult {
   const key = buildInboundDedupeKey(ctx);
   if (!key) {
@@ -95,23 +109,47 @@ export function claimInboundDedupe(
   if (inFlight.has(key)) {
     return { status: "inflight", key };
   }
-  inFlight.add(key);
-  return { status: "claimed", key };
+  const claim: InboundDedupeClaim = { status: "claimed", key };
+  inFlight.set(key, claim);
+  if (opts?.owner) {
+    inboundDedupeOwnerships.set(opts.owner, claim);
+  }
+  return claim;
 }
 
 export function commitInboundDedupe(
-  key: string,
-  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+  claim: InboundDedupeClaim,
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Map<string, InboundDedupeClaim> },
 ): void {
-  const cache = opts?.cache ?? inboundDedupeCache;
-  cache.check(key, opts?.now);
   const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
-  inFlight.delete(key);
+  // Abandonment or a prior commit retires this claim before a late finalizer runs.
+  if (inFlight.get(claim.key) !== claim) {
+    return;
+  }
+  const cache = opts?.cache ?? inboundDedupeCache;
+  cache.check(claim.key, opts?.now, claim);
+  inFlight.delete(claim.key);
 }
 
-export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string> }): void {
+export function releaseInboundDedupe(
+  claim: InboundDedupeClaim,
+  opts?: { cache?: DedupeCache; inFlight?: Map<string, InboundDedupeClaim> },
+): void {
   const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
-  inFlight.delete(key);
+  if (inFlight.get(claim.key) === claim) {
+    inFlight.delete(claim.key);
+  }
+  (opts?.cache ?? inboundDedupeCache).delete(claim.key, claim);
+}
+
+// A retired lifecycle must not release a newer commit of the same message key.
+export function releaseOwnedInboundDedupe(owner: object): void {
+  const claim = inboundDedupeOwnerships.get(owner);
+  if (!claim) {
+    return;
+  }
+  inboundDedupeOwnerships.delete(owner);
+  releaseInboundDedupe(claim);
 }
 
 export function resetInboundDedupe(): void {

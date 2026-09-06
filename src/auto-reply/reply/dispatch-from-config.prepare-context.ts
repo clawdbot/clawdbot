@@ -418,7 +418,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     };
   }
 
-  const inboundDedupeClaim = claimInboundDedupe(ctx);
+  const inboundDedupeClaim = claimInboundDedupe(ctx, {
+    owner: params.replyOptions?.turnAdoptionLifecycle,
+  });
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return {
@@ -431,12 +433,12 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   }
   const commitInboundDedupeIfClaimed = () => {
     if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
+      commitInboundDedupe(inboundDedupeClaim);
     }
   };
   const releaseInboundDedupeIfClaimed = () => {
     if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
+      releaseInboundDedupe(inboundDedupeClaim);
     }
   };
   const finishReplyOperationBusyDispatch = (opts?: {

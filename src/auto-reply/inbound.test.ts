@@ -40,7 +40,7 @@ function commitInboundForTest(ctx: MsgContext): string {
   if (claim.status !== "claimed") {
     throw new Error(`expected inbound dedupe claim, got ${claim.status}`);
   }
-  commitInboundDedupe(claim.key);
+  commitInboundDedupe(claim);
   return claim.key;
 }
 
@@ -359,7 +359,7 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(claimInboundDedupe(ctx, { inFlight: new Set() })).toEqual({
+    expect(claimInboundDedupe(ctx, { inFlight: new Map() })).toEqual({
       status: "claimed",
       key: JSON.stringify([
         "",

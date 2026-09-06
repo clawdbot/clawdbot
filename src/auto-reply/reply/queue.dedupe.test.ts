@@ -2,6 +2,8 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { MsgContext } from "../templating.js";
+import { claimInboundDedupe, commitInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -48,6 +50,7 @@ function createFollowupCollector(expectedCalls = 1): {
 describe("followup queue deduplication", () => {
   beforeEach(() => {
     resetRecentQueuedMessageIdDedupe();
+    resetInboundDedupe();
   });
 
   it("deduplicates messages with same Discord message_id", async () => {
@@ -589,6 +592,62 @@ describe("followup queue deduplication", () => {
     });
     expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
   });
+
+  it.each(["abandoned", "adopted", "adopting", "consumed"] as const)(
+    "preserves inbound retry eligibility after the %s disposition",
+    async (disposition) => {
+      const key = `test-dedup-inbound-release-${Date.now()}`;
+      const ctx: MsgContext = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15550100",
+        To: "whatsapp:+15550200",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+15550200",
+        SessionKey: "agent:main:whatsapp:+15550200",
+        MessageSid: "stalled-1",
+      };
+      const onAbandoned = vi.fn();
+      const pendingAdoption = createDeferred();
+
+      const run = createRun({
+        prompt: "stalled message",
+        messageId: "stalled-1",
+        originatingChannel: "whatsapp",
+        originatingTo: "whatsapp:+15550200",
+      });
+      run.turnAdoptionLifecycle = {
+        onAdopted: () => (disposition === "adopting" ? pendingAdoption.promise : undefined),
+        onAbandoned,
+      };
+      const claim = claimInboundDedupe(ctx, { owner: run.turnAdoptionLifecycle });
+      expect(claim.status).toBe("claimed");
+      if (claim.status !== "claimed") {
+        throw new Error("expected the first dispatch to claim inbound dedupe");
+      }
+      expect(enqueueFollowupRun(key, run, collectSettings)).toBe(true);
+      commitInboundDedupe(claim);
+      expect(claimInboundDedupe(ctx).status).toBe("duplicate");
+
+      if (disposition === "adopted") {
+        await admitFollowupRunLifecycle(run);
+      }
+      const admission = disposition === "adopting" ? admitFollowupRunLifecycle(run) : undefined;
+      completeFollowupRunLifecycle(run, disposition === "consumed" ? "consumed" : undefined);
+      if (admission) {
+        expect(claimInboundDedupe(ctx).status).toBe("duplicate");
+        expect(onAbandoned).not.toHaveBeenCalled();
+        pendingAdoption.resolve();
+        await admission;
+      }
+      expect(onAbandoned).toHaveBeenCalledTimes(disposition === "abandoned" ? 1 : 0);
+      clearSessionQueues([key]);
+
+      expect(claimInboundDedupe(ctx).status).toBe(
+        disposition === "abandoned" ? "claimed" : "duplicate",
+      );
+    },
+  );
 
   it("can opt-in to prompt-based dedupe when message id is absent", () => {
     const key = `test-dedup-prompt-mode-${Date.now()}`;
