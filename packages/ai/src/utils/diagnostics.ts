@@ -5,4 +5,5 @@ export { configureProviderErrorRedactor, type ProviderErrorRedactor } from "./pr
 export {
   hasRetryableConnectionErrorCode,
   isTransientNetworkError,
+  WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
 } from "./retryable-network-errors.js";

@@ -100,7 +100,7 @@ async function withWindowsDiagnostics(
         status = 1;
       } else if (script.includes("Get-NetTCPConnection")) {
         stdout = "424242";
-      } else if (script.includes("CreationDate")) {
+      } else if (script.includes("CreationDate") || script.includes(".StartTime")) {
         stdout =
           command === "wmic.exe"
             ? "CreationDate=20260903000000.000000+000"

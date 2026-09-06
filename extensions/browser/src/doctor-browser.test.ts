@@ -1,14 +1,9 @@
 // Browser tests cover doctor browser plugin behavior.
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../test-support.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   maybeArchiveLegacyClawdBrowserProfileResidue,
   noteChromeMcpBrowserReadiness,
 } from "./doctor-browser.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
   const [call] = noteFn.mock.calls;
@@ -209,7 +204,6 @@ describe("browser doctor readiness", () => {
       {
         noteFn,
         platform: "darwin",
-        homeDir: "/__openclaw_browser_doctor_missing_home__",
         resolveChromeExecutable: () => null,
       },
     );
@@ -218,7 +212,7 @@ describe("browser doctor readiness", () => {
     expect(chromeNote).toContain("brave://inspect/#remote-debugging");
     const importNote = requireNoteTextContaining(noteFn, "System browser profile cookie import");
     expect(importNote).toContain("enabled");
-    expect(importNote).toContain("Importable Chrome-family profile cookie databases found: 0");
+    expect(importNote).toContain("System browser profile discovery skipped");
   });
 
   it("warns when detected Chrome is too old for Chrome MCP", async () => {
@@ -303,55 +297,6 @@ describe("browser doctor readiness", () => {
     expect(noteFn).toHaveBeenCalled();
     const note = requireNoteTextContaining(noteFn, "explicit Chromium user data directory");
     expect(note).toContain("brave://inspect/#remote-debugging");
-  });
-});
-
-describe("browser plugin package layout", () => {
-  async function expectRepairLayout(layout: "source" | "built") {
-    const packageRoot = fs.realpathSync(tempDirs.make("openclaw-browser-doctor-"));
-    const moduleDir = layout === "source" ? path.join(packageRoot, "src") : packageRoot;
-    const modulePath = path.join(
-      moduleDir,
-      layout === "source" ? "doctor-browser.ts" : "browser-doctor.js",
-    );
-    fs.mkdirSync(moduleDir, { recursive: true });
-    fs.writeFileSync(path.join(packageRoot, "package.json"), "{}");
-
-    const repairOwnedChromeExtensionNativeHosts = vi.fn(async () => ({
-      changes: [],
-      warnings: [],
-    }));
-    vi.resetModules();
-    vi.doMock("node:url", async () => ({
-      ...(await vi.importActual<typeof import("node:url")>("node:url")),
-      fileURLToPath: () => modulePath,
-    }));
-    vi.doMock("./browser/extension-install.js", () => ({
-      browserExtensionStatus: vi.fn(),
-      FOUNDATION_CHROME_WEB_STORE_URL: "https://example.invalid",
-      repairOwnedChromeExtensionNativeHosts,
-    }));
-
-    try {
-      const { maybeRepairOwnedChromeExtensionNativeHosts } = await import("./doctor-browser.js");
-      await maybeRepairOwnedChromeExtensionNativeHosts();
-      expect(repairOwnedChromeExtensionNativeHosts).toHaveBeenCalledWith({
-        bundledDir: path.join(packageRoot, "chrome-extension"),
-        pluginRoot: packageRoot,
-      });
-    } finally {
-      vi.doUnmock("node:url");
-      vi.doUnmock("./browser/extension-install.js");
-      vi.resetModules();
-    }
-  }
-
-  it("resolves assets from the source package root", async () => {
-    await expectRepairLayout("source");
-  });
-
-  it("resolves assets from the built package root", async () => {
-    await expectRepairLayout("built");
   });
 });
 

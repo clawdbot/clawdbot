@@ -414,6 +414,9 @@ describe("sidebar attention refresh ownership", () => {
       if (method === "exec.approval.resolve") {
         return resolution.promise;
       }
+      if (method === "update.status") {
+        return Promise.resolve({ sentinel: null, updateAvailable: null });
+      }
       if (method === "cron.list") {
         return Promise.resolve(cronListResponse([]));
       }

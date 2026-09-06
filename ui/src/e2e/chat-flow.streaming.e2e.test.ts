@@ -10,6 +10,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -180,11 +181,7 @@ suite.define(() => {
   });
 
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -238,11 +235,7 @@ suite.define(() => {
   });
 
   it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -473,11 +466,7 @@ suite.define(() => {
   );
 
   it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -641,11 +630,7 @@ suite.define(() => {
   });
 
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -675,9 +660,9 @@ suite.define(() => {
         sessionInfo: acceptedSession,
         messages: [],
       });
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      // Publish acceptance after the ACK settles, then wait for its durable
-      // retirement before disconnecting this already accepted tool run.
+      await gateway.resolveDeferred("chat.send");
+      // Default execution commits the original source before its ACK. Publish
+      // live state after consumption, then disconnect during the tool run.
       await waitForCommittedState(
         page,
         ({ runId: expectedRunId }) => {
@@ -747,11 +732,7 @@ suite.define(() => {
   });
 
   it("keeps live assistant stream text before the matching tool card", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 

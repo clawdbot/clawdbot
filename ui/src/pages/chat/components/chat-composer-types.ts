@@ -88,7 +88,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   waitingApproval?: boolean;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
-  progressCardError?: string;
   runActive?: boolean;
   collapseTaskProgress?: boolean;
   runId?: string | null;

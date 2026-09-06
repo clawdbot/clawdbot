@@ -91,7 +91,7 @@ it("uses a prepared gallery session without describing it again", async () => {
   expect(request).toHaveBeenCalledOnce();
 });
 
-it("keeps passive documents live while exposing only capability-free HTML", async () => {
+it("keeps passive documents live with saved HTML and pure core reports only", async () => {
   const request = vi.fn(async () => ({
     sessionKey: "dashboard",
     revision: 1,
@@ -118,6 +118,18 @@ it("keeps passive documents live while exposing only capability-free HTML", asyn
         grantState: "granted",
         revision: 1,
       },
+      ...["session:report", "session:progress", "custom:report"].map((pluginKind) => ({
+        name: pluginKind,
+        tabId: "main",
+        contentKind: "plugin",
+        pluginKind,
+        props: { blocks: [{ type: "text", text: "Saved summary" }] },
+        sizeW: 12,
+        sizeH: 6,
+        position: 2,
+        grantState: "none",
+        revision: 1,
+      })),
     ],
   }));
   const client = {
@@ -134,6 +146,11 @@ it("keeps passive documents live while exposing only capability-free HTML", asyn
     hello: {
       auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["board.get", "board.widget.appView"] },
+      controlUiWidgetKinds: [
+        { pluginId: "session", kind: "session:report", label: "Report" },
+        { pluginId: "session", kind: "session:progress", label: "Progress" },
+        { pluginId: "custom", kind: "custom:report", label: "Custom report" },
+      ],
     },
   } as ApplicationGatewaySnapshot;
   document.body.append(element);
@@ -147,6 +164,6 @@ it("keeps passive documents live while exposing only capability-free HTML", asyn
   expect(view.bridgeEnabled).toBe(false);
   expect(view.canMutate).toBe(false);
   expect(view.canGrant).toBe(false);
-  expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual(["status"]);
+  expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual(["status", "session:report"]);
   expect(request).toHaveBeenCalledOnce();
 });

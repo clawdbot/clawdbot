@@ -490,6 +490,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       cfg: attempt.config,
       provider: attempt.provider,
       modelId: attempt.modelId,
+      providerRuntimeHandle: input.getProviderRuntimeHandle(),
       extraParamsOverride: streamExtraParamsOverride,
       thinkingLevel: input.providerThinkingLevel,
       agentId: input.sessionAgentId,

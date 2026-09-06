@@ -4,6 +4,7 @@ import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -137,6 +138,9 @@ suite.define(() => {
         .getByRole("menuitem", { name: "Attach release-notes · Bob", exact: false })
         .waitFor();
       const attachables = menu.locator('wa-dropdown-item[value^="library-attach:"]');
+      const menuPanel = menu.locator('[part="menu"]');
+      // Visible content can still share the dropdown's opening scale animation.
+      await waitForControlUiProofSurface(menuPanel, [aliceItem, attachables.first()]);
       const rows = await attachables.evaluateAll((items) =>
         items.map((item) => {
           const note = item.querySelector<HTMLElement>(".agent-chat__capability-menu-note")!;
@@ -163,7 +167,6 @@ suite.define(() => {
           .locator(".agent-chat__capability-menu-note")
           .getAttribute("title"),
       ).toBe(bobEntry.description);
-      const menuPanel = menu.locator('[part="menu"]');
       const listWidth = await menuPanel.evaluate((node) => node.getBoundingClientRect().width);
       // Native navigation keeps Web Awesome's active item aligned with browser focus.
       await page.keyboard.press("Home");
@@ -189,7 +192,10 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await readAction.waitFor({ state: "visible" });
       expect(await menu.getByText("release-notes · Alice", { exact: true }).count()).toBe(1);
-      await menu.getByText("Selected revision 11111111", { exact: true }).waitFor();
+      await waitForControlUiProofSurface(menuPanel, [
+        readAction,
+        menu.getByText("Selected revision 11111111", { exact: true }),
+      ]);
       const actionBounds = await menuPanel.evaluate((node) =>
         node.getBoundingClientRect().toJSON(),
       );

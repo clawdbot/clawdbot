@@ -454,7 +454,7 @@ suite.define(() => {
     });
   });
 
-  it("reconciles an image-bearing initial prompt into one user row", async () => {
+  it("keeps an initial image visible through worktree hydration and canonical history", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:single-image-prompt";
       const runId = "initial-image-send";
@@ -578,6 +578,43 @@ suite.define(() => {
         expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
         expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
         await captureUiProof(suite, page, "initial-image-metadata-loading.png");
+
+        const worktreeSession = {
+          key: sessionKey,
+          sessionId: "single-image-prompt",
+          displayName: "Image handoff worktree",
+          kind: "direct",
+          updatedAt: Date.now(),
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          status: "running",
+          permissionMode: "workspace",
+          sessionRoot: "/workspace/image-handoff",
+          spawnedCwd: "/workspace/image-handoff",
+          worktree: {
+            id: "image-handoff-worktree",
+            branch: "image-handoff",
+            repoRoot: "/workspace/project",
+          },
+        };
+        await gateway.setMethodResponse("sessions.list", {
+          ...createdSessionListResult(sessionKey),
+          sessions: [worktreeSession],
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          sessionId: worktreeSession.sessionId,
+          reason: "project",
+          session: worktreeSession,
+        });
+        await pollLocatorText(page.locator(".chat-pane__session-title-text")).toBe(
+          worktreeSession.displayName,
+        );
+        await captureUiProof(suite, page, "initial-image-worktree-metadata-loading.png");
+        expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
+        expect(await userImage.getAttribute("src")).toBe(initialImageSrc);
+        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
+        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
 
         await gateway.resolveDeferred("chat.startup");
 

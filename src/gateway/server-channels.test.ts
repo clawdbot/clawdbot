@@ -2423,6 +2423,7 @@ describe("server-channels auto restart", () => {
     const server = createTestGatewayServer({
       resolvedAuth: AUTH_NONE,
       overrides: {
+        getRuntimeConfig: () => ({}),
         handlePluginRequest: createGatewayPluginRequestHandler({
           registry,
           log: createSubsystemLogger("gateway/webhook-reload-test"),

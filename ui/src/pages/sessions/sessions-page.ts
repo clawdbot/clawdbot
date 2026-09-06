@@ -35,6 +35,7 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
+import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
@@ -1081,21 +1082,30 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async renameSession(row: GatewaySessionRow) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      this.error = t("sessionsView.actionRequiresConnection");
+      return;
+    }
+    const initialValue = resolveSessionRenameValue(row);
+    const requestSignal = this.pluginActionLifetime.signal;
     const value = await this.withDialogLifecycle(async (signal) => {
       const showInputDialog = await this.loadInputDialog();
       return (
         (await showInputDialog?.({
-          signal,
+          signal: AbortSignal.any([signal, requestSignal]),
           title: t("sessionsView.renameSessionPrompt"),
-          defaultValue: normalizeOptionalString(row.label) ?? "",
+          defaultValue: initialValue,
         })) ?? null
       );
     });
-    if (value === null) {
+    if (value === null || !this.isRequestScopeCurrent(scope)) {
       return;
     }
-    const patch = { label: normalizeOptionalString(value) ?? null };
-    void this.patchSession(row.key, patch, undefined, row.sessionId);
+    const patch = resolveSessionRenamePatch(value, initialValue, row.label);
+    if (patch) {
+      await this.patchSession(row.key, patch, scope, row.sessionId);
+    }
   }
 
   private async patchSession(

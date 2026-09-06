@@ -487,7 +487,14 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Scan QR code")).toBe(true);
     expect(entries.some((entry) => entry.source === "Test connection")).toBe(true);
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "apple" &&
+          entry.source === "Connection…" &&
+          hasSite(entry, (site) => site.path === "apps/macos/Sources/OpenClaw/MenuBar.swift"),
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(
       entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
@@ -599,7 +606,7 @@ describe("native app i18n inventory", () => {
             (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
           ) &&
           entry.source ===
-            "Direct mode supports device info, status, and notifications. Set up standalone voice on iPhone to use Talk on Watch. Chat and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -616,7 +623,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+          "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
       ),
     ).toBe(true);
     expect(
@@ -643,7 +650,7 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) =>
         [
-          "Your AI-powered setup helper. It can check status, fix config, ",
+          "The current gateway.remote.token value is not plain text. ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
           "Paste the token configured on the gateway host. ",
@@ -656,7 +663,6 @@ describe("native app i18n inventory", () => {
           entry.source === '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
       ),
     ).toBe(false);
-    expect(entries.some((entry) => entry.source === "Missing binaries: %@")).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -718,7 +724,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
     expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
-    expect(entries.some((entry) => entry.source === "State:  %@")).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -727,21 +732,27 @@ describe("native app i18n inventory", () => {
             (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
           ) &&
           entry.source ===
-            "The watch receives a one-time pairing code and stores its own device token. Standalone voice also grants read and Talk access, without admin access. A reachable secure Gateway URL is required away from the iPhone.",
+            "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
           entry.source ===
-          "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
+          "The Gateway can capture your screen and interact with apps on this Mac, including clicking and typing, subject to macOS permissions.",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) =>
+              site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
+              site.kind === "ui-localized-call-multiline",
+          ) &&
           entry.source ===
-          "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+            "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
       ),
     ).toBe(true);
     expect(

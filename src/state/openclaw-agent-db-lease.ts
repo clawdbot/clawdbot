@@ -47,9 +47,11 @@ export function runWithAgentDatabaseMaintenanceAuthority<T>(
 }
 
 /** Revalidate the held lease, including immediately before committing a versioned rebuild. */
-export function assertAgentDatabaseMaintenanceAuthority(): void {
+export function assertAgentDatabaseMaintenanceAuthority(
+  expected?: OpenClawStateLeaseContext,
+): void {
   const authority = maintenanceAuthority.getStore();
-  if (!authority) {
+  if (!authority || (expected && authority !== expected)) {
     throw new Error(
       "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
     );

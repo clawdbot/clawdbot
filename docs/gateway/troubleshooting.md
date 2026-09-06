@@ -45,6 +45,20 @@ Look for:
 - `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
 - Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
+## Prepared model runtime publication timeout
+
+If startup reports `prepared model runtime publication (...) timed out`, the
+parenthesized detail identifies the pending stage and, during workspace
+preparation, its agent. Collect that error together with
+`openclaw gateway status --deep` and the startup logs.
+
+An `ambient credentials` stage can be waiting for a plugin's external login
+check even when the Gateway process uses little CPU. For Claude CLI, run
+`claude auth status --json` as the Gateway user with the same environment.
+Startup shares this check across workspaces; a large roster should not launch
+one native-login subprocess per agent. A successful `/health` response alone
+does not establish that model runtime publication completed.
+
 ## Split brain installs and newer config guard
 
 Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -130,8 +144,8 @@ If the target is intentional, configure both the direct skill root and the allow
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
@@ -266,6 +280,21 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+
+## Agent run failed with a storage error
+
+An error naming the **Gateway state database** identifies a storage failure observed during the run. The chat banner, recorded assistant error, and `embedded_run_agent_end` log show the same diagnosis. Provider response bodies remain redacted.
+
+| SQLite message                                     | Next step                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `database is locked` or `database table is locked` | Retry. If it repeats, check Gateway logs and concurrent storage maintenance.                                   |
+| `database or disk is full`                         | Free disk space on the Gateway host, then retry.                                                               |
+| `attempt to write a readonly database`             | Check the Gateway service user's storage permissions and filesystem mount mode.                                |
+| `disk I/O error`                                   | Check storage health and filesystem access before retrying. This message alone does not prove disk exhaustion. |
+
+A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
+
+Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## No replies
 

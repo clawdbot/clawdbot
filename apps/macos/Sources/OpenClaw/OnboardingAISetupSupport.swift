@@ -17,26 +17,26 @@ extension OnboardingAISetupModel {
     }
 
     enum ActivationRequest {
-        case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
+        case candidate(kind: String, modelRef: String, label: String)
         case manual(key: String, provider: ManualProvider)
 
         var kind: String {
             switch self {
-            case let .candidate(kind, _, _, _): kind
+            case let .candidate(kind, _, _): kind
             case .manual: "api-key"
             }
         }
 
         var modelRef: String? {
             switch self {
-            case let .candidate(_, modelRef, _, _): modelRef
+            case let .candidate(_, modelRef, _): modelRef
             case .manual: nil
             }
         }
 
         var label: String {
             switch self {
-            case let .candidate(_, _, label, _): label
+            case let .candidate(_, _, label): label
             case let .manual(_, provider): provider.label
             }
         }
@@ -49,17 +49,10 @@ extension OnboardingAISetupModel {
             }
         }
 
-        var tryNextOnFailure: Bool {
-            switch self {
-            case let .candidate(_, _, _, tryNext): tryNext
-            case .manual: false
-            }
-        }
-
         @MainActor
         func params(supportsExactModel: Bool) -> [String: AnyCodable] {
             switch self {
-            case let .candidate(kind, modelRef, _, _):
+            case let .candidate(kind, modelRef, _):
                 OnboardingAISetupModel.activationParams(
                     kind: kind,
                     modelRef: modelRef,
@@ -131,6 +124,8 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -273,6 +268,16 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String {
+            self.pluginId
+        }
+    }
+
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -293,7 +298,7 @@ extension OnboardingAISetupModel {
         let id: String
         let presentation: CandidatePresentation?
         switch request {
-        case let .candidate(kind, _, _, _):
+        case let .candidate(kind, _, _):
             id = kind
             presentation = self.candidatePresentation[kind]
         case let .manual(_, provider):
@@ -357,6 +362,25 @@ extension OnboardingAISetupModel {
         return false
     }
 
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
+    var busyReason: String? {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
@@ -380,20 +404,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {

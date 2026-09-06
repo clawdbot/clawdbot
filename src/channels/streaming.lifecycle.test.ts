@@ -147,6 +147,17 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
+  it("keeps complete replies with long blank runs without stalling or reading candidates", async () => {
+    const finalText = `before${"\n".repeat(60_000)}after`;
+    const resolveCandidateText = vi.fn(async () => "unused");
+    const started = performance.now();
+    await expect(
+      resolveTranscriptBackedChannelFinalText({ finalText, resolveCandidateText }),
+    ).resolves.toBe(finalText);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(resolveCandidateText).not.toHaveBeenCalled();
+  });
+
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
     const fullAnswer =
       "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
