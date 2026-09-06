@@ -495,8 +495,7 @@ async function run() {
     ];
     bridgeId = (
       await podman([
-        "run",
-        "--detach",
+        "create",
         "--name",
         bridge,
         ...restrictions,
@@ -513,6 +512,8 @@ async function run() {
         "/bridge.sock",
       ])
     ).trim();
+    // Capture the identity before startup can fail after creating the container.
+    await podman(["start", bridgeId]);
     const config = telegramCandidateConfig(alias, credential.testerUserId, plan);
     const configPath = path.join(privateRoot, "candidate-config.json");
     await writeFile(configPath, JSON.stringify(config), { mode: 0o644 });
