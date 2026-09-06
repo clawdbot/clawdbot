@@ -2074,5 +2074,41 @@
   {
     "source": "Part 8 of 8",
     "target": "第 8 部分，共 8 部分"
+  },
+  {
+    "source": "Connect and pair",
+    "target": "连接与配对"
+  },
+  {
+    "source": "Sessions and sidebar",
+    "target": "会话与侧边栏"
+  },
+  {
+    "source": "Chat",
+    "target": "聊天"
+  },
+  {
+    "source": "Panels and docks",
+    "target": "面板与停靠区"
+  },
+  {
+    "source": "Settings",
+    "target": "设置"
+  },
+  {
+    "source": "Feature and RPC reference",
+    "target": "功能与 RPC 参考"
+  },
+  {
+    "source": "Offline and reconnect",
+    "target": "离线与重新连接"
+  },
+  {
+    "source": "Security model",
+    "target": "安全模型"
+  },
+  {
+    "source": "Build and develop",
+    "target": "构建与开发"
   }
 ]

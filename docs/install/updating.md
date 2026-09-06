@@ -592,7 +592,7 @@ campaigns, the CLI, and `update.run` API clients are unaffected.
 After confirmation, the dialog shows the live phase list, step details, and
 verification results. It stays open during restart and resumes from the Gateway's
 run record after reconnecting. Success and failure both leave a final report in
-the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui#updates).
+the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui/settings#updates).
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the

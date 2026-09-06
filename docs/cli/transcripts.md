@@ -35,7 +35,7 @@ derived from the session id.
 
 ## Read transcripts in the Control UI
 
-In the [Control UI](/web/control-ui#meetings-page), open the sidebar's pencil menu
+In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's pencil menu
 (**Edit pinned items**) and choose **Meetings** to browse the same SQLite archive
 at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
 Meeting notes are separate from agent chat history in **Sessions**.
@@ -198,7 +198,7 @@ when one capture is active.
 
 ## Gateway and Control UI reads
 
-Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
+Open **Meetings** in the [Control UI](/web/control-ui/settings#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
 clients use these read-only RPC methods:
 
