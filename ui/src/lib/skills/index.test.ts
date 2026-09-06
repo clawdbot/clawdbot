@@ -1259,21 +1259,21 @@ describe("skill mutations", () => {
   });
 
   it.each([
-    {
-      name: "shows ClawHub trust warnings from failed skill install error details",
-      message: "ClawHub blocked this release; install was not started.",
-      details: { warning: "BLOCKED - ClawHub flagged this release as malicious" },
-    },
-    {
-      name: "shows a ClawHub trust error without an acknowledgement retry",
-      message: "ClawHub requires acknowledgement before installing.",
-      details: {
+    [
+      "shows ClawHub trust warnings from failed skill install error details",
+      "ClawHub blocked this release; install was not started.",
+      { warning: "BLOCKED - ClawHub flagged this release as malicious" },
+    ],
+    [
+      "shows a ClawHub trust error without an acknowledgement retry",
+      "ClawHub requires acknowledgement before installing.",
+      {
         clawhubTrustCode: "clawhub_risk_acknowledgement_required",
         version: "1.2.3",
         warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
       },
-    },
-  ])("$name", async ({ message, details }) => {
+    ],
+  ] as const)("%s", async (_name, message, details) => {
     const { state, request } = createState();
     request.mockRejectedValue(Object.assign(new Error(message), { details }));
 
