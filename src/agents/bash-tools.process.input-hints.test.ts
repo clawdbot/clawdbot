@@ -4,7 +4,12 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
-import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  markExited,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -69,7 +74,7 @@ describe("process input-wait hints", () => {
       command: "cat",
       backgrounded: true,
     });
-    const write = vi.fn((_data: string, done?: (error?: Error | null) => void) => {
+    const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, done) => {
       current = false;
       done?.(null);
     });
