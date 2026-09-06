@@ -1,0 +1,156 @@
+// Real-behaviour proof for the session-derived Google Chat destination repair.
+//
+// Drives the real message tool over a session whose key folded the space id, through real
+// outbound normalization and the real Google Chat plugin action, to a real guarded HTTP
+// transport pointed at a loopback server. The assertion is on the request the transport
+// actually issued, not on a URL built by the test.
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+const loopback = vi.hoisted(() => ({ baseUrl: "" }));
+const requests = vi.hoisted(() => [] as Array<{ method: string; path: string; body: string }>);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    // Keep the real guarded fetch; only send it at the loopback origin.
+    fetchWithSsrFGuard: async (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
+      const [params] = args;
+      return await actual.fetchWithSsrFGuard({
+        ...params,
+        url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
+        policy: { allowPrivateNetwork: true },
+      });
+    },
+  };
+});
+
+vi.mock("../extensions/googlechat/src/auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../extensions/googlechat/src/auth.js")>()),
+  getGoogleChatAccessToken: vi.fn(async () => "transport-proof-token"),
+}));
+
+import { googlechatPlugin } from "../extensions/googlechat/api.js";
+import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
+import type { OpenClawConfig } from "../src/config/config.js";
+import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.sqlite-entry.js";
+import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
+import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+
+const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
+const FOLDED_SPACE = "spaces/aaqa1bc2def";
+const SESSION_KEY = `agent:main:googlechat:group:${FOLDED_SPACE}`;
+
+let server: Server;
+
+beforeAll(async () => {
+  server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      const path = request.url ?? "";
+      requests.push({
+        method: request.method ?? "",
+        path,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      if (request.method === "POST" && path.includes("/messages")) {
+        const space = path.replace(/^\/v1\//, "").replace(/\/messages.*$/, "");
+        response.end(JSON.stringify({ name: `${space}/messages/proof-1` }));
+        return;
+      }
+      response.end(JSON.stringify({ name: path.replace(/^\/v1\//, ""), spaceType: "SPACE" }));
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  loopback.baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+afterAll(async () => {
+  setActivePluginRegistry(createTestRegistry([]));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+});
+
+describe("session-derived Google Chat delivery", () => {
+  it("delivers to the canonical mixed-case space recorded by the session", async () => {
+    await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
+      const config = {
+        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        channels: {
+          googlechat: {
+            accounts: {
+              default: {
+                serviceAccount:
+                  '{"client_email":"proof@example.iam.gserviceaccount.com","private_key":"proof-key"}',
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      // The session recorded its canonical destination on the inbound turn.
+      await upsertSessionEntryCore({ agentId: "main", env: process.env, sessionKey: SESSION_KEY }, {
+        sessionId: "proof-session",
+        updatedAt: Date.now(),
+        delivery: {
+          kind: "external",
+          route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+          context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+          origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+        },
+      } as never);
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "googlechat", source: "test", origin: "bundled", plugin: googlechatPlugin },
+        ]),
+      );
+
+      requests.length = 0;
+
+      // The ambient surface is webchat; the destination exists only in the folded session
+      // key and in the session's stored delivery metadata.
+      const tool = createMessageTool({
+        config,
+        agentId: "main",
+        agentSessionKey: SESSION_KEY,
+        currentChannelProvider: "webchat",
+        workspaceDir: state.workspaceDir,
+        runMessageAction,
+        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+        resolveCommandSecretRefsViaGateway: async ({
+          config: inputConfig,
+        }: {
+          config: OpenClawConfig;
+        }) => ({
+          resolvedConfig: inputConfig,
+          diagnostics: [],
+          targetStatesByPath: {},
+          hadUnresolvedTargets: false,
+        }),
+      } as never);
+
+      // No explicit target: the tool must derive the destination from the session.
+      const result = await tool.execute("proof-1", {
+        action: "send",
+        message: "session-derived reply",
+      } as never);
+
+      const sends = requests.filter((entry) => entry.method === "POST");
+      expect(sends.length).toBeGreaterThan(0);
+      console.log("CAPTURED REQUESTS:", JSON.stringify(requests, null, 2));
+      console.log("TOOL RESULT:", JSON.stringify(result, null, 2));
+      expect(sends[0]?.path).toBe(`/v1/${CANONICAL_SPACE}/messages`);
+      expect(sends[0]?.path).not.toContain(FOLDED_SPACE);
+    });
+  }, 60_000);
+});

@@ -12,7 +12,11 @@ import {
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
-import { openSessionEntryReadView, type SessionEntryReadView } from "./session-accessor.js";
+import {
+  loadExactSessionEntryReadOnly,
+  openSessionEntryReadView,
+  type SessionEntryReadView,
+} from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -22,6 +26,53 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
+
+/**
+ * Reads one session's stored delivery context by exact persisted key.
+ *
+ * `extractDeliveryInfo` widens its search when a keyed probe finds nothing routable: it adds
+ * folded-alias probes and, at `findSessionEntryInStore`, builds a freshest-row index over
+ * `store.entries()`. That is the right trade for recovery paths that must find an entry, but it
+ * makes lookup cost grow with the store on exactly the miss paths. Callers on hot construction
+ * paths use this instead: one keyed read of this session's own row, no alias probes, no
+ * freshest-row index, and no `store.entries()`. A miss returns undefined and leaves the caller
+ * on its existing behaviour.
+ *
+ * Scope note: the shared exact-read primitive still runs the once-per-connection canonical-key
+ * audit in `assertCanonicalSqliteSessionKeysCurrent`, which scans on its first use of a database
+ * handle and is memoized thereafter. `extractDeliveryInfo` reaches that same primitive through
+ * `openSessionEntryReadView().get`, so this helper neither adds nor removes it.
+ */
+export function readExactSessionDeliveryContext(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string | undefined;
+}): { channel?: string; to?: string; accountId?: string; threadId?: string | number } | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const cfg = params.cfg ?? getRuntimeConfig();
+    const { agentId, canonicalKey } = resolveSessionStoreIdentity({ cfg, sessionKey });
+    const entry = loadExactSessionEntryReadOnly({
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      sessionKey: canonicalKey,
+      projection: "list",
+    })?.entry;
+    const context = deliveryContextFromSession(entry);
+    return hasDeliveryTargetFields(context)
+      ? {
+          channel: context.channel,
+          to: context.to,
+          accountId: context.accountId,
+          threadId: context.threadId,
+        }
+      : undefined;
+  } catch {
+    // Best-effort, matching extractDeliveryInfo: an unreadable store is not an error here.
+    return undefined;
+  }
+}
 
 /**
  * Extracts the routable delivery context and thread id for a persisted session key.

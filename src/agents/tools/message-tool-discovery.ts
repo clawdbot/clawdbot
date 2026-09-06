@@ -16,7 +16,7 @@ import {
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
+import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
@@ -93,6 +93,9 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
  * channel, and the stored id must match the folded one case-insensitively. The
  * last mirrors the stored-key guard in src/config/sessions/store-entry.ts, and
  * means the substitution can never select a different space or account.
+ *
+ * The lookup is bounded: readExactSessionDeliveryContext performs a single keyed read of this
+ * session's own row and never builds the freshest-row index that walks every stored session.
  */
 function recoverSessionCanonicalPeerId(params: {
   cfg?: OpenClawConfig;
@@ -103,7 +106,10 @@ function recoverSessionCanonicalPeerId(params: {
   if (getChannelPlugin(params.channel)?.messaging?.targetIdComparison !== "case-sensitive") {
     return params.peerId;
   }
-  const { deliveryContext } = extractDeliveryInfo(params.sessionKey, { cfg: params.cfg });
+  const deliveryContext = readExactSessionDeliveryContext({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
   const storedTo = normalizeOptionalString(deliveryContext?.to);
   if (!storedTo || normalizeMessageChannel(deliveryContext?.channel) !== params.channel) {
     return params.peerId;
