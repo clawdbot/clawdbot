@@ -34,14 +34,14 @@ export function readSqliteIntegrityFileIdentity(
   return { dev: current.dev, ino: current.ino };
 }
 
-/** The caller retains its canonical runtime lease until the read-only Worker exits. */
+/** The caller retains its owning lease until the read-only Worker exits. */
 export function assertSqliteIntegrityInWorker(
   pathname: string,
   busyTimeoutMs: number,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  // The caller retains its runtime lease through native exit. This witness
+  // The caller retains its owning lease through native exit. This witness
   // detects observed path swaps; it is not native descriptor authority.
   const identity = readSqliteIntegrityFileIdentity(pathname);
   const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");

@@ -18,6 +18,7 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -323,11 +324,12 @@ async function migrateTranscriptSessions(params: {
   }
 }
 
-async function migrateAgentDatabase(params: {
-  agentId: string;
-  pathname: string;
-}): Promise<DatabaseMigrationResult> {
-  migrateOpenClawAgentDatabaseForMaintenance(params);
+async function migrateAgentDatabase(
+  params: { agentId: string; pathname: string },
+  maintenance: OpenClawStateLeaseContext,
+): Promise<DatabaseMigrationResult> {
+  await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
+  maintenance.assertOwned();
   const database = openNodeSqliteDatabase(params.pathname);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -451,13 +453,13 @@ export async function migrateHistoricalTranscriptDirectives(
       }
     }
     if (targets.length > 0) {
-      await withAgentDatabaseMaintenanceLease({ env }, async () => {
+      await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
         for (const target of targets) {
           try {
-            const result = await migrateAgentDatabase({
-              agentId: target.agentId,
-              pathname: target.path,
-            });
+            const result = await migrateAgentDatabase(
+              { agentId: target.agentId, pathname: target.path },
+              maintenance,
+            );
             if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
               changes.push(
                 `Migrated historical transcript directives in ${target.path}: ${result.transcriptSessions} active session(s), ${result.archivedTranscripts} archived transcript(s).`,

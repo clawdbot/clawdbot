@@ -3823,8 +3823,9 @@ describe("openclaw agent database", () => {
     ).toEqual({ name: "route_context_json" });
   });
 
-  it("installs same-version session additions before maintenance index repair", () => {
+  it("installs same-version session additions before maintenance index repair", async () => {
     const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
@@ -3853,10 +3854,13 @@ describe("openclaw agent database", () => {
       drifted.close();
     }
 
-    migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: "worker-1",
-      pathname: databasePath,
-    });
+    materializeSharedStateDatabase(env);
+    await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+      migrateOpenClawAgentDatabaseForMaintenance(
+        { agentId: "worker-1", pathname: databasePath },
+        maintenance,
+      ),
+    );
 
     const repaired = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -4013,12 +4017,14 @@ describe("openclaw agent database", () => {
     await expect(
       migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env }),
     ).rejects.toThrow(/missing table auth_profile_store/iu);
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/missing table auth_profile_store/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/missing table auth_profile_store/iu);
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -4092,7 +4098,7 @@ describe("openclaw agent database", () => {
     ).toEqual({ name: "session_suggestions" });
   });
 
-  it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
+  it("rejects an inline unique constraint hidden behind a SQLite autoindex", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
@@ -4120,12 +4126,14 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /unexpected unique index on cache_entries/iu,
     );
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/unexpected unique index on cache_entries/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/unexpected unique index on cache_entries/iu);
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(

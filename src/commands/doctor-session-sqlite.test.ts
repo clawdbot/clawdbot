@@ -31,6 +31,11 @@ import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { ExitError } from "../runtime.js";
 import {
+  AGENT_DATABASE_MAINTENANCE_LEASE,
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "../state/openclaw-agent-db-lease.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -40,7 +45,10 @@ import {
   readOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
@@ -3146,6 +3154,76 @@ describe("runDoctorSessionSqlite", () => {
       ).toBe(true);
     },
   );
+
+  it("fences quarantine clearing and later recovery targets after an awaited repair loses maintenance", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    createCanonicalCacheIndexDrift(sqlitePath);
+    const laterPath = resolveOpenClawAgentSqlitePath({ agentId: "later", env: store.env });
+    fs.mkdirSync(path.dirname(laterPath), { recursive: true });
+    const laterBytes = Buffer.from("synthetic corrupt database\n");
+    fs.writeFileSync(laterPath, laterBytes, { mode: 0o600 });
+    for (const databasePath of [sqlitePath, laterPath]) {
+      expect(
+        recordOpenClawDatabaseQuarantine({
+          env: store.env,
+          kind: "agent",
+          path: databasePath,
+          reason: "synthetic recovery quarantine",
+        }),
+      ).toBe(true);
+    }
+    const quarantineBefore = [sqlitePath, laterPath].map((databasePath) =>
+      readOpenClawDatabaseQuarantine(databasePath, { env: store.env }),
+    );
+    const agentDatabase = await import("../state/openclaw-agent-db.js");
+    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    let competingLeaseId: string | undefined;
+    const repair = vi
+      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .mockImplementationOnce(async (options, maintenance) => {
+        await migrate(options, maintenance);
+        // Lose the real owner at the caller's new await boundary, after native repair succeeds.
+        const removed = openOpenClawStateDatabase({ env: store.env })
+          .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+        expect(removed.changes).toBe(1);
+        competingLeaseId = claimOpenClawAgentDatabaseLease({
+          agentId: "later",
+          path: laterPath,
+          env: store.env,
+        });
+      });
+    try {
+      await expect(
+        recoverDoctorSessionSqliteTargets({
+          env: store.env,
+          options: { mode: "recover" },
+          targets: [
+            { agentId: "main", storePath: sqlitePath },
+            { agentId: "later", storePath: laterPath },
+          ],
+          validateTarget: async () => {
+            throw new Error("Expected direct recovery without a failed migration manifest");
+          },
+        }),
+      ).rejects.toThrow(/maintenance lease.*was lost/iu);
+      expect(competingLeaseId).toBeDefined();
+      expect(
+        [sqlitePath, laterPath].map((databasePath) =>
+          readOpenClawDatabaseQuarantine(databasePath, { env: store.env }),
+        ),
+      ).toEqual(quarantineBefore);
+      expect(fs.readFileSync(laterPath)).toEqual(laterBytes);
+      expect(
+        fs.readdirSync(path.dirname(laterPath)).some((name) => name.includes(".corrupt-")),
+      ).toBe(false);
+    } finally {
+      repair.mockRestore();
+      if (competingLeaseId) {
+        releaseOpenClawAgentDatabaseLease(competingLeaseId, { env: store.env });
+      }
+    }
+  });
 
   it.each(["newer schema", "mismatched older schema", "I/O error"] as const)(
     "keeps canonical-index repair failures in place after %s",
