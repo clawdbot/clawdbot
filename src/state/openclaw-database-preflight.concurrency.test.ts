@@ -184,7 +184,11 @@ describe("OpenClaw database schema preflight concurrency", () => {
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    snapshotProbe.gatesByPath.set(realPaths[0], firstGate);
+    const firstRealPath = realPaths[0];
+    if (firstRealPath === undefined) {
+      throw new Error("expected at least one registered agent database");
+    }
+    snapshotProbe.gatesByPath.set(firstRealPath, firstGate);
 
     const preflightPromise = preflightOpenClawDatabaseSchemas({
       env,
