@@ -549,20 +549,16 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-    const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
+    const memorySync = vi.spyOn(harness, "syncMemoryFiles");
 
     harness.dirty = true;
     harness.memoryFullRetryDirty = true;
-    harness.syncMemoryFiles = async (params: { needsFullReindex: boolean }) => {
-      memorySyncCalls.push(params);
-      return emptySyncPlan;
-    };
 
     await harness.sync({ reason: "test" });
 
-    expect(memorySyncCalls).toHaveLength(1);
-    expect(memorySyncCalls[0]).toMatchObject({ needsFullReindex: true });
+    expect(memorySync).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ needsFullReindex: true }),
+    );
     expect(harness.dirty).toBe(false);
     expect(harness.memoryFullRetryDirty).toBe(false);
   });

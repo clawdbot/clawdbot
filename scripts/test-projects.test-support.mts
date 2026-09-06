@@ -31,7 +31,6 @@ import {
 import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -64,7 +63,6 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
-  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -580,7 +578,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   ]),
   ...[
     "src/system-agent/setup-inference-persist.ts",
-    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
@@ -4019,20 +4016,14 @@ export function buildVitestRunPlans(
       kind === "default" &&
       useCliTargetArgs &&
       !watchMode &&
-      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
-        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
-            "node",
-            "vitest",
-            ...forwardedPlanArgs,
-          ])
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim() &&
+      grouped.every((targetArg) => !path.isAbsolute(targetArg))
+        ? uniqueOrdered(grouped.map((targetArg) => toRepoRelativeTarget(targetArg, cwd)))
         : null;
     // CI needs explicit selection metadata. Keep the CLI filters too: the unit
     // config and runner use them for exclude and empty-selection policy.
     const scopedUnitIncludes =
       unitCliIncludes?.length &&
-      grouped.every((targetArg) =>
-        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
-      ) &&
       unitCliIncludes.every(
         (file) =>
           !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
@@ -4485,7 +4476,7 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
   const candidateFiles = includePatterns.some(isGlobTarget)
-    ? listExplicitTestTargetFilesForCwd(cwd)
+    ? listExplicitTestTargetFilesForCwd(cwd).toSorted()
     : [];
   return uniqueOrdered(
     includePatterns.flatMap((pattern) => {

@@ -40,7 +40,7 @@ import {
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -429,16 +429,19 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       }),
     };
   }
-  const commitInboundDedupeIfClaimed = () => {
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
-  };
-  const releaseInboundDedupeIfClaimed = () => {
-    if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
-    }
-  };
+  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAbandoned = lifecycle.onAbandoned;
+    lifecycle.onAbandoned = () => {
+      // Release before ingress retries, including abandonment before commit.
+      if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
+        inboundDedupeClaim.release();
+      }
+      onAbandoned?.();
+    };
+  }
   const finishReplyOperationBusyDispatch = (opts?: {
     dedupeDisposition?: "commit" | "release";
     recordAgentDispatchCompleted?: boolean;

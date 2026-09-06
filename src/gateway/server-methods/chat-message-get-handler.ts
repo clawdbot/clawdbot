@@ -12,14 +12,16 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  isPendingAssistantError,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
 import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { readChatHistoryMessageId } from "./chat-history-pages.js";
+import { readChatHistoryPage } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
@@ -29,13 +31,33 @@ import { assertValidParams } from "./validation.js";
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionEntry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   sessionKey: string;
-  agentId?: string;
+  agentId: string;
+  message: unknown;
   messageId: string;
   sessionStartedAt?: number;
   allowResetArchiveFallback?: boolean;
 }): Promise<boolean> {
+  if (isPendingAssistantError(params.message)) {
+    // A recovered attempt remains stored but no longer belongs to visible history.
+    // Reuse the anchored history owner; ordinary message lookups stay on the exact-ID path.
+    const page = await readChatHistoryPage({
+      entry: params.sessionEntry,
+      provider: undefined,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+      sessionAgentId: params.agentId,
+      canonicalKey: params.sessionKey,
+      max: 1,
+      maxHistoryBytes: MAX_PAYLOAD_BYTES,
+      effectiveMaxChars: MAX_PAYLOAD_BYTES,
+      offset: undefined,
+      messageId: params.messageId,
+      ignoreCliSessionImports: true,
+    });
+    return page.messages.some((message) => readChatHistoryMessageId(message) === params.messageId);
+  }
   if (params.sessionStartedAt === undefined) {
     return true;
   }
@@ -159,6 +181,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       sessionEntry: entry,
       sessionKey,
       agentId: sessionAgentId,
+      message: resolved.message,
       messageId,
       sessionStartedAt:
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,

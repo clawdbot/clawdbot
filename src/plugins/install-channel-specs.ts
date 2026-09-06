@@ -1,12 +1,13 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import {
   isExactSemverVersion,
   parseRegistryNpmSpec,
   type ParsedRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
 } from "../infra/npm-registry-spec.js";
-import { isBetaTag, type UpdateChannel } from "../infra/update-channels.js";
+import { selectNpmChannelVersion, type UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { isUnavailableNpmTarget, PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
 import type { PluginPackageInstall } from "./package-manifest.types.js";
@@ -80,7 +81,14 @@ type ChannelInstallSpecs = {
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  npmResolution?: NpmSpecResolution;
+  channelTag?: "beta" | "latest";
+  channelReason?: "tag-behind-latest";
 };
+
+export class NpmChannelResolutionError extends Error {
+  readonly code = PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE;
+}
 
 /** Bare specs and latest retain default intent while following the active release channel. */
 export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | null {
@@ -97,13 +105,16 @@ export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | nul
   return null;
 }
 
-export function resolveNpmInstallSpecsForUpdateChannel(params: {
+type ChannelInstallParams = {
   spec: string;
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
-}): ChannelInstallSpecs {
+  timeoutMs?: number;
+};
+
+function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefined {
   if (
     params.updateChannel === "extended-stable" ||
     (params.updateChannel === "stable" && params.versionBoundToCore)
@@ -121,39 +132,66 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
       const installVersion = params.versionBoundToCore
         ? resolveOpenClawReleaseCohortVersion(coreVersion)
         : coreVersion;
-      return {
-        installSpec: `${target.name}@${installVersion}`,
-        recordSpec: params.spec,
-      };
+      return `${target.name}@${installVersion}`;
     }
+  }
+  return undefined;
+}
+
+export async function resolveNpmInstallSpecsForUpdateChannel(
+  params: ChannelInstallParams,
+): Promise<ChannelInstallSpecs> {
+  const coreBoundSpec = resolveCoreBoundNpmSpec(params);
+  const target = parseRegistryNpmSpec(params.spec);
+  const selector = target?.selector?.toLowerCase();
+  if (
+    coreBoundSpec ||
+    params.updateChannel !== "beta" ||
+    !target ||
+    (target.selectorKind !== "none" &&
+      !(target.selectorKind === "tag" && (selector === "latest" || selector === "beta")))
+  ) {
     return {
-      installSpec: params.spec,
+      installSpec: coreBoundSpec ?? params.spec,
       recordSpec: params.spec,
     };
   }
-  const betaTarget = resolveDefaultNpmSpec(params.spec);
-  if (params.updateChannel !== "beta" || !betaTarget) {
-    return {
-      installSpec: params.spec,
-      recordSpec: params.spec,
-    };
+  const { resolveNpmSpecMetadata } = await import("../infra/install-source-utils.js");
+  const resolveTag = async (tag: "beta" | "latest") => {
+    const result = await resolveNpmSpecMetadata({
+      spec: `${target.name}@${tag}`,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!result.ok) {
+      if (result.category === "metadata-env") {
+        throw new NpmChannelResolutionError(
+          `Could not resolve ${target.name}@${tag}: ${result.error}`,
+        );
+      }
+      return { version: null, metadata: undefined };
+    }
+    if (
+      result.metadata.name !== target.name ||
+      !isExactSemverVersion(result.metadata.version ?? "")
+    ) {
+      throw new NpmChannelResolutionError(
+        `Invalid npm channel metadata for ${target.name}@${tag}.`,
+      );
+    }
+    return { version: result.metadata.version ?? null, metadata: result.metadata, tag };
+  };
+  const [beta, latest] = await Promise.all([resolveTag("beta"), resolveTag("latest")]);
+  const selected = selectNpmChannelVersion(beta, latest);
+  if (!selected.version || !selected.metadata) {
+    // Preserve the install owner's normal unavailable-source result and declared source fallback.
+    return { installSpec: `${target.name}@latest`, recordSpec: params.spec };
   }
-  // The installed core survives post-update process handoffs; a moving beta tag
-  // can select a different release from an explicitly requested core version.
-  const coreVersion = params.coreVersion?.trim();
-  const betaVersion =
-    params.officialPackageName === betaTarget.name &&
-    coreVersion &&
-    isExactSemverVersion(coreVersion) &&
-    isBetaTag(coreVersion)
-      ? coreVersion
-      : "beta";
-  const betaSpec = `${betaTarget.name}@${betaVersion}`;
   return {
-    installSpec: betaSpec,
+    installSpec: `${target.name}@${selected.version}`,
     recordSpec: params.spec,
-    fallbackSpec: params.spec,
-    fallbackLabel: betaSpec,
+    npmResolution: selected.metadata,
+    channelTag: selected.tag,
+    ...(selected === latest && beta.version ? { channelReason: "tag-behind-latest" } : {}),
   };
 }
 
@@ -171,11 +209,11 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     (params.updateChannel === "extended-stable" ||
       (params.updateChannel === "stable" && params.versionBoundToCore))
   ) {
-    const npm = resolveNpmInstallSpecsForUpdateChannel({
+    const npmSpec = resolveCoreBoundNpmSpec({
       ...params,
       spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
     });
-    return { installSpec: `clawhub:${npm.installSpec}`, recordSpec: params.spec };
+    return { installSpec: npmSpec ? `clawhub:${npmSpec}` : params.spec, recordSpec: params.spec };
   }
   if (
     params.updateChannel !== "beta" ||
@@ -187,13 +225,7 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
       recordSpec: params.spec,
     };
   }
-  // Declared official sources share the installed core's beta cohort even when
-  // availability moves an install from npm to ClawHub.
-  const betaTarget =
-    params.officialPackageName === parsed.name
-      ? resolveNpmInstallSpecsForUpdateChannel({ ...params, spec: parsed.name }).installSpec
-      : `${parsed.name}@beta`;
-  const betaSpec = `clawhub:${betaTarget}`;
+  const betaSpec = `clawhub:${parsed.name}@beta`;
   return {
     installSpec: betaSpec,
     recordSpec: params.spec,

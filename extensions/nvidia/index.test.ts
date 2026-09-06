@@ -94,19 +94,38 @@ function buildCatalogContext(apiKey?: string) {
   };
 }
 
-function buildAugmentCatalogContext(apiKey?: string) {
-  const env = { ...process.env };
-  if (!apiKey) {
-    delete env.NVIDIA_API_KEY;
-  }
-  return {
-    ...buildCatalogContext(apiKey),
-    env,
-    entries: [],
-  };
-}
-
 describe("nvidia provider hooks", () => {
+  it.each([401, 403, 503])(
+    "reports public catalog HTTP %s without rejecting inference credentials",
+    async (status) => {
+      mockFeaturedCatalogResponse({ error: "unavailable" }, status);
+      const provider = await registerNvidiaProvider();
+      const rejected = status === 401 || status === 403;
+      await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toEqual({
+        providers: {},
+        outcomes: [
+          {
+            provider: "nvidia",
+            status: rejected ? "auth-rejected" : "unavailable",
+            ...(rejected ? { rejectionScope: "catalog" } : {}),
+          },
+        ],
+      });
+      for (const [request] of ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls) {
+        expect(new Headers(request.init.headers).has("authorization")).toBe(false);
+      }
+    },
+  );
+
+  it("publishes ready for successful empty inventory", async () => {
+    mockFeaturedCatalogResponse({ "featured-models": [] });
+    const provider = await registerNvidiaProvider();
+    await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toMatchObject({
+      provider: { apiKey: "nvapi-test", models: [] },
+      outcomes: [{ provider: "nvidia", status: "ready" }],
+    });
+  });
+
   it("registers the nvidia provider with correct metadata", async () => {
     const provider = await registerNvidiaProvider();
 
@@ -210,70 +229,6 @@ describe("nvidia provider hooks", () => {
 
     // NVIDIA uses standard streaming without custom wrappers
     expect(provider.wrapStreamFn).toBeUndefined();
-  });
-
-  it("surfaces the bundled NVIDIA models without fetching when no NVIDIA API token is available", async () => {
-    const provider = await registerNvidiaProvider();
-
-    const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext());
-
-    expect(entries?.map((entry) => entry.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "nvidia/nemotron-3.5-lightning-30b-a3b",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "z-ai/glm-5.2",
-      "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m3",
-      "deepseek-ai/deepseek-v4-pro",
-    ]);
-    expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
-
-  it("surfaces the bundled NVIDIA models when authenticated live discovery fails", async () => {
-    mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
-    const provider = await registerNvidiaProvider();
-
-    const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
-
-    expect(entries?.map((entry) => entry.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "nvidia/nemotron-3.5-lightning-30b-a3b",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "z-ai/glm-5.2",
-      "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m3",
-      "deepseek-ai/deepseek-v4-pro",
-    ]);
-    expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces republished NVIDIA featured models via augmentModelCatalog", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
-        {
-          model: "qwen/qwen3.5-397b-a17b",
-          "model-name": "Qwen3.5 397B A17B",
-          context: 262144,
-          "max-output": 32768,
-        },
-      ],
-    });
-    const provider = await registerNvidiaProvider();
-
-    const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
-
-    expect(entries?.map((entry) => entry.id)).toEqual([
-      "minimaxai/minimax-m3",
-      "qwen/qwen3.5-397b-a17b",
-    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {

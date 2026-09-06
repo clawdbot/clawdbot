@@ -338,16 +338,22 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
-// mint@4.2.808 -> common@1.0.1096: slugify.js and remarkComponentIds.js.
-// Keep its package slugger, including percent-byte and numbered-title behavior.
+// mint@4.2.808/common@1.0.1096 published these suffixes before counting.
+// Keep apostrophes as separators so slugify 2.2.1 cannot join them early
+// and change existing heading or component links.
+function mintBaseSlug(title, options) {
+  return slugify(title, { ...options, customReplacements: [["'", "-"]] }).replace(
+    /([a-zA-Z\d]+)-([ts])(-|$)/g,
+    "$1$2$3",
+  );
+}
 function mintSlug(title, counter = slugifyWithCounter()) {
   const encoded = anchor.defaults.slugify(title);
-  return counter(
-    encoded,
-    /%[0-9A-F]{2}/.test(encoded)
-      ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
-      : { decamelize: false, preserveCharacters: ["_"] },
-  );
+  const options = /%[0-9A-F]{2}/.test(encoded)
+    ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
+    : { decamelize: false, preserveCharacters: ["_"] };
+  const base = mintBaseSlug(encoded, options);
+  return counter(base, options);
 }
 function cleanMintId(id) {
   return decodeURIComponent(id.replace(/%(?![0-9A-Fa-f]{2})/g, "%25"))
@@ -537,11 +543,11 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
               ? deduplicateMintId(mintSlug(title), toc)
               : mintSlug(title);
           } else if (kind === "accordionOpen" && title) {
-            component.alias = slugify(title.replace(":", "-"), { decamelize: false });
+            component.alias = mintBaseSlug(title.replace(":", "-"), { decamelize: false });
           } else if (kind === "paramOpen") {
             const name = attrs.query ?? attrs.path ?? attrs.body ?? attrs.header ?? attrs.name;
             if (name) {
-              component.alias = slugify(`param-${name}`, { decamelize: true });
+              component.alias = mintBaseSlug(`param-${name}`, { decamelize: true });
             }
           }
         }

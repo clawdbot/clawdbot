@@ -419,6 +419,8 @@ If the bound conversation is an external channel, OpenClaw also performs its nor
 
 When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
 
+For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by

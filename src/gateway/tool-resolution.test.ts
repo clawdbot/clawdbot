@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -131,6 +132,30 @@ describe("resolveGatewayScopedTools", () => {
     });
     expect(imageTool?.description).toContain("private model context");
   });
+
+  it.each([
+    { first: undefined, second: false },
+    { first: false, second: undefined },
+  ])(
+    "keeps unknown and disabled model vision distinct in cached tools: $first then $second",
+    async ({ first, second }) => {
+      const cache = new McpLoopbackToolCache();
+      const cfg: OpenClawConfig = { tools: { allow: ["computer"] } };
+      for (const modelHasVision of [first, second]) {
+        const result = await cache.resolve({
+          cfg,
+          context: {
+            sessionKey: "agent:main:vision-context",
+            senderIsOwner: true,
+            modelHasVision,
+          },
+        });
+        expect(result.tools.some((tool) => tool.name === "computer")).toBe(
+          modelHasVision !== false,
+        );
+      }
+    },
+  );
 
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
@@ -283,7 +308,6 @@ describe("resolveGatewayScopedTools", () => {
       expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
       expect(toolResult.details).toEqual({
         status: "yielded",
-        message: "waiting on subagents",
         acknowledgment: "I’m waiting on the subagents.",
       });
     } finally {

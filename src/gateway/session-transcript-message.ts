@@ -9,7 +9,7 @@ import {
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 
 export type SessionMessageProjectionState = {
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
   turnBoundaryPending: boolean;
 };
 
@@ -77,7 +77,7 @@ export function projectSessionMessagePayload(params: {
   const projected = params.projectionState
     ? projectChatDisplayMessagesWithState([rawMessage], {
         redactInlineMedia: params.redactInlineMedia,
-        streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
+        assistantErrorPending: params.projectionState.assistantErrorPending,
         turnBoundaryPending: params.projectionState.turnBoundaryPending,
       })
     : {
@@ -86,11 +86,11 @@ export function projectSessionMessagePayload(params: {
             redactInlineMedia: params.redactInlineMedia,
           }),
         ],
-        streamErrorFallbackPending: false,
+        assistantErrorPending: false,
         turnBoundaryPending: false,
       };
   const projectionState = {
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
     turnBoundaryPending: projected.turnBoundaryPending,
   };
   const message = projected.messages[0];

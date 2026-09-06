@@ -228,6 +228,8 @@ After receiving `tool_calls`, execute the requested function(s) and send a follo
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream reports an error rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`
@@ -235,6 +237,8 @@ Set `stream: true` to receive Server-Sent Events:
 - Stream ends with `data: [DONE]`
 
 Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Open WebUI quick setup
 

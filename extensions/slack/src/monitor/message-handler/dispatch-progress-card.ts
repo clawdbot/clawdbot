@@ -70,6 +70,7 @@ export function createSlackDraftProgressCardRuntime(params: {
       formatLine: formatSlackProgressDraftLine,
       narration: snapshot.statusHeadline,
       plan: snapshot.plan,
+      diffStat: snapshot.diffStat,
     });
 
   const resolvePresentation = (

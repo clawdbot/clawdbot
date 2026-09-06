@@ -26,6 +26,7 @@ import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
+import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
@@ -313,10 +314,9 @@ export async function runExtensionBatchPlan(
     // from the exact emitted chunks, including existing exact-exclude expansion.
     const preparationCode = await prepareVitestRuntime(
       preparedGroups.flatMap((group) =>
-        group.invocations.map(({ config, args, targets }) => ({
-          configs: [config],
-          cli: { args: [...args, ...targets], dir: "extensions", env },
-        })),
+        group.invocations.flatMap(({ config, args, targets }) =>
+          resolveVitestRuntimeCliSelections(config, [...args, ...targets], env),
+        ),
       ),
       env,
     );

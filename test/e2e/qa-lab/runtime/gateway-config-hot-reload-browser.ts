@@ -69,7 +69,9 @@ export async function proveHotReloadBrowserSettings({
         (label) => document.title.endsWith(` · ${label}`),
         environment.label,
       );
-      assert.equal(await page.locator(".control-ui-environment-stripe").count(), 1);
+      const stripe = page.locator(".control-ui-environment-stripe");
+      await stripe.waitFor({ state: "visible" });
+      assert.equal(await stripe.count(), 1);
       await page.screenshot({ path: path.join(outputDir, `environment-${environment.color}.png`) });
     }
     await verifyContinuity(

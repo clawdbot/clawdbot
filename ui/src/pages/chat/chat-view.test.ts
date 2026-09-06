@@ -877,34 +877,58 @@ function createBackgroundTasks(
 }
 
 describe("chat Swarm progress", () => {
-  it("stays visible during an active run between the transcript and composer", () => {
-    const parentSessionKey = "agent:main:parent";
-    const container = renderChatView({
-      sessionKey: parentSessionKey,
-      canAbort: true,
-      showNewMessages: true,
-      swarmSessions: [
-        {
-          key: "agent:main:subagent:worker",
-          kind: "direct",
-          updatedAt: 1,
-          parentSessionKey,
-          swarmGroupId: "swarm:agent:main:parent:turn-42",
-          label: "Worker A",
-          status: "running",
+  it.each(["agent:main:parent", "parent"])(
+    "stays visible for %s between the transcript and composer",
+    (routeKey) => {
+      const parentSessionKey = "agent:main:parent";
+      const container = renderChatView({
+        sessionKey: routeKey,
+        canAbort: true,
+        showNewMessages: true,
+        swarm: {
+          sessionKey: parentSessionKey,
+          sessions: [
+            {
+              key: "agent:main:parent",
+              kind: "direct",
+              swarm: {
+                groups: [
+                  {
+                    groupId: "swarm:agent:main:parent:turn-42",
+                    createdAt: 1,
+                    children: [{ sessionKey: "agent:main:subagent:worker", status: "running" }],
+                    queued: 0,
+                    running: 1,
+                    done: 0,
+                    failed: 0,
+                  },
+                ],
+                otherActiveGroups: 0,
+              },
+            },
+            {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              updatedAt: 1,
+              parentSessionKey,
+              swarmGroupId: "swarm:agent:main:parent:turn-42",
+              label: "Worker A",
+              status: "running",
+            },
+          ],
         },
-      ],
-    });
+      });
 
-    const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
-    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
-    const scrollAnchor = widget.previousElementSibling;
-    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget.parentElement).toBe(shell.parentElement);
-    expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
-  });
+      const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
+      const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+      const scrollAnchor = widget.previousElementSibling;
+      expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
+      expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+      expect(widget.parentElement).toBe(shell.parentElement);
+      expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
+    },
+  );
 });
 
 describe("inline approval card", () => {
