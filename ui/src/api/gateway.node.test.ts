@@ -191,7 +191,7 @@ type ConnectFrame = {
   method?: string;
   params?: {
     auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
-    client: { buildId?: string };
+    client: { buildId?: string; platform?: string; deviceFamily?: string };
     maxProtocol?: number;
     minProtocol?: number;
     caps?: string[];
@@ -557,6 +557,53 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it.each([
+    {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh)",
+      maxTouchPoints: 0,
+      family: "Mac",
+    },
+    {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh)",
+      maxTouchPoints: 5,
+      family: "iPad",
+    },
+    { platform: "MacIntel", userAgent: "Mozilla/5.0 (iPad)", maxTouchPoints: 0, family: "iPad" },
+    { platform: "Win32", userAgent: "Mozilla/5.0 (Windows)", maxTouchPoints: 0, family: undefined },
+  ])(
+    "reports browser family $family without changing $platform",
+    async ({ family, ...browser }) => {
+      vi.stubGlobal("navigator", { ...browser, language: "en-US" });
+      const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+      try {
+        const { connectFrame } = await startConnect(client);
+        expect(connectFrame.params?.client.platform).toBe(browser.platform);
+        expect(connectFrame.params?.client.deviceFamily).toBe(family);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it("does not infer browser family for an explicit native platform", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Macintosh",
+      maxTouchPoints: 0,
+      language: "en-US",
+    });
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL, platform: "iOS 27.0.0" });
+    try {
+      const { connectFrame } = await startConnect(client);
+      expect(connectFrame.params?.client.platform).toBe("iOS 27.0.0");
+      expect(connectFrame.params?.client.deviceFamily).toBeUndefined();
+    } finally {
+      client.stop();
+    }
   });
 
   it("uses native client metadata and its existing operator scope grant", async () => {
