@@ -30,8 +30,8 @@ const CJK_RE = new RegExp(
   "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
 );
 
-// Anchors carrying this class get the decorative GitHub mark painted by CSS
-// (styles/chat/text.css). The mark is never emitted as markup so it stays out
+// Anchors carrying this class get a decorative GitHub icon painted by CSS
+// (styles/chat/text.css). The icon is never emitted as markup so it stays out
 // of the accessibility tree and out of copied text.
 const GITHUB_LINK_CLASS = "markdown-github-link";
 // Marks anchors whose visible text is the URL itself, which CSS may break at
@@ -110,10 +110,6 @@ function parseWebLinkHref(href: string): URL | null {
 
 function formatGitHubLinkLabel(url: URL): string {
   const segments = url.pathname.split("/").filter(Boolean);
-  const item = parseGitHubItemPath(url);
-  if (item) {
-    return segments.length === 4 && !url.search && !url.hash ? `#${item.number}` : url.href;
-  }
   if (segments.length === 2) {
     return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
   }
@@ -542,10 +538,28 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (githubLink && labelToken) {
           open.attrJoin("class", GITHUB_LINK_CLASS);
-        }
-        if (githubLink && generatedUrlLabel && labelToken) {
-          labelToken.content = formatGitHubLinkLabel(url);
-          open.attrSet("title", href ?? url.href);
+          const item = parseGitHubItemPath(url);
+          const label =
+            labelToken.type === "text" &&
+            children[index + 1] === labelToken &&
+            children[index + 2]?.type === "link_close"
+              ? labelToken.content
+              : null;
+          const itemChip =
+            item &&
+            (generatedUrlLabel ||
+              label === `#${item.number}` ||
+              label === `${item.owner}/${item.repo}#${item.number}`);
+          if (itemChip) {
+            open.attrJoin("class", "markdown-github-item");
+            open.attrSet("data-github-kind", item.kind);
+          }
+          if (generatedUrlLabel) {
+            labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
+          }
+          if (generatedUrlLabel || itemChip) {
+            open.attrSet("title", href);
+          }
         }
         if (!githubLink && labelToken && state.env.linkFavicons) {
           const favicon = new state.Token("link_favicon", "img", 0);
