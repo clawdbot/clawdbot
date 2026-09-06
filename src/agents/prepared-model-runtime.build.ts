@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
@@ -420,6 +421,7 @@ function createSnapshot(
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
+    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);

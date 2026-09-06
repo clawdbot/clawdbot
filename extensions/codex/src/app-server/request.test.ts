@@ -343,13 +343,12 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const request = vi.fn(async () => ({ ok: true }));
     type TestClient = { request: typeof request };
     const client: TestClient = { request };
-    let resolveAcquire: ((client: TestClient) => void) | undefined;
-    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(
-      () =>
-        new Promise<TestClient>((resolve) => {
-          resolveAcquire = resolve;
-        }),
-    );
+    const acquisition = createDeferred<TestClient>();
+    const acquisitionStarted = createDeferred<void>();
+    sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
+      acquisitionStarted.resolve();
+      return acquisition.promise;
+    });
 
     const result = requestCodexAppServerJson({
       method: "thread/list",
@@ -357,6 +356,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       timeoutMs: 50,
     });
     const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
+    await acquisitionStarted.promise;
     const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
@@ -367,7 +367,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await rejection;
     expect(acquireOptions?.abandonSignal?.aborted).toBe(true);
 
-    resolveAcquire?.(client);
+    acquisition.resolve(client);
     await Promise.resolve();
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();

@@ -37,8 +37,6 @@ export async function runGlobalUpdate(params: {
   timeoutMs: number;
   startedAt: number;
   beforeVersion: string | null;
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
   const { opts, pkgRoot, globalManager, runCommand, timeoutMs, startedAt, beforeVersion } = params;
   const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;

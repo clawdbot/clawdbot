@@ -43,11 +43,9 @@ export function renderSkillWorkshopHeaderControls(
   const pending = state.skillWorkshopProposals.filter(
     (proposal) => proposal.status === "pending",
   ).length;
-  const historyRecords = state.skillWorkshopProposals.length - pending;
 
   return html`
     <div class="sw-header-controls">
-      ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle)}
       ${renderHubTabs({
         id: "skill-workshop-mode",
         active: state.skillWorkshopMode,
@@ -68,20 +66,13 @@ export function renderSkillWorkshopHeaderControls(
               <span>${t("skillWorkshop.sections.suggestions")}</span>
             `,
           },
-          {
-            value: "history",
-            count: countOf(historyRecords),
-            label: html`
-              ${sectionIcon(icons.rotateCcw)}
-              <span>${t("skillWorkshop.sections.history")}</span>
-            `,
-          },
         ],
         ariaLabel: t("skillWorkshop.sections.aria"),
         panelId: "skill-workshop-mode-panel",
         variant: "sub",
         onSelect: onModeChange,
       })}
+      ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle)}
     </div>
   `;
 }

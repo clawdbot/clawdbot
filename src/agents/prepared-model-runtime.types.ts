@@ -1,5 +1,6 @@
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
@@ -69,6 +70,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
   inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
+  /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
+  routeModelResolutionMemo?: Map<string, Promise<Model>>;
 }>;
 
 /** Closed Gateway turn facts published atomically for one configured agent. */

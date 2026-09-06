@@ -92,10 +92,12 @@ function resolveRuntimeBindingCacheId(value: object | undefined): number | undef
   return id;
 }
 
-function resolveRuntimeBindingCacheIdentity(
-  runtimeOptions: PluginLoadOptions["runtimeOptions"],
-): string {
+function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string {
+  const { runtimeOptions } = options;
   return JSON.stringify({
+    capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
+    modelAuth: resolveRuntimeBindingCacheId(runtimeOptions?.modelAuth),
+    modelConfig: resolveRuntimeBindingCacheId(runtimeOptions?.modelConfig),
     nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
     subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
   });
@@ -395,7 +397,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
-    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
+    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,

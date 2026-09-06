@@ -35,12 +35,6 @@ import {
 
 const CLI_NAME = resolveCliName();
 
-export function shouldUseLegacyProcessRestartAfterUpdate(params: {
-  updateMode: UpdateRunResult["mode"];
-}): boolean {
-  return !isPackageManagerUpdateMode(params.updateMode);
-}
-
 type PostUpdateGatewayHealthRecoveryDeps = {
   recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
   waitForHealthy?: typeof waitForGatewayHealthyRestart;

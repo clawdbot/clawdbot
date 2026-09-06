@@ -23,6 +23,7 @@ import type {
 } from "../../../process/command-queue.types.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
+import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
@@ -364,50 +365,60 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       throw error;
     });
   };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = {
-      ...opts,
-      abortSignal,
-      priority: sessionLanePolicy.priority,
-      onQueued: noteCapacityWait,
-    };
-    const admittedTask = () => {
-      endCapacityWait();
-      return task();
-    };
-    const params = options.getParams();
-    // Session admission, deferred maintenance, and global admission share one queue owner.
-    releaseQueuedRunContext = retainQueuedAgentRunContext(
-      params.runId,
-      options.getLifecycleGeneration(),
-    );
-    if (releaseQueuedRunContext && params.abortSignal) {
-      if (params.abortSignal.aborted) {
-        releaseQueuedContext("abandoned");
-      } else {
-        queuedRunAbortSignal = params.abortSignal;
-        queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
-      }
-    }
-    let queuedRun: Promise<T>;
+  const enqueueSession = async <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const releaseForeground =
+      sessionLanePolicy.priority === "foreground"
+        ? await beginForegroundSessionMaintenance(
+            options.getParams().sessionKey ?? options.getParams().sessionId,
+          )
+        : undefined;
     try {
-      if (params.enqueue) {
-        queuedRun = params.enqueue(admittedTask, withRunLaneWait(sessionOpts));
-      } else {
-        noteLaneWaitIfBusy(options.sessionLane);
-        queuedRun = enqueueCommandInLane(
-          options.sessionLane,
-          admittedTask,
-          withRunLaneWait(sessionOpts),
-        );
+      const sessionOpts: CommandQueueEnqueueOptions = {
+        ...opts,
+        abortSignal,
+        priority: sessionLanePolicy.priority,
+        onQueued: noteCapacityWait,
+      };
+      const admittedTask = () => {
+        endCapacityWait();
+        return task();
+      };
+      const params = options.getParams();
+      // Session admission, deferred maintenance, and global admission share one queue owner.
+      releaseQueuedRunContext = retainQueuedAgentRunContext(
+        params.runId,
+        options.getLifecycleGeneration(),
+      );
+      if (releaseQueuedRunContext && params.abortSignal) {
+        if (params.abortSignal.aborted) {
+          releaseQueuedContext("abandoned");
+        } else {
+          queuedRunAbortSignal = params.abortSignal;
+          queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
+        }
       }
-    } catch (error) {
-      releaseQueuedContext("abandoned");
-      throw error;
+      let queuedRun: Promise<T>;
+      try {
+        if (params.enqueue) {
+          queuedRun = params.enqueue(admittedTask, withRunLaneWait(sessionOpts));
+        } else {
+          noteLaneWaitIfBusy(options.sessionLane);
+          queuedRun = enqueueCommandInLane(
+            options.sessionLane,
+            admittedTask,
+            withRunLaneWait(sessionOpts),
+          );
+        }
+      } catch (error) {
+        releaseQueuedContext("abandoned");
+        throw error;
+      }
+      return await queuedRun.finally(() => {
+        releaseQueuedContext("abandoned");
+      });
+    } finally {
+      releaseForeground?.();
     }
-    return queuedRun.finally(() => {
-      releaseQueuedContext("abandoned");
-    });
   };
 
   return {

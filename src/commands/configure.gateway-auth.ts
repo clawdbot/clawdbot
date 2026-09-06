@@ -1,7 +1,6 @@
 // Configure wizard model/auth selection and gateway auth config helpers.
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
@@ -206,9 +205,6 @@ export async function promptAuthConfig(
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
       prompter,
-      store: ensureAuthProfileStore(target.agentDir, {
-        allowKeychainPrompt: false,
-      }),
       includeSkip: true,
       config: next,
     });

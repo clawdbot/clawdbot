@@ -584,6 +584,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
     cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
     cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
@@ -608,8 +609,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     // The host loop settles all completed counts, including default/SDK runs.
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,
+    onCompactionRequestBudget: params.onCompactionRequestBudget,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
+    oneShotCliRun: params.oneShotCliRun,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,

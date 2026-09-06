@@ -205,7 +205,7 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);

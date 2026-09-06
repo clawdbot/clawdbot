@@ -19,6 +19,7 @@ import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
+import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
@@ -421,6 +422,15 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     const blockMessage = params.handoffFromGateway
       ? gatewayAncestryBlockMessage(serviceState.runtime?.pid)
       : undefined;
+    if (
+      blockMessage &&
+      (await isCurrentManagedServiceUpdateHandoffProcess({
+        root: params.root,
+        runId: params.updateRun?.runId,
+      }))
+    ) {
+      return inspected;
+    }
     return blockMessage ? { ...inspected, blockMessage } : inspected;
   }
   const updateRun = params.updateRun;

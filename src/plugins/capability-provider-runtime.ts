@@ -1,21 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
-import {
-  createProviderHttpError,
-  readProviderJsonResponse,
-  readProviderTextResponse,
-} from "../agents/provider-http-errors.js";
-import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { warn } from "../globals.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { redactSensitiveText } from "../logging/redact.js";
-import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { captureWsEvent } from "../proxy-capture/runtime.js";
-import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -24,10 +10,10 @@ import {
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
   hasManifestContractValue,
@@ -36,11 +22,6 @@ import {
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import {
-  isProviderApiKeyConfigured,
-  isProviderAuthProfileConfigured,
-  resolveProviderAuthProfileApiKey,
-} from "./provider-auth-availability.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -49,30 +30,6 @@ import {
   getPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
-
-// Supply native host operations here; importing auth discovery from the loader creates a cycle.
-const capabilityCatalogContext: PluginCapabilityCatalogContext = Object.freeze({
-  isProviderApiKeyConfigured,
-  isProviderAuthProfileConfigured,
-  resolveAgentDir,
-  createRealtimeTranscriptionWebSocketSession,
-  resolveProviderRequestHeaders,
-  resolveProviderAuthProfileApiKey,
-  resolveApiKeyForProvider: async (
-    params: Parameters<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>[0],
-  ) =>
-    (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(params),
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-  fetchWithSsrFGuard,
-  createProviderHttpError,
-  readProviderJsonResponse,
-  readProviderTextResponse,
-  formatErrorMessage,
-  warn,
-  redactSensitiveText,
-});
 
 type CapabilityProviderRegistryKey =
   | "embeddingProviders"
@@ -485,7 +442,12 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
     resolveRuntimePluginRegistry({
       ...params.loadOptions,
       ...(catalogFamily
-        ? { capabilityCatalog: { family: catalogFamily, context: capabilityCatalogContext } }
+        ? {
+            capabilityCatalog: {
+              family: catalogFamily,
+              context: resolvePluginCapabilityCatalogContext(),
+            },
+          }
         : {}),
     });
   const entries = filterAllowedEntries(registry);

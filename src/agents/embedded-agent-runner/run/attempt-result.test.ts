@@ -342,6 +342,41 @@ describe("attempt result projection", () => {
     expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
   });
 
+  it.each([
+    {
+      label: "an opaque WebSocket error",
+      errorMessage: "WebSocket error",
+      errorCode: "ERR_WEBSOCKET_TRANSPORT",
+      expected: true,
+    },
+    {
+      label: "a coded socket failure",
+      errorMessage: "provider request failed",
+      errorCode: "ECONNRESET",
+      expected: true,
+    },
+    {
+      label: "an authentication failure",
+      errorMessage: "invalid API key",
+      errorCode: undefined,
+      expected: false,
+    },
+  ])(
+    "captures settled-turn context from $label reported by the provider assistant=$expected",
+    ({ errorMessage, errorCode, expected }) => {
+      const result = completeResult({
+        currentAttemptCompletedAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage,
+          ...(errorCode ? { errorCode } : {}),
+        }),
+        messagesSnapshot: settledToolMessages(),
+      });
+
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
+    },
+  );
+
   it.each(["compaction", "tool_execution"] as const)(
     "does not authorize settled-turn finalization after a %s timeout observation",
     (timeoutObservation) => {
@@ -352,6 +387,23 @@ describe("attempt result projection", () => {
           error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
           timeoutObservation,
         },
+        messagesSnapshot: settledToolMessages(),
+      });
+
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+    },
+  );
+
+  it.each(["compaction", "tool_execution"] as const)(
+    "does not authorize assistant-reported finalization after a %s timeout observation",
+    (phase) => {
+      const result = completeResult({
+        terminal: { kind: "timeout", phase, source: "observation" },
+        currentAttemptCompletedAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "WebSocket error",
+          errorCode: "ERR_WEBSOCKET_TRANSPORT",
+        }),
         messagesSnapshot: settledToolMessages(),
       });
 

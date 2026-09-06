@@ -96,13 +96,10 @@ describe("one-shot tool-generation process cleanup", () => {
         const externalRun = await supervisor.spawn({
           mode: "child",
           argv: createSilentIdleArgv(),
-          sessionId: scopeKey,
           scopeKey,
-          backendId: "sandbox-transport",
           cleanupOwnership: "external",
         });
         const hostRun = await spawnChild(supervisor, {
-          sessionId: scopeKey,
           scopeKey,
           argv: createSilentIdleArgv(),
         });

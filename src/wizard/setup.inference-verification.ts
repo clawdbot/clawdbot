@@ -49,7 +49,7 @@ export async function offerLiveModelVerification(params: {
   }
   const [inference, authStore, agentDatabase] = await Promise.all([
     import("../system-agent/setup-inference.js"),
-    import("../agents/auth-profiles/store.js"),
+    import("../agents/auth-profiles/store-runtime.js"),
     import("../state/openclaw-agent-db.js"),
   ]);
   const stagedEnv = params.stateDir

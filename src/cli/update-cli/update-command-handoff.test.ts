@@ -115,9 +115,18 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
       }
     };
     try {
-      await expect.poll(() => fs.readFile(resultPath, "utf8"), { timeout: 20_000 }).toBeDefined();
+      // Transfer releases the CLI before its detached helper finishes owning the lease.
+      await expect
+        .poll(
+          async () => {
+            await fs.readFile(resultPath, "utf8");
+            return fs.readFile(tracePath, "utf8");
+          },
+          { timeout: 20_000 },
+        )
+        .toContain('"event":"helper-exit"');
       const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
-      await expect.poll(readLease).toBeUndefined();
+      expect(readLease()).toBeUndefined();
       expect(gateway.exitCode).toBeNull();
       expect(result.code, result.stderr).toBe(mode === "transfer" ? 0 : 23);
       const trace = (await fs.readFile(tracePath, "utf8"))
@@ -142,8 +151,8 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
     } finally {
       gateway.stdin.end();
       await closed;
-      await expect.poll(readLease).toBeUndefined();
       await expect.poll(() => fs.readFile(tracePath, "utf8")).toContain('"event":"helper-exit"');
+      expect(readLease()).toBeUndefined();
     }
   },
 );

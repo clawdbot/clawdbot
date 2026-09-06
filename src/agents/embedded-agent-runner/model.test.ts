@@ -64,8 +64,10 @@ const preparedSnapshotState = vi.hoisted(() => ({
   inlineProviderModels: [] as PreparedModelRuntimeSnapshot["inlineProviderModels"],
 }));
 
-vi.mock("../../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({

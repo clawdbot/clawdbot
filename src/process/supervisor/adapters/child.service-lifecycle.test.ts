@@ -129,8 +129,6 @@ describe.skipIf(process.platform === "win32")("POSIX child invocation identity",
         mode: "child",
         argv: [process.execPath, "-e", "process.stdout.write(process.argv0)"],
         argv0: executableAlias,
-        sessionId: `argv0-${mode}`,
-        backendId: "argv0-test",
         stdinMode: "pipe-closed" as const,
       });
 
@@ -191,8 +189,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
           'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
         ],
         stdinMode: "pipe-closed",
-        sessionId: "service-lifecycle-test",
-        backendId: "service-lifecycle-test",
         timeoutMs: timing.timeoutMs,
         noOutputTimeoutMs: timing.noOutputTimeoutMs,
         onStdout: (chunk) => {
@@ -238,8 +234,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, "-e", command],
       stdinMode: "pipe-closed",
-      sessionId: "service-secret-construction",
-      backendId: "service-secret-construction",
       timeoutMs: 500,
       secretInput: {
         fd: 3,
@@ -252,12 +246,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       commandPid = startedPid;
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
-      expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
       await vi.advanceTimersByTimeAsync(500);
-      expect(supervisor.getRecord(runId)).toMatchObject({
-        state: "exited",
-        terminationReason: "overall-timeout",
-      });
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -545,8 +534,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
-      sessionId: "service-term-grace-test",
-      backendId: "service-term-grace-test",
       onStdout: (chunk) => {
         streamedStdout += chunk;
       },
@@ -714,8 +701,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, "-e", rootScript],
       stdinMode: "pipe-closed",
-      sessionId: "service-incomplete-utf8-test",
-      backendId: "service-incomplete-utf8-test",
       onStdout: (chunk) => {
         streamed += chunk;
       },

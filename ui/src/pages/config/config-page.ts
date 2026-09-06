@@ -77,6 +77,7 @@ import {
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp } from "./mcp.ts";
+import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
@@ -123,12 +124,16 @@ type ConfigPageSetting =
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
-const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
+const MOVED_SECTION_ROUTES: Record<
+  string,
+  { routeId: RouteId; keepSection: boolean; advanced?: boolean }
+> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
   "appearance:wizard": { routeId: "advanced", keepSection: true },
+  "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -138,33 +143,11 @@ const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
-  switch (pageId) {
-    case "communications":
-      return { activeSection: "messages", activeSubsection: null };
-    case "appearance":
-      return { activeSection: "__appearance__", activeSubsection: null };
-    case "notifications":
-      return { activeSection: "__notifications__", activeSubsection: null };
-    case "security":
-      return { activeSection: "security", activeSubsection: null };
-    case "automation":
-      return { activeSection: "commands", activeSubsection: null };
-    case "mcp":
-      return { activeSection: "mcp", activeSubsection: null };
-    case "memory":
-      return { activeSection: "memory", activeSubsection: null };
-    case "talk":
-      return { activeSection: "talk", activeSubsection: null };
-    case "infrastructure":
-      return { activeSection: "gateway", activeSubsection: null };
-    case "updates":
-      return { activeSection: "update", activeSubsection: null };
-    case "ai-agents":
-      return { activeSection: "agents", activeSubsection: null };
-    case "advanced":
-      return { activeSection: null, activeSubsection: null };
+  const activeSection = configSectionKeysForPage(pageId)?.[0] ?? null;
+  if (activeSection === null && pageId !== "advanced") {
+    throw new Error("Unknown config page");
   }
-  throw new Error("Unknown config page");
+  return { activeSection, activeSubsection: null };
 }
 
 function normalizeConfigSelection(
@@ -629,8 +612,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
       if (movedRoute) {
         this.context?.navigate(movedRoute.routeId, {
-          search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
-          hash: globalThis.location?.hash ?? "",
+          search: movedRoute.keepSection
+            ? `?section=${encodeURIComponent(rawSection)}${movedRoute.advanced ? "&advanced=1" : ""}`
+            : "",
+          hash: this.routeData?.hash ?? globalThis.location?.hash ?? "",
         });
         return;
       }
@@ -1300,6 +1285,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
       showSectionDocs: this.pageId !== "communications",
+      renderSection:
+        this.pageId === "communications" && activeSection === "transcripts"
+          ? (editor) =>
+              renderMeetingCapture({
+                mutationDisabled: this.isCuratedConfigMutationDisabled(),
+                advancedExpanded:
+                  this.routeData?.advanced === true ||
+                  this.routeData?.targetBlockId === "config-section-transcripts",
+                editor,
+              })
+          : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({

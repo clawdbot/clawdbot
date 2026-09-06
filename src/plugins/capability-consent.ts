@@ -237,6 +237,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   artifactDir: string;
   currentArtifactDir?: string;
   env?: NodeJS.ProcessEnv;
+  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -259,6 +260,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       record: params.sourceRecord,
     });
   const official = isOfficialArtifact(manifest);
+  const officialExempt = official && !params.reviewOfficialArtifacts;
   const review = buildPluginCapabilityConsentReview({
     pluginId: params.pluginId,
     manifest: manifest ?? { name: params.pluginId },
@@ -279,7 +281,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
-    official || !params.enabled || acceptanceCurrent
+    officialExempt || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -315,8 +317,8 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     return throwManagedPluginCapabilityConsentRequired(finalReview);
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
-  // First-party provenance authorizes the artifact; it is not operator acceptance.
-  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  // Provenance alone is not operator acceptance; an explicit review is.
+  return !officialExempt && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -326,6 +328,8 @@ export function createManagedPluginArtifactConsentHandler(params: {
   env?: NodeJS.ProcessEnv;
   spec?: string;
   expectedIntegrity?: string;
+  /** Request operator consent for official artifacts instead of the provenance exemption. */
+  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -391,6 +395,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
           ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
         },
         sourceRecord: artifact.sourceRecord,
+        reviewOfficialArtifacts: params.reviewOfficialArtifacts,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,

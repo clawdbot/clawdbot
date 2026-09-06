@@ -55,7 +55,7 @@ beforeEach(() => {
   }));
   originalArgv = process.argv;
   originalExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
   vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   patternFiles.cleanup();
   process.argv = originalArgv;
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -143,11 +143,11 @@ describe("CLI runtime admission", () => {
     fs.writeFileSync(
       preload,
       `import cp from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
-syncBuiltinESMExports();\n`,
+syncFixtureBuiltinExports();\n`,
     );
     const configArgs = args.includes("--config")
       ? []
@@ -211,6 +211,17 @@ syncBuiltinESMExports();\n`,
         "src/cli/update-dry-run-state.process.test.ts",
       ],
       "runtime",
+    ],
+    [
+      "Codex delivery QA runtime",
+      "scripts/run-vitest.mts",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+      ],
+      "private-qa",
     ],
     [
       "Gateway core",
@@ -315,7 +326,7 @@ process.stdin.resume();\n`,
               preload,
               `import cp from 'node:child_process';
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   if (args.includes('scripts/run-node.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
@@ -325,7 +336,7 @@ cp.spawn = (bin, args, options) => {
   }
   return spawn(bin, args, options);
 };
-syncBuiltinESMExports();\n`,
+syncFixtureBuiltinExports();\n`,
             );
             const child = spawn(
               process.execPath,
@@ -546,7 +557,7 @@ describe("parallel cache lease completion", () => {
       expect(uiPaths).toHaveLength(4);
       expect(new Set(uiPaths).size).toBe(1);
       expect(attempts).toBe(2);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 
@@ -635,6 +646,7 @@ describe("test-projects build admission", () => {
   const toolingConfig = "test/vitest/vitest.tooling.config.ts";
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
   const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+  const privateQaTooling = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
 
   it.each([
     {
@@ -647,6 +659,12 @@ describe("test-projects build admission", () => {
       name: "borrowed runtime tooling",
       args: [toolingConfig],
       include: [runtimeTooling],
+      build: true,
+    },
+    {
+      name: "borrowed private-QA tooling",
+      args: [toolingConfig],
+      include: [privateQaTooling],
       build: true,
     },
     { name: "borrowed empty selection", args: [toolingConfig], include: [], build: false },
@@ -784,7 +802,7 @@ describe("test-projects build admission", () => {
       }
       expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
       expect(commands.reader).toHaveBeenCalledTimes(2);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 

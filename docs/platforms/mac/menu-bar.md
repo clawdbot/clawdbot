@@ -22,7 +22,9 @@ The app's main **Gateways** menu is always present. It lists the primary Gateway
 
 Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, **checking…** before the first result, or **unreachable** with the last successful contact time after a failure. Closing the menu cancels its probes and disconnects probed saved Gateways with no open dashboard windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+
+The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
 
 Manual Cron refreshes and successful job changes supersede older reads, so an in-flight response cannot restore a deleted job to the list.
 

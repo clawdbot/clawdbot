@@ -2,8 +2,6 @@ import { html } from "lit";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import {
   filterSkillWorkshopProposals,
-  filterWorkshopSection,
-  type SkillWorkshopAppliedDiffMode,
   type SkillWorkshopMode,
 } from "../../lib/skill-workshop/index.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
@@ -13,7 +11,6 @@ import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./heade
 import type { SkillWorkshopRenderContext } from "./page-types.ts";
 import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
-  countSkillWorkshopProposals,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopInstalledSkill,
   selectSkillWorkshopProposal,
@@ -42,26 +39,14 @@ export function renderSkillWorkshopPage(
     void selectSkillWorkshopInstalledSkill(state, context, name).finally(requestUpdate);
     requestUpdate();
   };
-  const selectMode = (mode: SkillWorkshopMode, query = "") => {
-    state.skillWorkshopStatusFilter = mode === "suggestions" ? "pending" : "all";
-    state.skillWorkshopQuery = query;
+  const selectMode = (mode: SkillWorkshopMode) => {
+    state.skillWorkshopQuery = "";
     state.skillWorkshopFilePreviewKey = null;
     setSkillWorkshopMode(state, mode, requestUpdate);
     if (mode === "skills") {
-      const current = state.skillWorkshopInstalledSelection;
-      const skill =
-        state.skillWorkshopInstalledSkills.find(
-          (candidate) => current.status !== "idle" && candidate.name === current.name,
-        ) ?? state.skillWorkshopInstalledSkills[0];
-      if (skill) {
-        selectInstalled(skill.name);
-      }
+      onRetry();
     } else {
-      const proposal = filterSkillWorkshopProposals(
-        filterWorkshopSection(state.skillWorkshopProposals, mode),
-        state.skillWorkshopStatusFilter,
-        query,
-      )[0];
+      const proposal = filterSkillWorkshopProposals(state.skillWorkshopProposals, "")[0];
       if (proposal) {
         void selectSkillWorkshopProposal(state, context, proposal.key).finally(requestUpdate);
       }
@@ -91,23 +76,12 @@ export function renderSkillWorkshopPage(
           ${renderSkillWorkshopHeaderControls(state, { ...renderContext, onModeChange: selectMode })}
         </div>
         ${(() => {
-          const sectionProposals = filterWorkshopSection(
-            state.skillWorkshopProposals,
-            state.skillWorkshopMode,
-          );
           const visibleProposals = filterSkillWorkshopProposals(
-            sectionProposals,
-            state.skillWorkshopStatusFilter,
+            state.skillWorkshopProposals,
             state.skillWorkshopQuery,
           );
-          const selectedProposal = state.skillWorkshopProposals.find(
-            (proposal) => proposal.key === state.skillWorkshopSelectedKey,
-          );
           const isSelectedProposal = (proposal: (typeof visibleProposals)[number]) =>
-            proposal.key === state.skillWorkshopSelectedKey ||
-            (state.skillWorkshopStatusFilter === "applied" &&
-              selectedProposal?.status === "applied" &&
-              proposal.slug === selectedProposal?.slug);
+            proposal.key === state.skillWorkshopSelectedKey;
           const selectedIndex = visibleProposals.findIndex(isSelectedProposal);
           const selectProposal = (key: string) => {
             state.skillWorkshopFilePreviewKey = null;
@@ -149,18 +123,20 @@ export function renderSkillWorkshopPage(
               inspectingKey: state.skillWorkshopInspectingKey,
               proposals: state.skillWorkshopProposals,
               installedSkills: state.skillWorkshopInstalledSkills,
-              installedSelection: state.skillWorkshopInstalledSelection,
+              installedSelection: state.skillWorkshopInstalledSkills.find(
+                (skill) => skill.name === state.skillWorkshopInstalledName,
+              )?.read ?? { status: "idle" },
               onSelectInstalled: selectInstalled,
               onRetryInstalled: () => {
-                const selection = state.skillWorkshopInstalledSelection;
-                if (selection.status !== "idle") {
-                  selectInstalled(selection.name);
+                const name = state.skillWorkshopInstalledName;
+                if (name) {
+                  void selectSkillWorkshopInstalledSkill(state, context, name, {
+                    force: true,
+                  }).finally(requestUpdate);
+                  requestUpdate();
                 }
               },
-              onShowHistory: (skillKey) => selectMode("history", skillKey),
               selectedKey: state.skillWorkshopSelectedKey,
-              appliedDiffMode: state.skillWorkshopAppliedDiffMode,
-              statusFilter: state.skillWorkshopStatusFilter,
               query: state.skillWorkshopQuery,
               filePreviewKey: state.skillWorkshopFilePreviewKey,
               filePreviewQuery: state.skillWorkshopFilePreviewQuery,
@@ -175,27 +151,15 @@ export function renderSkillWorkshopPage(
               workshopAgentName,
               selfLearning,
               historyScan: state.skillWorkshopHistoryScan,
-              counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
-              onRetry: () => {
-                onRetry();
-              },
-              onStatusFilterChange: (status) => {
-                state.skillWorkshopStatusFilter = status;
-                requestUpdate();
-                selectVisibleFallback(
-                  filterSkillWorkshopProposals(sectionProposals, status, state.skillWorkshopQuery),
-                );
-              },
+              onRetry,
               onQueryChange: (query) => {
                 state.skillWorkshopQuery = query;
                 requestUpdate();
-                selectVisibleFallback(
-                  filterSkillWorkshopProposals(
-                    sectionProposals,
-                    state.skillWorkshopStatusFilter,
-                    query,
-                  ),
-                );
+                if (state.skillWorkshopMode === "suggestions") {
+                  selectVisibleFallback(
+                    filterSkillWorkshopProposals(state.skillWorkshopProposals, query),
+                  );
+                }
               },
               onFilePreviewQueryChange: (query) => {
                 state.skillWorkshopFilePreviewQuery = query;
@@ -207,10 +171,6 @@ export function renderSkillWorkshopPage(
               },
               onModeChange: selectMode,
               onSelect: selectProposal,
-              onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => {
-                state.skillWorkshopAppliedDiffMode = mode;
-                requestUpdate();
-              },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (decision) => {

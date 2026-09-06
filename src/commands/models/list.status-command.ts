@@ -1,5 +1,6 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
@@ -21,8 +22,8 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  getRuntimeAuthProfileStoreSnapshot,
-} from "../../agents/auth-profiles/store.js";
+} from "../../agents/auth-profiles/store-runtime.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -198,22 +199,6 @@ type StatusModelRouteIssue =
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
       message: string;
     };
-
-function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
-  return providerUsageRuntimeLoader.load();
-}
-
-function loadProgressRuntime(): Promise<ProgressRuntime> {
-  return progressRuntimeLoader.load();
-}
-
-function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
-  return terminalTableRuntimeLoader.load();
-}
-
-function loadListProbeRuntime(): Promise<ListProbeRuntime> {
-  return listProbeRuntimeLoader.load();
-}
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
   if (raw === undefined || raw === null || raw === "") {
@@ -652,14 +637,12 @@ export async function modelsStatusCommand(
     >();
     const resolveStatusRouteIdentityKey = (entry: { provider: string; id: string }) => {
       const provider = normalizeProviderId(entry.provider);
-      const key = modelKey(provider, entry.id);
-      const providerPrefix = `${provider}/`;
       // Physical catalog rows may repeat their provider in the model id.
       // Collapse only that prefix; the remaining model id stays case-sensitive.
-      const id = key.toLowerCase().startsWith(providerPrefix)
-        ? key.slice(providerPrefix.length)
-        : key;
-      return resolveModelCatalogIdentityKey({ provider, id });
+      return resolveModelCatalogIdentityKey({
+        provider,
+        id: stripSelfProviderModelPrefix(provider, modelKey(provider, entry.id)),
+      });
     };
     for (const entry of catalog.routeVariants) {
       if (entry.api === undefined && entry.baseUrl === undefined) {
@@ -1149,8 +1132,8 @@ export async function modelsStatusCommand(
     let probeSummary: AuthProbeSummary | undefined;
     if (opts.probe) {
       const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-        loadProgressRuntime(),
-        loadListProbeRuntime(),
+        progressRuntimeLoader.load(),
+        listProbeRuntimeLoader.load(),
       ]);
       probeSummary = await withProgressTotals(
         { label: "Probing auth profiles…", total: 1 },
@@ -1598,7 +1581,7 @@ export async function modelsStatusCommand(
       runtime.log(colorize(rich, theme.muted, "- none"));
     } else {
       const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
-        await loadProviderUsageRuntime();
+        await providerUsageRuntimeLoader.load();
       const usageByProvider = new Map<string, string>();
       const usageProviders = Array.from(
         new Set(
@@ -1686,7 +1669,7 @@ export async function modelsStatusCommand(
       const [
         { getTerminalTableWidth, renderTable },
         { describeProbeSummary, formatProbeLatency, sortProbeResults },
-      ] = await Promise.all([loadTerminalTableRuntime(), loadListProbeRuntime()]);
+      ] = await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Auth probes"));
       if (probeSummary.results.length === 0) {

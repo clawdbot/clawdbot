@@ -272,6 +272,7 @@ export async function runPreparedEmbeddedLoop(
       "context-engine",
       () =>
         createContextEngineLogicalTurnLease({
+          identity: params,
           config: params.config,
           agentDir,
           workspaceDir: resolvedWorkspace,
@@ -367,10 +368,20 @@ export async function runPreparedEmbeddedLoop(
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
       let recordedCompactionCount = 0;
+      let acceptsRequestBudget = true;
+      contextRecoveryState.compactionRequestBudget = undefined;
+      params.onCompactionRequestBudget?.(undefined);
       const attemptRunInput: PreparedEmbeddedRunInput = {
         ...admittedRunInput,
         runParams: {
           ...params,
+          onCompactionRequestBudget: (budget) => {
+            if (!acceptsRequestBudget || abortSignal?.aborted) {
+              return;
+            }
+            contextRecoveryState.compactionRequestBudget = budget;
+            params.onCompactionRequestBudget?.(budget);
+          },
           onContextAccountingEvent: (event) => {
             if (event.kind === "compaction") {
               recordedCompactionCount += 1;
@@ -410,6 +421,7 @@ export async function runPreparedEmbeddedLoop(
           }),
         );
       } catch (error) {
+        acceptsRequestBudget = false;
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
           throw error;
@@ -417,6 +429,8 @@ export async function runPreparedEmbeddedLoop(
         traceAttempts.push(retryTrace);
         lastRetryFailoverReason = retryTrace.reason;
         continue;
+      } finally {
+        acceptsRequestBudget = false;
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;

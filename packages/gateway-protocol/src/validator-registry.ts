@@ -268,6 +268,7 @@ export const validateSessionsObserverVisibilityParams = compile(
   S.SessionsObserverVisibilityParamsSchema,
 );
 export const validateSessionVisibilitySetParams = compile(S.SessionVisibilitySetParamsSchema);
+export const validateSessionPublicShareSetParams = compile(S.SessionPublicShareSetParamsSchema);
 export const validateSessionMembersListParams = compile(S.SessionMembersListParamsSchema);
 export const validateSessionMemberAddParams = compile(S.SessionMemberAddParamsSchema);
 export const validateSessionMemberRemoveParams = compile(S.SessionMemberRemoveParamsSchema);
@@ -546,3 +547,5 @@ export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
 
 export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
+export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
+export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);

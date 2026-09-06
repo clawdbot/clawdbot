@@ -202,6 +202,9 @@ the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+Triage preserves the original update report. Any update launched during repair
+gets a separate `runId`.
+
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 Human output, chat completion notices, the Control UI update view, and the
@@ -219,6 +222,10 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+Native service-stop observations do not advance the update's recorded phase.
+If the Control UI cannot read fresh progress, it shows the read error alongside
+the last recorded run; use **Check status** to retry without starting another update.
 
 Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
 `restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,
@@ -464,9 +471,13 @@ or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. In `verifying`, the updater requires the normal 12-probe settle,
 the expected version and Git build identity, no plugin activation errors,
-channel readiness, and HTTP 200 from `/readyz`. A separate inference probe has a
-15-second budget. Provider unavailability records `inference: unavailable` as a
-warning; it does not trigger rollback by itself.
+channel readiness, and HTTP 200 from `/readyz`. It then runs a real agent turn
+through that Gateway using configured inference and verifies the saved request and
+completed response through a fresh session-storage reader. This serving check has
+a 60-second budget and must match the health-checked Gateway boot and expected
+artifact version/build. Unavailable inference, timeout, failed turns, or missing
+persistence fail verification and enter the existing repair or rollback flow.
+Health or readiness alone cannot pass verification.
 
 Plugin packages download and sync after the core Gateway is serving. When the
 plugin snapshot changes, the updater stops the service for a second measured

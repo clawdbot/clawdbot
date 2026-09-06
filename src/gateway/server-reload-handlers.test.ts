@@ -2190,10 +2190,7 @@ describe("gateway hot reload model state", () => {
           await handlers.applyHotReload(createCronRestartPlan(), config);
         });
 
-        expect(supervisor.getRecord(watchedRun.runId)).toMatchObject({
-          pid: watchedRun.pid,
-          state: "running",
-        });
+        expect(watchedRun.activity.resultSettled).toBe(false);
         expect(await readFile(markerPath, "utf8")).toBe("run\n");
         expect(spawn).toHaveBeenCalledOnce();
 
@@ -2683,12 +2680,19 @@ describe("gateway hot reload model state", () => {
           ).resolves.toBe("applied");
         }
         await vi.advanceTimersByTimeAsync(30_000);
-        expect(await readIntervals()).toEqual([7_200_000, 7_200_000]);
-        expect(
-          (await loadCronJobsStore(cronState.storePath)).jobs
-            .filter((job) => skillCollectionReviewMonitorAgentId(job) !== undefined)
-            .map((job) => job.enabled),
-        ).toEqual([false, false]);
+        // The retry spans real event-loop turns; keep fake time fixed so this
+        // observes that retry's result without starting another retry.
+        await waitForFast(
+          async () => {
+            expect(await readIntervals()).toEqual([7_200_000, 7_200_000]);
+            expect(
+              (await loadCronJobsStore(cronState.storePath)).jobs
+                .filter((job) => skillCollectionReviewMonitorAgentId(job) !== undefined)
+                .map((job) => job.enabled),
+            ).toEqual([false, false]);
+          },
+          { interval: 0 },
+        );
       } finally {
         db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
         handlers.stopRestartRetries();

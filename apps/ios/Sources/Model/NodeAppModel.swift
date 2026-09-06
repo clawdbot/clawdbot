@@ -1651,10 +1651,7 @@ final class NodeAppModel {
                 paramsJSON: #"{"keys":["ui.accent"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(res)
         } catch {
             return nil
         }

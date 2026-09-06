@@ -295,7 +295,13 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+| `dispose()`                    | Method | Release engine-instance resources when the logical turn retires, after any retained turn work finishes.                                      |
+
+Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
+default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
+logs a warning and lets the completed reply return; it does not cancel the
+plugin's pending disposal. Cleanup failures and timeouts retain the existing
+one-shot CLI cleanup-failure outcome; they do not certify resource closure.
 
 ### Runtime settings
 

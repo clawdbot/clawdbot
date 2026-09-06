@@ -44,6 +44,7 @@ export function createTestPreparedRunAdmission(runId: string): PreparedAgentRunA
   return Object.freeze({
     operationalRunInstance: admitted.operationalRunInstance,
     admit: async () => admitted,
+    assertSourceCurrent: () => {},
     close: () => {},
   });
 }

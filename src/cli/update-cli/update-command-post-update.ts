@@ -504,7 +504,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         maybeRestartService({
           shouldRestart: params.shouldRestart && serviceMutationAllowed,
           result: resultWithPostUpdate,
-          channel: params.channel,
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
           serviceUpdateVerdict,
@@ -524,7 +523,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           onVerified: recordVerifiedDowntime,
         }),
       );
-      if (restarted) {
+      if (restarted === "ok") {
         return;
       }
       const failure: UpdateRunResult = {
@@ -667,12 +666,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           reason: "wrapper-retirement-failed",
           jsonMode: Boolean(params.opts.json),
         });
-        const reported = printFinalResult(
-          completedResult({
+        const reported = await reportResult(
+          {
             ...resultWithPostUpdate,
             status: "error",
             reason: "wrapper-retirement-failed",
-          }),
+          },
+          false,
+          undefined,
+          false,
         );
         throw new UpdateCommandFailure(reported, 1, retirement.error);
       }

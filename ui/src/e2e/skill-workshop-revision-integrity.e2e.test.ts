@@ -248,12 +248,11 @@ suite.define(() => {
         await gateway.resolveDeferred(method, {});
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
         await gateway.waitForRequest("skills.proposals.inspect", { after: secondInspectCount });
-        await page.locator("#skill-workshop-mode-tab-history").click();
-        await page
-          .locator(".sw-lifecycle-tab")
-          .filter({ hasText: status === "applied" ? "Applied" : "Rejected" })
-          .click();
-        await page.getByText(H2.body, { exact: true }).waitFor();
+        await expect.poll(() => page.locator(".sw-row").count()).toBe(0);
+        await expect
+          .poll(() => page.locator(".sw-action-toast").textContent())
+          .toContain(status === "applied" ? "Applied" : "Rejected");
+        expect(await page.getByText(H2.body, { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests(method)).toHaveLength(secondActionCount + 1);
         await page.screenshot({
           animations: "disabled",

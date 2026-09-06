@@ -94,8 +94,6 @@ async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<Upda
       timeoutMs,
       startedAt,
       beforeVersion,
-      allowGatewayServiceRepair: opts.allowGatewayServiceRepair !== false,
-      allowGatewayActivation: opts.allowGatewayActivation === true,
     });
   }
   return {

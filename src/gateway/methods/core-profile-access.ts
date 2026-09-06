@@ -38,6 +38,7 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "taskSuggestions.",
   "tasks.",
   "terminal.",
+  "transcripts.",
   "users.authConnect.",
   "users.prefs.",
   "users.github.",
