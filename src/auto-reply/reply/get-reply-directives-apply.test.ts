@@ -6,7 +6,7 @@ import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -193,7 +193,7 @@ describe("applyInlineDirectiveOverrides", () => {
         agentRuntimeOverride: "codex",
         modelSelectionLocked: true,
       };
-      const modelState = createFastTestModelSelectionState({
+      const modelState = createModelSelectionStateFixture({
         agentCfg: {},
         provider: "openai",
         model: "gpt-5.5",
@@ -335,7 +335,7 @@ describe("applyInlineDirectiveOverrides", () => {
         aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
         model,
-        modelState: createFastTestModelSelectionState({
+        modelState: createModelSelectionStateFixture({
           agentCfg: {},
           provider: "openai",
           model,

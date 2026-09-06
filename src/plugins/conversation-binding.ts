@@ -11,11 +11,15 @@ import {
   type SessionBindingScope,
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   isPluginOwnedBindingMetadata,
   type PluginBindingMetadata,
 } from "./conversation-binding-metadata.js";
+import {
+  addPendingPluginBindingRequest,
+  takePluginBindingRequestForApproval,
+  type PendingPluginBindingRequest,
+} from "./conversation-binding-pending.js";
 import {
   buildPluginBindingSessionKey,
   normalizeChannel,
@@ -48,31 +52,7 @@ const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
 // configured channel bindings compiled from config.
 type PluginBindingApprovalDecision = PluginConversationBindingResolutionDecision;
 
-type PluginBindingConversation = {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  threadId?: string | number;
-};
-
-type PendingPluginBindingRequest = {
-  id: string;
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  conversation: PluginBindingConversation;
-  requestedBySenderId?: string;
-  summary?: string;
-  detachHint?: string;
-  data?: Record<string, unknown>;
-};
-
-type PendingPluginBindingRequestEntry = {
-  request: PendingPluginBindingRequest;
-  expiresAtMs: number;
-  timeoutId: ReturnType<typeof setTimeout>;
-};
+type PluginBindingConversation = PluginConversationBindingResolvedEvent["request"]["conversation"];
 
 type PluginBindingApprovalAction = {
   approvalId: string;
@@ -99,54 +79,6 @@ type PluginBindingResolveResult =
   | {
       status: "expired";
     };
-
-// Chat approvals get the exec-style 30-minute decision window, with abandoned payloads capped.
-const PENDING_PLUGIN_BINDING_REQUEST_TTL_MS = 30 * 60_000;
-const MAX_PENDING_PLUGIN_BINDING_REQUESTS = 512;
-const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequestEntry>(
-  Symbol.for("openclaw.pluginBindingPendingRequests"),
-  (requests) => {
-    for (const entry of requests.values()) {
-      clearTimeout(entry.timeoutId);
-    }
-    requests.clear();
-  },
-);
-
-function takePendingPluginBindingRequest(
-  approvalId: string,
-  expected?: PendingPluginBindingRequestEntry,
-): PendingPluginBindingRequest | undefined {
-  const entry = pendingRequests.get(approvalId);
-  if (!entry || (expected && entry !== expected)) {
-    return undefined;
-  }
-  pendingRequests.delete(approvalId);
-  clearTimeout(entry.timeoutId);
-  return entry.request;
-}
-
-function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): void {
-  const expiresAtMs = Date.now() + PENDING_PLUGIN_BINDING_REQUEST_TTL_MS;
-  const entry: PendingPluginBindingRequestEntry = {
-    request,
-    expiresAtMs,
-    timeoutId: setTimeout(() => {
-      takePendingPluginBindingRequest(request.id, entry);
-    }, PENDING_PLUGIN_BINDING_REQUEST_TTL_MS),
-  };
-  entry.timeoutId.unref?.();
-  pendingRequests.set(request.id, entry);
-
-  // Oldest-first eviction keeps abandoned approval payloads bounded and fail-closed.
-  while (pendingRequests.size > MAX_PENDING_PLUGIN_BINDING_REQUESTS) {
-    const oldestId = pendingRequests.keys().next().value;
-    if (oldestId === undefined) {
-      break;
-    }
-    takePendingPluginBindingRequest(oldestId);
-  }
-}
 
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
   return {
@@ -340,10 +272,8 @@ function withConversationBindingContext(
   };
 }
 
-function resolvePluginConversationBindingState(params: {
-  conversation: PluginBindingConversation;
-}) {
-  const ref = toConversationRef(params.conversation);
+function resolvePluginConversationBindingState(conversation: PluginBindingConversation) {
+  const ref = toConversationRef(conversation);
   const record = getSessionBindingService().resolveByConversation(ref);
   const binding = toPluginConversationBinding(record);
   return {
@@ -358,9 +288,7 @@ function resolveOwnedPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
 }): PluginConversationBinding | null {
-  const state = resolvePluginConversationBindingState({
-    conversation: params.conversation,
-  });
+  const state = resolvePluginConversationBindingState(params.conversation);
   if (!state.binding || state.binding.pluginRoot !== params.pluginRoot) {
     return null;
   }
@@ -560,9 +488,7 @@ export async function requestPluginConversationBinding(params: {
   binding: PluginConversationBindingRequestParams | undefined;
 }): Promise<PluginConversationBindingRequestResult> {
   const conversation = normalizeConversation(params.conversation);
-  const state = resolvePluginConversationBindingState({
-    conversation,
-  });
+  const state = resolvePluginConversationBindingState(conversation);
   if (state.record && !state.binding) {
     if (state.isLegacyForeignBinding) {
       logPluginBindingLifecycleEvent({
@@ -665,22 +591,10 @@ export async function resolvePluginConversationBindingApproval(params: {
   decision: PluginBindingApprovalDecision;
   senderId?: string;
 }): Promise<PluginBindingResolveResult> {
-  const entry = pendingRequests.get(params.approvalId);
-  if (!entry || Date.now() >= entry.expiresAtMs) {
-    if (entry) {
-      takePendingPluginBindingRequest(params.approvalId, entry);
-    }
+  const request = takePluginBindingRequestForApproval(params);
+  if (!request) {
     return { status: "expired" };
   }
-  const request = entry.request;
-  if (
-    request.requestedBySenderId &&
-    params.senderId?.trim() &&
-    request.requestedBySenderId !== params.senderId.trim()
-  ) {
-    return { status: "expired" };
-  }
-  takePendingPluginBindingRequest(params.approvalId, entry);
   if (params.decision === "deny") {
     dispatchPluginConversationBindingResolved({
       status: "denied",
@@ -788,4 +702,3 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
   }
   return `Allowed ${params.request.pluginName ?? params.request.pluginId} to bind this conversation once.${summarySuffix}`;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

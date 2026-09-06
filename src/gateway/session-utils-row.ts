@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -328,6 +329,17 @@ export function buildGatewaySessionRow(params: {
   });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
+  const repositoryWorkspace = entry?.repositoryWorkspaceId
+    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
+    : undefined;
+  const repository =
+    repositoryWorkspace?.agentId === sessionAgentId && repositoryWorkspace.sessionKey === key
+      ? {
+          url: repositoryWorkspace.url,
+          ...(repositoryWorkspace.requestedRef ? { ref: repositoryWorkspace.requestedRef } : {}),
+          branch: repositoryWorkspace.branch,
+        }
+      : undefined;
 
   const swarm = buildSessionSwarmSummary(
     rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
@@ -353,6 +365,8 @@ export function buildGatewaySessionRow(params: {
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+    ...(repository ? { repository } : {}),
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
     forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,

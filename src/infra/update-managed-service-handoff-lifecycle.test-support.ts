@@ -59,6 +59,14 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  helperExitCode?: number | null;
+  repairEffects?: {
+    firstSpawn: boolean;
+    secondSpawn: boolean;
+    firstExec: boolean;
+    secondExec: boolean;
+    secondWrite: boolean;
+  };
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;

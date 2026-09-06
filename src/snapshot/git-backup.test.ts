@@ -503,6 +503,27 @@ describe("Git-backed SQLite snapshots", () => {
     });
   });
 
+  it.skipIf(process.platform !== "win32")(
+    "initializes and reads history when Windows Git emits MSYS paths",
+    async () => {
+      const root = await tempRoot();
+      const stateDir = path.join(root, "state");
+      const repositoryPath = path.join(root, "repository");
+      await fs.mkdir(stateDir);
+
+      await initializeGitBackupRepository({ repositoryPath, stateDir });
+      await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+      await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+      await fs.writeFile(path.join(repositoryPath, "README.md"), "backup\n");
+      await requireGit(repositoryPath, ["add", "README.md"]);
+      await requireGit(repositoryPath, ["commit", "-m", "backup history"]);
+
+      await expect(readGitBackupLog({ repositoryPath, limit: 1 })).resolves.toEqual([
+        expect.objectContaining({ message: "backup history" }),
+      ]);
+    },
+  );
+
   it("uses a commit-scoped fallback identity when Git has no configured email", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);

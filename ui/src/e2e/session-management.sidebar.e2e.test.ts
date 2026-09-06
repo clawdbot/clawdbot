@@ -229,8 +229,9 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       const openSessionMenu = async () => {
-        await row.hover();
-        await row.getByRole("button", { name: "Open session menu" }).click();
+        // Keep dismissal setup independent of hover while the sidebar expands.
+        await row.getByRole("button", { name: "Open session menu" }).focus();
+        await page.keyboard.press("Enter");
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });

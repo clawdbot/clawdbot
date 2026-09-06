@@ -2684,7 +2684,7 @@ describe("stageSystemdService", () => {
         installSystemdService(gatewayPortSystemdServiceFixture(env, "18789")),
       ).rejects.toThrow("system ownership appeared before activation");
 
-      await expect(fs.access(unitPath)).resolves.toBeUndefined();
+      await fs.access(unitPath);
       expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(4);
       expect(execFileMock).toHaveBeenCalledTimes(1);
     });
@@ -3912,8 +3912,8 @@ describe("uninstallLegacySystemdUnits", () => {
         await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
           "systemctl disable failed: Permission denied",
         );
-        await expect(fs.access(unitPath)).resolves.toBeUndefined();
-        await expect(fs.access(`${unitPath}.bak`)).resolves.toBeUndefined();
+        await fs.access(unitPath);
+        await fs.access(`${unitPath}.bak`);
       } finally {
         await fs.rm(tempHomeRoot, { recursive: true, force: true });
       }
@@ -4070,7 +4070,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
           "systemctl disable failed: Permission denied",
         );
-        await expect(fs.access(unitPath)).resolves.toBeUndefined();
+        await fs.access(unitPath);
         expect(execFileMock).toHaveBeenCalledTimes(2);
       });
     },

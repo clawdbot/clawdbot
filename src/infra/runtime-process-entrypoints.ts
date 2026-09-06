@@ -22,6 +22,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-integrity.worker",
     distWorkerPath: "infra/sqlite-integrity.worker.js",
   },
+  updateRepair: {
+    currentModuleUrl,
+    sourceWorkerName: "update-repair.worker",
+    distWorkerPath: "infra/update-repair.worker.js",
+  },
   updateInferenceProbe: {
     currentModuleUrl,
     sourceWorkerName: "update-inference-probe.worker",
