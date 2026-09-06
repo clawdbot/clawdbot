@@ -554,7 +554,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     {
       agents: {
         defaults: {
-          workspace: "~/Projects/my-repo",
+          workspace: "~/path/to/my-repo",
         },
       },
     }

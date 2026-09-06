@@ -5,7 +5,7 @@ This folder stores translation config for the source docs repo.
 Generated locale trees and live translation memory now live in the publish repo:
 
 - repo: `openclaw/docs`
-- local checkout: `~/Projects/openclaw-docs`
+- local checkout: `~/path/to/openclaw-docs`
 
 ## Source of truth
 
