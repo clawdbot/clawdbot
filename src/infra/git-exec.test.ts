@@ -17,16 +17,16 @@ describe("Git filesystem paths", () => {
   it.each([
     { input: "/c/Users/example/repo", expected: "C:\\Users\\example\\repo" },
     { input: "/d/", expected: "D:\\" },
-  ])("translates an MSYS drive path on Windows: $input", ({ input, expected }) => {
+    { input: "C:\\c\\Users\\example", expected: "C:\\c\\Users\\example" },
+    { input: "C:/Users/example", expected: "C:/Users/example" },
+    { input: "\\\\server\\share\\repo", expected: "\\\\server\\share\\repo" },
+    { input: "relative/repo", expected: "relative/repo" },
+    { input: "/c", expected: "/c" },
+    { input: "/cygdrive/c/repo", expected: "/cygdrive/c/repo" },
+    { input: "/workspace/repo", expected: "/workspace/repo" },
+  ])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
     expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
   });
-
-  it.each(["C:\\c\\Users\\example", "C:/Users/example", "//server/share/repo"])(
-    "leaves a native Windows path unchanged: %s",
-    (input) => {
-      expect(normalizeGitPathForFilesystem(input, "win32")).toBe(input);
-    },
-  );
 
   it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
     expect(normalizeGitPathForFilesystem("/c/Users/example/repo", "linux")).toBe(

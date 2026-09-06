@@ -14,7 +14,7 @@ export function normalizeGitPathForFilesystem(
   }
   // Translate only path-typed Git output at its filesystem boundary. Native
   // paths must stay untouched because C:\c\... can be a real Windows path.
-  const match = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(value);
+  const match = /^\/([a-zA-Z])\/(.*)$/.exec(value);
   const drive = match?.[1];
   if (!drive) {
     return value;

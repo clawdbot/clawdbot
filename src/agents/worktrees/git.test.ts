@@ -9,69 +9,56 @@ import {
   gitEnvironment,
   hasSelfContainedGitMetadata,
   insideGitCheckout,
+  listGitWorktrees,
   runGit,
 } from "./git.js";
 
 describe("Git execution environment", () => {
-  it("disables MSYS and Cygwin argv globbing for Windows worktree Git", () => {
+  it("preserves literal commit revisions only for Windows worktree Git", () => {
     expect(
       gitEnvironment(
         {
           MSYS: "winsymlinks:nativestrict",
           CYGWIN: "disable_pcon",
         },
+        ["rev-parse", "--verify", "HEAD^{commit}"],
         "win32",
       ),
     ).toMatchObject({
       MSYS: "winsymlinks:nativestrict noglob",
       CYGWIN: "disable_pcon noglob",
     });
-  });
-
-  it("keeps noglob as the final Windows option and preserves non-Windows environments", () => {
-    expect(gitEnvironment({ MSYS: "noglob winsymlinks:native" }, "win32").MSYS).toBe(
-      "noglob winsymlinks:native noglob",
-    );
-    expect(gitEnvironment({ CYGWIN: "noglob glob:ignorecase" }, "win32").CYGWIN).toBe(
-      "noglob glob:ignorecase noglob",
-    );
-    expect(gitEnvironment({ MSYS: "winsymlinks:native noglob" }, "win32").MSYS).toBe(
-      "winsymlinks:native noglob",
-    );
-    expect(gitEnvironment({ MSYS: "winsymlinks:native" }, "linux")).toMatchObject({
-      MSYS: "winsymlinks:native",
-    });
-  });
-
-  it("restores noglob when a later MSYS option re-enables globbing", () => {
-    expect(gitEnvironment({ MSYS: "noglob winsymlinks:native glob" }, "win32").MSYS).toBe(
-      "noglob winsymlinks:native glob noglob",
-    );
-  });
-
-  it("preserves inherited MSYS options when callers pass partial overrides", () => {
     expect(
-      gitEnvironment({ GIT_INDEX_FILE: "snapshot.index" }, "win32", {
-        MSYS: "winsymlinks:nativestrict",
-        CYGWIN: "disable_pcon",
-      }),
+      gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS,
+    ).toBe("winsymlinks:nativestrict");
+  });
+
+  it.each([
+    ["noglob winsymlinks:native", "noglob winsymlinks:native noglob"],
+    ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
+    ["winsymlinks:native noglob", "winsymlinks:native noglob"],
+  ])("keeps noglob final for %s", (value, expected) => {
+    expect(
+      gitEnvironment({ MSYS: value }, ["rev-parse", "HEAD^{commit}"], "win32").MSYS,
+    ).toBe(expected);
+  });
+
+  it("merges inherited Windows runtime options before preserving revisions", () => {
+    expect(
+      gitEnvironment(
+        { GIT_INDEX_FILE: "snapshot.index", msys: "winsymlinks:native", CYGWIN: undefined },
+        ["rev-parse", "HEAD^{commit}"],
+        "win32",
+        { MSYS: "winsymlinks:nativestrict", CYGWIN: "disable_pcon" },
+      ),
     ).toMatchObject({
       GIT_INDEX_FILE: "snapshot.index",
-      MSYS: "winsymlinks:nativestrict noglob",
-      CYGWIN: "disable_pcon noglob",
-    });
-  });
-
-  it("honors Windows overrides and removal before adding noglob", () => {
-    expect(
-      gitEnvironment({ msys: "winsymlinks:native", CYGWIN: undefined }, "win32", {
-        MSYS: "winsymlinks:nativestrict",
-        CYGWIN: "disable_pcon",
-      }),
-    ).toMatchObject({
       MSYS: "winsymlinks:native noglob",
       CYGWIN: "noglob",
     });
+    expect(
+      gitEnvironment({ MSYS: "winsymlinks:native" }, ["rev-parse", "HEAD^{commit}"], "linux").MSYS,
+    ).toBe("winsymlinks:native");
   });
 });
 
@@ -118,4 +105,30 @@ describe("Git checkout discovery", () => {
     await fs.writeFile(path.join(root, ".git"), "gitdir: /outside/worktrees/card\n", "utf8");
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "parses linked worktree paths and lock reasons from Windows Git output",
+    async () => {
+      const root = tempDirs.make("openclaw-git-worktree-list-");
+      const repo = path.join(root, "repo");
+      const linked = path.join(root, "linked");
+      expect((await runGit(root, ["init", "-b", "main", repo])).code).toBe(0);
+      expect((await runGit(repo, ["config", "user.name", "OpenClaw Test"])).code).toBe(0);
+      expect(
+        (await runGit(repo, ["config", "user.email", "openclaw-test@example.invalid"])).code,
+      ).toBe(0);
+      await fs.writeFile(path.join(repo, "README.md"), "base\n");
+      expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
+      expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
+      expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(0);
+      expect(
+        (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
+      ).toBe(0);
+
+      expect(await listGitWorktrees(repo)).toContainEqual({
+        path: await fs.realpath(linked),
+        lockedReason: "held by test",
+      });
+    },
+  );
 });

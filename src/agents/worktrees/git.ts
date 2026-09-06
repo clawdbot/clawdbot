@@ -35,16 +35,19 @@ function withNoGlob(value: string | undefined): string {
  */
 export function gitEnvironment(
   env?: NodeJS.ProcessEnv,
+  args: readonly string[] = [],
   platform: NodeJS.Platform = process.platform,
   inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const baseEnv = env ?? inheritedEnv;
   // Callers may supply only Git-specific overrides. Resolve against the inherited
-  // child environment first so adding noglob cannot discard existing runtime policy.
+  // child environment first so preserving revision arguments cannot discard policy.
   const effectiveWindowsEnv =
-    platform === "win32" ? mergeProcessEnv([inheritedEnv, env], platform) : undefined;
+    platform === "win32" && args.some((arg) => arg.endsWith("^{commit}"))
+      ? mergeProcessEnv([inheritedEnv, env], platform)
+      : undefined;
   const windowsNoGlob =
-    platform === "win32"
+    effectiveWindowsEnv
       ? {
           // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
           // expressions such as HEAD^{commit} literal within this Git owner.
@@ -73,7 +76,7 @@ export async function runGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<GitResult> {
-  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -90,11 +93,11 @@ export async function requireGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<string> {
-  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment() });
+  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment(undefined, args) });
 }
 
 export async function requireGitBuffer(
@@ -102,7 +105,10 @@ export async function requireGitBuffer(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
 ): Promise<Buffer> {
-  return await requireGitCommandBuffer(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await requireGitCommandBuffer(cwd, args, {
+    ...options,
+    env: gitEnvironment(options.env, args),
+  });
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
