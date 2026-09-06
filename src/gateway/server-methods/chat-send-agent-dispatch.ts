@@ -230,6 +230,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     admission,
     classifyFailure: classifyDispatchFailure,
     context,
+    isAgentRunStarted: () => agentRunStarted,
     isQueuedFollowupEnqueued: queuedFollowup.isEnqueued,
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,
