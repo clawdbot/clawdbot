@@ -11,6 +11,7 @@ import {
   isPrereleaseResolutionAllowed,
   isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
 } from "../infra/npm-registry-spec.js";
 import {
   comparePackageUpdateVersions,
@@ -463,6 +464,48 @@ export async function resolveNpmUpdateSpecs(params: {
   const recordSpec = params.specOverride ?? params.record.spec ?? params.officialSpecOverride;
   if (!recordSpec) {
     return {};
+  }
+  // Fix for #133810: externally-managed official plugins pinned to a pre-upgrade
+  // OpenClaw release version (e.g. "@openclaw/discord@2026.7.1" when gateway is
+  // 2026.8.1) must not be reinstalled at the stale pin when the operator runs
+  // `openclaw plugins update <id>` without an explicit spec. Prior behavior
+  // preserved the exact pin and returned `already at 2026.7.1` with a hint to
+  // use `@latest`, leaving the channel/provider crashed until the operator
+  // discovered the drift. When the record is a trusted official npm install
+  // whose pinned selector is an OpenClaw release cohort version that differs
+  // from the gateway's cohort, auto-target the gateway cohort so the update
+  // heals the crash in one command. This mirrors the drift warning's
+  // `resolvePluginVersionDriftUpdateCommand` target and the prior
+  // `extended-stable` cohort-binding logic, but applies to the default update
+  // path where `officialSpecOverride` is not set (the `plugins update <id>`
+  // path that the issue's repro exercised).
+  if (
+    !params.specOverride &&
+    !params.officialSpecOverride &&
+    params.officialPackageName &&
+    params.coreVersion
+  ) {
+    const parsed = parseRegistryNpmSpec(recordSpec);
+    if (parsed?.selectorKind === "exact-version" && parsed.name === params.officialPackageName) {
+      const pinnedVersion = parsed.selector;
+      if (
+        pinnedVersion &&
+        isExactSemverVersion(pinnedVersion) &&
+        isExactSemverVersion(params.coreVersion)
+      ) {
+        const normalizedPinned = resolveOpenClawReleaseCohortVersion(pinnedVersion);
+        const normalizedCore = resolveOpenClawReleaseCohortVersion(params.coreVersion);
+        if (normalizedPinned !== normalizedCore && /^2026\.\d+\.\d+/.test(pinnedVersion)) {
+          const gatewaySpec = `${params.officialPackageName}@${normalizedCore}`;
+          if (parseRegistryNpmSpec(gatewaySpec)?.selectorKind === "exact-version") {
+            return {
+              installSpec: gatewaySpec,
+              recordSpec: gatewaySpec,
+            };
+          }
+        }
+      }
+    }
   }
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
