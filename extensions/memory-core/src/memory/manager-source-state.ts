@@ -1,10 +1,15 @@
 // Memory Core plugin module implements manager source state behavior.
+import type { Stats } from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
   listMemoryFiles,
+  normalizeExtraMemoryPathEntries,
   runWithConcurrency,
+  type MemoryExtraPath,
   type MemoryFileEntry,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -75,12 +80,71 @@ export async function inspectMemorySourceState(params: {
 }): Promise<MemorySourceInspection> {
   const entries = await resolveMemorySourceFileEntries(params);
   const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
+  const skippedRootIssues = await resolveSkippedExtraMemoryRootIssues({
+    workspaceDir: params.workspaceDir,
+    extraPaths: params.settings.extraPaths,
+    eligibleEntries: entries,
+  });
   return {
     source: "memory",
     dirty: hasMemorySourceDrift({ entries, indexedRows }),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...skippedRootIssues,
+    ],
   };
+}
+
+/**
+ * Mirror the scanner's skip decision for configured extra-path roots so a root
+ * that contributes nothing is named in status output instead of disappearing
+ * behind healthy canonical memory. Symlink traversal stays a scanner security
+ * boundary, so this reports the skip with the next recovery step and must not
+ * change which files get indexed.
+ */
+export async function resolveSkippedExtraMemoryRootIssues(params: {
+  workspaceDir: string;
+  extraPaths?: MemoryExtraPath[];
+  eligibleEntries: readonly Pick<MemoryFileEntry, "absPath">[];
+}): Promise<string[]> {
+  const issues: string[] = [];
+  const seenRoots = new Set<string>();
+  for (const entry of normalizeExtraMemoryPathEntries(params.workspaceDir, params.extraPaths)) {
+    if (seenRoots.has(entry.path)) {
+      continue;
+    }
+    seenRoots.add(entry.path);
+    let stat: Stats;
+    try {
+      stat = await fsp.lstat(entry.path);
+    } catch {
+      // Missing roots keep the scanner's existing silent-skip path.
+      continue;
+    }
+    if (!stat.isSymbolicLink()) {
+      continue;
+    }
+    if (
+      params.eligibleEntries.some((candidate) => isPathInsideRoot(entry.path, candidate.absPath))
+    ) {
+      continue;
+    }
+    issues.push(
+      `extra path "${describeExtraMemoryRoot(params.workspaceDir, entry.path)}" is a symlink root and contributed no files; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+    );
+  }
+  return issues;
+}
+
+function isPathInsideRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function describeExtraMemoryRoot(workspaceDir: string, root: string): string {
+  const relative = path.relative(workspaceDir, root);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : root;
 }
 
 export function loadMemorySourceFileState(params: {
