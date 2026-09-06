@@ -53,7 +53,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
     turnState.promptBuild.developerInstructions,
-    attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+    attemptTools.configuredMcp?.diagnosticNotice,
   );
   const {
     params,
@@ -76,7 +76,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
     startupAuthRequirement,
-    abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -91,6 +90,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
+      assertCurrent: connection.assertCurrent,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -130,6 +130,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
             Boolean(connection.sandboxSessionKey) &&
             loopDetectionEnabled)),
       bundleMcpThreadConfig,
+      configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
@@ -155,6 +156,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    // Capture native authority only after this exact client's managed-policy
+    // preflight succeeds; startup retries may have replaced the initial client.
+    await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
       ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
@@ -217,7 +221,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         clientId: state.client.getInstanceId(),
       },
     });
-    if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
+    if (
+      await applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)
+    ) {
       await rebuildCodexTurnPromptTextFromCurrentProjection();
     }
     trajectoryRecorder?.recordEvent("session.started", {
@@ -232,7 +238,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       cwd: effectiveCwd,
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
-        attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+        attemptTools.configuredMcp?.diagnosticNotice,
       ),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
@@ -253,9 +259,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep(
       "codex-start-failure-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
-    );
-    await runCleanupStep("codex-start-failure-abort-listener", () =>
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
     throw error instanceof CodexThreadPolicyHandoffError
       ? error

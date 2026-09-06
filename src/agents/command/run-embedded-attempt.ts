@@ -21,6 +21,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -363,7 +364,7 @@ export async function runEmbeddedAgentAttempt(params: {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
-          const candidateAccounting = compactionAccounting.beginCandidate();
+          const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
@@ -498,6 +499,10 @@ export async function runEmbeddedAgentAttempt(params: {
               body,
               transcriptBody,
               isFallbackRetry: runOptions.isFallbackRetry,
+              classifyResult: runOptions.classifyResult,
+              preserveCliSessionBinding:
+                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
+                params.preserveUserFacingSessionModelState,
               modelRoutingProvenance: runOptions.modelRoutingProvenance,
               resolvedThinkLevel: candidateThinkLevel,
               fastMode,
@@ -539,10 +544,12 @@ export async function runEmbeddedAgentAttempt(params: {
                 (runOptions.isFallbackRetry &&
                   attemptLifecycleState.currentTurnUserMessagePersisted),
               userTurnTranscriptRecorder,
+              assistantErrorTranscript: runOptions.assistantErrorTranscript,
               contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
               onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onCompactionAccounting: candidateAccounting.observe,
+              onCompactionRequestBudget: candidateAccounting.observeRequestBudget,
               onSuccessfulAuthProfile: (selection) => {
                 // Absence is a valid ambient-auth result; only an uncalled observer is unknown.
                 maintenanceAuthProfile = selection;
@@ -628,15 +635,15 @@ export async function runEmbeddedAgentAttempt(params: {
             { cause: err },
           );
         }
-        const previousProvider = provider;
-        const previousModel = model;
+        if (storedModelOverride || err.model !== model || err.provider !== provider) {
+          storedModelOverride = err.model;
+          storedModelOverrideSource = "user";
+        }
         if (autoFallbackPrimaryProbe) {
           autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
         }
         provider = err.provider;
         model = err.model;
-        fallbackProvider = err.provider;
-        fallbackModel = err.model;
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
@@ -651,14 +658,6 @@ export async function runEmbeddedAgentAttempt(params: {
             : undefined;
           sessionEntry.authProfileOverrideCompactionCount = undefined;
           sessionEntryForAttempt = sessionEntry;
-        }
-        if (
-          storedModelOverride ||
-          err.model !== previousModel ||
-          err.provider !== previousProvider
-        ) {
-          storedModelOverride = err.model;
-          storedModelOverrideSource = "user";
         }
         attemptLifecycleState.lifecycleEnded = false;
         log.info(
@@ -681,6 +680,7 @@ export async function runEmbeddedAgentAttempt(params: {
   }
 
   return {
+    startedAt,
     result,
     fallbackProvider,
     fallbackModel,
@@ -692,6 +692,7 @@ export async function runEmbeddedAgentAttempt(params: {
     effectiveTurnThinkLevel,
     maintenanceAuthProfile,
     compactionAccounting: compactionAccounting.fact,
+    compactionRequestBudget: compactionAccounting.requestBudget,
     internalSessionTarget,
     attemptExecutionRuntime,
     messageChannel,

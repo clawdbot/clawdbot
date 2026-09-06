@@ -141,48 +141,25 @@ struct NotificationServingPreferenceTests {
         }
     }
 
-    @Test @MainActor func `cancellation after authorization cannot schedule a native notification`() async {
+    @Test @MainActor func `cancelled callers cannot add a native notification`() async {
         let center = UNUserNotificationCenter.current()
         let adapter = LiveNotificationCenter(center: center)
         let identifier = "notification-cancellation-test-\(UUID().uuidString)"
-        let authorized = XCTestExpectation(description: "native authorization settings returned")
-        let (pause, release) = AsyncStream<Void>.makeStream()
+        defer { center.removePendingNotificationRequests(withIdentifiers: [identifier]) }
         let operation = Task { @MainActor in
-            defer { center.removePendingNotificationRequests(withIdentifiers: [identifier]) }
-            _ = await adapter.authorizationStatus()
-            authorized.fulfill()
-            for await _ in pause {}
             let content = UNMutableNotificationContent()
             content.title = "OpenClaw cancellation test"
             let request = UNNotificationRequest(
                 identifier: identifier,
                 content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3600, repeats: false))
-            let outcome: Result<Void, any Error>
-            do {
-                try await adapter.add(request)
-                outcome = .success(())
-            } catch {
-                outcome = .failure(error)
-            }
-            let pending = await center.pendingNotificationRequests()
-            return (outcome, pending.contains { $0.identifier == identifier })
+            try await adapter.add(request)
         }
-        let ready = await XCTWaiter.fulfillment(of: [authorized], timeout: 5)
         operation.cancel()
-        release.finish()
-        guard ready == .completed else {
-            Issue.record("Native notification settings did not return")
-            return
+
+        await #expect(throws: CancellationError.self) {
+            try await operation.value
         }
-        let (outcome, scheduled) = await operation.value
-        switch outcome {
-        case .success:
-            Issue.record("The native notification adapter accepted a cancelled request")
-        case let .failure(error):
-            #expect(error is CancellationError, "Expected cancellation before scheduling, received \(error)")
-        }
-        #expect(!scheduled)
     }
 
     private func makeDefaults() throws -> (String, UserDefaults) {

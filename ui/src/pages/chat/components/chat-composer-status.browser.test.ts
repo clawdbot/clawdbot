@@ -8,6 +8,7 @@ import { renderFallbackIndicator } from "./chat-composer-status.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
+import chatComposerStyles from "../../../styles/chat/composer.css?inline";
 import groupedStyles from "../../../styles/chat/grouped.css?inline";
 import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
 import componentStyles from "../../../styles/components.css?inline";
@@ -28,6 +29,7 @@ describe("inline compaction motion", () => {
       componentStyles,
       groupedStyles,
       chatLayoutStyles,
+      chatComposerStyles,
       composerStatusStyles,
     ].join("\n");
     document.head.append(styles);

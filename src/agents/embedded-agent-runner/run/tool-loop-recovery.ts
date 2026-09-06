@@ -9,16 +9,12 @@ import {
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
-import { isCodeModeRecoveryResumeTool } from "./code-mode-reconciliation.js";
-import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
 
 /** Build the embedded-runner's private bridge into agent-core loop recovery. */
 export function createToolLoopBatchAdmission(
   ctx: HookContext,
-  codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>,
 ): InternalBeforeToolBatchHook | undefined {
-  const loopDetectionEnabled = ctx.loopDetection?.enabled === true;
-  if (!loopDetectionEnabled && codeModeRecovery?.kind !== "inspect") {
+  if (ctx.loopDetection?.enabled !== true) {
     return undefined;
   }
   return async ({ calls }) => {
@@ -29,25 +25,7 @@ export function createToolLoopBatchAdmission(
         : call.args,
     }));
     try {
-      if (codeModeRecovery?.kind === "inspect" && codeModeRecovery.phase === "read-required") {
-        const resumeCall = canonicalCalls.find((call) =>
-          isCodeModeRecoveryResumeTool(call.toolCall),
-        );
-        if (resumeCall) {
-          return {
-            intervention: {
-              kind: "critical-tool-loop",
-              toolCallId: resumeCall.toolCall.id,
-              toolName: resumeCall.toolCall.name,
-              actionKey: hashToolCall(resumeCall.toolCall.name, resumeCall.args),
-              detector: "loop_admission_failure",
-              count: 1,
-              reason: "Use read by itself and wait for its result before resuming.",
-            },
-          };
-        }
-      }
-      const admission = loopDetectionEnabled ? await admitToolCallBatch(canonicalCalls, ctx) : {};
+      const admission = await admitToolCallBatch(canonicalCalls, ctx);
       const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
       return commitReadyCalls && releaseSkippedCalls
         ? attachInternalToolBatchLifecycle(result, {

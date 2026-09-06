@@ -819,13 +819,6 @@ vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
 }));
 
-vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
-    changes: [],
-    warnings: [],
-  })),
-}));
-
 vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: vi.fn(async () => ({
     changes: [],

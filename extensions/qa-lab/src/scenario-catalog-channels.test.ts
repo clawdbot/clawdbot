@@ -70,6 +70,25 @@ function runTelegramStreamingFinalScenario(params: {
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
 
+  it("runs the Telegram RTT exact-marker scenario through an isolated direct message", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("telegram-reply-chain-exact-marker"));
+    expect(scenario.execution.transportPolicy).toEqual({ directMessageOnly: true });
+    expect(scenario.execution.flow?.steps[0]?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sendInbound: expect.objectContaining({
+            conversation: { id: "telegram-reply-chain-dm", kind: "direct" },
+          }),
+        }),
+        expect.objectContaining({
+          waitForOutbound: expect.objectContaining({
+            conversation: { id: "telegram-reply-chain-dm", kind: "direct" },
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as

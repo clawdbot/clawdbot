@@ -13,6 +13,7 @@ import {
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -411,6 +412,7 @@ export function createEditToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+      const assertCurrent = captureAgentToolSourceExecutionGuard();
       const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
@@ -419,6 +421,7 @@ export function createEditToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
+        assertCurrent();
 
         let realEdits: Edit[] = [];
         let expectedContent: string | undefined;
@@ -441,6 +444,7 @@ export function createEditToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
+          assertCurrent();
 
           const { bom, text: content } = stripBom(rawContent);
           const normalizedContent = normalizeToLF(content);
@@ -448,14 +452,13 @@ export function createEditToolDefinition(
           const noOpEdits = editSets.noOpEdits;
           realEdits = editSets.realEdits;
           validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+          // No-op: not terminal — the model may still be mid-task and needs a
+          // continuation, not an ended turn.
           if (realEdits.length === 0) {
-            return {
-              ...textResult(
-                `No changes made to ${path}. The replacement text is identical to the original.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
-            };
+            return textResult(
+              `No changes made to ${path}. The replacement text is identical to the original.`,
+              { changed: false } satisfies EditToolDetails,
+            );
           }
           const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
             content,
@@ -467,12 +470,14 @@ export function createEditToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
+          assertCurrent();
           if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
             throw new Error(
               `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
 
+          assertCurrent();
           const diffResult = generateDiffString(baseContent, newContent);
           const patch = generateUnifiedPatch(path, baseContent, newContent);
           return {
@@ -492,6 +497,7 @@ export function createEditToolDefinition(
             },
           };
         } catch (error: unknown) {
+          assertCurrent();
           const normalizedError = error instanceof Error ? error : new Error(String(error));
           const currentContent = await ops
             .readFile(absolutePath)
@@ -501,6 +507,7 @@ export function createEditToolDefinition(
             expectedContent !== undefined &&
             (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
           ) {
+            assertCurrent();
             return {
               content: [
                 {
@@ -514,15 +521,13 @@ export function createEditToolDefinition(
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
           }
-          // Terminal no-op: the edit matched but produced identical content.
+          // No-op: the edit matched but produced identical content. Not
+          // terminal — see the realEdits.length===0 case above.
           if (normalizedError instanceof EditNoChangeError) {
-            return {
-              ...textResult(
-                `No changes made to ${path}. The replacement produced identical content.`,
-                { changed: false } satisfies EditToolDetails,
-              ),
-              terminate: true,
-            };
+            return textResult(
+              `No changes made to ${path}. The replacement produced identical content.`,
+              { changed: false } satisfies EditToolDetails,
+            );
           }
           throw normalizedError;
         }

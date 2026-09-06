@@ -176,8 +176,8 @@ describe("shared/usage-aggregates", () => {
         latency: quick,
         dailyLatency: [{ date: later, ...quick }],
         dailyBreakdown: [
-          { date: later, tokens: 3, cost: 4 },
-          { date: earlier, tokens: 5, cost: 6 },
+          { ...usage({ totalTokens: 3, totalCost: 4 }), date: later, tokens: 3, cost: 4 },
+          { ...usage({ totalTokens: 5, totalCost: 6 }), date: earlier, tokens: 5, cost: 6 },
         ],
         dailyModelUsage: [
           { date: later, provider: "fixture", model: "one", tokens: 3, cost: 4, count: 2 },
@@ -191,7 +191,9 @@ describe("shared/usage-aggregates", () => {
           { date: later, ...slow },
           { date: earlier, ...slow },
         ],
-        dailyBreakdown: [{ date: later, tokens: 7, cost: 8 }],
+        dailyBreakdown: [
+          { ...usage({ totalTokens: 7, totalCost: 8 }), date: later, tokens: 7, cost: 8 },
+        ],
         dailyMessageCounts: [
           { date: later, total: 9, user: 5, assistant: 4, toolCalls: 2, toolResults: 2, errors: 1 },
         ],

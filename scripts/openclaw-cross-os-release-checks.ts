@@ -11,7 +11,6 @@ import {
 } from "./lib/cross-os-release-checks/companions.ts";
 import type { CandidateBuild, LaneResult } from "./lib/cross-os-release-checks/config.ts";
 import {
-  isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
   resolveProviderConfig,
@@ -35,6 +34,7 @@ import {
   writeSummary,
 } from "./lib/cross-os-release-checks/reporting.ts";
 import { formatError } from "./lib/cross-os-release-checks/shared.ts";
+import { isSupportedCrossOsSuite } from "./lib/cross-os-release-checks/suite-filter.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 

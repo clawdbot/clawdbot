@@ -319,7 +319,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         replacements: new Map(),
         frozen: new Set(),
         ambiguousBaseKeys: new Set(),
-        sourceTextByKey: new Map(),
+        restoredCacheTtl: new Map(),
+        sourceHashByKey: new Map(),
       };
       return recoverEmbeddedRunOverflow({
         ...input,

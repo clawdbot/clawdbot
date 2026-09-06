@@ -1,10 +1,10 @@
 // Cross-process managed update handoff lease behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -43,12 +43,17 @@ vi.mock("../daemon/systemd-scope.js", async (importOriginal) => ({
   findInstalledSystemdGatewayScope: vi.fn(async () => null),
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Competing helpers share this fixture's coordinator, never the operator's database.
+  const tmpDirOwner = await import("./tmp-openclaw-dir.js");
+  vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+    makeTempDir(tempDirs, "openclaw-handoff-coordinator-"),
+  );
   spawnMock.mockReset();
   spawnMock.mockImplementation(createReadyChild);
 });
 
-afterEach(async () => {
+afterEach(() => {
   for (const parent of handoffParents.values()) {
     parent.stdin?.end();
   }
@@ -56,8 +61,8 @@ afterEach(async () => {
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
-  await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempDirs.clear();
+  cleanupTempDirs(tempDirs);
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -77,8 +82,7 @@ async function prepareConcurrentHandoffHelper(): Promise<{
 }> {
   const { DatabaseSync } = await import("node:sqlite");
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-concurrent-test-"));
-  tempDirs.add(tmpDir);
+  const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-concurrent-test-");
 
   await startManagedServiceUpdateHandoff({
     root: tmpDir,
@@ -263,10 +267,7 @@ describe("managed service update handoff cross-process lease", () => {
         claimManagedServiceUpdateHandoff,
         startManagedServiceUpdateHandoff,
       } = await import("./update-managed-service-handoff.js");
-      const tmpDir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-scope-wrapper-")),
-      );
-      tempDirs.add(tmpDir);
+      const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-scope-wrapper-");
       const helperExitPath = path.join(tmpDir, "nested-helper-exited");
       const launcherPath = path.join(tmpDir, "systemd-run");
       await fs.writeFile(

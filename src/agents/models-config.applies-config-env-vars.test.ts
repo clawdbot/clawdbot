@@ -32,8 +32,10 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 // These planner tests exercise no plugin-owned auth policy. Keep their exact

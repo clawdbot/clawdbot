@@ -19,20 +19,18 @@ import {
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
-const toolPolicyWarningOrder: string[] = [];
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = toolPolicyWarningOrder.shift();
+    const oldest = seenToolPolicyWarnings.values().next().value;
     if (oldest) {
       seenToolPolicyWarnings.delete(oldest);
     }
   }
   seenToolPolicyWarnings.add(warning);
-  toolPolicyWarningOrder.push(warning);
   return true;
 }
 
@@ -159,10 +157,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    const policy = step.policy;
     const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
         policy,
         pluginGroups,
@@ -204,16 +203,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           }
         }
       }
-      policy = resolved.policy;
     }
 
-    const expanded =
-      frozenAllow && policy
-        ? {
-            allow: policy.allow,
-            deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
-          }
-        : expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }

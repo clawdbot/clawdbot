@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -11,6 +12,7 @@ import {
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -62,7 +64,6 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -156,18 +157,12 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const initialCallSummary = ctx.state.toolMetaById.get(toolCallId);
-  const initialArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
+  const initialArgs = asRecord(startData?.args);
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
   const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
-  const startArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : initialArgs;
+  const startArgs = asOptionalObjectRecord(adjustedArgs) ?? initialArgs;
   const callSummary = buildToolCallSummary(
     toolName,
     startArgs,
@@ -180,7 +175,6 @@ export async function handleToolExecutionEnd(
   // custom producers use their terminal fact, while policy blocks override it.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
-  const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
@@ -232,6 +226,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     toolName,
     arguments: startArgs,
+    result,
     ...(meta ? { meta } : {}),
     executionStarted,
     replaySafe: callSummary.replaySafe,
@@ -262,7 +257,7 @@ export async function handleToolExecutionEnd(
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
-  if (attemptedPotentialSideEffect || acceptedSessionSpawn || asyncStarted) {
+  if (terminal.sideEffectEvidence || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -278,6 +273,9 @@ export async function handleToolExecutionEnd(
   const messageDelivery = readEmbeddedMessageDeliveryFact(
     readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
   );
+  if (messageDelivery?.sourceReplyDelivered) {
+    ctx.state.sourceReplyDelivered = true;
+  }
   const didDeliverMessagingResult =
     isMessagingInvocation &&
     (messageDelivery
@@ -318,6 +316,7 @@ export async function handleToolExecutionEnd(
       toolName,
       args: startArgs,
       result,
+      hookResult: toolSendReceiptResult,
       isError: isToolError,
       allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
         send: confirmedMessageTarget,
@@ -417,7 +416,9 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
+    !isToolError && toolName === "progress_card"
+      ? projectProgressCardChannelUpdate(startArgs)
+      : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,
@@ -465,9 +466,7 @@ export async function handleToolExecutionEnd(
     ...(callSummary.commandBearing && !isExecToolName(toolName)
       ? { suppressChannelProgress: true }
       : {}),
-    ...(isToolError && extractToolErrorMessage(sanitizedResult)
-      ? { error: extractToolErrorMessage(sanitizedResult) }
-      : {}),
+    ...(errorMessage ? { error: errorMessage } : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
@@ -562,9 +561,7 @@ export async function handleToolExecutionEnd(
         startedAt: startData?.startTime,
         endedAt,
         ...(output ? { summary: output } : {}),
-        ...(isToolError && extractToolErrorMessage(sanitizedResult)
-          ? { error: extractToolErrorMessage(sanitizedResult) }
-          : {}),
+        ...(errorMessage ? { error: errorMessage } : {}),
       });
       const outputData: AgentCommandOutputEventData = {
         itemId: commandItemId,
@@ -677,15 +674,17 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({
-    ctx,
-    toolName,
-    rawToolName,
-    meta,
-    isToolError,
-    result,
-    sanitizedResult,
-  });
+  if (!planUpdate) {
+    await emitToolResultOutput({
+      ctx,
+      toolName,
+      rawToolName,
+      meta,
+      isToolError,
+      result,
+      sanitizedResult,
+    });
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });

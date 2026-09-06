@@ -1,7 +1,18 @@
-import type { ApplicationTheme, ApplicationThemeServerSelection } from "./context.ts";
+import type {
+  ApplicationGateway,
+  ApplicationTheme,
+  ApplicationThemeServerSelection,
+} from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
+import {
+  bindUiPreferences,
+  loadUiPreferences,
+  patchSettings,
+  settingsKeyForGateway,
+  type UiPreferences,
+  type UiSettings,
+} from "./settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
@@ -11,7 +22,7 @@ import {
   syncTypefaceStylesheets,
 } from "./typography.ts";
 
-function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
+function applyThemePresentation(settings: UiPreferences): void {
   if (typeof document === "undefined") {
     return;
   }
@@ -37,8 +48,10 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
 
 export function createApplicationTheme(
   initialSettings: UiSettings,
+  gateway: ApplicationGateway,
 ): ApplicationTheme & { dispose: () => void } {
-  let settings = initialSettings;
+  const { token: _token, ...initialPreferences } = initialSettings;
+  let settings: UiPreferences = initialPreferences;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   let chromeBreakpointCleanup: (() => void) | undefined;
@@ -53,10 +66,12 @@ export function createApplicationTheme(
         return;
       }
       applyThemePresentation(settings);
-      for (const listener of listeners) {
-        listener();
-      }
     });
+    // Live preferences cannot wait for a palette download. Presentation keeps
+    // its own generation fence; subscribers consume the new snapshot now.
+    for (const listener of listeners) {
+      listener();
+    }
   };
 
   const detachSystemThemeListener = () => {
@@ -98,6 +113,30 @@ export function createApplicationTheme(
     }
   }
 
+  const refresh = () => {
+    const next = loadUiPreferences(gateway.connection.gatewayUrl);
+    if (JSON.stringify(next) === JSON.stringify(settings)) {
+      return;
+    }
+    settings = next;
+    publish();
+    syncSystemThemeListener();
+  };
+  const stopPreferences = bindUiPreferences({
+    gatewayUrl: () => gateway.connection.gatewayUrl,
+    refresh,
+  });
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key === settingsKeyForGateway(gateway.connection.gatewayUrl)) {
+      refresh();
+    }
+  };
+  globalThis.addEventListener?.("storage", onStorage);
+  const stopGateway = gateway.subscribe(() => {
+    if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
+      refresh();
+    }
+  });
   syncSystemThemeListener();
   publish();
 
@@ -119,7 +158,7 @@ export function createApplicationTheme(
       publish();
     },
     setMode(mode: ThemeMode, element) {
-      const currentSettings = loadSettings();
+      const currentSettings = settings;
       const nextSettings = { ...currentSettings, themeMode: mode };
       const currentTheme = resolveTheme(currentSettings.theme, currentSettings.themeMode);
       const nextTheme = resolveTheme(nextSettings.theme, nextSettings.themeMode);
@@ -128,22 +167,19 @@ export function createApplicationTheme(
         currentTheme,
         context: { element },
         applyTheme: () => {
-          settings = patchSettings({ themeMode: mode });
-          publish();
-          syncSystemThemeListener();
+          patchSettings({ themeMode: mode });
         },
       });
     },
-    refresh() {
-      settings = loadSettings();
-      publish();
-      syncSystemThemeListener();
-    },
+    refresh,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     dispose() {
+      stopPreferences();
+      globalThis.removeEventListener?.("storage", onStorage);
+      stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
       chromeBreakpointCleanup?.();

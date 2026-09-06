@@ -11,6 +11,8 @@ type QaRuntimeGatewayClient = {
   getProcessCpuMs?: () => number | null;
   getProcessRssBytes?: () => number | null;
   logs?: () => string;
+  markLogs?: () => number;
+  readLogsSince?: (mark: number) => string;
   restart?: () => Promise<void>;
   stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   restartAfterStateMutation?: (

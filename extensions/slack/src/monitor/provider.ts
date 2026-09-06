@@ -397,7 +397,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
-  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
@@ -448,6 +447,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (adopted && contextInstallationIdentity) {
         installationState.update(contextInstallationIdentity.kind);
         await installSlackRuntimeForIdentity(contextInstallationIdentity);
+      }
+      if (
+        !current.apiAppId &&
+        identity.apiAppId &&
+        current.installationIdentity.kind !== "degraded"
+      ) {
+        // HTTP accounts have no app token and auth.test omits app_id for bot tokens,
+        // so the first signed event is the earliest trusted source. Recorded once;
+        // later mismatches are dropped by shouldDropMismatchedSlackEvent, never re-learned.
+        applySlackInstallationIdentity(current, {
+          ...current.installationIdentity,
+          apiAppId: identity.apiAppId,
+        });
+        runtime.log?.(
+          `[${account.accountId}] slack app id ${identity.apiAppId} learned from signed event`,
+        );
       }
       if (recovered || adopted) {
         publishSlackConnectedStatus(opts.setStatus, current.identityHealth);
@@ -622,7 +637,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     threadInheritParent,
     slashCommand,
     textLimit,
-    ackReactionScope,
     typingReaction,
     mediaMaxBytes,
   });
@@ -690,6 +704,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({
     ctx,
     account,
+    abortSignal: opts.abortSignal,
     trackEvent,
     onPrepared: (prepared) => presenceMonitor?.observe(prepared),
   });
@@ -867,7 +882,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         ...(identity.kind === "enterprise"
           ? {
               enterprise: {
-                apiAppId: identity.apiAppId,
                 enterpriseId: identity.enterpriseId,
               },
             }

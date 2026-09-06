@@ -18,6 +18,7 @@ import {
   logClawExperimentalWarning,
   logClawUpdatePlanSummary,
 } from "./claws-cli-output.js";
+import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -182,6 +183,7 @@ export async function runClawsUpdateCommand(
         packagePreflight: preflightClawPackage,
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
+          waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
           get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
           remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),

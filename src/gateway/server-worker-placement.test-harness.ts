@@ -28,6 +28,7 @@ export function admitWorkerStopChat(params: {
       supportsTaskSuggestions: false,
       inboundMessage: "continue",
       rawMessage: "continue",
+      requestIdentity: "worker-stop-continue-without-mentions",
       suppressCommandInterpretation: false,
       stopCommand: false,
       turnKind: "main",

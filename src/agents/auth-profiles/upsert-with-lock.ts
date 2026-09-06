@@ -11,7 +11,10 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
-import { saveAuthProfileStoreWithPreparedOwner, updateAuthProfileStoreWithLock } from "./store.js";
+import {
+  saveAuthProfileStoreWithPreparedOwner,
+  updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 

@@ -9,6 +9,7 @@ import {
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -108,11 +109,7 @@ suite.define(() => {
   it.each(["temporary failure", "previous success", "not found"] as const)(
     "refreshes a reply preview after reconnect from $0 and keeps source navigation working",
     async (initial) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const source = {
         role: "assistant",

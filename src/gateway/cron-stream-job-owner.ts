@@ -391,8 +391,6 @@ export class CronStreamJobOwner {
     let run: ManagedRun;
     try {
       run = await this.params.getProcessSupervisor().spawn({
-        sessionId: `cron-stream:${this.job.id}`,
-        backendId: "cron-stream-source",
         scopeKey: scopeKey(this.job.id),
         replaceExistingScope: true,
         mode: "child",

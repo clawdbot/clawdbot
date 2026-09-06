@@ -43,7 +43,13 @@ const connection = new AgentSideConnection(
     },
     async newSession({ mcpServers }) {
       const sessionId = randomUUID();
-      const state = { history: [], tone: "plain", mode: "normal", mcpServers };
+      const state = {
+        history: [],
+        tone: "plain",
+        mode: "normal",
+        mcpServers,
+        argv: process.argv.slice(3),
+      };
       sessions.set(sessionId, state);
       await save(sessionId);
       return { sessionId, ...describe(state) };

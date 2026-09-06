@@ -11,7 +11,7 @@ export type ChannelRuntimeSnapshot = {
 /** The lifecycle owner's decision for one requested account start, separate from connectivity. */
 export type ChannelAccountStartOutcome =
   | { status: "handed-off" }
-  | { status: "retry"; reason: "stop-in-flight" | "task-owned" | "start-in-flight" }
+  | { status: "retry"; reason: "stop-in-flight" | "task-owned" }
   | {
       status: "skipped";
       reason:

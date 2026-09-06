@@ -19,12 +19,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionSearchTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
 
   private fun sessionRowJson(
     key: String,
@@ -197,6 +200,8 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = gateway::request,
           currentDefaultAgentId = { null },
@@ -238,6 +243,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -267,6 +273,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -294,6 +301,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { cacheScope },
@@ -322,6 +330,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope("gateway-a", 1) },
@@ -382,6 +391,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { scope },
@@ -426,6 +436,7 @@ class ChatControllerSessionSearchTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },

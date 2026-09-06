@@ -13,7 +13,7 @@ import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
-  withAcpxLeaseEnvironment,
+  withAcpxLeaseArgs,
   type AcpxProcessLease,
 } from "./process-lease.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
@@ -95,41 +95,40 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 });
 
-describe("withAcpxLeaseEnvironment", () => {
+describe("withAcpxLeaseArgs", () => {
   it("adds portable lease wrapper args", () => {
-    const command = withAcpxLeaseEnvironment({
+    const command = withAcpxLeaseArgs({
       command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
       leaseId: "lease-test",
       gatewayInstanceId: "gateway-test",
     });
 
-    expect(command).toBe(
-      [
-        "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-        OPENCLAW_ACPX_LEASE_ID_ARG,
-        "lease-test",
-        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-        "gateway-test",
-      ].join(" "),
-    );
+    expect(command).toEqual([
+      "node",
+      "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      OPENCLAW_ACPX_LEASE_ID_ARG,
+      "lease-test",
+      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+      "gateway-test",
+    ]);
   });
 
-  it("quotes portable lease wrapper args", () => {
-    const command = withAcpxLeaseEnvironment({
-      command: "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
+  it("preserves portable lease wrapper args", () => {
+    const command = withAcpxLeaseArgs({
+      command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],
       leaseId: "lease test",
       gatewayInstanceId: "gateway-test",
     });
 
-    expect(command).toBe(
-      [
-        "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
-        OPENCLAW_ACPX_LEASE_ID_ARG,
-        "'lease test'",
-        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-        "gateway-test",
-      ].join(" "),
-    );
+    expect(command).toEqual([
+      "node",
+      "C:/openclaw/acpx/codex-acp-wrapper.mjs",
+      "",
+      OPENCLAW_ACPX_LEASE_ID_ARG,
+      "lease test",
+      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+      "gateway-test",
+    ]);
   });
 });
 
@@ -138,7 +137,7 @@ describe("readAcpxProcessLeaseIdentity", () => {
     expect(
       readAcpxProcessLeaseIdentity(
         [
-          "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+          "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs --label owner's-choice",
           OPENCLAW_ACPX_LEASE_ID_ARG,
           "'lease test'",
           OPENCLAW_GATEWAY_INSTANCE_ID_ARG,

@@ -10,6 +10,7 @@ type PendingApprovalTerminal<TValue> = NonNullable<PendingApprovalEntry<TValue>[
 
 export function createPendingApprovalRegistry<TValue>() {
   const pending = new Map<string, PendingApprovalEntry<TValue>>();
+  let expiryStopped = false;
   const remove = (id: string, expected?: PendingApprovalEntry<TValue>) => {
     const entry = pending.get(id);
     if (!entry || (expected && entry !== expected)) {
@@ -55,10 +56,13 @@ export function createPendingApprovalRegistry<TValue>() {
     timeoutMs: number,
     onExpire: PendingApprovalTerminal<TValue>,
   ) => {
-    if (!isCurrent(entry)) {
+    if (expiryStopped || !isCurrent(entry)) {
       return;
     }
     entry.timeoutId = setTimeout(() => {
+      if (expiryStopped || !isCurrent(entry)) {
+        return;
+      }
       const expired = settle(entry.id, onExpire);
       if (expired.status === "taken") {
         void expired.terminal(expired.entry);
@@ -72,6 +76,22 @@ export function createPendingApprovalRegistry<TValue>() {
     }
     pending.clear();
   };
+  const stopExpiryTimers = () => {
+    expiryStopped = true;
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timeoutId);
+    }
+  };
   const has = (id: string) => pending.has(id);
-  return { has, begin, isCurrent, completeDelivery, settle, scheduleExpiry, remove, clear };
+  return {
+    has,
+    begin,
+    isCurrent,
+    completeDelivery,
+    settle,
+    scheduleExpiry,
+    remove,
+    clear,
+    stopExpiryTimers,
+  };
 }

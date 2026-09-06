@@ -24,6 +24,8 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { getFinishedSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
 
 const TEST_ENV_KEYS = [
@@ -63,6 +65,7 @@ describe("gateway-hosted exec approvals", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
+    resetProcessRegistryForTests();
   });
 
   it(
@@ -83,7 +86,11 @@ describe("gateway-hosted exec approvals", () => {
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
       const config = {
-        agents: { defaults: { workspace: workspaceDir } },
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
+        },
         gateway: {
           port,
           auth: { mode: "token", token },
@@ -93,6 +100,7 @@ describe("gateway-hosted exec approvals", () => {
             host: "gateway",
             security: "full",
             ask: "off",
+            cleanupMs: 60_000,
           },
         },
       } satisfies OpenClawConfig;
@@ -136,6 +144,7 @@ describe("gateway-hosted exec approvals", () => {
       cleanup.push(() => disconnectGatewayClient(operator));
 
       let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      let approvedProcessId: string | undefined;
 
       const tools = createOpenClawCodingTools({
         agentId: "main",
@@ -151,7 +160,8 @@ describe("gateway-hosted exec approvals", () => {
         exec: {
           approvalRunningNoticeMs: 0,
           approvalFollowupMode: "direct",
-          approvalFollowup: ({ outcome }) => {
+          approvalFollowup: ({ outcome, sessionId }) => {
+            approvedProcessId = sessionId;
             resolveOutcome(outcome);
             return undefined;
           },
@@ -187,6 +197,13 @@ describe("gateway-hosted exec approvals", () => {
       });
       const approvalId = requireApprovalId(pending.details);
 
+      const helperTools = createOpenClawCodingTools({ agentId: "helper", config, workspaceDir });
+      const helperProcess = helperTools.find((candidate) => candidate.name === "process");
+      if (!helperProcess) {
+        throw new Error("expected helper process tool");
+      }
+      await helperProcess.execute("helper-process-during-approval", { action: "list" });
+
       await operator.request(
         "exec.approval.resolve",
         { id: approvalId, decision: "allow-once" },
@@ -199,6 +216,14 @@ describe("gateway-hosted exec approvals", () => {
       expect(outcome.status).toBe("completed");
       expect(outcome.exitCode).toBe(0);
       expect(outcome.aggregated).toBe("smoke");
+      if (!approvedProcessId) {
+        throw new Error("expected the approved process identity");
+      }
+      const finished = getFinishedSession(approvedProcessId);
+      if (!finished) {
+        throw new Error("expected retained approved process output");
+      }
+      expect(finished.expiresAt - finished.endedAt).toBe(180_000);
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

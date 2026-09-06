@@ -10,6 +10,7 @@ export type AgentVitestProjectOwner = {
 
 export const agentVitestProjectOwners: {
   all: AgentVitestProjectOwner;
+  spawnProductionBoundary: AgentVitestProjectOwner;
   coreIsolated: AgentVitestProjectOwner;
   core: AgentVitestProjectOwner;
   embedded: AgentVitestProjectOwner;
@@ -23,3 +24,4 @@ export const agentVitestProjectOwners: {
 export const agentVitestProjectConfigs: string[];
 export const embeddedAgentVitestProjectOwners: AgentVitestProjectOwner[];
 export function isAgentsCoreIsolatedTestFile(file: string): boolean;
+export function isAgentsSpawnProductionBoundaryTestFile(file: string): boolean;

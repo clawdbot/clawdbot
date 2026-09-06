@@ -1,9 +1,12 @@
+import { toUSVString } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isIncognitoOpenClawAgentDatabase,
@@ -37,7 +40,6 @@ import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -123,7 +125,7 @@ function readSessionTranscriptUpdatedAt(
   if (row?.updated_at === null || row?.updated_at === undefined) {
     return undefined;
   }
-  return coerceSqliteNumber(row.updated_at);
+  return sqliteNumber(row.updated_at);
 }
 
 function sqliteTranscriptStateIsReclaimable(params: {
@@ -147,15 +149,20 @@ function sqliteTranscriptStateHasMarker(params: {
   transcriptContentMarker: string;
 }): boolean {
   const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom("transcript_events")
       .select("event_json")
       .where("session_id", "=", params.sessionId)
       .orderBy("seq", "asc"),
-  ).rows;
-  return rows.some((row) => row.event_json.includes(params.transcriptContentMarker));
+  );
+  // Consume every row so late SQLite errors still abort cleanup planning.
+  let hasMarker = false;
+  for (const row of rows) {
+    hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
+  }
+  return hasMarker;
 }
 
 /** Session ids protected by live node state. */
@@ -164,11 +171,18 @@ export function readReferencedSessionIds(
   excludedSessionKeys: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const db = getSessionKysely(database.db);
+  // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
+  const excludedKeys = [...excludedSessionKeys].filter(
+    (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
+  );
   const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key"]),
+      .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
+      .$if(excludedKeys.length > 0, (query) =>
+        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+      ),
   );
   const sessionIds = new Set<string>();
   for (const row of rows) {
@@ -301,16 +315,14 @@ export function readSessionGenerationIdsForKeys(
   keys: Iterable<string>,
   options: { exactStoredKeys?: boolean } = {},
 ): string[] {
-  const sessionKeys = uniqueStrings(
-    [...keys].map((key) => (options.exactStoredKeys ? key : key.trim())),
-  );
-  if (sessionKeys.length === 0) {
-    return [];
-  }
+  const sessionKeys = [...keys].map((key) => (options.exactStoredKeys ? key : key.trim()));
   const db = getSessionKysely(database.db);
   return executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_windows").select("session_id").where("session_key", "in", sessionKeys),
+    db
+      .selectFrom("session_windows")
+      .select("session_id")
+      .where("session_key", "in", sqliteStringSet(sessionKeys)),
   ).rows.map((row) => row.session_id);
 }
 
@@ -637,7 +649,7 @@ export function planSessionLifecycleArtifactCleanup(
       !sqliteTranscriptStateIsReclaimable({
         database,
         // Admission updates the node even when a run has no event yet or reuses old events.
-        sessionUpdatedAt: coerceSqliteNumber(row.updated_at),
+        sessionUpdatedAt: sqliteNumber(row.updated_at),
         sessionId: row.current_session_id,
         nowMs: params.nowMs,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,

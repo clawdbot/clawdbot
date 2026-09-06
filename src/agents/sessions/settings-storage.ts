@@ -1,6 +1,8 @@
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
+import { resolveJsonSaveTarget } from "../../infra/json-file.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 
@@ -128,6 +130,24 @@ export interface SettingsError {
   error: Error;
 }
 
+function replaceSettingsFile(path: string, content: string): void {
+  const savePath = resolveJsonSaveTarget(path);
+  const saveDir = realpathSync(dirname(savePath));
+  const canonicalSavePath = join(saveDir, basename(savePath));
+
+  // The atomic helper enforces explicit modes. Carry the existing parent mode
+  // and Node's writeFile creation mode forward so replacement changes no permissions.
+  // Keep rename failures fail-closed: copy fallback can expose a partial destination.
+  replaceFileAtomicSync({
+    filePath: canonicalSavePath,
+    content,
+    dirMode: statSync(saveDir).mode & 0o7777,
+    mode: 0o666 & ~process.umask(),
+    preserveExistingMode: true,
+    tempPrefix: basename(canonicalSavePath),
+  });
+}
+
 export class FileSettingsStorage implements SettingsStorage {
   private paths: Record<SettingsScope, string>;
 
@@ -166,7 +186,7 @@ export class FileSettingsStorage implements SettingsStorage {
       const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        writeFileSync(path, next, "utf-8");
+        replaceSettingsFile(path, next);
       }
     } finally {
       release();

@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { isScalar, parseDocument, visit } from "yaml";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -21,6 +20,7 @@ import type {
   ClawSourceIdentity,
   ClawWorkspaceSourceSnapshot,
 } from "./types.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 type PackageJson = {
   name: string;
@@ -387,57 +387,8 @@ export function parseClawMarkdown(
       ],
     };
   }
-  const document = parseDocument(frontmatter, { prettyErrors: false, uniqueKeys: true });
-  if (document.errors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: document.errors.map((error) =>
-        fileDiagnostic("invalid_claw_frontmatter", `Could not parse ${path}: ${error.message}`),
-      ),
-    };
-  }
-  let unsupportedFeature: string | undefined;
-  visit(document, {
-    Alias() {
-      unsupportedFeature ??= "aliases";
-    },
-    Node(_key, node) {
-      if (node.anchor) {
-        unsupportedFeature ??= "anchors";
-      } else if (node.tag) {
-        unsupportedFeature ??= "explicit tags";
-      }
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<") {
-        unsupportedFeature ??= "merge keys";
-      }
-    },
-  });
-  if (unsupportedFeature) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "unsupported_claw_yaml_feature",
-          `${path} uses ${unsupportedFeature}; CLAW.md frontmatter must map directly to JSON data.`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, value: document.toJSON(), body };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "invalid_claw_frontmatter",
-          `Could not parse ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
+  const parsed = parseClawYaml(frontmatter, path, "frontmatter");
+  return parsed.ok ? { ...parsed, body } : parsed;
 }
 
 function parseClawManifestDocument(

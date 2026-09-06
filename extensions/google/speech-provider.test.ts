@@ -1,7 +1,7 @@
-// Google tests cover speech provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest as requireFirstRecordArg,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -90,25 +90,6 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
     expect(actual[key]).toEqual(expectedValue);
   }
   return actual;
-}
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`Expected ${label}`);
-  }
-  return call[0];
-}
-
-function requireFirstRecordArg(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): Record<string, unknown> {
-  const value = requireFirstMockArg(mock, label);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
 }
 
 describe("Google speech provider", () => {

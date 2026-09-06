@@ -31,6 +31,65 @@ function fixture() {
 }
 
 describe("canonical declaration stage", () => {
+  it.each([".d.ts", ".d.mts", ".d.cts"])(
+    "strips undeclared __exportAll from staged %s declaration exports",
+    async (extension) => {
+      const { staging, dist, invocation } = fixture();
+      await publishStagedDeclarations(
+        {
+          env: process.env,
+          maxOldSpaceMb: 8192,
+          heapShortfall: null,
+          invocations: [
+            invocation({
+              [`plugin-sdk/core${extension}`]:
+                "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+            }),
+          ],
+        },
+        [],
+        staging,
+        dist,
+        [`plugin-sdk/core${extension}`],
+        ["plugin-sdk/obsolete.d.ts"],
+      );
+      const published = fs.readFileSync(path.join(dist, `plugin-sdk/core${extension}`), "utf8");
+      expect(published).toContain("keep as k");
+      expect(published).not.toContain("__exportAll");
+    },
+  );
+
+  it.each([".d.ts", ".d.mts", ".d.cts"])(
+    "also strips undeclared __exportAll left in live dist outside staging (%s)",
+    async (extension) => {
+      const { staging, dist, invocation } = fixture();
+      fs.writeFileSync(
+        path.join(dist, `leftover-chunk${extension}`),
+        "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+      );
+      await publishStagedDeclarations(
+        {
+          env: process.env,
+          maxOldSpaceMb: 8192,
+          heapShortfall: null,
+          invocations: [
+            invocation({
+              "plugin-sdk/core.d.ts": "export declare const ok: true;\n",
+            }),
+          ],
+        },
+        [],
+        staging,
+        dist,
+        ["plugin-sdk/core.d.ts"],
+        ["plugin-sdk/obsolete.d.ts"],
+      );
+      const leftover = fs.readFileSync(path.join(dist, `leftover-chunk${extension}`), "utf8");
+      expect(leftover).toContain("keep as k");
+      expect(leftover).not.toContain("__exportAll");
+    },
+  );
+
   it("rejects absolute reference paths even when a staged relative namesake exists", async () => {
     const { staging, dist, invocation } = fixture();
     await expect(

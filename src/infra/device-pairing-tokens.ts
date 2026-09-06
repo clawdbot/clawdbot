@@ -228,10 +228,16 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  isIssuanceCurrent?: () => boolean;
   baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
   return await withDevicePairingLock(async () => {
     const state = await loadDevicePairingState(params.baseDir);
+    // A handshake can lose authority while queued behind another pairing operation.
+    // Recheck before reusing or replacing a token, with no further await before commit.
+    if (params.isIssuanceCurrent?.() === false) {
+      return null;
+    }
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     const context = resolveDeviceTokenUpdateContext({
       state,

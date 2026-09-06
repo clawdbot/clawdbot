@@ -57,7 +57,6 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
 
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | { type: "anchor-exit"; generation: string; code: number | null; signal: NodeJS.Signals | null }
   | { type: "relay-error"; generation: string; error: string };
 
 export function encodeServiceChildMessage(

@@ -5,7 +5,7 @@ read_when:
   - You want to pass url/token/session from scripts
   - You want to run the TUI in local embedded mode without a Gateway
   - You want to use openclaw chat or openclaw tui --local
-title: "TUI"
+title: "openclaw tui"
 ---
 
 # `openclaw tui`
@@ -21,11 +21,13 @@ openclaw tui [target]
 short reference such as `movies-a1166b81`, or a literal `agent:...` session key.
 A URL or host target authoritatively selects that Gateway; a bare reference
 uses the configured or default Gateway. You can also paste a Control UI URL
-directly as `openclaw <url>` and place the TUI options after it, for example
+directly as `openclaw <url>` and place the TUI options before or after it, for example
 `openclaw <url> --token <token> --deliver`.
 
 The bare-URL form accepts `--token`, `--password`, `--tls-fingerprint`,
 `--deliver`, `--thinking`, `--message`, `--timeout-ms`, and `--history-limit`.
+URL-valued messages work in either position, including
+`openclaw --message https://example.com/article <url>`.
 Use `openclaw tui <url>` when you need another TUI option; `--local`, `--url`,
 and `--session` conflict with a session URL.
 

@@ -206,7 +206,7 @@ export async function sendWebhookMessageDiscord(
         ...(replyTo ? { replyToId: replyTo } : {}),
       });
       const resultConversationId = result.channelId.trim();
-      if (result.messageId !== "unknown" && resultConversationId) {
+      if (result.messageId && resultConversationId) {
         recordOutboundMessageIdentity({
           channel: "discord",
           accountId: account.accountId,

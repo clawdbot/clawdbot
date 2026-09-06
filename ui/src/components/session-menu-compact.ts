@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import "../styles/session-menu-compact.css";
 
 export type CompactSessionMenuView =
   | "root"
@@ -24,21 +25,31 @@ export function compactSessionMenuViewForValue(value: string): CompactSessionMen
 }
 
 export function renderCompactSessionMenuNavigationItem(params: {
-  view: Exclude<CompactSessionMenuView, "root">;
+  value: string;
   label: string;
   icon: TemplateResult;
+  details?: TemplateResult;
+  accessibleLabel?: string;
   disabled?: boolean;
   title?: string;
 }) {
   return html`
     <wa-dropdown-item
-      class="session-menu__item"
-      value=${`compact:open-${params.view}`}
+      class=${`session-menu__item${params.details ? " session-menu__item--compact-details" : ""}`}
+      value=${params.value}
+      aria-label=${params.accessibleLabel ?? nothing}
       ?disabled=${params.disabled ?? false}
       title=${params.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${params.icon}</span>
       <span class="session-menu__text">${params.label}</span>
+      ${
+        params.details
+          ? html`<span class="session-menu__compact-details" aria-hidden="true"
+              >${params.details}</span
+            >`
+          : nothing
+      }
       <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
         >${icons.chevronRight}</span
       >

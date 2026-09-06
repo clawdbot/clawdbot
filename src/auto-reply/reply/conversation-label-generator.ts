@@ -32,6 +32,8 @@ export type ConversationLabelParams = {
   modelRef?: string;
   timeoutMs?: number;
   maxLength?: number;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 type ConversationLabelFallbackParams = ConversationLabelParams & {
@@ -100,9 +102,14 @@ async function runLabelAttempts(
     normalizeLabel?: (label: string) => string | null;
   },
 ): Promise<string | null> {
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+  };
   const seen = new Set(params.skipAttempts?.map((attempt) => resolveAttemptKey(params, attempt)));
   const failures: LabelModelPhase[] = [];
   for (const attempt of params.attempts) {
+    assertCurrent();
     const key = resolveAttemptKey(params, attempt);
     if (seen.has(key)) {
       continue;
@@ -136,9 +143,12 @@ async function runLabelAttempts(
         ].join(" "),
         prompt: params.userMessage,
         timeoutMs: params.timeoutMs,
+        abortSignal: params.abortSignal,
+        assertCurrent: params.assertCurrent,
         outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
       });
+      assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();
       partitioner.markStrict();
       const visibleText = [...partitioner.push(completion.text), ...partitioner.flush()]
@@ -151,6 +161,7 @@ async function runLabelAttempts(
         return normalized;
       }
     } catch {
+      assertCurrent();
       failures.push(attempt.phase);
     }
   }

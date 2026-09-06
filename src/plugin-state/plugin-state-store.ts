@@ -1,15 +1,19 @@
 // Plugin state store exposes persisted per-plugin state operations.
+import type { Result } from "@openclaw/normalization-core/result";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   clearPluginStateDatabaseForTests,
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
+  PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS,
+  pluginStateImportBatch,
   pluginStateClear,
   pluginStateConsume,
   pluginStateDelete,
   pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
+  pluginStateLookupMany,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateRegisterSequencedJournalEntry,
@@ -173,6 +177,7 @@ function createKeyedStoreForPluginId<T>(
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
     lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (...args) => store.lookupMany(...args),
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
     entries: async () => store.entries(),
@@ -262,6 +267,20 @@ function createSyncKeyedStoreForPluginId<T>(
         key: normalizedKey,
         ...(env ? { env } : {}),
       }) as T | undefined;
+    },
+    lookupMany(keys) {
+      if (keys.length > 10_000) {
+        throw invalidInput("plugin state lookupMany accepts at most 10000 keys", "lookup");
+      }
+      const normalizedKeys = Array.from(keys, (key) => validateKey(key, "lookup"));
+      const values = pluginStateLookupMany({
+        pluginId,
+        namespace,
+        keys: normalizedKeys,
+        ...(env ? { env } : {}),
+      });
+      // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
+      return values as Array<Result<T | undefined, PluginStateStoreError>>;
     },
     consume(key) {
       const normalizedKey = validateKey(key, "consume");
@@ -465,28 +484,33 @@ export function importPluginStateEntriesForDoctor(
     defaultTtlMs,
   });
 
+  let batch: Array<PreparedRegisterParams & { createdAtMs: number }> = [];
+  const flush = () => {
+    pluginStateImportBatch({ pluginId, namespace, maxEntries, overflowPolicy, env }, batch);
+    batch = [];
+  };
   for (const entry of entries) {
-    if (!Number.isSafeInteger(entry.createdAt)) {
-      throw invalidInput("plugin state import createdAt must be a safe integer", "register");
+    try {
+      if (!Number.isSafeInteger(entry.createdAt)) {
+        throw invalidInput("plugin state import createdAt must be a safe integer", "register");
+      }
+      const prepared = prepareRegisterParams(
+        entry.key,
+        entry.value,
+        defaultTtlMs,
+        entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+      );
+      batch.push({ ...prepared, createdAtMs: entry.createdAt });
+    } catch (error) {
+      // Validation failure must not discard earlier valid rows in this batch.
+      flush();
+      throw error;
     }
-    const prepared = prepareRegisterParams(
-      entry.key,
-      entry.value,
-      defaultTtlMs,
-      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
-    );
-    pluginStateRegister({
-      pluginId,
-      namespace,
-      key: prepared.key,
-      valueJson: prepared.valueJson,
-      maxEntries,
-      overflowPolicy,
-      createdAtMs: entry.createdAt,
-      ...(env ? { env } : {}),
-      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
-    });
+    if (batch.length === PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS) {
+      flush();
+    }
   }
+  flush();
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

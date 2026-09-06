@@ -187,7 +187,7 @@ openclaw plugins install <source>
 openclaw doctor --fix
 ```
 
-`doctor --fix` cleans legacy OpenClaw-generated dependency state and can
+`doctor --fix` removes dangling global plugin-runtime symlinks and can
 recover downloadable plugins that are missing from local install records when
 config still references them. Doctor does not repair dependencies for an
 already-installed local plugin.
@@ -262,14 +262,17 @@ this setup or runs a package manager.
 ## Legacy cleanup
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup
-or during doctor repair. Current doctor cleanup removes those stale
-directories and symlinks with `--fix`, including old `plugin-runtime-deps`
-roots, global Node-prefix package symlinks pointing at pruned
-`plugin-runtime-deps` targets, `.openclaw-runtime-deps*` manifests, generated
-plugin `node_modules`, install stage directories, and package-local pnpm
-stores. Packaged postinstall also removes those global symlinks before
-pruning the legacy target roots, so upgrades do not leave dangling ESM
-package imports.
+or during doctor repair. Packaged postinstall now cleans only its own
+installation: obsolete bundled-plugin `node_modules` and
+`.openclaw-install-stage*` directories under `dist/extensions`, `dist` files
+absent from the packaged inventory, and empty `dist` directories.
+
+`doctor --fix` removes global Node-prefix package symlinks into
+`plugin-runtime-deps` only when the alias itself is genuinely dangling. Live
+aliases are preserved. Neither Doctor nor postinstall deletes shared
+`plugin-runtime-deps` roots or mirrors, which may still serve another
+installation or profile. The deprecated `core/doctor/legacy-plugin-dependencies`
+selector is informational only; it no longer scans shared roots for removal.
 
 Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
 Current install, update, uninstall, and doctor flows still recognize that

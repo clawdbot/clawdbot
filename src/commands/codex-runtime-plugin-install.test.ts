@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emptyMetadataSnapshot,
@@ -489,6 +490,42 @@ describe("Codex runtime plugin install repair", () => {
       expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
     );
   });
+
+  it.each(["selected onboarding", "ordinary selection", "silent supervision"] as const)(
+    "requests official capability review only for the explicit caller: %s",
+    async (caller) => {
+      const reviewOfficialArtifacts = caller === "selected onboarding" ? true : undefined;
+      const prompter = createWizardPrompter();
+      mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
+        expect(params.reviewOfficialArtifacts).toBe(reviewOfficialArtifacts);
+        if (caller === "silent supervision") {
+          expect(await params.onCapabilityConsent({})).toBeUndefined();
+        }
+        return { cfg: params.cfg, installed: true, pluginId: "codex", status: "installed" };
+      });
+      const { ensureCodexRuntimePluginForModelSelection, ensureCodexRuntimePluginForSupervision } =
+        await import("./codex-runtime-plugin-install.js");
+      const ensure =
+        caller === "silent supervision"
+          ? ensureCodexRuntimePluginForSupervision
+          : ensureCodexRuntimePluginForModelSelection;
+      const result = await ensure({
+        cfg: {
+          agents: {
+            defaults: { models: { "openai/fixture-model": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+        model: "openai/fixture-model",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        ...(reviewOfficialArtifacts ? { reviewOfficialArtifacts } : {}),
+        ...(caller === "silent supervision" ? { output: "silent" } : {}),
+      });
+      expect(result).toMatchObject({ ok: true, required: true });
+      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
 
   it("silences installer output and rejects prompts in non-interactive mode", async () => {
     const note = vi.fn(async () => {});

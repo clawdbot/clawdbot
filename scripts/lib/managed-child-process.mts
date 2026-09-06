@@ -67,7 +67,7 @@ type RunManagedCommandOptions = ManagedCommandOptions & {
 };
 
 type ManagedCommandOutcome =
-  | { type: "completed"; status: number }
+  | { type: "completed"; exit: number | NodeJS.Signals }
   | { type: "failed"; error: unknown }
   | { type: "timeout" }
   | { type: "aborted" }
@@ -254,7 +254,9 @@ export function inspectManagedProcessGroup(
 function isLinuxZombieProcessGroup(pid: number): boolean {
   // Detached children lead their own session. Linux kill(0) includes zombies,
   // which cannot write or respond to signals while awaiting their parent's reap.
-  const result = spawnSync("ps", ["-s", String(pid), "-o", "pgid=,state="], {
+  // Enumerate threads (-L): a process row reports only the group leader's state,
+  // and a pthread_exit leader reads Z while sibling threads still run and write.
+  const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: PROCESS_GROUP_DRAIN_TIMEOUT_MS,
@@ -416,7 +418,7 @@ export async function runManagedCommand({
     child.once(requireProcessTreeExit ? "exit" : "close", (status, received) => {
       notifyOutcome({
         type: "completed",
-        status: received ? signalExitCode(received) : (status ?? 1),
+        exit: received ?? status ?? 1,
       });
     });
     if (timeoutMs !== undefined) {
@@ -453,7 +455,9 @@ export async function runManagedCommand({
     }
     let outcome = await completion;
     if (outcome.type === "completed" && requireProcessTreeExit) {
-      void finalize();
+      // Preserve actual signal cleanup; numeric 143 must still reject lingering descendants.
+      const exitSignal = typeof outcome.exit === "string" ? outcome.exit : undefined;
+      void finalize(exitSignal);
     }
     // Cleanup failure overrides the first cancellation, including during strict drainage.
     const cleanup = finalization ? await finalization : undefined;
@@ -477,7 +481,7 @@ export async function runManagedCommand({
     if (outcome.type === "signal") {
       return signalExitCode(outcome.signal);
     }
-    return outcome.status;
+    return typeof outcome.exit === "string" ? signalExitCode(outcome.exit) : outcome.exit;
   } finally {
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);

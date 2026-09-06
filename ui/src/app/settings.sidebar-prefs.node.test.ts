@@ -60,7 +60,11 @@ describe("sidebar preference persistence", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:dashboards",
+      "route:cron",
+      "route:plugins",
+    ]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -78,12 +82,16 @@ describe("sidebar preference persistence", () => {
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
     expect(loadSettings().sidebarEntries).toEqual([
-      "route:workboard",
+      "plugin:workboard/workboard",
       "route:usage",
       "route:tasks",
     ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual([
+      "plugin:workboard/workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });
