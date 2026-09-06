@@ -1,9 +1,24 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
+import {
+  resetTestClaudeCodeVersionResolver,
+  setTestClaudeCodeVersionResolver,
+} from "./claude-code-version.js";
+
+// This test environment has no @anthropic-ai/claude-code install and no
+// `claude` binary on PATH, so the real resolver would throw before this
+// file's requests even reach the loopback server. Inject a stable test
+// version for the duration of this file.
+beforeAll(() => {
+  setTestClaudeCodeVersionResolver(() => "2.1.177");
+});
+afterAll(() => {
+  resetTestClaudeCodeVersionResolver();
+});
 
 type CapturedRequest = {
   method: string;

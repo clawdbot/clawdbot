@@ -34,8 +34,8 @@ import {
 } from "../providers/anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
-  ANTHROPIC_CLAUDE_CODE_VERSION,
+  getAnthropicClaudeCodeBillingSystemBlock,
+  getAnthropicClaudeCodeVersion,
   defaultsClaudeAdaptiveThinking,
   mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
@@ -866,7 +866,7 @@ function createAnthropicTransportClient(params: {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            "user-agent": `claude-cli/${ANTHROPIC_CLAUDE_CODE_VERSION}`,
+            "user-agent": `claude-cli/${getAnthropicClaudeCodeVersion()}`,
             "x-app": "cli",
           },
           model.headers,
@@ -964,7 +964,7 @@ async function buildAnthropicParams(
       // Anthropic requires this first block to route Claude subscription OAuth billing.
       {
         type: "text",
-        text: ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
+        text: getAnthropicClaudeCodeBillingSystemBlock(),
       },
       {
         type: "text",
