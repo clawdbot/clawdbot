@@ -370,7 +370,7 @@ function isTrustedSymlinkSkillTarget(
 function shouldIgnoreSkillsWatchPath(
   watchPath: string,
   stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-  options: { usePolling?: boolean } = {},
+  usePolling = false,
 ): boolean {
   if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
     return true;
@@ -381,7 +381,7 @@ function shouldIgnoreSkillsWatchPath(
   if (!stats) {
     return false;
   }
-  if (options.usePolling && isSkillFileWatchPath(watchPath)) {
+  if (usePolling && isSkillFileWatchPath(watchPath)) {
     return false;
   }
   // Regular files are surfaced through raw directory events below. Letting
@@ -515,8 +515,8 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
         pollInterval: 100,
       },
       ignored: (watchPath, stats) =>
-        (!isPathInside(target.path, watchPath) && !isPathInside(watchPath, target.path)) ||
-        shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
+        shouldIgnoreSkillsWatchPath(watchPath, stats, usePolling) ||
+        (!isPathInside(target.path, watchPath) && !isPathInside(watchPath, target.path)),
     }),
   );
 

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { Skill } from "../skills/loading/skill-contract.js";
+import { decodeSkillXml, type Skill } from "../skills/loading/skill-contract.js";
 
 export type CodeModeSkill = {
   name: string;
@@ -14,21 +14,12 @@ export type CodeModeSkillReader = (params: {
   signal?: AbortSignal;
 }) => Promise<string>;
 
-function decodeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 const SKILL_NAME_PATTERN = /^[ ]{4}<name>(.*)<\/name>$/mu;
 const SKILL_LOCATION_PATTERN = /^[ ]{4}<location>(.*)<\/location>$/mu;
 
 function readSkillField(block: string, pattern: RegExp): string | undefined {
   const match = pattern.exec(block)?.[1];
-  return match === undefined ? undefined : decodeXml(match);
+  return match === undefined ? undefined : decodeSkillXml(match);
 }
 
 /** Select Code Mode skills from the exact catalog rendered into this run's prompt. */

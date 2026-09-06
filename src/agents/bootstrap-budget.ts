@@ -74,13 +74,9 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
 }
 
 /**
- * Compares raw bootstrap files with the injected context files the agent received.
- *
- * Identity is the source path both sides were resolved from: basenames repeat
- * across a workspace (nested `AGENTS.md` added by bootstrap-extra-files), so a
- * looser match would hand a file the budget dropped the bytes of the sibling
- * that consumed that budget. Callers that rewrite injected paths (the sandbox
- * workspace remap) build these stats before rewriting.
+ * Matches injected content by source path, because basenames can repeat even
+ * when the total budget drops one of those files. Account before remapping
+ * source paths into the prompt workspace.
  */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];

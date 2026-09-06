@@ -25,7 +25,46 @@ function expectPinnedOnlySchema(tool: ReturnType<typeof expectWidget>): void {
   expect(schema.properties?.pin?.const).toBe(true);
 }
 
-describe("scheduled show_widget registration", () => {
+describe("pinned show_widget registration", () => {
+  it("keeps recovered Control UI dashboard authoring available without an inline client", () => {
+    const tool = expectWidget(
+      createOpenClawTools({
+        agentSessionKey: "agent:main:dashboard:recovered",
+        pinnedWidgetAuthoring: true,
+      }),
+    );
+
+    expectPinnedOnlySchema(tool);
+  });
+
+  it.each([undefined, "agent:main:cron:job:run:detached"])(
+    "requires a persistent session for recovered authoring (%s)",
+    (agentSessionKey) => {
+      const tools = createOpenClawTools({ agentSessionKey, pinnedWidgetAuthoring: true });
+      expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
+    },
+  );
+
+  it("applies tool policy to recovered dashboard authoring", () => {
+    const options = {
+      sessionKey: "agent:main:dashboard:recovered",
+      pinnedWidgetAuthoring: true,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    };
+    expectPinnedOnlySchema(expectWidget(createOpenClawCodingTools(options)));
+    const deniedTools = createOpenClawCodingTools({
+      ...options,
+      config: { tools: { deny: ["show_widget"] } },
+    });
+    expect(deniedTools.some((tool) => tool.name === "show_widget")).toBe(false);
+  });
+
   it("exposes a pinned-only widget tool to verified scheduled callers", () => {
     const tool = expectWidget(
       createOpenClawTools({

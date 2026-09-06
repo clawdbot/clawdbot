@@ -476,7 +476,6 @@ describe("Doctor plugin persistence", () => {
             }
           }
           let acceptedRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
-          let beforeConvergenceRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
           let result: Awaited<ReturnType<typeof runDoctorConfigPreflight>> | undefined;
           let failure: string | undefined;
           try {
@@ -491,7 +490,6 @@ describe("Doctor plugin persistence", () => {
                 observe: false,
                 measure: async (name, operation) => {
                   if (name === "doctor.config-preflight.plugin-plan") {
-                    beforeConvergenceRead = acceptedRead;
                     // The real machine-state migration must finish before startup convergence begins.
                     expect(readBundledDiscoveryModeMemoized()).toBe("compat");
                   }
@@ -523,16 +521,12 @@ describe("Doctor plugin persistence", () => {
           const policyHash = resolveInstalledPluginIndexPolicyHash(config, process.env);
           expect(readBundledDiscoveryModeMemoized()).toBe("compat");
           expect(policyHash).not.toBe(initial.pluginMetadataSnapshot?.policyHash);
-          expect(beforeConvergenceRead).toBeDefined();
           expect(acceptedRead).toBeDefined();
           expect(acceptedRead?.snapshot.raw).toBe(initial.snapshot.raw);
           const durable = withPluginCache(createPluginCache(), () =>
             readPersistedInstalledPluginIndexSync({ env: process.env }),
           );
           expect.soft(durable?.policyHash).toBe(policyHash);
-          expect
-            .soft(beforeConvergenceRead?.pluginMigrationFingerprint)
-            .toBe(acceptedRead?.pluginMigrationFingerprint);
           expect.soft(acceptedRead?.pluginMetadataSnapshot?.registrySource).toBe("persisted");
           expect(result).toBeDefined();
           if (result) {

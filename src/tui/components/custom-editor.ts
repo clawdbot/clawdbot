@@ -116,19 +116,19 @@ export class CustomEditor extends Editor {
     }
 
     const keybindings = getKeybindings();
-    const cursor = this.getCursor();
-    const lines = this.getLines();
-    const cursorAtEnd =
-      cursor.line === lines.length - 1 && cursor.col === (lines[cursor.line]?.length ?? 0);
     if (
-      cursorAtEnd &&
       this.isShowingAutocomplete() &&
       keybindings.matches(data, "tui.select.confirm") &&
-      keybindings.matches(data, "tui.input.submit") &&
-      this.shouldSubmitAutocomplete?.(this.getText())
+      keybindings.matches(data, "tui.input.submit")
     ) {
-      // Exact argument already present: close the picker so this Enter reaches submit.
-      this.setText(this.getText());
+      const cursor = this.getCursor();
+      const lines = this.getLines();
+      const cursorAtEnd =
+        cursor.line === lines.length - 1 && cursor.col === (lines[cursor.line]?.length ?? 0);
+      if (cursorAtEnd && this.shouldSubmitAutocomplete?.(this.getText())) {
+        // Exact argument already present: close the picker so this Enter reaches submit.
+        this.setText(this.getText());
+      }
     }
 
     if (keybindings.matches(data, "tui.input.submit") && this.onSubmit) {

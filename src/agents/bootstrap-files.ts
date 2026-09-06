@@ -303,12 +303,7 @@ type BootstrapFileResolutionParams = {
   readOnlyState?: boolean;
 };
 
-/**
- * Hook effects a resolution applies. Hook-runtime-free processes (doctor) pass
- * the files a bundled handler would have added as `projected`; registered
- * handlers still run first and path dedupe in sanitizeBootstrapFiles keeps the
- * projection idempotent when both are present.
- */
+// Diagnostics project declared files without executing registered hook handlers.
 type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
 
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
@@ -378,16 +373,16 @@ async function resolveBootstrapFiles(
   });
 
   const hooked =
-    hooks === "none"
-      ? bootstrapFiles
-      : await applyBootstrapHookOverrides({
+    hooks === "registered"
+      ? await applyBootstrapHookOverrides({
           files: bootstrapFiles,
           workspaceDir: params.workspaceDir,
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           agentId: params.agentId,
-        });
+        })
+      : bootstrapFiles;
   const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
@@ -422,15 +417,15 @@ export async function resolveBootstrapContextForRun(params: {
   return { bootstrapFiles, contextFiles };
 }
 
-/** Resolves the run-equivalent bootstrap context plus hook additions a caller projected itself. */
+/** Applies declared additions through the normal bootstrap filters and budgets. */
 export async function resolveBootstrapContextWithProjectedHookFiles(
-  params: Pick<
-    BootstrapFileResolutionParams,
-    "workspaceDir" | "config" | "agentId" | "readOnlyState"
-  >,
+  params: Pick<BootstrapFileResolutionParams, "workspaceDir" | "config" | "agentId">,
   projected: WorkspaceBootstrapFile[],
 ): ReturnType<typeof resolveBootstrapContextForRun> {
-  const bootstrapFiles = await resolveBootstrapFiles(params, { projected });
+  const bootstrapFiles = await resolveBootstrapFiles(
+    { ...params, readOnlyState: true },
+    { projected },
+  );
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

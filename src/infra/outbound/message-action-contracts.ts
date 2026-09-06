@@ -183,15 +183,11 @@ export type MessageActionResult =
       dryRun: boolean;
     };
 
-export function resolveMessageSendOutcome(
+function resolveMessageSendOutcome(
   sendResult: MessageSendResult | undefined,
   action: "Message" | "Broadcast" = "Message",
 ): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
-  if (
-    !sendResult ||
-    sendResult.deliveryStatus === undefined ||
-    sendResult.deliveryStatus === "sent"
-  ) {
+  if (sendResult?.deliveryStatus === undefined || sendResult.deliveryStatus === "sent") {
     return { ok: true };
   }
   switch (sendResult.deliveryStatus) {
@@ -214,6 +210,7 @@ export function resolveMessageSendOutcome(
 
 export function resolveMessageActionOutcome(
   result: MessageActionResult,
+  action: "Message" | "Broadcast" = "Message",
 ): ReturnType<typeof resolveMessageSendOutcome> {
   if (result.kind === "broadcast") {
     const failure = result.payload.results.find((entry) => !entry.ok);
@@ -223,7 +220,9 @@ export function resolveMessageActionOutcome(
     return { ok: true };
   }
   const outcome =
-    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : { ok: true as const };
+    result.kind === "send"
+      ? resolveMessageSendOutcome(result.sendResult, action)
+      : { ok: true as const };
   const payload = result.payload;
   if (!outcome.ok || !isRecord(payload) || payload.ok !== false) {
     return outcome;
@@ -232,7 +231,9 @@ export function resolveMessageActionOutcome(
     [payload.error, payload.warning, payload.hint, payload.reason]
       .map(normalizeOptionalString)
       .find(Boolean) ?? `Message ${result.action} failed.`;
-  return { ok: false, error };
+  return payload.sentBeforeError === true
+    ? { ok: false, error, sentBeforeError: true }
+    : { ok: false, error };
 }
 
 export function resolveMessageActionMessageId(payload: unknown): string | undefined {

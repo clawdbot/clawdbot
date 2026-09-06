@@ -13,7 +13,12 @@
 
 ## Better Defaults
 
-- Run provider-secret preflight first. Require real `/models` or equivalent endpoint checks for release-blocking providers.
+- Run provider-secret preflight first. Required providers need a real completion
+  to prove inference entitlement; a successful `/models` request proves only
+  authentication. The current verifier probes inference only for Anthropic;
+  OpenAI and Fireworks remain authentication-only. Record and complete their
+  missing inference proof before expensive dispatch, using the existing live
+  provider lane with the same credential source.
 - Keep one watcher open. Use child summaries every few minutes, not every few seconds.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the

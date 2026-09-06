@@ -15,8 +15,7 @@ struct DashboardGatewayMenuItem: Equatable, Identifiable, Sendable {
 
 enum DashboardGatewayMenuModel {
     static func items(from entries: [DashboardGatewayEntry]) -> [DashboardGatewayMenuItem] {
-        guard entries.count >= 2 else { return [] }
-        return entries.enumerated().compactMap { index, entry in
+        entries.enumerated().compactMap { index, entry in
             guard let target = DashboardGatewayTarget(bridgeID: entry.id) else { return nil }
             return DashboardGatewayMenuItem(
                 target: target,

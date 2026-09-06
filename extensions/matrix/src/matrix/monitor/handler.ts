@@ -585,7 +585,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onAssistantMessageStart: draftStream
                 ? () => {
                     draftController.resetDraftBlockOffsets();
-                    draftController.resetPreviewToolProgress();
+                    draftController.beginAssistantMessage();
                     return false;
                   }
                 : undefined,
@@ -611,7 +611,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             cfg,
             client,
             accountId: _route.accountId,
-            replyToId: threadTarget ?? (replyToMode === "off" ? undefined : messageId),
+            replyToId: threadTarget || replyToMode === "off" ? undefined : messageId,
+            fallbackReplyToId: threadTarget,
             threadId: threadTarget,
             deliveryQueueId: `matrix:restart-recovery-tombstone:${_route.accountId}:${roomId}:${eventId}`,
             deliveryPartIndex: 0,

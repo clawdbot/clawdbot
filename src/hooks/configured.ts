@@ -64,10 +64,7 @@ export function isHookNameSelected(
   return Boolean(names?.has(entry.hook.name) || names?.has(resolveHookKey(entry.hook.name, entry)));
 }
 
-/**
- * Entry gate the loader applies to discovered hooks. Hook-runtime-free callers
- * (doctor) share it so their projection cannot drift from what the Gateway loads.
- */
+/** Shared selection and eligibility gate; importing handlers remains the loader's job. */
 export function isHookLoadable(params: {
   entry: HookPolicyEntry;
   config: OpenClawConfig;

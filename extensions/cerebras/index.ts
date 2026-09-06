@@ -26,6 +26,7 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Cerebras",
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: CEREBRAS_MODEL_DISCOVERY,
     },

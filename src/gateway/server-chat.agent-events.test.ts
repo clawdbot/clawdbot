@@ -1066,6 +1066,12 @@ describe("agent event handler", () => {
               { phase: "error", error: "retryable failure" },
               { seq: 50 },
             );
+            expect(
+              frames
+                .filter((frame) => frame.event === "chat" && frame.payload.state === "delta")
+                .map((frame) => frame.payload.deltaText)
+                .join(""),
+            ).toBe(`${expected} failed tail`);
           } else if (terminal === "clearRun") {
             chatRunState.clearRun(runId);
           } else {
@@ -2595,6 +2601,9 @@ describe("agent event handler", () => {
     },
     { itemId: "message-1", text: "Hi", flags: { replace: true }, expected: "EarlierHi" },
     { itemId: "message-1", text: "", flags: { replace: true }, expected: "Earlier" },
+    { itemId: "message-1", text: "", flags: {}, expected: "Earlier" },
+    { itemId: "message-1", flags: { delta: "Hello" }, expected: "EarlierHelloHello" },
+    { itemId: "message-2", flags: { delta: "Hello" }, expected: "HelloHello" },
   ])(
     "keeps item ownership across $itemId correction $text",
     ({ itemId, text, flags, expected }) => {
@@ -2629,7 +2638,7 @@ describe("agent event handler", () => {
         handler,
         "run-item-correction",
         "assistant",
-        { itemId, text, ...flags },
+        { itemId, ...(text === undefined ? {} : { text }), ...flags },
         {
           seq: itemId === "message-1" ? 3 : 2,
         },

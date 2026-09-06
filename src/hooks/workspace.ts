@@ -11,7 +11,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
-import { isHookLoadable, resolveInternalHookSelection } from "./configured.js";
 import { resolveHookInvocationPolicy, resolveHookManifestMetadata } from "./frontmatter.js";
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
@@ -246,7 +245,6 @@ export function prepareWorkspaceHookEntries(
   opts?: HookDiscoveryOptions & {
     previousSources?: HookSourceFact[];
     requireValidHook?: (entry: HookPolicyEntry) => boolean;
-    retainInvalidShadowing?: boolean;
   },
 ): { entries: HookEntry[]; sources: HookSourceFact[] } {
   const candidates = resolveHookDiscoveryRoots(workspaceDir, opts).flatMap((root) => {
@@ -282,14 +280,8 @@ export function prepareWorkspaceHookEntries(
     }
     return entries;
   });
-  // Best-effort inspection drops handlerless candidates before precedence so they
-  // cannot hide code a best-effort startup still loads. Callers describing a live
-  // Gateway opt in: its atomic reload keeps that shadowing source and then fails,
-  // leaving the shadowed hook unregistered.
   const resolved = resolveHookEntries(
-    opts?.requireValidHook || opts?.retainInvalidShadowing
-      ? candidates
-      : candidates.filter(({ entry }) => entry?.hook.handlerPath),
+    opts?.requireValidHook ? candidates : candidates.filter(({ entry }) => entry?.hook.handlerPath),
     {
       onCollisionIgnored: ({ name, kept, ignored }) => {
         log.warn(
@@ -336,22 +328,6 @@ export function loadWorkspaceHookEntries(
   opts?: HookDiscoveryOptions,
 ): HookEntry[] {
   return prepareWorkspaceHookEntries(workspaceDir, opts).entries;
-}
-
-/**
- * Hook entries the loader would register for this config: discovered, merged by
- * source precedence, and config-eligible. Hook-runtime-free callers (doctor)
- * share it so their projection cannot drift from what the Gateway loads.
- */
-export function resolveLoadableHookEntries(cfg: OpenClawConfig, workspaceDir: string): HookEntry[] {
-  const selection = resolveInternalHookSelection(cfg);
-  if (!selection.configured) {
-    return [];
-  }
-  return prepareWorkspaceHookEntries(workspaceDir, {
-    config: cfg,
-    retainInvalidShadowing: true,
-  }).entries.filter((entry) => isHookLoadable({ entry, config: cfg, names: selection.names }));
 }
 
 function readRootFileUtf8(params: {

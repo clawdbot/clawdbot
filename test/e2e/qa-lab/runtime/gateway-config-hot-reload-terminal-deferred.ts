@@ -153,7 +153,7 @@ export async function proveHotReloadTerminalDeferredRestart({
         );
         assert.equal(preflight.safe, false);
         assert(preflight.counts.embeddedRuns > 0, "The held response must own an active agent run");
-        const restart = await patch({ gateway: { controlUi: { enabled: false } } });
+        const restart = await patch({ gateway: { controlUi: { basePath: "/deferred-reload" } } });
         assert.equal(restart.sentinel.payload.stats.requiresRestart, true);
         await waitForHotReloadFact("startup-only change deferred for active work", () =>
           gateway
@@ -161,7 +161,7 @@ export async function proveHotReloadTerminalDeferredRestart({
             .split("\n")
             .some(
               (line) =>
-                line.includes("gateway.controlUi.enabled") && line.includes("deferring until"),
+                line.includes("gateway.controlUi.basePath") && line.includes("deferring until"),
             )
             ? true
             : undefined,
@@ -237,8 +237,9 @@ export async function proveHotReloadTerminalDeferredRestart({
           ),
         );
         assert.equal((await fetch(`${gateway.baseUrl}/chat/qa`)).status, 404);
+        assert.equal((await fetch(`${gateway.baseUrl}/deferred-reload/chat/qa`)).status, 200);
         startupOnlyControl = {
-          prefix: "gateway.controlUi.enabled (deferred)",
+          prefix: "gateway.controlUi.basePath (deferred)",
           originalBootId: bootId,
           replacementBootId: connection.bootId,
         };

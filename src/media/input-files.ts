@@ -243,12 +243,23 @@ async function fetchWithGuard(params: {
   }
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
+  const limit = Math.max(0, Math.floor(maxChars));
+  const decode = (label: string) => {
+    const decoder = new TextDecoder(label);
+    let text = "";
+    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+      const end = Math.min(offset + 16_384, buffer.length);
+      // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
+      text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
+    }
+    return truncateUtf16Safe(text, limit);
+  };
   try {
-    return new TextDecoder(encoding).decode(buffer);
+    return decode(encoding);
   } catch {
-    return new TextDecoder("utf-8").decode(buffer);
+    return decode("utf-8");
   }
 }
 
@@ -318,9 +329,10 @@ export async function extractImageContentFromSource(
 ): Promise<InputImageContent> {
   let buffer: Buffer;
   let mimeType: string | undefined;
+  let canonicalData: string | undefined;
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
-    const canonicalData = canonicalizeBase64(source.data);
+    canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
     }
@@ -347,7 +359,10 @@ export async function extractImageContentFromSource(
     throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
   const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
-  return { type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType };
+  // Conversions replace the buffer; unchanged bytes already have validated base64.
+  const data =
+    image.buffer === buffer && canonicalData ? canonicalData : image.buffer.toString("base64");
+  return { type: "image", data, mimeType: image.mimeType };
 }
 
 /** Extracts model-visible text and images from an input_file source after MIME validation. */
@@ -404,7 +419,7 @@ export async function extractFileContentFromSource(params: {
   });
 }
 
-/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+/** Extracts text from borrowed bytes or PDFs from owned bytes after shared size and MIME checks. */
 export async function extractFileContentFromBuffer(params: {
   buffer: Buffer;
   filename?: string;
@@ -458,6 +473,6 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = decodeTextContent(buffer, charset, limits.maxChars);
   return { filename, text };
 }

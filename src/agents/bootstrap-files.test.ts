@@ -771,6 +771,22 @@ describe("resolveBootstrapContextForDiagnostics", () => {
     );
   });
 
+  it("does not execute registered hooks while projecting declared files", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+    const handler = vi.fn(() => {
+      throw new Error("diagnostics must not execute hook code");
+    });
+    registerInternalHook("agent:bootstrap", handler);
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(),
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.contextFiles).toContainEqual({ path: extraPath, content: "extra agents" });
+  });
+
   it("projects nothing while the hook system is disabled", async () => {
     const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
 
@@ -782,16 +798,14 @@ describe("resolveBootstrapContextForDiagnostics", () => {
     expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
   });
 
-  // A managed hook with the bundled name wins selection, so the runtime never runs
-  // the bundled handler and doctor must not describe its additions. A handlerless
-  // replacement still shadows it: the Gateway's atomic reload keeps that source,
-  // fails, and leaves whatever handler it already had registered.
   it.each([
-    ["a loadable handler", true],
-    ["no readable handler", false],
+    { label: "a loadable handler", handler: "export default async () => {};", projects: false },
+    { label: "an invalid export", handler: "export default 42;", projects: false },
+    { label: "an import failure", handler: 'throw new Error("must not import");', projects: false },
+    { label: "no readable handler", handler: undefined, projects: true },
   ])(
-    "projects nothing when a managed hook with %s replaces the bundled one",
-    async (_label, withHandler) => {
+    "matches fresh-start selection for a managed hook with $label",
+    async ({ handler, projects }) => {
       const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
       const managedHooksDir = await makeTempWorkspace("openclaw-managed-hooks-");
       const replacementDir = path.join(managedHooksDir, "bootstrap-extra-files");
@@ -808,19 +822,15 @@ describe("resolveBootstrapContextForDiagnostics", () => {
         ].join("\n"),
         "utf8",
       );
-      if (withHandler) {
-        await fs.writeFile(
-          path.join(replacementDir, "handler.js"),
-          "export default async () => {};\n",
-          "utf8",
-        );
+      if (handler !== undefined) {
+        await fs.writeFile(path.join(replacementDir, "handler.js"), handler, "utf8");
       }
       const config = createExtraFilesConfig();
       config.hooks!.internal!.load = { extraDirs: [managedHooksDir] };
 
       const result = await resolveBootstrapContextForDiagnostics({ workspaceDir, config });
 
-      expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
+      expect(result.bootstrapFiles.some((file) => file.path === extraPath)).toBe(projects);
     },
   );
 });

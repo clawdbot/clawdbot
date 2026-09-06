@@ -52,6 +52,7 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Venice AI",
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildStaticVeniceProvider,
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },

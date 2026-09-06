@@ -405,6 +405,41 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         self.deleteSessionImpl = deleteSession
     }
 
+    /// The caller binds requests to its captured connection. Resolve targets at
+    /// invocation time because transport copies can share mutable agent routing.
+    public init(
+        sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
+        unreadAckContract: Bool?,
+        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
+    {
+        self.init(
+            patchSession: { key, expectedID, expectedMarkedUnreadAt, label, category, color, pinned, archived, unread in
+                guard unread != false || unreadAckContract != nil else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
+                let target = sessionTarget(key)
+                _ = try await request(OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    expectedSessionID: expectedID,
+                    label: label,
+                    category: category,
+                    color: color,
+                    pinned: pinned,
+                    archived: archived,
+                    unreadPatch: .routed(
+                        unread: unread,
+                        expectedMarkedUnreadAt: expectedMarkedUnreadAt,
+                        supportsReadContract: unreadAckContract == true)))
+            },
+            deleteSession: { key in
+                let target = sessionTarget(key)
+                _ = try await request(OpenClawChatGatewayRequests.deleteSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID))
+            })
+    }
+
     public func patchSession(
         key: String,
         expectedSessionID: String? = nil,

@@ -136,6 +136,14 @@ test-only registry, manifest, public-artifact, and runtime fixture helpers.
 Core-only suites that depend on bundled OpenClaw inventory stay under
 `src/plugins/contracts` instead.
 
+For channel account-policy tests, `createAccountPolicyInheritanceCases()` from
+`openclaw/plugin-sdk/channel-test-helpers` returns four literal inheritance rows
+with fresh objects and arrays on each call, preserving omitted policy fields.
+Use it alongside `validateTestChannelConfig(channelId, channelConfig)`, which
+validates schema-parsed channel data through the host config boundary. Each
+plugin test still owns its schema parsing, account resolver, and assertions,
+including checks that omitted account policies remain absent.
+
 ### Types
 
 Focused testing subpaths also re-export types useful in test files:

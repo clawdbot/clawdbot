@@ -675,16 +675,6 @@ function decodeLogRequest(body: Buffer): CapturedLogRecord[] {
   return records;
 }
 
-function closeLocalOtlpReceiverConnections(
-  server: ReturnType<typeof createServer>,
-  sockets: Set<Socket>,
-): void {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  server.closeAllConnections();
-}
-
 export function startLocalOtlpReceiver(
   disallowedBodyNeedles: string[] = [],
   captureHeaderNames: string[] = [],
@@ -811,9 +801,11 @@ export function startLocalOtlpReceiver(
     },
     async close(): Promise<void> {
       closePromise ??= new Promise<void>((resolve, reject) => {
-        closeLocalOtlpReceiverConnections(server, sockets);
         server.close((error) => (error ? reject(error) : resolve()));
-        closeLocalOtlpReceiverConnections(server, sockets);
+        // Stop accepting first, then abort owned requests without stopping Bun's listener twice.
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
       await closePromise;
     },

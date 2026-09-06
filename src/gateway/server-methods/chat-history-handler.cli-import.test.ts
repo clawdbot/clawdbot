@@ -10,8 +10,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import { readChatHistoryMessageId } from "./chat-history-pages.js";
 
 type HistoryPage = {
   messages: unknown[];
