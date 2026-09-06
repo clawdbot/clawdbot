@@ -53,6 +53,15 @@ type GitCandidatePreflightResult =
     }
   | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> };
 
+function normalizeDevTargetRef(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function looksLikeFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value.trim());
+}
+
 function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
   return ref.startsWith("refs/tags/") ? ref : null;
@@ -60,20 +69,38 @@ function resolveTagFetchRef(candidate: string): string | null {
 
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  if (/^[0-9a-f]{40}$/i.test(trimmed) || trimmed.startsWith("refs/remotes/")) {
-    return [trimmed];
+  const candidates: string[] = [];
+  const addCandidate = (candidate?: string | null) => {
+    if (candidate && !candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+  if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
+    addCandidate(trimmed);
+    return candidates;
   }
   if (trimmed.startsWith("refs/heads/")) {
-    return [`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`];
+    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
+    return candidates;
   }
   if (trimmed.startsWith("origin/")) {
-    return [`refs/remotes/${trimmed}`];
+    addCandidate(`refs/remotes/${trimmed}`);
+    return candidates;
   }
   if (trimmed.startsWith("refs/tags/")) {
-    return [`${trimmed}^{}`, trimmed];
+    addCandidate(`${trimmed}^{}`);
+    addCandidate(trimmed);
+    return candidates;
   }
   // Plain branch names resolve from the freshly fetched remote ref.
-  return [`refs/remotes/origin/${trimmed}`, `refs/tags/${trimmed}^{}`, `refs/tags/${trimmed}`];
+  addCandidate(`refs/remotes/origin/${trimmed}`);
+  addCandidate(`refs/tags/${trimmed}^{}`);
+  addCandidate(`refs/tags/${trimmed}`);
+  return candidates;
+}
+
+function resolvePreflightWorktreeDir(preflightRoot: string) {
+  return path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
 }
 
 async function createPreflightRoot(gitRoot: string) {
@@ -519,7 +546,7 @@ export async function runGitCandidatePreflight(params: {
   beforeCandidate?: (revision: string) => Promise<void>;
 }): Promise<GitCandidatePreflightResult> {
   const devTargetRef = params.devTarget
-    ? resolveDevUpdateTargetRevision(params.devTarget).trim() || null
+    ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
     : null;
   let preflightBaseSha: string;
   let candidates: string[];
@@ -601,7 +628,7 @@ export async function runGitCandidatePreflight(params: {
         : "preflight-worktree-failed",
     };
   }
-  const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+  const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
   let tested: PreflightCandidateResult | undefined;
   let cleanupFailed: boolean;
   try {

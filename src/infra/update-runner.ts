@@ -1,5 +1,6 @@
 import { withForegroundGitMaintenance } from "./git-exec.js";
 import { readPackageVersion } from "./package-json.js";
+// Runs OpenClaw package update checks, package steps, and restart handoff.
 import { detectGlobalInstallManagerForRoot, verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   resolveGitRoot,
@@ -93,6 +94,8 @@ async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<Upda
       timeoutMs,
       startedAt,
       beforeVersion,
+      allowGatewayServiceRepair: opts.allowGatewayServiceRepair !== false,
+      allowGatewayActivation: opts.allowGatewayActivation === true,
     });
   }
   return {

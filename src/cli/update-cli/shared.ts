@@ -1,3 +1,4 @@
+// Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -113,6 +114,7 @@ const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
@@ -164,6 +166,11 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
+async function isCorePackage(root: string): Promise<boolean> {
+  const name = await readPackageName(root);
+  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
+}
+
 /** Return true only for existing directories with no entries. */
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
@@ -180,6 +187,10 @@ export function resolveGitInstallDir(): string {
   if (override) {
     return path.resolve(override);
   }
+  return resolveDefaultGitDir();
+}
+
+function resolveDefaultGitDir(): string {
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
@@ -296,8 +307,9 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
+      const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
       const destinationEntries = await fs.readdir(targetDir);
-      if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(stagingDir)) {
+      if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
@@ -387,7 +399,7 @@ export async function ensureGitCheckout(params: {
     });
   }
 
-  if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
+  if (!(await isCorePackage(params.dir))) {
     throw new UpdatePreMutationError(
       "invalid-git-directory",
       `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,

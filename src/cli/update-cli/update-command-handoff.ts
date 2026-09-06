@@ -60,6 +60,12 @@ const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
 const UPDATE_CHAT_HANDOFF_GUIDANCE =
   "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.";
 
+function appendUpdateChatHandoffGuidance(blockMessage: string): string {
+  return blockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
+    ? blockMessage
+    : `${blockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+}
+
 /** Update-specific follow-up for an ancestry block: the chat path hands off to the managed helper. */
 export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
   if (!blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
@@ -69,9 +75,7 @@ export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
     .split("\n")
     .filter((line) => line !== GATEWAY_ANCESTRY_SHELL_GUIDANCE)
     .join("\n");
-  return updateBlockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
-    ? updateBlockMessage
-    : `${updateBlockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+  return appendUpdateChatHandoffGuidance(updateBlockMessage);
 }
 
 export async function handoffUpdateFromGateway(params: {

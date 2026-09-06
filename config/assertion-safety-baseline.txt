@@ -2295,7 +2295,7 @@ src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	8
 src/cli/daemon-cli/launchd-recovery.ts	1
 src/cli/daemon-cli/lifecycle.ts	1
-src/cli/daemon-cli/restart-health-probe.ts	9
+src/cli/daemon-cli/restart-health-probe.ts	7
 src/cli/daemon-cli/restart-health.ts	1
 src/cli/daemon-cli/start-repair.ts	1
 src/cli/daemon-cli/status.gather.ts	10

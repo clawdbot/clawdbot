@@ -1,3 +1,4 @@
+// Restart health probes for gateway service restarts and port listener recovery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -68,7 +69,7 @@ function applyExpectedVersion(
     expectedVersion,
     versionMismatch: {
       expected: expectedVersion,
-      actual: snapshot.gatewayVersion,
+      actual: snapshot.gatewayVersion ?? null,
     },
   };
 }
@@ -107,8 +108,15 @@ function applyExpectedGatewayIdentity(
   return applyExpectedBuildId(applyExpectedVersion(snapshot, expectedVersion), expectedBuildId);
 }
 
-function applyProbeErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (!snapshot.activatedPluginErrors?.length && !snapshot.channelProbeErrors?.length) {
+function applyActivatedPluginErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
+  if (!snapshot.activatedPluginErrors?.length) {
+    return snapshot;
+  }
+  return { ...snapshot, healthy: false };
+}
+
+function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
+  if (!snapshot.channelProbeErrors?.length) {
     return snapshot;
   }
   return { ...snapshot, healthy: false };
@@ -183,24 +191,26 @@ export async function inspectGatewayRestart(params: {
   if (portUsage.status === "busy" && runtime.status !== "running") {
     const reachable = await loadReachability();
     if (reachable.reachable) {
-      return applyProbeErrors(
-        applyExpectedGatewayIdentity(
-          {
-            runtime,
-            portUsage,
-            healthy: true,
-            staleGatewayPids: [],
-            gatewayVersion: reachable.gatewayVersion,
-            gatewayBuildId: reachable.gatewayBuildId,
-            ...(reachable.activatedPluginErrors.length > 0
-              ? { activatedPluginErrors: reachable.activatedPluginErrors }
-              : {}),
-            ...(reachable.channelProbeErrors.length > 0
-              ? { channelProbeErrors: reachable.channelProbeErrors }
-              : {}),
-          },
-          expectedVersion,
-          expectedBuildId,
+      return applyChannelProbeErrors(
+        applyActivatedPluginErrors(
+          applyExpectedGatewayIdentity(
+            {
+              runtime,
+              portUsage,
+              healthy: true,
+              staleGatewayPids: [],
+              gatewayVersion: reachable.gatewayVersion,
+              gatewayBuildId: reachable.gatewayBuildId,
+              ...(reachable.activatedPluginErrors.length > 0
+                ? { activatedPluginErrors: reachable.activatedPluginErrors }
+                : {}),
+              ...(reachable.channelProbeErrors.length > 0
+                ? { channelProbeErrors: reachable.channelProbeErrors }
+                : {}),
+            },
+            expectedVersion,
+            expectedBuildId,
+          ),
         ),
       );
     }
@@ -236,12 +246,15 @@ export async function inspectGatewayRestart(params: {
   let gatewayBuildId: string | null | undefined;
   if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
-    healthy =
-      reachable.reachable &&
-      reachable.activatedPluginErrors.length === 0 &&
-      reachable.channelProbeErrors.length === 0;
+    healthy = reachable.reachable;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
+    if (reachable.activatedPluginErrors.length > 0) {
+      healthy = false;
+    }
+    if (reachable.channelProbeErrors.length > 0) {
+      healthy = false;
+    }
   }
   if (!healthy && running && portUsage.status === "busy" && !requiresGatewayProbe) {
     const reachable = await loadReachability();
@@ -269,21 +282,23 @@ export async function inspectGatewayRestart(params: {
     ]),
   );
 
-  return applyProbeErrors(
-    applyExpectedGatewayIdentity(
-      {
-        runtime,
-        portUsage,
-        healthy,
-        staleGatewayPids,
-        ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-        ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
-        ...(probeError ? { probeError } : {}),
-        ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
-        ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
-      },
-      expectedVersion,
-      expectedBuildId,
+  return applyChannelProbeErrors(
+    applyActivatedPluginErrors(
+      applyExpectedGatewayIdentity(
+        {
+          runtime,
+          portUsage,
+          healthy,
+          staleGatewayPids,
+          ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+          ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
+          ...(probeError ? { probeError } : {}),
+          ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
+          ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
+        },
+        expectedVersion,
+        expectedBuildId,
+      ),
     ),
   );
 }
