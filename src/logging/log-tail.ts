@@ -23,6 +23,14 @@ type LogFileStat = {
   mtimeNs: bigint;
   ctimeNs: bigint;
 };
+type LogSliceParams = {
+  file: string;
+  cursor?: number;
+  limit: LogTailLimit;
+  maxBytes: number;
+  filter?: (line: string) => boolean;
+  forceReset?: boolean;
+};
 
 function missingPathToNull(error: unknown): null {
   if (!isMissingPathError(error)) {
@@ -91,13 +99,7 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
   return sorted[0]?.path ?? file;
 }
 
-async function readLogSlice(params: {
-  file: string;
-  cursor?: number;
-  limit: LogTailLimit;
-  maxBytes: number;
-  filter?: (line: string) => boolean;
-}): Promise<Omit<LogTailReadPayload, "file">> {
+async function readLogSlice(params: LogSliceParams): Promise<Omit<LogTailReadPayload, "file">> {
   const handle = await fs.open(params.file, "r").catch(missingPathToNull);
   if (!handle) {
     return {
@@ -141,14 +143,7 @@ function isSameLogFileStat(left: LogFileStat, right: LogFileStat): boolean {
 }
 
 async function readLogSliceAttempt(
-  params: {
-    file: string;
-    cursor?: number;
-    limit: LogTailLimit;
-    maxBytes: number;
-    filter?: (line: string) => boolean;
-    forceReset?: boolean;
-  },
+  params: LogSliceParams,
   handle: Awaited<ReturnType<typeof fs.open>>,
   stat: LogFileStat,
 ): Promise<Omit<LogTailReadPayload, "file">> {
