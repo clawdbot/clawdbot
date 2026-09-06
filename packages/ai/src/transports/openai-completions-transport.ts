@@ -16,11 +16,11 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import {
-  processCompletionsStream,
+  buildOpenAICompletionsParams,
   shouldEmitOpenAICompletionsReasoning,
-} from "./openai-completions-stream.js";
+} from "./openai-completions-params.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,

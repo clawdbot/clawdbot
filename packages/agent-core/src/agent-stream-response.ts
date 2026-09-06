@@ -65,15 +65,50 @@ function appendTextDeltaToAssistantMessage(
   return { ...message, content };
 }
 
+function resolveAssistantTextDeltaUpdate(
+  event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>,
+  currentMessage: AssistantMessage,
+  emittedTextByContentIndex: Map<number, string>,
+): {
+  message: AssistantMessage;
+  event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>;
+} {
+  if ("partial" in event && event.partial) {
+    // Direct-mode events carry an authoritative partial; producer already normalized.
+    if (event.delta) {
+      const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
+      emittedTextByContentIndex.set(event.contentIndex, emittedText + event.delta);
+    }
+    return { message: event.partial, event };
+  }
+  const currentContent = currentMessage.content[event.contentIndex];
+  const messageText = currentContent?.type === "text" ? currentContent.text : "";
+  // Bare deltas stay additive. Track emitted text so a polluted text_start partial
+  // (already holding later stream text) does not cause a second append for the
+  // confirming deltas HTTP/SSE sinks still need to observe.
+  const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
+  const nextEmitted = emittedText + event.delta;
+  emittedTextByContentIndex.set(event.contentIndex, nextEmitted);
+  if (messageText.startsWith(nextEmitted) && messageText.length >= nextEmitted.length) {
+    return { message: currentMessage, event };
+  }
+  return {
+    message: appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta),
+    event,
+  };
+}
+
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
   currentMessage: AssistantMessage,
+  emittedTextByContentIndex: Map<number, string>,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
     return event.partial;
   }
   if (event.type === "text_delta") {
-    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+    return resolveAssistantTextDeltaUpdate(event, currentMessage, emittedTextByContentIndex)
+      .message;
   }
   return currentMessage;
 }
@@ -229,6 +264,7 @@ export async function streamAgentResponse(
     let partialIndex: number | undefined;
     let committedContentCount = 0;
     let streamedTurnId: string | undefined;
+    const emittedTextByContentIndex = new Map<number, string>();
 
     // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
     const remainingFragment = (message: AssistantMessage) =>
@@ -272,8 +308,32 @@ export async function streamAgentResponse(
           break;
         }
 
-        case "text_start":
         case "text_delta":
+          if (partialMessage) {
+            const resolved = resolveAssistantTextDeltaUpdate(
+              event,
+              partialMessage,
+              emittedTextByContentIndex,
+            );
+            partialMessage = resolved.message;
+            if (event.contentIndex < committedContentCount) {
+              break;
+            }
+            const fragment = await updatePartial(resolved.message);
+            const fragmentEvent = {
+              ...resolved.event,
+              contentIndex: resolved.event.contentIndex - committedContentCount,
+              ...("partial" in resolved.event ? { partial: fragment } : {}),
+            };
+            await emit({
+              type: "message_update",
+              assistantMessageEvent: fragmentEvent,
+              message: { ...fragment },
+            });
+          }
+          break;
+
+        case "text_start":
         case "text_end":
         case "thinking_start":
         case "thinking_delta":
@@ -282,7 +342,11 @@ export async function streamAgentResponse(
         case "toolcall_delta":
         case "toolcall_end":
           if (partialMessage) {
-            const message = resolveAssistantMessageUpdate(event, partialMessage);
+            const message = resolveAssistantMessageUpdate(
+              event,
+              partialMessage,
+              emittedTextByContentIndex,
+            );
             partialMessage = message;
             if (event.contentIndex < committedContentCount) {
               break;

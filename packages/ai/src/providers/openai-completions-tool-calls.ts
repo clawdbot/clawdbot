@@ -20,6 +20,30 @@ type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
   onConfirmedToolCall?: (block: TBlock, contentIndex: number) => void;
 };
 
+export function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
+  // SAFETY: Provider tool-call objects are untyped wire payloads; we only read optional string fields.
+  const tc = toolCall as Record<string, unknown> | undefined;
+  if (!tc) {
+    return undefined;
+  }
+  // SAFETY: Google encrypts thought signatures under extra_content.google on the same wire object.
+  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
+    | Record<string, unknown>
+    | undefined;
+  const fromExtra = extra?.thought_signature;
+  if (typeof fromExtra === "string" && fromExtra.length > 0) {
+    return fromExtra;
+  }
+  // SAFETY: Some providers nest thought_signature on function rather than the tool-call root.
+  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
+    ?.thought_signature;
+  if (typeof fromFunction === "string" && fromFunction.length > 0) {
+    return fromFunction;
+  }
+  const fromToolCall = tc.thought_signature;
+  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+}
+
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
 export function createOpenAIEncryptedToolCallReasoningTracker() {
   const firstBlocks = new Map<string, ToolCall>();

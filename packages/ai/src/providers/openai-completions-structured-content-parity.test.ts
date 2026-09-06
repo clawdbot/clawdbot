@@ -240,6 +240,7 @@ const scenarios: StructuredContentScenario[] = [
     expectedContent: [{ type: "text", text: "Safety refusal." }],
   },
   {
+    // Bare choice.delta repeats stay additive under the shared event contract.
     name: "identical refusals intentionally repeated across separate chunks",
     choice: { delta: { refusal: "Safety refusal." } },
     followupChoice: { delta: { refusal: "Safety refusal." } },

@@ -8,7 +8,36 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { parseOpenAICompletionsUsage } from "./openai-transport-shared.js";
+import {
+  parseOpenAICompletionsUsage,
+  normalizeOpenAICompletionsTextDelta,
+} from "./openai-transport-shared.js";
+
+describe("normalizeOpenAICompletionsTextDelta", () => {
+  it("keeps bare deltas additive including long exact repeats", () => {
+    expect(normalizeOpenAICompletionsTextDelta("", "abc")).toBe("abc");
+    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef")).toBe("abcdef");
+    expect(normalizeOpenAICompletionsTextDelta("Ha", "Ha")).toBe("Ha");
+    expect(normalizeOpenAICompletionsTextDelta("ab", "cd")).toBe("cd");
+    // Bare deltas have no snapshot marker — preserve intentional long repeats.
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("abcdefgh");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh again")).toBe(
+      "abcdefgh again",
+    );
+  });
+
+  it("treats message-shaped snapshot frames as cumulative even when short", () => {
+    expect(
+      normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh", { frameKind: "snapshot" }),
+    ).toBe("");
+    expect(
+      normalizeOpenAICompletionsTextDelta("abcdefghij", "abcdefgh", { frameKind: "snapshot" }),
+    ).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef", { frameKind: "snapshot" })).toBe(
+      "def",
+    );
+  });
+});
 
 describe("openai completions stream", () => {
   it("preserves reasoning tokens without double-counting them", () => {
@@ -326,6 +355,203 @@ describe("openai completions stream", () => {
     expect(textDeltas).toHaveLength(2);
     expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
     expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
+  it("normalizes cumulative message-shaped snapshots before emitting bare deltas", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const prefix = "abcdefghijklmnopqrst";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: prefix }),
+        // Cumulative snapshots via choice.message (not choice.delta).
+        makeCompletionsChunk({}, null, {
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: `${prefix}uv` },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        }),
+        makeCompletionsChunk({}, null, {
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: `${prefix}uvw` },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([prefix, "uv", "w"]);
+    expect(output.content).toEqual([{ type: "text", text: `${prefix}uvw` }]);
+  });
+
+  it("preserves bare delta exact repeats that match accumulated text", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const phrase = "abcdefgh";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: phrase }),
+        // Bare choice.delta with equal text must stay additive (shared event contract).
+        makeCompletionsChunk({ content: phrase }),
+        makeCompletionsChunk({ content: "!" }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([phrase, phrase, "!"]);
+    expect(output.content).toEqual([{ type: "text", text: `${phrase}${phrase}!` }]);
+  });
+
+  it("treats a longer message snapshot that extends prior text as cumulative growth", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const phrase = "abcdefgh";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: phrase }),
+        makeCompletionsChunk({}, null, {
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: `${phrase} again` },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([phrase, " again"]);
+    expect(output.content).toEqual([{ type: "text", text: `${phrase} again` }]);
+  });
+
+  it("suppresses message-shaped snapshot replays without dropping ordinary deltas", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const text = "abcdefghijklmnop";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: text }),
+        // Compat endpoints may deliver a full message snapshot instead of delta.
+        makeCompletionsChunk({}, null, {
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: text },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        }),
+        makeCompletionsChunk({ content: "!" }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([text, "!"]);
+    expect(output.content).toEqual([{ type: "text", text: `${text}!` }]);
+  });
+
+  it("keeps intentional short repeated OpenAI-compatible text incremental", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: "Ha" }),
+        makeCompletionsChunk({ content: "Ha" }),
+        makeCompletionsChunk({ content: "Ha" }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual(["Ha", "Ha", "Ha"]);
+    expect(output.content).toEqual([{ type: "text", text: "HaHaHa" }]);
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {

@@ -56,6 +56,9 @@ export function resolveOpenAIClientBaseUrl(
 
 export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
 
+/** Wire contract for chat.completion.chunk text: incremental delta vs message snapshot. */
+export type OpenAICompletionsTextFrameKind = "delta" | "snapshot";
+
 export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
   | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
@@ -326,6 +329,48 @@ export function resolvePromptCacheKey(
 export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   const normalized = effort.trim().toLowerCase();
   return normalized !== "off" && normalized !== "none";
+}
+
+function growthFromCumulativeExtension(accumulated: string, incoming: string): string {
+  const growth = incoming.slice(accumulated.length);
+  // Drop doubled snapshots where the "growth" is itself a replay of prior text.
+  if (growth === accumulated || growth.startsWith(accumulated)) {
+    return "";
+  }
+  return growth;
+}
+
+/**
+ * Normalize message-shaped cumulative text snapshots into true increments.
+ *
+ * Bare `choice.delta` frames stay additive under the shared assistant-event contract
+ * (intentional long repeats must not be dropped). Only `choice.message` snapshots
+ * have an authoritative full-text frame type and may be de-cumulated here.
+ */
+export function normalizeOpenAICompletionsTextDelta(
+  accumulated: string,
+  incoming: string,
+  options?: { frameKind?: OpenAICompletionsTextFrameKind },
+): string {
+  if (!incoming) {
+    return "";
+  }
+  if (!accumulated) {
+    return incoming;
+  }
+
+  // Bare deltas: preserve additive semantics for all StreamFn consumers.
+  if ((options?.frameKind ?? "delta") !== "snapshot") {
+    return incoming;
+  }
+
+  if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
+    return growthFromCumulativeExtension(accumulated, incoming);
+  }
+  if (incoming === accumulated || accumulated.startsWith(incoming)) {
+    return "";
+  }
+  return incoming;
 }
 
 export function readOpenAICompletionsContentDeltas(

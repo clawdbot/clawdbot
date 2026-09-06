@@ -68,6 +68,20 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
+export function shouldEmitOpenAICompletionsReasoning(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  if (!model.reasoning) {
+    return false;
+  }
+  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
+    return false;
+  }
+  return true;
+}
+
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
