@@ -5,6 +5,7 @@ import { checkAbort, parseApiBase, wait } from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
 const timeoutMs = 30_000;
+export const ABORT_LABEL = "Discord collection aborted.";
 
 export function createClient(
   config: DiscordSourceConfig,
@@ -26,7 +27,7 @@ export function createClient(
     };
     let release: (() => Promise<void>) | undefined;
     try {
-      checkAbort(runtime.signal, "Discord collection aborted.");
+      checkAbort(runtime.signal, ABORT_LABEL);
       status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
       let response: Response;
       if (runtime.fetchImpl) {
@@ -45,7 +46,7 @@ export function createClient(
         release = result.release;
       }
       const body = await response.text();
-      checkAbort(runtime.signal, "Discord collection aborted.");
+      checkAbort(runtime.signal, ABORT_LABEL);
       let data: unknown;
       try {
         data = JSON.parse(body);
@@ -67,18 +68,18 @@ export function createClient(
       }
       let retries = 0;
       while (true) {
-        checkAbort(runtime.signal, "Discord collection aborted.");
+        checkAbort(runtime.signal, ABORT_LABEL);
         let result: Awaited<ReturnType<typeof request>>;
         try {
           result = await request(url.toString());
         } catch {
-          checkAbort(runtime.signal, "Discord collection aborted.");
+          checkAbort(runtime.signal, ABORT_LABEL);
           if (retries >= 2) {
             throw new Error(
               "Discord request failed after retries; check connectivity and API access.",
             );
           }
-          await wait(1000 * 2 ** retries++, runtime.signal, "Discord collection aborted.");
+          await wait(1000 * 2 ** retries++, runtime.signal, ABORT_LABEL);
           continue;
         }
         if (result.status === 429) {
@@ -88,12 +89,12 @@ export function createClient(
           await wait(
             Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 1000,
             runtime.signal,
-            "Discord collection aborted.",
+            ABORT_LABEL,
           );
           continue;
         }
         if (result.status >= 500 && retries < 2) {
-          await wait(1000 * 2 ** retries++, runtime.signal, "Discord collection aborted.");
+          await wait(1000 * 2 ** retries++, runtime.signal, ABORT_LABEL);
           continue;
         }
         if (result.status < 200 || result.status >= 300) {

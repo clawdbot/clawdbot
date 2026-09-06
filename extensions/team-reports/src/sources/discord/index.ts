@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
 import { checkAbort } from "../http.js";
-import { createClient } from "./client.js";
+import { ABORT_LABEL, createClient } from "./client.js";
 
 const snowflake = z.string().regex(/^\d{1,20}$/);
 const channelSchema = z.object({
@@ -47,7 +47,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
       };
       const collected = new Map<string, { message: DiscordMessage; url: string }>();
       const warn = (scope: string, error: unknown) => {
-        checkAbort(runtime.signal, "Discord collection aborted.");
+        checkAbort(runtime.signal, ABORT_LABEL);
         const detail = error instanceof Error ? error.message : "Discord collection failed.";
         const warning = `${scope}: ${detail}`;
         status.warnings.push(
@@ -55,7 +55,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         );
         status.stale = true;
       };
-      checkAbort(runtime.signal, "Discord collection aborted.");
+      checkAbort(runtime.signal, ABORT_LABEL);
       const client = createClient(config, runtime, status);
       const channels = new Map<string, Channel>();
       try {
@@ -103,7 +103,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         let before: string | undefined;
         try {
           while (true) {
-            checkAbort(runtime.signal, "Discord collection aborted.");
+            checkAbort(runtime.signal, ABORT_LABEL);
             const page = parse(
               archivesSchema,
               await client.get(`/channels/${encodeURIComponent(id)}/threads/archived/public`, {
@@ -136,7 +136,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         let after = ((BigInt(window.sinceMs) - epochMs) << 22n).toString();
         try {
           while (true) {
-            checkAbort(runtime.signal, "Discord collection aborted.");
+            checkAbort(runtime.signal, ABORT_LABEL);
             const page = parse(
               messagesSchema,
               await client.get(`/channels/${encodeURIComponent(target.id)}/messages`, {
@@ -195,7 +195,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
           warn(`Discord messages for channel ${target.id}`, error);
         }
       }
-      checkAbort(runtime.signal, "Discord collection aborted.");
+      checkAbort(runtime.signal, ABORT_LABEL);
       const messages = [...collected.values()]
         .toSorted(
           (left, right) =>

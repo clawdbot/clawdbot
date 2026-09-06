@@ -4,6 +4,8 @@ import { z } from "zod";
 import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
 import { checkAbort, parseApiBase, wait } from "../http.js";
 
+export const ABORT_LABEL = "GitHub collection aborted";
+
 export class GithubSourceError extends Error {}
 
 export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -36,7 +38,7 @@ export class GithubClient {
   }
 
   warn(scope: string, error: unknown): void {
-    checkAbort(this.runtime.signal, "GitHub collection aborted");
+    checkAbort(this.runtime.signal, ABORT_LABEL);
     const detail =
       error instanceof GithubSourceError
         ? error.message
@@ -49,7 +51,7 @@ export class GithubClient {
   }
 
   async attempt(scope: string, action: () => Promise<void>, required = false): Promise<void> {
-    checkAbort(this.runtime.signal, "GitHub collection aborted");
+    checkAbort(this.runtime.signal, ABORT_LABEL);
     try {
       await action();
     } catch (error) {
@@ -76,7 +78,7 @@ export class GithubClient {
   async get(path: string): Promise<{ data: unknown; next?: string }> {
     const url = this.url(path);
     for (let failures = 0; ;) {
-      checkAbort(this.runtime.signal, "GitHub collection aborted");
+      checkAbort(this.runtime.signal, ABORT_LABEL);
       this.status.stats.apiCalls = Number(this.status.stats.apiCalls) + 1;
       let response: Response;
       let data: unknown;
@@ -113,7 +115,7 @@ export class GithubClient {
         }
         // Error payloads can echo credentials; neither parse errors nor API bodies escape this client.
         const body = await response.text();
-        checkAbort(this.runtime.signal, "GitHub collection aborted");
+        checkAbort(this.runtime.signal, ABORT_LABEL);
         if (response.ok) {
           try {
             data = JSON.parse(body);
@@ -128,7 +130,7 @@ export class GithubClient {
           }
         }
       } catch (error) {
-        checkAbort(this.runtime.signal, "GitHub collection aborted");
+        checkAbort(this.runtime.signal, ABORT_LABEL);
         if (error instanceof GithubSourceError) {
           throw error;
         }
@@ -141,12 +143,12 @@ export class GithubClient {
         clearTimeout(timeout);
         if (release) {
           await release().catch(() => {
-            checkAbort(this.runtime.signal, "GitHub collection aborted");
+            checkAbort(this.runtime.signal, ABORT_LABEL);
             throw new GithubSourceError("Could not release API response");
           });
         }
       }
-      checkAbort(this.runtime.signal, "GitHub collection aborted");
+      checkAbort(this.runtime.signal, ABORT_LABEL);
       const remaining = response.headers.get("x-ratelimit-remaining");
       if (remaining !== null && Number.isFinite(Number(remaining))) {
         this.status.stats.rateLimitRemaining = Number(remaining);
@@ -172,13 +174,13 @@ export class GithubClient {
             retryAfter === undefined && remaining !== "0" ? 60_000 : 0,
           ),
           this.runtime.signal,
-          "GitHub collection aborted",
+          ABORT_LABEL,
         );
         continue;
       }
       if (response.status >= 500 && failures < 3) {
         failures += 1;
-        await wait(1000 * 2 ** (failures - 1), this.runtime.signal, "GitHub collection aborted");
+        await wait(1000 * 2 ** (failures - 1), this.runtime.signal, ABORT_LABEL);
         continue;
       }
       if (!response.ok) {
@@ -199,7 +201,7 @@ export class GithubClient {
     let next: string | undefined = path;
     const seen = new Set<string>();
     while (next) {
-      checkAbort(this.runtime.signal, "GitHub collection aborted");
+      checkAbort(this.runtime.signal, ABORT_LABEL);
       const canonical = this.url(next).href;
       if (seen.has(canonical)) {
         throw new GithubSourceError("API pagination did not advance");
@@ -207,7 +209,7 @@ export class GithubClient {
       seen.add(canonical);
       const page = await this.get(next);
       for (const item of parse(z.array(schema), page.data)) {
-        checkAbort(this.runtime.signal, "GitHub collection aborted");
+        checkAbort(this.runtime.signal, ABORT_LABEL);
         yield item;
       }
       next = page.next;
