@@ -161,6 +161,7 @@ export async function prepareWorkspaceBuildGroup(
     includeCredentialProviders?: boolean;
     getConfiguredHarnessRuntimes?: () => readonly string[];
     basePluginIds?: readonly string[];
+    onStage?: (stage: string) => void;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -183,6 +184,9 @@ export async function prepareWorkspaceBuildGroup(
     throw new Error("prepared model runtime workspace group is empty");
   }
   const env = input.env ?? process.env;
+  const reportStage = (stage: string) =>
+    options.onStage?.(`${stage}; agent ${input.agentId ?? "standalone"}`);
+  reportStage("workspace plugins");
   const pluginMetadataStartedAt = performance.now();
   const pluginMetadataSnapshot =
     preparedPluginMetadataSnapshot ??
@@ -279,6 +283,7 @@ export async function prepareWorkspaceBuildGroup(
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
+    reportStage("static provider catalog");
     let preparedStaticProviderCatalog = reusablePluginGeneration
       ? reusablePluginGeneration.preparedStaticProviderCatalog
       : catalogMode === "static"
@@ -319,6 +324,7 @@ export async function prepareWorkspaceBuildGroup(
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];
     // Static Gateway publication consumes discovery entrypoints; the run owns activation.
     const ambientCredentialsStartedAt = performance.now();
+    reportStage("ambient credentials");
     const ambientCredentials = await prepareAmbientAgentCredentialsForDiscovery({
       config: input.config,
       env,
@@ -352,6 +358,7 @@ export async function prepareWorkspaceBuildGroup(
     });
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
+    reportStage("agent facts");
     const agentBaseFacts = inputs.map((candidate) =>
       withAgentRosterFactsBatch(candidate.config, () =>
         prepareAgentFacts(
@@ -365,6 +372,7 @@ export async function prepareWorkspaceBuildGroup(
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;
     const configuredProjectionStartedAt = performance.now();
+    reportStage("configured model projection");
     const providerStaticModels =
       reusablePluginGeneration?.providerStaticModels ??
       (catalogMode === "static"
