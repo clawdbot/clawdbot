@@ -47,6 +47,9 @@ const manifestMocks = vi.hoisted(() => ({
     id: string;
     channels: string[];
   }>,
+  // A plugin installed into the agent's workspace is only discoverable when the caller
+  // supplies that scope, which is what pins the purge lookup to the selected agent.
+  workspaceScoped: false,
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -84,7 +87,9 @@ vi.mock("../plugins/plugin-registry.js", async () => {
   );
   return {
     ...actual,
-    loadPluginManifestRegistryForPluginRegistry: () => ({ plugins: manifestMocks.plugins }),
+    loadPluginManifestRegistryForPluginRegistry: (params?: { workspaceDir?: string }) => ({
+      plugins: manifestMocks.workspaceScoped && !params?.workspaceDir ? [] : manifestMocks.plugins,
+    }),
   };
 });
 
@@ -158,6 +163,7 @@ describe("channelsRemoveCommand", () => {
     });
     resetPluginRuntimeStateForTest();
     manifestMocks.plugins = [{ id: "external-chat", channels: ["external-chat"] }];
+    manifestMocks.workspaceScoped = false;
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
@@ -937,6 +943,47 @@ describe("channelsRemoveCommand", () => {
       'Deleted external-chat account "default". Kept its stored ingress events: plugin "@vendor/external-chat-plugin" serves more than one channel and its stored events do not record which.',
     );
     // The sibling's unanswered event is still claimable, which is the whole point.
+    await expect(queue.claimNext({ ownerId: "worker" })).resolves.toMatchObject({
+      id: "inbound-1",
+    });
+  });
+
+  // The shared-queue guard only fires when discovery finds the manifest. A plugin
+  // installed into the agent's workspace is invisible to an unscoped lookup, and the
+  // no-manifest branch below it purges the queue its channels share.
+  it("keeps a workspace-installed plugin's sibling rows when one of its channels is deleted", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: { "external-chat": { enabled: true, token: "token-1" } },
+      }),
+    );
+    manifestMocks.workspaceScoped = true;
+    manifestMocks.plugins = [
+      { id: "external-chat", channels: ["external-chat", "external-chat-voice"] },
+    ];
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        { pluginId: "external-chat", plugin: createExternalChatDeletePlugin(), source: "test" },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "external-chat",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "belongs to a sibling channel too" });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Kept its stored ingress events: plugin "external-chat" serves more than one channel and its stored events do not record which.',
+    );
     await expect(queue.claimNext({ ownerId: "worker" })).resolves.toMatchObject({
       id: "inbound-1",
     });

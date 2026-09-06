@@ -1,5 +1,6 @@
-// Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+// Implements guided and non-interactive disable/delete for channel accounts.
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import {
   type ChannelIngressQueueAccountPurge,
   purgeChannelIngressQueueAccount,
@@ -20,6 +21,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -65,13 +67,21 @@ type IngressDiscardOutcome =
  * populated at Gateway startup and this command runs in its own process - the same source
  * `channels logs` uses to map channels to plugins.
  */
-function resolveIngressQueueOwner(
-  channelId: string,
-): { pluginId: string } | { sharedWithPluginId: string } {
-  const id = channelId.toLowerCase();
+function resolveIngressQueueOwner(params: {
+  channelId: string;
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+}): { pluginId: string } | { sharedWithPluginId: string } {
+  const id = params.channelId.toLowerCase();
+  // Discovery has to run in the same scope the removal was selected in. Without the
+  // config and workspace, a workspace-installed plugin is missing from the registry,
+  // this falls through to the no-manifest branch, and that branch purges a queue the
+  // plugin's other channels share - taking their pending rows with it.
   const plugins = loadPluginManifestRegistryForPluginRegistry({
     includeDisabled: true,
     env: process.env,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
   }).plugins;
   // A channel is registered under a declared channel id OR under the plugin's own id -
   // `channelPluginIdBelongsToManifest` accepts either - so a channel named after the
@@ -84,7 +94,7 @@ function resolveIngressQueueOwner(
   if (!owner) {
     // No manifest claims this channel, so the only id available is the one the operator
     // typed, which is what a bundled channel's queue is keyed by anyway.
-    return { pluginId: channelId };
+    return { pluginId: params.channelId };
   }
   return owner.channels.length > 1 ? { sharedWithPluginId: owner.id } : { pluginId: owner.id };
 }
@@ -99,9 +109,11 @@ function resolveIngressQueueOwner(
 function discardRemovedAccountIngressRows(params: {
   channelId: string;
   accountId: string;
+  cfg: OpenClawConfig;
+  workspaceDir: string;
 }): IngressDiscardOutcome {
   try {
-    const owner = resolveIngressQueueOwner(params.channelId);
+    const owner = resolveIngressQueueOwner(params);
     if ("sharedWithPluginId" in owner) {
       return {
         kind: "kept",
@@ -328,6 +340,8 @@ export async function channelsRemoveCommand(
     ? discardRemovedAccountIngressRows({
         channelId: resolvedChannelId,
         accountId: preparedRemoval.accountKey,
+        cfg,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, opts.agent ?? DEFAULT_AGENT_ID),
       })
     : undefined;
   const summary = [
