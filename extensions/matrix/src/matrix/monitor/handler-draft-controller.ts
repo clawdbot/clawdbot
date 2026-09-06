@@ -67,6 +67,17 @@ export async function createMatrixDraftController(params: {
   let currentDraftMessageGeneration = 0;
   let currentDraftBlockOffset = 0;
   let latestDraftFullText = "";
+  // FIFO of generations captured at the moment each tool result was actually
+  // queued for delivery (see onToolResultQueued in handler-reply-dispatcher.ts),
+  // not read fresh inside deliver() -- the shared dispatcher's send queue can
+  // delay a tool's own deliver() call well past when a fast-following
+  // assistant message already bumped currentDraftMessageGeneration, which
+  // would otherwise make deliver()'s own late read of "current" indistinguishable
+  // from "this tool's own". Queued deliveries settle in submission order (the
+  // shared dispatcher's sendChain preserves it), so a plain FIFO correctly
+  // pairs each deliver() call with its own tool result's real dispatch-time
+  // generation.
+  const pendingToolDispatchGenerations: number[] = [];
   const pendingDraftBoundaries: PendingDraftBoundary[] = [];
   const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
   let currentDraftReplyToId = draftReplyToId;
@@ -217,6 +228,22 @@ export async function createMatrixDraftController(params: {
     return !draftStream.mustDeliverFinalNormally();
   };
 
+  /** Records the generation active at the moment a tool result was actually
+   * queued for delivery (see onToolResultQueued). Called synchronously,
+   * before the shared dispatcher's send queue can introduce any delay. */
+  const pushPendingToolDispatchGeneration = () => {
+    pendingToolDispatchGenerations.push(currentDraftMessageGeneration);
+  };
+
+  /** Consumes the oldest queued dispatch-time generation, in submission
+   * order. Falls back to the live generation (today's pre-fix behavior,
+   * never worse) if the queue is empty -- e.g. a tool result delivered
+   * through a path that bypasses onToolResultQueued entirely. */
+  const takeNextPendingToolDispatchGeneration = (): number => {
+    const queued = pendingToolDispatchGenerations.shift();
+    return queued ?? currentDraftMessageGeneration;
+  };
+
   /**
    * Settles the draft on behalf of a tool dispatch, but only if the draft is
    * still on the exact generation that was active when the tool call was
@@ -254,6 +281,16 @@ export async function createMatrixDraftController(params: {
     latestDraftFullText = "";
     pendingDraftBoundaries.length = 0;
     latestQueuedDraftBoundaryOffsets.clear();
+    // pendingToolDispatchGenerations is deliberately NOT cleared here: a tool
+    // dispatched before this reset (e.g. from the turn a just-admitted queued
+    // followup interrupts) can still be sitting in the shared dispatcher's
+    // send queue, with its own real entry still due. Its ordering relative to
+    // this turn's own future pushes is unaffected by resetting the *draft's*
+    // generation/display state -- deliver()/onError still consume entries in
+    // the same order they were queued, so clearing here would only strand
+    // that still-pending tool's deliver() with an empty queue, making it fall
+    // back to (by then wrong) "current" generation and risk finalizing a
+    // newer, unrelated draft. See takeNextPendingToolDispatchGeneration.
     currentDraftReplyToId = draftReplyToId;
     progressDraft.beginNewTurn({ force: true });
   };
@@ -270,6 +307,8 @@ export async function createMatrixDraftController(params: {
     resetDraftDeliveryState,
     settleDraftGeneration,
     settleDraftForToolDispatch,
+    pushPendingToolDispatchGeneration,
+    takeNextPendingToolDispatchGeneration,
     updateDraftFromLatestFullText,
     draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {

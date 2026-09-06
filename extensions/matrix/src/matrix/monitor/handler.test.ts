@@ -3075,6 +3075,7 @@ describe("matrix monitor handler draft streaming", () => {
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
+    onToolResultQueued?: () => void;
     onQueuedFollowupAdmitted?: () => Promise<void> | void;
     suppressDefaultToolProgressMessages?: boolean;
     onToolStart?: (payload: {
@@ -4743,6 +4744,128 @@ describe("matrix monitor handler draft streaming", () => {
     // The tool call belonged to the first generation ("First"); it must not
     // finalize (strip the live marker on) the second generation's draft,
     // which is a different, still-in-flight block it doesn't own.
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft1" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(false);
+    await finish();
+  });
+
+  it("binds two queued tool deliveries to their own dispatch-time generation, not whichever is current when deliver() finally runs", async () => {
+    // ClawSweeper P2: production enqueues a tool result via the shared
+    // dispatcher's serialized send queue (onToolResultQueued fires right
+    // there, before any send delay) and only later drains to deliver().
+    // Two tool calls issued from the SAME assistant message can both still
+    // be queued behind a slow send when the NEXT assistant message already
+    // starts and bumps the generation -- deliver() reading "current"
+    // generation at that late point would see the bumped value for BOTH,
+    // wrongly finalizing the newer message's still-live draft. Simulated
+    // here by controlling exactly when each generation gets queued
+    // (onToolResultQueued) versus when deliver() actually runs for it,
+    // independent of this harness's own send timing.
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Both tool calls originate from generation 0 -- queued before either's
+    // own send starts.
+    opts.onToolResultQueued?.();
+    opts.onToolResultQueued?.();
+
+    // The next assistant message starts (and streams new text) while both
+    // tool deliveries are still pending -- generation 0's own draft ("First")
+    // is superseded by generation 1's ("Second") on the very same event.
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Second" });
+    await waitForMatrixState(() => {
+      expect(
+        mockCalls(editMessageMatrixMock, "edit calls").some(
+          ([, eventId, body]) => eventId === "$draft1" && body === "Second",
+        ),
+      ).toBe(true);
+    });
+
+    let resolveFirstTool: (() => void) | undefined;
+    deliverMatrixRepliesMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstTool = () => resolve(createMockMatrixDeliveryResult());
+        }),
+    );
+    const firstToolDeliver = deliver({ text: "tool result 1" }, { kind: "tool" });
+    let resolveSecondTool: (() => void) | undefined;
+    deliverMatrixRepliesMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSecondTool = () => resolve(createMockMatrixDeliveryResult());
+        }),
+    );
+    const secondToolDeliver = deliver({ text: "tool result 2" }, { kind: "tool" });
+    await waitForMatrixState(() => {
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(2);
+    });
+
+    resolveFirstTool?.();
+    await firstToolDeliver;
+    resolveSecondTool?.();
+    await secondToolDeliver;
+
+    // Neither delayed tool delivery owned generation 1 -- the still-live
+    // "Second" draft must never have been finalized on their behalf.
+    expect(
+      mockCalls(editMessageMatrixMock, "edit calls").some(
+        ([, eventId, , options]) =>
+          eventId === "$draft1" && requireRecord(options, "edit options").live === false,
+      ),
+    ).toBe(false);
+    await finish();
+  });
+
+  it("consumes its queued generation on a pre-deliver() tool failure, keeping the FIFO aligned for the next tool", async () => {
+    // ClawSweeper P2 (found reviewing the fix above): a rejection from
+    // beforeDeliver or another shared-dispatcher stage happens before
+    // options.deliver is ever called, so this tool's own deliver() closure
+    // never runs and never consumes its queued generation. Left unconsumed,
+    // that stale entry would both settle this failure against the wrong
+    // generation AND get wrongly taken by the *next* tool's deliver() call.
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, onError, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "First" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Two tool calls queued from generation 0.
+    opts.onToolResultQueued?.();
+    opts.onToolResultQueued?.();
+
+    // The next assistant message starts and streams new text while both
+    // tool calls are still pending.
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Second" });
+    await waitForMatrixState(() => {
+      expect(
+        mockCalls(editMessageMatrixMock, "edit calls").some(
+          ([, eventId, body]) => eventId === "$draft1" && body === "Second",
+        ),
+      ).toBe(true);
+    });
+
+    // Only now does the first tool call fail, e.g. a beforeDeliver
+    // rejection -- its own deliver() closure never ran at all.
+    onError(new Error("boom"), { kind: "tool" });
+    await deliver({ text: "tool result 2" }, { kind: "tool" });
+
+    // The second tool call must still resolve to its own queued generation
+    // (0), not whatever the first failure's unconsumed entry would have left
+    // behind -- the still-live "Second" draft must never be finalized.
     expect(
       mockCalls(editMessageMatrixMock, "edit calls").some(
         ([, eventId, , options]) =>

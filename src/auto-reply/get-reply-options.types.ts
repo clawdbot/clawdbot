@@ -247,6 +247,14 @@ export type GetReplyOptions = {
   onToolResult?: (
     payload: ReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called synchronously the moment a tool result payload is committed to
+   * the serialized send queue (immediately before enqueueing), unlike
+   * onToolResult above which can fire earlier and does not guarantee the
+   * payload will actually be queued (e.g. fast-mode/forced-progress paths
+   * short-circuit afterward). Useful for a channel that needs to bind
+   * dispatch-time state (e.g. a generation counter) to this exact delivery
+   * before the queue's own send delay can let that state drift. */
+  onToolResultQueued?: (payload: ReplyPayload) => void | Promise<void>;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
     itemId?: string;

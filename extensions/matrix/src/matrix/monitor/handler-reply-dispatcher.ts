@@ -79,6 +79,12 @@ export function createMatrixReplyDispatcher(config: {
   const hasRepliedRef = { value: false };
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
+  // Set by deliver()'s own catch block for a tool-kind failure (correctly
+  // bound to that call's draftGenerationAtDispatch) so the separate onError
+  // callback below -- invoked immediately after for the same failed call,
+  // per the shared dispatcher's deliverOnce -- skips its own, unbound
+  // fallback settlement instead of double-settling.
+  let toolDeliveryFailureSettled = false;
   const beginNextBlockDraft = async () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
@@ -101,11 +107,19 @@ export function createMatrixReplyDispatcher(config: {
     ...prefixOptions,
     humanDelay,
     deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-      // Captured before any await below: production enqueues a tool's own
+      // Consumed (not read fresh) for "tool": production enqueues a tool's own
       // Matrix delivery without awaiting completion, so a fast-following
-      // assistant message can already be streaming new partial text into
-      // this same draft by the time completeDelivery below actually runs.
-      const draftGenerationAtDispatch = draftController.currentGeneration();
+      // assistant message can already have bumped the live generation by the
+      // time this call finally runs. onToolResultQueued in handler.ts pushed
+      // this tool's real dispatch-time generation onto a FIFO the moment it
+      // was actually queued; deliver() calls settle in that same submission
+      // order, so consuming here pairs each call with its own tool's value
+      // instead of whatever happens to be current by now. Irrelevant for
+      // "block"/"final" (only the "tool" branches below ever read it).
+      const draftGenerationAtDispatch =
+        info.kind === "tool"
+          ? draftController.takeNextPendingToolDispatchGeneration()
+          : draftController.currentGeneration();
       const completeDelivery = async (
         result: MatrixReplyDeliveryResult,
       ): Promise<MatrixReplyDeliveryResult> => {
@@ -488,21 +502,36 @@ export function createMatrixReplyDispatcher(config: {
         }
         return await completeDelivery(await deliverFallback());
       }
-      return await completeDelivery(
-        await deliverMatrixReplies({
-          cfg,
-          replies: [payload],
-          roomId,
-          client,
-          runtime,
-          replyToMode,
-          hasRepliedRef,
-          threadId: threadTarget,
-          replyToId: threadTarget ?? replyToEventId ?? undefined,
-          accountId,
-          mediaLocalRoots,
-        }),
-      );
+      try {
+        return await completeDelivery(
+          await deliverMatrixReplies({
+            cfg,
+            replies: [payload],
+            roomId,
+            client,
+            runtime,
+            replyToMode,
+            hasRepliedRef,
+            threadId: threadTarget,
+            replyToId: threadTarget ?? replyToEventId ?? undefined,
+            accountId,
+            mediaLocalRoots,
+          }),
+        );
+      } catch (error) {
+        if (info.kind === "tool") {
+          // Settle here, bound to this exact call's own draftGenerationAtDispatch,
+          // instead of in the separate onError callback below: onError is a later,
+          // distinct closure with no access to this generation snapshot, and a
+          // fresh read there would race the same way completeDelivery's success
+          // path used to (see the queue-delay comment on draftGenerationAtDispatch
+          // above). toolDeliveryFailureSettled tells onError to skip its own
+          // (now redundant) settlement for this failure.
+          toolDeliveryFailureSettled = true;
+          await draftController.settleDraftForToolDispatch(draftGenerationAtDispatch);
+        }
+        throw error;
+      }
     },
     onError: async (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
@@ -512,15 +541,20 @@ export function createMatrixReplyDispatcher(config: {
       }
       if (info.kind === "block") {
         await beginNextBlockDraft();
-      } else if (info.kind === "tool") {
-        // No captured pre-dispatch generation is available on this error
-        // path (a distinct, later top-level callback, not the same deliver()
-        // closure) -- read the current one directly. A delivery failure
-        // path is not the enqueue-without-awaiting race the dispatch path
-        // guards against, so this is not a meaningful narrowing here, just
-        // parameter parity with the success path's generation-bound check.
-        await draftController.settleDraftForToolDispatch(draftController.currentGeneration());
+      } else if (info.kind === "tool" && !toolDeliveryFailureSettled) {
+        // Reached only when the failure happened outside deliver()'s own
+        // try/catch above (e.g. a rejection from beforeDeliver, which runs
+        // before options.deliver is ever called -- this tool's deliver()
+        // closure never ran at all, so it never consumed its own queued
+        // generation). Still consume it here, not read currentGeneration()
+        // fresh: leaving it unconsumed would both settle against the wrong
+        // (possibly already-bumped) generation AND desync the FIFO, making
+        // the *next* tool's deliver() wrongly take this failed tool's entry.
+        await draftController.settleDraftForToolDispatch(
+          draftController.takeNextPendingToolDispatchGeneration(),
+        );
       }
+      toolDeliveryFailureSettled = false;
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
     onReplyStart: typingCallbacks.onReplyStart,

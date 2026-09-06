@@ -592,6 +592,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onQueuedFollowupAdmitted: draftStream
                 ? draftController.resetDraftDeliveryState
                 : undefined,
+              // Captures the draft generation at the exact moment this tool
+              // result is committed to the send queue -- deliver() below
+              // consumes it in the same order, so a fast-following assistant
+              // message that bumps the generation while this tool's own send
+              // is still queued cannot make deliver()'s later read look like
+              // it belongs to this tool call. See handler-reply-dispatcher.ts.
+              onToolResultQueued: draftStream
+                ? () => {
+                    draftController.pushPendingToolDispatchGeneration();
+                  }
+                : undefined,
               ...draftController.buildPreviewToolProgressReplyOptions(),
               onModelSelected,
             },

@@ -326,6 +326,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (shouldRouteToOriginating) {
                       await sendPayloadAsync(deliveryPayload, undefined, false);
                     } else {
+                      // Fires exactly once per payload that is actually about to be
+                      // queued (unlike onToolResult above, which can fire earlier and
+                      // then short-circuit without ever reaching sendQueued) -- a
+                      // channel binding dispatch-time state to this delivery must do
+                      // it here, not inside its own deliver() callback, which only
+                      // runs once this serialized queue reaches it.
+                      await params.replyOptions?.onToolResultQueued?.(deliveryPayload);
                       const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
                       if (hasAskUserPayload(deliveryPayload)) {
                         await requireQueuedReplyDelivery({
