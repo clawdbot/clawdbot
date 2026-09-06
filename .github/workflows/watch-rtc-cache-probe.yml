@@ -1,0 +1,93 @@
+name: Watch RTC artifact transport measurement
+
+on:
+  push:
+    branches: [codex/watch-rtc-current-probe-20260906]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-rtc-current-probe-20260906
+  cancel-in-progress: true
+
+jobs:
+  produce:
+    if: &probe_guard github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/codex/watch-rtc-current-probe-20260906'
+    runs-on: macos-26
+    timeout-minutes: 30
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      archive_name: ${{ steps.build.outputs.archive_name }}
+      archive_sha256: ${{ steps.build.outputs.archive_sha256 }}
+      identity_sha256: ${{ steps.build.outputs.identity_sha256 }}
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - &toolchain
+        name: Select the existing iOS CI toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          [[ "$xcode_version" == 26.6* ]]
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          time rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src --component llvm-tools-preview
+          command -v tar
+          command -v zstd
+
+      - name: Compile both simulator slices and archive target
+        id: build
+        shell: bash
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          python3 .github/watch-rtc-probe.py produce
+
+      - name: Upload only the inert compiled target archive
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: ${{ steps.build.outputs.archive_path }}
+          archive: false
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 1
+
+  consume:
+    needs: produce
+    if: *probe_guard
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - *checkout
+      - *toolchain
+
+      - name: Download the exact producer archive without extraction
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.produce.outputs.artifact_id }}
+          path: ${{ runner.temp }}/watch-rtc-transfer
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify independent inputs and measure restored Cargo build
+        shell: bash
+        env:
+          PROBE_ARCHIVE: ${{ runner.temp }}/watch-rtc-transfer/${{ needs.produce.outputs.archive_name }}
+          PROBE_ARCHIVE_SHA256: ${{ needs.produce.outputs.archive_sha256 }}
+          PROBE_IDENTITY_SHA256: ${{ needs.produce.outputs.identity_sha256 }}
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          python3 .github/watch-rtc-probe.py consume
