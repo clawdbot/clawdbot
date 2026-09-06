@@ -3,12 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import {
-  asDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
@@ -16,14 +11,16 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
-import type { FeishuDomain } from "./types.js";
+import {
+  cancelUnreadResponseBody,
+  getToken,
+  resolveAllowedHostnames,
+  resolveApiBase,
+  type Credentials,
+  type FeishuStreamingDeps,
+  type FeishuStreamingFetch,
+} from "./streaming-card-token.js";
 
-type Credentials = {
-  appId: string;
-  appSecret: string;
-  domain?: FeishuDomain;
-  httpTimeoutMs?: number;
-};
 type CardState = {
   cardId: string;
   messageId?: string;
@@ -31,15 +28,6 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
-};
-
-type FeishuStreamingFetch = typeof fetch;
-
-type FeishuStreamingDeps = {
-  /** Override fetch for tests while preserving the real SSRF guard path. */
-  fetchImpl?: FeishuStreamingFetch;
-  /** Override hostname lookup for hermetic SSRF-guard tests. */
-  lookupFn?: LookupFn;
 };
 
 type CardKitResponse = { code?: number; msg?: string };
@@ -85,56 +73,11 @@ type StreamingStartOptions = {
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
-const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
-// Token cache (keyed by domain + appId)
-const tokenCache = new Map<string, { token: string; expiresAt: number }>();
-
-function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
-  const now = resolveDateTimestampMs(nowMs);
-  if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
-    return now;
-  }
-  return (
-    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
-    resolveExpiresAtMsFromDurationSeconds(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, {
-      nowMs: now,
-    }) ??
-    now
-  );
-}
-
-function resolveApiBase(domain?: FeishuDomain): string {
-  if (domain === "lark") {
-    return "https://open.larksuite.com/open-apis";
-  }
-  if (domain && domain !== "feishu" && domain.startsWith("http")) {
-    return `${domain.replace(/\/+$/, "")}/open-apis`;
-  }
-  return "https://open.feishu.cn/open-apis";
-}
-
-function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
-  if (domain === "lark") {
-    return ["open.larksuite.com"];
-  }
-  if (domain && domain !== "feishu" && domain.startsWith("http")) {
-    try {
-      return [new URL(domain).hostname];
-    } catch {
-      return [];
-    }
-  }
-  return ["open.feishu.cn"];
-}
-
-function cancelUnreadResponseBody(response: Response): void {
-  // A rejected response leaves its body unread; start cancellation before the
-  // guarded dispatcher is released so the connection is not leaked. Do not
-  // await: debug capture can tee the stream and deadlock a waiter.
-  if (!response.bodyUsed) {
-    void response.body?.cancel().catch(() => undefined);
-  }
+/** Detect a dead-stream error from a Card Kit response error message. */
+function isCardStreamClosedError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return /code=(200850|300309)/.test(msg);
 }
 
 async function assertSuccessfulCardKitResponse(
@@ -150,55 +93,6 @@ async function assertSuccessfulCardKitResponse(
   if (data.code !== 0) {
     throw new Error(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
   }
-}
-
-async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
-  const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
-  const cached = tokenCache.get(key);
-  const rawNow = Date.now();
-  const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
-  const now = resolveDateTimestampMs(rawNow);
-  const minUsableExpiresAt = resolveExpiresAtMsFromDurationSeconds(60, { nowMs: now }) ?? now;
-  if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
-    return cached.token;
-  }
-
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`,
-    init: {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": getFeishuUserAgent() },
-      body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
-    },
-    fetchImpl: deps?.fetchImpl,
-    lookupFn: deps?.lookupFn,
-    policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
-    auditContext: "feishu.streaming-card.token",
-    timeoutMs: creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
-  });
-  let data: {
-    code: number;
-    msg: string;
-    tenant_access_token?: string;
-    expire?: number;
-  };
-  try {
-    if (!response.ok) {
-      cancelUnreadResponseBody(response);
-      throw new Error(`Token request failed with HTTP ${response.status}`);
-    }
-    data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
-  } finally {
-    await release();
-  }
-  if (data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`Token error: ${data.msg}`);
-  }
-  tokenCache.set(key, {
-    token: data.tenant_access_token,
-    expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
-  });
-  return data.tenant_access_token;
 }
 
 function truncateSummary(text: string, max = 50): string {
@@ -253,6 +147,10 @@ export class FeishuStreamingSession {
   private state: CardState | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  /** Set when a streaming API patch fails with a dead-stream code (200850/300309).
+   *  Further streaming patches are skipped to avoid log flooding; closeWithResult falls
+   *  back to the non-streaming message patch API. */
+  private streamDead = false;
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
@@ -449,6 +347,12 @@ export class FeishuStreamingSession {
       }
       return true;
     } catch (error) {
+      if (isCardStreamClosedError(error)) {
+        this.streamDead = true;
+        this.log?.(
+          `Streaming card stream is dead (cardId=${this.state.cardId}); skipping further streaming patches`,
+        );
+      }
       onError?.(error);
       return false;
     }
@@ -530,7 +434,7 @@ export class FeishuStreamingSession {
 
   private async flushPendingUpdate(): Promise<void> {
     this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) {
+      if (!this.state || this.closed || this.streamDead) {
         return;
       }
       const nextText = this.pendingText;
@@ -552,7 +456,7 @@ export class FeishuStreamingSession {
   }
 
   async update(text: string): Promise<void> {
-    if (!this.state || this.closed || !text) {
+    if (!this.state || this.closed || this.streamDead || !text) {
       return;
     }
     // The caller supplies the complete current card text. CardKit derives its own
@@ -572,7 +476,7 @@ export class FeishuStreamingSession {
   }
 
   private async updateNoteContent(note: string): Promise<void> {
-    if (!this.state || !this.state.hasNote) {
+    if (!this.state || !this.state.hasNote || this.streamDead) {
       return;
     }
     const apiBase = resolveApiBase(this.creds.domain);
@@ -612,7 +516,15 @@ export class FeishuStreamingSession {
           await release();
         }
       })
-      .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
+      .catch((e: unknown) => {
+        if (isCardStreamClosedError(e)) {
+          this.streamDead = true;
+          this.log?.(
+            `Streaming card stream is dead after note update (cardId=${this.state?.cardId})`,
+          );
+        }
+        this.log?.(`Note update failed: ${String(e)}`);
+      });
   }
 
   async closeWithResult(
@@ -633,9 +545,50 @@ export class FeishuStreamingSession {
     let visibleContentSent = Boolean(this.state.sentText.trim());
     let finalWriteError: unknown;
 
-    // Only send final update if content differs from what's already displayed.
-    // An explicit empty final text clears a transient preview before closeout.
-    if ((text || finalText !== undefined) && text !== this.state.sentText) {
+    // When the streaming card's server-side stream is dead (200850 idle timeout →
+    // 300309 "streaming mode is closed"), all streaming API patches fail. Skip them
+    // and fall back to the non-streaming im.message.patch API to update the card
+    // content so the final text is not lost and logs are not flooded.
+    if (this.streamDead && this.state.messageId) {
+      const fallbackContent = JSON.stringify({
+        schema: "2.0",
+        body: {
+          elements: [
+            { tag: "markdown", content: text, element_id: "content" },
+            ...(this.state.hasNote && options?.note
+              ? [
+                  { tag: "hr" },
+                  {
+                    tag: "markdown",
+                    content: `<font color='grey'>${options.note}</font>`,
+                    element_id: "note",
+                  },
+                ]
+              : []),
+          ],
+        },
+      });
+      try {
+        const response = await this.client.im.message.patch({
+          path: { message_id: this.state.messageId },
+          data: { content: fallbackContent },
+        });
+        if (response.code !== undefined && response.code !== 0) {
+          throw new Error(`Non-streaming card fallback failed: ${response.msg ?? response.code}`);
+        }
+        this.state.sentText = text;
+        this.state.currentText = text;
+        visibleContentSent = Boolean(text.trim());
+        this.log?.(
+          `Closed streaming via non-streaming fallback: cardId=${this.state.cardId}, messageId=${this.state.messageId}`,
+        );
+      } catch (error: unknown) {
+        finalWriteError = error;
+        this.log?.(`Non-streaming card fallback failed: ${String(error)}`);
+      }
+    } else if ((text || finalText !== undefined) && text !== this.state.sentText) {
+      // Only send final update if content differs from what's already displayed.
+      // An explicit empty final text clears a transient preview before closeout.
       const sent = text.startsWith(this.state.sentText)
         ? await this.updateCardContent(text, (e) => {
             finalWriteError = e;
@@ -652,58 +605,62 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
-    if (options?.note) {
+    // Update note with final model/provider info (skipped when stream is dead —
+    // note content is included in the non-streaming fallback above).
+    if (!this.streamDead && options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
-    // A rejected final write must not advertise content that CardKit never accepted.
-    const acceptedText = this.state.sentText;
-    this.state.sequence += 1;
+    // Close streaming mode. When the stream is already dead, the server-side
+    // streaming mode is already closed, so this PATCH would fail with 300309 — skip it.
     let closeError: unknown;
-    try {
-      const { response, release } = await fetchWithSsrFGuard({
-        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-        init: {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${await getToken(this.creds, {
-              fetchImpl: this.fetchImpl,
-              lookupFn: this.lookupFn,
-            })}`,
-            "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": getFeishuUserAgent(),
-          },
-          body: JSON.stringify({
-            settings: JSON.stringify({
-              config: {
-                streaming_mode: false,
-                summary: { content: truncateSummary(acceptedText) },
-              },
-            }),
-            sequence: this.state.sequence,
-            uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-          }),
-        },
-        fetchImpl: this.fetchImpl,
-        lookupFn: this.lookupFn,
-        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-        auditContext: "feishu.streaming-card.close",
-        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
-      });
+    if (!this.streamDead) {
+      // A rejected final write must not advertise content that CardKit never accepted.
+      const acceptedText = this.state.sentText;
+      this.state.sequence += 1;
       try {
-        await assertSuccessfulCardKitResponse(
-          response,
-          "feishu.streaming-card.close",
-          "Close streaming card",
-        );
-      } finally {
-        await release();
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+          init: {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${await getToken(this.creds, {
+                fetchImpl: this.fetchImpl,
+                lookupFn: this.lookupFn,
+              })}`,
+              "Content-Type": "application/json; charset=utf-8",
+              "User-Agent": getFeishuUserAgent(),
+            },
+            body: JSON.stringify({
+              settings: JSON.stringify({
+                config: {
+                  streaming_mode: false,
+                  summary: { content: truncateSummary(acceptedText) },
+                },
+              }),
+              sequence: this.state.sequence,
+              uuid: `c_${this.state.cardId}_${this.state.sequence}`,
+            }),
+          },
+          fetchImpl: this.fetchImpl,
+          lookupFn: this.lookupFn,
+          policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+          auditContext: "feishu.streaming-card.close",
+          timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
+        });
+        try {
+          await assertSuccessfulCardKitResponse(
+            response,
+            "feishu.streaming-card.close",
+            "Close streaming card",
+          );
+        } finally {
+          await release();
+        }
+      } catch (error: unknown) {
+        closeError = error;
+        this.log?.(`Close failed: ${String(error)}`);
       }
-    } catch (error: unknown) {
-      closeError = error;
-      this.log?.(`Close failed: ${String(error)}`);
     }
     const finalState = this.state;
     this.state = null;
@@ -728,14 +685,26 @@ export class FeishuStreamingSession {
     return result;
   }
 
-  async discard(): Promise<FeishuStreamingCloseResult> {
+  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+    try {
+      return (await this.closeWithResult(finalText, options)).visibleReplySent;
+    } catch (error: unknown) {
+      if (error instanceof FeishuStreamingFinalizationError) {
+        return error.result.visibleReplySent;
+      }
+      throw error;
+    }
+  }
+
+  async discard(): Promise<void> {
     if (!this.state || this.closed) {
-      return { visibleReplySent: false };
+      return;
     }
     const { cardId, messageId } = this.state;
     if (!messageId) {
       // Accepted cards without a message receipt can still be cleared by card id.
-      return this.closeWithResult("");
+      await this.close("");
+      return;
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -751,12 +720,10 @@ export class FeishuStreamingSession {
       this.state = null;
       this.pendingText = null;
       this.log?.(`Discarded streaming card: cardId=${cardId}`);
-      return { visibleReplySent: false };
     } catch (error) {
       this.log?.(`Discard failed: ${String(error)}`);
       this.closed = false;
-      // A rejected clear leaves accepted text visible; preserve its receipt and failure.
-      return this.closeWithResult("");
+      await this.close("");
     }
   }
 
