@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   loadTranscriptEvents,
   readSessionTranscriptVisibleMessageDeltaCore,
   readSessionTranscriptWatermark,
@@ -185,6 +186,50 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
   runWithSessionTranscriptReadFence(
     { ...admitted.anchor, logicalTurnId: "current", role: "user" },
     () => expect(() => manager.appendMessage(buildAssistantMessage("reply"))).not.toThrow(),
+  );
+});
+
+it("keeps a fenced assistant after rebasing over a concurrent assistant", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-fenced-rebase-");
+  const scope = {
+    agentId: "main",
+    sessionId: "fenced-assistant-rebase",
+    sessionKey: "agent:main:fenced-assistant-rebase",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const seed = SessionManager.open(scope, dir);
+  const admission = seed.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "current",
+    timestamp: 1,
+  });
+  if (!admission.anchor) {
+    throw new Error("missing admission anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admission.anchor, logicalTurnId: "current", role: "user" },
+    () => {
+      const fenced = SessionManager.open(scope, dir);
+      expect(
+        appendTranscriptMessageSync(scope, {
+          eventId: "concurrent-assistant",
+          message: buildAssistantMessage("concurrent"),
+          now: 2,
+        }).ok,
+      ).toBe(true);
+      const replyId = fenced.appendMessage(buildAssistantMessage("reply"));
+      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
+        admission.entryId,
+        "concurrent-assistant",
+        replyId,
+      ]);
+      expect(fenced.buildSessionContext().messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ text: "reply" }],
+      });
+    },
   );
 });
 
@@ -469,6 +514,32 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
     { message: { content: "oldest" } },
     { message: { content: "middle" } },
   ]);
+});
+
+it("keeps the original hydration boundary after a partial bounded trim", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-partial-trim-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-partial-trim",
+    sessionKey: "agent:main:bounded-partial-trim",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  for (let index = 0; index < 12; index += 1) {
+    await appendTranscriptMessage(scope, {
+      eventId: `event-${index}`,
+      message: { role: index % 2 === 0 ? "user" : "assistant", content: `message-${index}` },
+      now: index + 1,
+    });
+  }
+  const manager = SessionManager.open(scope, dir, { maxBytes: 1024 * 1024, maxEvents: 8 });
+  expect(manager.removeTrailingEntries((entry) => entry.id === "event-11")).toBe(1);
+  expect(manager.removeTrailingEntries((entry) => entry.id !== "event-3")).toBe(7);
+  expect(
+    (await loadTranscriptEvents(scope))
+      .map((entry) => (entry as { id?: string }).id)
+      .filter((id) => id?.startsWith("event-")),
+  ).toEqual(["event-0", "event-1", "event-2", "event-3"]);
 });
 
 it.each([

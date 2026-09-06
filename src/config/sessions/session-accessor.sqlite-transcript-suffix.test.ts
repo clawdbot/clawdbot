@@ -782,7 +782,7 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, duplicateKeyEvents);
   });
 
-  it("promotes a keyed owner from a long prefix without scanning it in the write transaction", async () => {
+  it("rejects idempotency-owner promotion beyond the synchronous prefix bound", async () => {
     const prefix = Array.from({ length: SYNC_REBUILD_MAX_ROWS + 1 }, (_value, index) => ({
       type: "message" as const,
       id: `keyed-prefix-${index}`,
@@ -808,36 +808,22 @@ describe("SQLite exact transcript suffix replacement", () => {
       db.prepare(
         "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
       ).run("retry", scope.sessionId, owner.id);
-      const plan = prepareSqliteTranscriptSuffixMutation(
-        openOpenClawAgentDatabase(scope),
-        scope,
-        duplicateKeyEvents,
-        duplicateKeyEvents.slice(0, -1),
-        duplicateKeyEvents.length - 1,
-      );
-      const work = trackSqliteStatementExecutions(db, ["prefixJsonScan"], (statement) => {
-        const sql = statement.toLowerCase();
-        return sql.includes("json_extract") ||
-          (sql.includes("event_json") && sql.includes("identity.seq") && sql.includes("<"))
-          ? "prefixJsonScan"
-          : null;
-      });
-      try {
-        runOpenClawAgentWriteTransaction((database) => {
-          replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
-        }, scope);
-      } finally {
-        work.restore();
-      }
-
-      expect(work.counts.prefixJsonScan).toBe(0);
+      expect(() =>
+        prepareSqliteTranscriptSuffixMutation(
+          openOpenClawAgentDatabase(scope),
+          scope,
+          duplicateKeyEvents,
+          duplicateKeyEvents.slice(0, -1),
+          duplicateKeyEvents.length - 1,
+        ),
+      ).toThrow("idempotency-owner promotion exceeds the synchronous row limit");
       expect(
         db
           .prepare(
             "SELECT event_id, message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
           )
           .get(scope.sessionId, duplicateId),
-      ).toEqual({ event_id: duplicateId, message_idempotency_key: "retry" });
+      ).toEqual({ event_id: duplicateId, message_idempotency_key: null });
     }, duplicateKeyEvents);
   });
 

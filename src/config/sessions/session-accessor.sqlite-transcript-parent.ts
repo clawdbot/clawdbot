@@ -6,7 +6,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import {
@@ -20,6 +19,7 @@ import {
 
 const PREPARED_ASSISTANT_MAX_NEWER_MESSAGES = 256;
 const PREPARED_ASSISTANT_MAX_NEWER_BYTES = 1024 * 1024;
+const PREPARED_ASSISTANT_MAX_ANCESTORS = 4096;
 
 /** Validates a prepared assistant from bounded indexed message metadata. */
 export function canRebasePreparedAssistantInTransaction(
@@ -61,7 +61,7 @@ export function canRebasePreparedAssistantInTransaction(
     return false;
   }
   const admitted = admittedUserId
-    ? readTranscriptIdentityByEventId(database, sessionId, admittedUserId)
+    ? readTranscriptIdentityInTransaction(database, sessionId, admittedUserId)
     : undefined;
   if (admittedUserId && !admitted) {
     return false;
@@ -165,7 +165,7 @@ function transcriptEntryIsAncestor(
   candidateId: string | null,
 ): boolean {
   const db = getSessionKysely(database.db);
-  // UNION visits each parent once, so cycles terminate without a transcript-wide count.
+  // Bound ancestry work even for malformed cycles or very deep metadata chains.
   // Keep dangling and null parents in the walk: they can be the requested ancestor.
   const ancestor = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -173,15 +173,16 @@ function transcriptEntryIsAncestor(
       .withRecursive("transcript_ancestors", (query) =>
         query
           .selectFrom("transcript_event_identities")
-          .select("parent_id")
+          .select(["parent_id", sql<number>`1`.as("depth")])
           .where("session_id", "=", sessionId)
           .where("event_id", "=", leafId)
-          .union(
+          .unionAll(
             query
               .selectFrom("transcript_event_identities as ti")
               .innerJoin("transcript_ancestors as ancestor", "ti.event_id", "ancestor.parent_id")
-              .select("ti.parent_id")
-              .where("ti.session_id", "=", sessionId),
+              .select(["ti.parent_id", sql<number>`ancestor.depth + 1`.as("depth")])
+              .where("ti.session_id", "=", sessionId)
+              .where("ancestor.depth", "<", PREPARED_ASSISTANT_MAX_ANCESTORS),
           ),
       )
       .selectFrom("transcript_ancestors")
@@ -257,12 +258,31 @@ function readTranscriptNavigationEvents(
   );
 }
 
+function readTranscriptIdentityInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  eventId: string,
+): { eventId: string; parentId: string | null; seq: number } | undefined {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities")
+      .select(["event_id", "parent_id", "seq"])
+      .where("session_id", "=", sessionId)
+      .where("event_id", "=", eventId)
+      .limit(1),
+  );
+  return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+}
+
 function transcriptTreeReferenceExists(
   database: OpenClawAgentDatabase,
   sessionId: string,
   eventId: string | null,
 ): boolean {
   return (
-    eventId === null || readTranscriptIdentityByEventId(database, sessionId, eventId) !== undefined
+    eventId === null ||
+    readTranscriptIdentityInTransaction(database, sessionId, eventId) !== undefined
   );
 }

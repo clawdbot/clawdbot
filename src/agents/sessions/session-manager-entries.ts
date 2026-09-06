@@ -85,7 +85,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       if (validatedMutationAt === undefined) {
         throw this.createTranscriptMutationConflictError();
       }
-      attemptOptions = { ...persistenceOptions, expectedMutationAt: validatedMutationAt };
+      attemptOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+        ...persistenceOptions,
+        expectedMutationAt: validatedMutationAt,
+      });
     }
     let persistenceResult;
     try {
@@ -121,12 +124,15 @@ export class SessionManagerEntries extends SessionManagerPersistence {
               if (validatedMutationAt === undefined) {
                 throw error;
               }
-              return { ...persistenceOptions, expectedMutationAt: validatedMutationAt };
+              return copyCodeModeSourceAppendOptions(persistenceOptions, {
+                ...persistenceOptions,
+                expectedMutationAt: validatedMutationAt,
+              });
             })()
-          : {
+          : copyCodeModeSourceAppendOptions(persistenceOptions, {
               ...persistenceOptions,
               expectedMutationAt: this.readPersistedTranscriptMutationAt(),
-            };
+            });
       persistenceResult = this.persist(canonicalEntry, retryOptions);
     }
     if (persistenceResult?.adoptedMessageId) {
@@ -143,7 +149,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       persistenceResult?.effectiveParentId !== undefined &&
       persistenceResult.effectiveParentId !== canonicalEntry.parentId
     ) {
-      this.reloadPersistedTranscript();
+      if (admittedUserId) {
+        this.reloadPersistedTranscriptAfterAppend();
+      } else {
+        this.reloadPersistedTranscript();
+      }
     } else {
       if (
         !isSessionTranscriptSideAppendEntry(canonicalEntry) &&

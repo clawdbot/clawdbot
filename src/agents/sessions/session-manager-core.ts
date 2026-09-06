@@ -1,5 +1,6 @@
 import {
   inspectRuntimeTranscriptEventsSync,
+  inspectTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -169,6 +170,33 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       this.setSessionTarget(this.persistenceTarget);
       this.cwd = runtimeCwd;
     }
+  }
+
+  /** Reloads durable state without applying the current turn's read fence. */
+  protected reloadPersistedTranscriptAfterAppend(): void {
+    if (!this.persistenceTarget) {
+      return;
+    }
+    const runtimeCwd = this.cwd;
+    const target = this.persistenceTarget;
+    if (this.boundedContextLimits) {
+      const bounded = readSessionTranscriptBoundedActiveContextCore(target, {
+        ...this.boundedContextLimits,
+        ignoreReadFence: true,
+      });
+      this.boundedContextIncomplete = true;
+      this.persistedBoundaryCount = bounded.boundaryCount;
+      this.persistedSuffixStartSeq = bounded.persistedSuffixStartSeq;
+      this.transcriptMutationAt = bounded.transcriptMutationAt;
+      // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
+      this.setLoadedSessionTarget(target, bounded.events as FileEntry[], bounded);
+    } else {
+      const inspected = inspectTranscriptEventsSync(target);
+      this.transcriptMutationAt = inspected.snapshot.transcriptUpdatedAt;
+      // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
+      this.setLoadedSessionTarget(target, inspected.events as FileEntry[]);
+    }
+    this.cwd = runtimeCwd;
   }
 
   newSession(options?: NewSessionOptions): string | undefined {

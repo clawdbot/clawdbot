@@ -4,6 +4,7 @@ import {
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
   loadTranscriptSuffixEventsBoundedSync,
+  readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
   replaceTranscriptSuffixEventsSync,
   type TranscriptEntryAnchor,
@@ -68,6 +69,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
       candidatePreservedStart -= 1;
     }
+    if (this.boundedContextIncomplete && candidatePreservedStart === 1) {
+      throw new RangeError("Bounded transcript cleanup cannot cross the hydrated trailing window");
+    }
     const removableEntryIds = new Set<string>();
     let candidateRemoveStart = candidatePreservedStart;
     while (candidateRemoveStart > 1) {
@@ -80,6 +84,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (candidateRemoveStart === candidatePreservedStart) {
       return 0;
+    }
+    if (this.boundedContextIncomplete && candidateRemoveStart === 1) {
+      const previousSeq = (this.persistedSuffixStartSeq ?? 0) - 1;
+      const previous =
+        previousSeq >= 0 && this.persistenceTarget
+          ? readTranscriptEventAtSeqSync(this.persistenceTarget, previousSeq)?.event
+          : undefined;
+      // SAFETY: SQLite transcript rows deserialize to the persisted SessionEntry/FileEntry union.
+      const previousEntry = previous as FileEntry | undefined;
+      if (previousEntry && isIndexedSessionEntry(previousEntry) && predicate(previousEntry)) {
+        throw new RangeError("Bounded transcript cleanup cannot cross the hydrated removal window");
+      }
     }
     // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,
     // even if another writer advanced the durable transcript after this manager was opened.
@@ -330,7 +346,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     this.boundedContextIncomplete = Boolean(this.boundedContextLimits && this.persistenceTarget);
     this.persistedBoundaryCount = undefined;
     this.persistedSuffixStartSeq = this.boundedContextIncomplete
-      ? persistedSuffixStartSeq
+      ? retainedContextPrefix.length > 0
+        ? this.persistedSuffixStartSeq
+        : persistedSuffixStartSeq
       : undefined;
     this.transcriptMutationAt = committedMutationAt;
     return removedEntries.length;

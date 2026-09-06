@@ -168,6 +168,8 @@ describe("SessionManager stale-parent rebase", () => {
         options?: AppendPersistenceOptions & { expectedMutationAt?: number | null },
       ): unknown;
     };
+    // Preserve the unbound implementation so the spy can forward each concurrent manager receiver.
+    // oxlint-disable-next-line typescript/unbound-method
     const originalPersist = persistencePrototype.persist;
     let persistCalls = 0;
     vi.spyOn(persistencePrototype, "persist").mockImplementation(

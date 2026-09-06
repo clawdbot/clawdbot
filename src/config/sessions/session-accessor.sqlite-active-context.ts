@@ -96,7 +96,7 @@ function readBoundedRetentionRanges(
 /** Reads one byte-bounded active branch without materializing abandoned transcript history. */
 export function readSessionTranscriptBoundedActiveContextCore(
   scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxEvents: number },
+  options: { maxBytes: number; maxEvents: number; ignoreReadFence?: boolean },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
     options.maxBytes,
@@ -112,10 +112,12 @@ export function readSessionTranscriptBoundedActiveContextCore(
   );
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
+    const fence = options.ignoreReadFence
+      ? undefined
+      : resolveSqliteSessionTranscriptReadFence({
+          database: projection.database,
+          ...projection.resolved,
+        });
     const transcript = db
       .selectFrom("transcript_events")
       .where("session_id", "=", projection.resolved.sessionId);
