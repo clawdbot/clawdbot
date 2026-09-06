@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -1229,6 +1237,223 @@ console.log(JSON.stringify({ data }));
       } else {
         expect(() => readFileSync(join(cwd, "run-requests"))).toThrow();
       }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "exact",
+    "double-revert",
+    "before-base",
+    "before-base-double",
+    "before-base-triple",
+    "three-targets",
+    "non-utf8",
+    "overlapping",
+    "extra-change",
+    "partial",
+    "unknown-target",
+    "nonancestor",
+    "merge-target",
+    "abbreviated",
+    "duplicate",
+    "multiple-declarations",
+    "prose",
+    "non-revert-subject",
+  ])("proves explicit multi-commit reversal accounting: %s", (mode) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-multi-revert-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "main"]);
+      const prose = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- One.",
+        "- Two.",
+        "- Three.",
+        "- Four.",
+        "- Five.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), prose);
+      writeFileSync(join(cwd, "alpha.txt"), "original\n");
+      writeFileSync(join(cwd, "beta.bin"), Buffer.from([0, 255, 1]));
+      const commit = (subject: string) => {
+        git(cwd, ["add", "."]);
+        git(cwd, ["commit", "-qm", subject]);
+        return git(cwd, ["rev-parse", "HEAD"]);
+      };
+      const originalBase = commit("chore: baseline");
+      writeFileSync(
+        join(cwd, "alpha.txt"),
+        mode === "non-utf8" ? Buffer.from([97, 255, 10]) : "first\n",
+      );
+      const first = commit("chore: first source (#21)");
+      writeFileSync(join(cwd, "beta.bin"), Buffer.from([0, 254, 2]));
+      if (mode === "overlapping") {
+        writeFileSync(join(cwd, "alpha.txt"), "second\n");
+      }
+      const second = commit("chore: second source (#22)");
+      let third: string | undefined;
+      if (mode === "three-targets") {
+        writeFileSync(join(cwd, "third.txt"), "third\n");
+        third = commit("chore: third source (#23)");
+      }
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${originalBase}..${second} history: 2 in-range PRs + 0 retained seed-only PRs = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: first source.\n- **PR #22** chore: second source.\n`,
+      );
+      const seed = commit("docs: preserve source ledger");
+      let declaredSecond = second;
+      if (mode === "nonancestor" || mode === "merge-target") {
+        git(cwd, ["checkout", "-qb", "side", originalBase]);
+        writeFileSync(join(cwd, "side.txt"), "side\n");
+        declaredSecond = commit("chore: side source");
+        git(cwd, ["checkout", "-q", "main"]);
+        if (mode === "merge-target") {
+          git(cwd, ["merge", "--no-ff", "-qm", "merge side", "side"]);
+          declaredSecond = git(cwd, ["rev-parse", "HEAD"]);
+        }
+      }
+      git(cwd, [
+        "revert",
+        "--no-commit",
+        ...(third ? [third] : []),
+        second,
+        ...(mode === "partial" ? [] : [first]),
+      ]);
+      if (mode === "extra-change") {
+        writeFileSync(join(cwd, "extra.txt"), "unrelated change\n");
+      }
+      if (mode === "unknown-target") {
+        declaredSecond = "1".repeat(40);
+      }
+      if (mode === "duplicate") {
+        declaredSecond = first;
+      }
+      let declaration = `Reverts ${first} and ${declaredSecond} to restore the previous behavior.`;
+      if (third) {
+        declaration = `Reverts ${first}, ${second}, and ${third}.`;
+      }
+      if (mode === "abbreviated") {
+        declaration = `Reverts ${first.slice(0, 12)} and ${second.slice(0, 12)}.`;
+      } else if (mode === "multiple-declarations") {
+        declaration = `${declaration}\n\n${declaration}`;
+      } else if (mode === "prose") {
+        declaration = `Discussion: ${declaration}`;
+      }
+      git(cwd, ["add", "."]);
+      git(cwd, [
+        "commit",
+        "-qm",
+        mode === "non-revert-subject" ? "chore: describe changes" : "chore: revert source changes",
+        "-m",
+        declaration,
+      ]);
+      let base = mode.startsWith("before-base") ? seed : originalBase;
+      if (mode === "before-base-double") {
+        base = git(cwd, ["rev-parse", "HEAD"]);
+      }
+      if (["double-revert", "before-base-double", "before-base-triple"].includes(mode)) {
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      if (mode === "before-base-triple") {
+        base = git(cwd, ["rev-parse", "HEAD"]);
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      const associations = { [first]: 21, [second]: 22, ...(third ? { [third]: 23 } : {}) };
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const associations = ${JSON.stringify(associations)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+ const number = associations[hash];
+ data[alias] = { object: { associatedPullRequests: { nodes: number ? [{ number, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: hash } }] : [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias, number] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+ data[alias] = { issueOrPullRequest: { __typename: "PullRequest", number: Number(number), title: "chore: source", baseRefName: "main", mergedAt: "2020-01-01T00:00:00Z", author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const privateTmp = join(cwd, "private-proof-tmp");
+      mkdirSync(privateTmp);
+      const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
+      const originalIndex = readFileSync(index);
+      const originalObjects = git(cwd, ["count-objects", "-v"]);
+      const hooks = join(cwd, "test-hooks");
+      mkdirSync(hooks);
+      const hook = join(hooks, "post-index-change");
+      writeFileSync(hook, "#!/bin/sh\nprintf unexpected > hook-fired\n");
+      chmodSync(hook, 0o755);
+      git(cwd, ["config", "core.hooksPath", hooks]);
+      git(cwd, ["config", "diff.external", hook]);
+
+      const manifestPath = join(cwd, "manifest.json");
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          base,
+          "--target",
+          target,
+          "--main-ref",
+          target,
+          "--seed-ref",
+          seed,
+          "--version",
+          "2026.7.1",
+          "--manifest",
+          manifestPath,
+          "--write-ledger",
+          "--json",
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, TMPDIR: privateTmp, PATH: `${cwd}:${process.env.PATH}` },
+        },
+      );
+      expect(readFileSync(index)).toEqual(originalIndex);
+      expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
+      expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+      expect(readdirSync(privateTmp)).toEqual([]);
+      expect(readdirSync(cwd)).not.toContain("hook-fired");
+      if (
+        ["extra-change", "partial", "unknown-target", "nonancestor", "merge-target"].includes(mode)
+      ) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("could not verify explicit multi-commit revert");
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const removed = [
+        "exact",
+        "before-base",
+        "before-base-triple",
+        "three-targets",
+        "non-utf8",
+        "overlapping",
+      ].includes(mode);
+      expect(
+        manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
+      ).toEqual(removed ? [] : [21, 22]);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
