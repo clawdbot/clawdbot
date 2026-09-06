@@ -36,6 +36,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+  readControlPlaneUpdateSentinelMeta,
   UPDATE_RUN_ID_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
@@ -2113,6 +2114,34 @@ export function claimManagedServiceUpdateHandoff(
   }
   active.claimed = true;
   return true;
+}
+
+/** A transferred updater may inspect its serving ancestor only under its current lease. */
+export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
+  root: string;
+  runId: string | undefined;
+}): Promise<boolean> {
+  if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" || !params.runId) {
+    return false;
+  }
+  const meta = await readControlPlaneUpdateSentinelMeta();
+  const root = resolveUpdateInstallRoot(params.root);
+  if (
+    meta?.runId !== params.runId ||
+    !meta.handoffId ||
+    !meta.root ||
+    resolveUpdateInstallRoot(meta.root) !== root
+  ) {
+    return false;
+  }
+  const lease = readManagedServiceUpdateHandoffLease(root);
+  const startIdentity = getFileLockProcessStartTime(process.pid);
+  return (
+    lease?.owner === meta.handoffId &&
+    lease.pid === process.pid &&
+    startIdentity !== null &&
+    lease.startIdentity === String(startIdentity)
+  );
 }
 
 function readManagedServiceUpdateHandoffLease(

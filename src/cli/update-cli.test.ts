@@ -168,6 +168,7 @@ vi.mock("../infra/update-managed-service-handoff.js", () => ({
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
   activateManagedServiceUpdateHandoff: managedUpdateHandoff.activate,
+  isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   prepareUnattendedUpdateRepair: unattendedRepair,
