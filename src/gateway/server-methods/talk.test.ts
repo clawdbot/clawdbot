@@ -1344,13 +1344,17 @@ describe("talk.config handler", () => {
     });
   });
 
-  it.each([false, true])(
-    "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=%s",
-    async (includeSecrets) => {
+  it.each([
+    { includeSecrets: false, providerSelection: "explicit" },
+    { includeSecrets: true, providerSelection: "explicit" },
+    { includeSecrets: false, providerSelection: "implicit" },
+  ] as const)(
+    "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=$includeSecrets provider=$providerSelection",
+    async ({ includeSecrets, providerSelection }) => {
       const runtimeConfig = {
         talk: {
           realtime: {
-            provider: "openai",
+            ...(providerSelection === "explicit" ? { provider: "openai" } : {}),
             model: "gpt-live-test-canary",
             providers: {
               openai: { model: "gpt-live-test-canary", voice: "marin" },
