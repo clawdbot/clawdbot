@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import tempfile
 import textwrap
 import unittest
@@ -332,6 +333,104 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                     self.appdir,
                     readelf=str(self.readelf),
                 )
+
+
+class PackagedRuntimeGStreamerTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.appdir = self.root / "squashfs-root"
+        hook = self.appdir / "apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("# packaged GStreamer environment\n")
+        self.output = self.root / "output"
+        self.output.mkdir()
+        self.log = self.root / "tools.log"
+        self.host_tools = self.root / "host tools"
+        self.host_tools.mkdir()
+        self.matching_tools = self.root / "matching tools"
+        self.matching_tools.mkdir()
+        self.write_tool(
+            self.host_tools / "gst-inspect-1.0",
+            'printf "host-inspect:%s\\n" "$1" >> "$PROBE_LOG"\n',
+        )
+        self.write_tool(
+            self.host_tools / "gst-launch-1.0",
+            'printf "host-launch\\n" >> "$PROBE_LOG"\nexit 42\n',
+        )
+        self.write_tool(
+            self.host_tools / "timeout",
+            'shift\nexec "$@"\n',
+        )
+        self.write_tool(
+            self.matching_tools / "gst-inspect-1.0",
+            'printf "matching-inspect:%s\\n" "$1" >> "$PROBE_LOG"\n',
+        )
+        self.write_tool(
+            self.matching_tools / "gst-launch-1.0",
+            'printf "matching-launch\\n" >> "$PROBE_LOG"\n',
+        )
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def write_tool(self, path, body):
+        path.write_text(f"#!/bin/sh\nset -eu\n{body}")
+        path.chmod(0o755)
+
+    def test_explicit_gstreamer_tools_override_incompatible_path(self):
+        sample = self.root / "sample.wav"
+        sample.touch()
+        env = {
+            "PATH": str(self.host_tools),
+            "PROBE_LOG": str(self.log),
+        }
+        gst_inspect, gst_launch = smoke.resolve_gstreamer_tools(
+            self.matching_tools,
+            search_path=str(self.host_tools),
+        )
+
+        smoke.bundled_gstreamer_probe(
+            self.appdir,
+            self.output,
+            env,
+            [sample],
+            gst_inspect=gst_inspect,
+            gst_launch=gst_launch,
+        )
+
+        lines = self.log.read_text().splitlines()
+        self.assertEqual(
+            [line.removeprefix("matching-inspect:") for line in lines[:-1]],
+            list(smoke.REQUIRED_GSTREAMER_ELEMENTS),
+        )
+        self.assertEqual(lines[-1], "matching-launch")
+        self.assertFalse(any(line.startswith("host-") for line in lines))
+
+    def test_gstreamer_tools_dir_requires_both_executables(self):
+        cases = (
+            ("gst-inspect-1.0", "missing"),
+            ("gst-inspect-1.0", "not executable"),
+            ("gst-launch-1.0", "missing"),
+            ("gst-launch-1.0", "not executable"),
+        )
+        for name, condition in cases:
+            with self.subTest(name=name, condition=condition):
+                tools = self.root / f"{name}-{condition}"
+                tools.mkdir()
+                for candidate in smoke.GSTREAMER_TOOL_NAMES:
+                    if candidate == name and condition == "missing":
+                        continue
+                    path = tools / candidate
+                    self.write_tool(path, "exit 0\n")
+                    if candidate == name:
+                        path.chmod(0o644)
+
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    rf"GStreamer tool {re.escape(name)} is {condition}: ",
+                ):
+                    smoke.resolve_gstreamer_tools(tools)
 
 
 if __name__ == "__main__":

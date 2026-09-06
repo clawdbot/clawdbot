@@ -86,6 +86,11 @@ ELF_MACHINE_ARCHITECTURES = {
     "AArch64": "aarch64",
 }
 
+GSTREAMER_TOOL_NAMES = (
+    "gst-inspect-1.0",
+    "gst-launch-1.0",
+)
+
 
 def version_key(version):
     return tuple(int(part) for part in version.split("."))
@@ -355,6 +360,29 @@ def isolated_environment(root):
     return env
 
 
+def resolve_gstreamer_tools(directory=None, search_path="/usr/bin:/bin"):
+    resolved = []
+    for name in GSTREAMER_TOOL_NAMES:
+        if directory is None:
+            executable = shutil.which(name, path=search_path)
+            if executable is None:
+                raise RuntimeError(
+                    f"GStreamer tool {name} not found in {search_path}"
+                )
+            path = Path(executable).resolve()
+        else:
+            candidate = Path(directory) / name
+            if not candidate.is_file():
+                raise RuntimeError(f"GStreamer tool {name} is missing: {candidate}")
+            if not os.access(candidate, os.X_OK):
+                raise RuntimeError(
+                    f"GStreamer tool {name} is not executable: {candidate}"
+                )
+            path = candidate.resolve()
+        resolved.append(path)
+    return tuple(resolved)
+
+
 def process_ids(root_pid):
     found = {root_pid}
     pending = [root_pid]
@@ -519,7 +547,15 @@ def generate_media_samples(root, output):
     return generated
 
 
-def bundled_gstreamer_probe(appdir, output, env, samples):
+def bundled_gstreamer_probe(
+    appdir,
+    output,
+    env,
+    samples,
+    *,
+    gst_inspect,
+    gst_launch,
+):
     hook = appdir / "apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
     if not hook.is_file():
         raise RuntimeError("Missing packaged GStreamer AppRun hook")
@@ -537,14 +573,16 @@ export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
         "-c",
         common
         + """
-shift
+gst_inspect=$2
+shift 2
 for element; do
-  gst-inspect-1.0 "$element" >/dev/null
+  "$gst_inspect" "$element" >/dev/null
   printf '%s\\tok\\n' "$element"
 done
 """,
         "bundled-gstreamer-probe",
         str(appdir),
+        str(gst_inspect),
         *REQUIRED_GSTREAMER_ELEMENTS,
     ]
     code, text = write_command(
@@ -569,13 +607,14 @@ done
                 common
                 + """
 export GST_REGISTRY_1_0=$2
-exec timeout 30s gst-launch-1.0 -q playbin "uri=file://$3" \
+exec timeout 30s "$4" -q playbin "uri=file://$3" \
   audio-sink=fakesink video-sink=fakesink
 """,
                 "bundled-gstreamer-playback",
                 str(appdir),
                 str(registry),
                 str(sample),
+                str(gst_launch),
             ],
             cwd=appdir,
             env=env,
@@ -597,6 +636,7 @@ def main():
     parser.add_argument("appimage", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-sha256")
+    parser.add_argument("--gstreamer-tools-dir", type=Path)
     parser.add_argument("--require-fuse", action="store_true")
     parser.add_argument("--shell-container")
     parser.add_argument("--skip-ui", action="store_true")
@@ -714,6 +754,20 @@ def main():
         shell_env["LD_LIBRARY_PATH"] = ":".join(
             str(path) for path in library_paths if path.is_dir()
         )
+        gst_inspect, gst_launch = resolve_gstreamer_tools(
+            args.gstreamer_tools_dir
+        )
+        selected_version_code, _ = write_command(
+            output,
+            "gstreamer-selected-tool.txt",
+            [str(gst_inspect), "--version"],
+            cwd=appdir,
+            env=shell_env,
+        )
+        if selected_version_code:
+            raise RuntimeError(
+                "Selected gst-inspect-1.0 failed under the packaged library path"
+            )
         shell_results = {}
         for shell in ("/bin/sh", "/bin/bash"):
             if not Path(shell).is_file():
@@ -743,6 +797,8 @@ def main():
             output,
             shell_env,
             samples,
+            gst_inspect=gst_inspect,
+            gst_launch=gst_launch,
         )
 
         extracted = launch_probe(
