@@ -241,6 +241,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Required metadata readers load this tsdown entry by computed source/dist path.
+  "src/plugins/plugin-metadata-readers.runtime.ts!",
   // Released Gateways still import this stable entry after an on-disk update.
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
