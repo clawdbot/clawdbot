@@ -130,13 +130,13 @@ describe("DesktopClient", () => {
       credentials: { username: "operator", password: "secret" },
     });
 
-    handle.setScaleViewport?.(true);
+    handle.setScaleViewport(true);
     expect(instances[0]?.scaleViewport).toBe(true);
-    handle.sendKeyboardEvent?.(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
+    handle.sendKeyboardEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
     expect(onKeyDown).toHaveBeenCalledOnce();
     expect((onKeyDown.mock.calls[0]?.[0] as KeyboardEvent | undefined)?.key).toBe("k");
-    handle.sendText?.("m");
-    handle.sendBackspace?.();
+    handle.sendText("m");
+    handle.sendBackspace();
     expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
       ["k", "m", "Backspace"],
     );
@@ -206,7 +206,7 @@ describe("DesktopClient", () => {
       target,
     });
 
-    handle.sendText?.(text);
+    handle.sendText(text);
 
     expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
       keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),

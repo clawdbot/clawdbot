@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -59,7 +60,8 @@ describe("worker desktop observer tokens", () => {
 async function createProxyHarness(
   params: {
     control?: boolean;
-    getBufferedAmount?: () => number;
+    getBufferedAmount?: (ws: WebSocket) => number;
+    stream?: Duplex;
     preauth?: RfbPreauthDescriptor;
   } = {},
 ) {
@@ -74,6 +76,7 @@ async function createProxyHarness(
   });
   cleanup.push(async () => {
     desktopPeer?.destroy();
+    params.stream?.destroy();
     await new Promise<void>((resolveClose) => {
       server.close(() => resolveClose());
     });
@@ -95,7 +98,7 @@ async function createProxyHarness(
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: {
-        claimStream: () => undefined,
+        claimStream: () => params.stream,
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
             observer.close(code, reason);
@@ -103,7 +106,7 @@ async function createProxyHarness(
           return { release };
         },
       },
-      ...(params.getBufferedAmount ? { getBufferedAmount: () => params.getBufferedAmount!() } : {}),
+      ...(params.getBufferedAmount ? { getBufferedAmount: params.getBufferedAmount } : {}),
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -118,7 +121,9 @@ async function createProxyHarness(
     sourceKey: "worker:pump",
     ownerEpoch: 2,
     control: params.control ?? false,
-    attachment: { kind: "unix-socket", socketPath: localSocketPath },
+    attachment: params.stream
+      ? { kind: "stream", streamId: "synthetic-stream" }
+      : { kind: "unix-socket", socketPath: localSocketPath },
     ...(params.preauth ? { preauth: params.preauth } : {}),
   });
   const ws = new WebSocket(
@@ -131,14 +136,14 @@ async function createProxyHarness(
   });
   return {
     closeObserver,
-    desktopPeer: await peerConnected.promise,
+    desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
     ws,
   };
 }
 
-function readSocketBytes(socket: net.Socket, byteLength: number): Promise<Buffer> {
+function readSocketBytes(socket: Duplex, byteLength: number): Promise<Buffer> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let received = 0;
@@ -329,6 +334,96 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(serialized).not.toContain(harness.observerUrl);
     expect(harness.release).toHaveBeenCalledOnce();
   });
+
+  it("expires unused credential-bearing tokens without a later token operation", async () => {
+    const harness = await createProxyHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const minted = mintDesktopObserverToken({
+      sourceKey: "worker:unused",
+      ownerEpoch: 1,
+      control: false,
+      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+      preauth: {
+        auth: "vnc-password",
+        credentials: { password: "synthetic-memory-only-password" },
+      },
+    });
+
+    vi.advanceTimersByTime(60_000);
+    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
+    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
+    const observerUrl = new URL(harness.observerUrl);
+    observerUrl.searchParams.set("token", minted.token);
+    await expectUnauthorizedObserver(observerUrl.toString());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])(
+    "bounds browser writes, resumes on drain, and closes a blocked desktop (control: %s)",
+    async (control) => {
+      const received: Buffer[] = [];
+      let blocked = true;
+      let releaseWrite: (() => void) | undefined;
+      let gatewaySocket: WebSocket | undefined;
+      const stream = new Duplex({
+        writableHighWaterMark: 1,
+        read() {},
+        write(chunk, _encoding, callback) {
+          received.push(Buffer.from(chunk));
+          if (blocked) {
+            releaseWrite = callback;
+          } else {
+            callback();
+          }
+        },
+      });
+      const harness = await createProxyHarness({
+        control,
+        stream,
+        getBufferedAmount: (ws) => {
+          gatewaySocket = ws;
+          return ws.bufferedAmount;
+        },
+      });
+      const pulse = new Promise<void>((resolve) => {
+        harness.ws.once("message", () => resolve());
+      });
+      stream.push(Buffer.from("synthetic-server-pulse"));
+      await pulse;
+      const handshake = Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1])]);
+      harness.ws.send(handshake);
+      await expect.poll(() => releaseWrite).toBeDefined();
+      expect(gatewaySocket?.isPaused).toBe(true);
+      expect(stream.writableLength).toBe(handshake.length);
+
+      const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+      const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+      harness.ws.send(Buffer.concat([keyEvent, framebufferRequest]));
+      blocked = false;
+      releaseWrite?.();
+      releaseWrite = undefined;
+      const expected = Buffer.concat([
+        handshake,
+        ...(control ? [keyEvent] : []),
+        framebufferRequest,
+      ]);
+      await expect.poll(() => Buffer.concat(received)).toEqual(expected);
+      await expect.poll(() => gatewaySocket?.isPaused).toBe(false);
+
+      blocked = true;
+      harness.ws.send(framebufferRequest);
+      await expect.poll(() => releaseWrite).toBeDefined();
+      expect(gatewaySocket?.isPaused).toBe(true);
+      const closed = new Promise<number>((resolve) => {
+        harness.ws.once("close", resolve);
+      });
+      harness.closeObserver(1012, "desktop tunnel closed");
+      await expect(closed).resolves.toBe(1012);
+      expect(stream.destroyed).toBe(true);
+      expect(stream.listenerCount("drain")).toBe(0);
+      expect(harness.release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {
     let bufferedAmount = 5 * 1024 * 1024;

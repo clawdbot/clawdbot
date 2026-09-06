@@ -123,15 +123,40 @@ def group_alive(pgid, deadline):
         return False
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
-    # Zombies are terminated, not writers. A failed/ambiguous inspection
-    # never authorizes checkout reuse, including after a denied signal probe.
-    result = subprocess.run(
-        ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, text=True, check=True,
-        timeout=max(0.001, deadline - time.monotonic()),
-    )
-    return any(int(group) == pgid and not state.startswith("Z")
-               for group, state in (line.split() for line in result.stdout.splitlines()))
+    # Darwin -g selects a group; procps selects its session (a superset because
+    # run_git starts a new session). Pin Darwin's standard, not legacy, -g syntax.
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "COMMAND_MODE": "unix2003"},
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
+    except subprocess.TimeoutExpired as error:
+        print((error.stderr or b"").decode(errors="replace"), end="", file=sys.stderr)
+        raise
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    states = []
+    if result.returncode != 1 or result.stdout or result.stderr:
+        result.check_returncode()
+        # Validate the complete census before ignoring zombies; Darwin ps can
+        # report sysctl errors on stderr with exit 0. Neither permits reuse.
+        if result.stderr or not re.fullmatch(
+            r"(?:[ \t]*[1-9][0-9]*[ \t]+[RSDTtXZxKWPIU?][<+NLlsEVWX]*[ \t]*\n)+", result.stdout
+        ):
+            raise RuntimeError("Invalid process group census")
+        states = [state for group, state in (line.split() for line in result.stdout.splitlines())
+                  if int(group) == pgid]
+    if states:
+        return any(not state.startswith("Z") for state in states)
+    # Empty selection (exit 1), or a session with only other groups, can race
+    # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    raise RuntimeError("Process group census missed a present group")
 
 
 def drain(child, job):
@@ -369,6 +394,14 @@ def checkout_harness(sha):
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
+    # This owner creates the harness, not candidate source. Keep strict source-status
+    # checks useful without hiding tracked edits or similarly named nested paths.
+    exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "a+b") as output:
+        output.seek(0)
+        if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+            output.write(b"\n/.ci-harness/\n")
     os.makedirs(harness, exist_ok=True)
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
@@ -551,16 +584,21 @@ def terminal_diagnostic(error, owner_code):
 
 
 if __name__ == "__main__":
+    exit_code, terminal_error = 0, None
     try:
         main()
     except FetchTimeout:
-        raise SystemExit(124)
+        exit_code = 124
     except GitFailure as error:
-        raise SystemExit(error.code)
+        exit_code = error.code
     except Exception as error:
+        exit_code, terminal_error = 125, error
+    # Leave the handler before diagnostics or exit can raise: older Python's
+    # implicit exception chaining can loop on an already-cyclic context.
+    if terminal_error is not None:
         name, diagnostic = "unknown", "unavailable"
         try:
-            records = terminal_diagnostic(error, sys._getframe().f_code)
+            records = terminal_diagnostic(terminal_error, sys._getframe().f_code)
             diagnostic = json.dumps(records, separators=(",", ":"))
             name = records[0]["type"]
         except BaseException:
@@ -570,4 +608,4 @@ if __name__ == "__main__":
             print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
         except BaseException:
             pass
-        raise SystemExit(125)
+    raise SystemExit(exit_code)

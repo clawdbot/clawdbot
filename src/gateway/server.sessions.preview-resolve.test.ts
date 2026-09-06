@@ -1,20 +1,135 @@
 /**
  * Gateway session preview resolve tests.
  */
-import { expect, test, vi } from "vitest";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
+import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { rpcReq, writeSessionStore } from "./test-helpers.js";
+import type { SessionsListResult } from "./session-utils.types.js";
+import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
+  getGatewayConfigModule,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
+
+test("lists and previews the selected aggregate global owner over WebSocket", async () => {
+  const config = await getGatewayConfigModule();
+  const runtime = config.getRuntimeConfigSnapshot();
+  const source = config.getRuntimeConfigSourceSnapshot();
+  const previous = {
+    agentsConfig: testState.agentsConfig,
+    sessionConfig: testState.sessionConfig,
+    sessionStorePath: testState.sessionStorePath,
+  };
+  const configPaths = new Set([config.CONFIG_PATH]);
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const files = new Map<string, Buffer | undefined>();
+  for (const configPath of configPaths) {
+    try {
+      files.set(configPath, await fs.readFile(configPath));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      files.set(configPath, undefined);
+    }
+  }
+  onTestFinished(async () => {
+    Object.assign(testState, previous);
+    // The connected fixture publishes both config paths as well as its runtime snapshot.
+    for (const [configPath, contents] of files) {
+      if (contents === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, contents);
+      }
+    }
+    if (runtime) {
+      config.setRuntimeConfigSnapshot(runtime, source ?? undefined);
+    } else {
+      config.clearRuntimeConfigSnapshot();
+    }
+  });
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  testState.agentsConfig = {
+    entries: {
+      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      work: { model: { primary: "openai/gpt-5.5" } },
+    },
+  };
+  const sessionId = "aggregate-work-global";
+  await writeSessionStore({
+    agentId: "work",
+    storePath: workStorePath,
+    entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
+  });
+  await seedSessionTranscript({
+    agentId: "work",
+    sessionId,
+    sessionKey: "global",
+    storePath: workStorePath,
+    messages: [{ role: "user", content: "Work global conversation" }],
+  });
+  const { ws } = await openClient();
+  try {
+    for (const search of [undefined, "gpt-5.5"]) {
+      const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+        includeGlobal: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        ...(search ? { search } : {}),
+      });
+      expect(listed.ok).toBe(true);
+      expect(listed.payload?.sessions).toMatchObject([
+        {
+          key: "global",
+          sessionId,
+          agentId: "work",
+          model: "gpt-5.5",
+          derivedTitle: "Work global conversation",
+          lastMessagePreview: "Work global conversation",
+        },
+      ]);
+    }
+    const preview = await rpcReq<ControlUiSessionPreview>(ws, "controlUi.sessionPreview", {
+      sessionKey: "agent:work:main",
+    });
+    expect(preview).toMatchObject({
+      ok: true,
+      payload: { status: "ok", agentId: "work", derivedTitle: "Work global conversation" },
+    });
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      label: "Work global conversation",
+      includeGlobal: true,
+    });
+    expect(resolved).toMatchObject({
+      ok: true,
+      payload: { ok: true, key: "global", agentId: "work" },
+    });
+  } finally {
+    if (ws.readyState !== ws.CLOSED) {
+      const closed = once(ws, "close");
+      ws.close();
+      await closed;
+    }
+  }
+});
 
 async function seedPreviewTail(
   sessionId: string,
@@ -385,6 +500,15 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
     { client },
   );
   expect(exactKey).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+
+  for (const key of [hiddenOnlyKey, "agent:main:hidden-only"]) {
+    const reference = await directSessionReq(
+      "sessions.resolve",
+      { reference: { key, slug: "hidden-only" }, agentId: "main", allowMissing: true },
+      { client },
+    );
+    expect(reference).toMatchObject({ ok: true, payload: { ok: false } });
+  }
 
   const ownerDraft = await directSessionReq<{ ok: true; key: string }>(
     "sessions.resolve",

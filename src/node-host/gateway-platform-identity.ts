@@ -1,4 +1,5 @@
 import { resolveMachineModelIdentifier } from "../infra/machine-model.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 
 export function resolveNodeHostGatewayPlatformIdentity(
   platform: NodeJS.Platform,
@@ -9,14 +10,6 @@ export function resolveNodeHostGatewayPlatformIdentity(
   modelIdentifier?: string;
 } {
   const modelIdentifier = resolveModel(platform);
-  switch (platform) {
-    case "darwin":
-      return { platform: "macos", deviceFamily: "Mac", modelIdentifier };
-    case "win32":
-      return { platform: "windows", deviceFamily: "Windows", modelIdentifier };
-    case "linux":
-      return { platform: "linux", deviceFamily: "Linux", modelIdentifier };
-    default:
-      return { platform: "unknown" };
-  }
+  const identity = resolveGatewayClientPlatformIdentity(platform);
+  return identity.deviceFamily ? { ...identity, modelIdentifier } : identity;
 }

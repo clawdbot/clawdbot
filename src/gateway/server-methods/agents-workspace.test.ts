@@ -110,17 +110,35 @@ describe("agents.workspace RPC handlers", () => {
     expect(Number.isInteger(file.updatedAtMs)).toBe(true);
   });
 
-  it("lists subdirectories with a parent path", async () => {
+  it.each(["src", "..notes"])("round-trips listed subdirectory %s", async (directory) => {
+    writeWorkspaceFile(workspaceRoot, `${directory}/index.ts`, "export const ok = true;\n");
+    writeWorkspaceFile(workspaceRoot, `${directory}/util.ts`, "export const util = 1;\n");
+    const root = expectOkPayload(
+      await invokeWorkspaceHandler("agents.workspace.list", { agentId: "main" }),
+    );
+    const selected = root.entries.find(
+      (entry: Record<string, unknown>) => entry.name === directory,
+    );
     const payload = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", { agentId: "main", path: "src" }),
+      await invokeWorkspaceHandler("agents.workspace.list", {
+        agentId: "main",
+        path: selected.path,
+      }),
     );
 
-    expect(payload.path).toBe("src");
+    expect(payload.path).toBe(directory);
     expect(payload.parentPath).toBe("");
     expect(payload.entries.map((entry: Record<string, unknown>) => entry.path)).toEqual([
-      "src/index.ts",
-      "src/util.ts",
+      `${directory}/index.ts`,
+      `${directory}/util.ts`,
     ]);
+    const preview = expectOkPayload(
+      await invokeWorkspaceHandler("agents.workspace.get", {
+        agentId: "main",
+        path: payload.entries[0].path,
+      }),
+    );
+    expect(preview.file.content).toBe("export const ok = true;\n");
   });
 
   it("paginates large directories deterministically", async () => {

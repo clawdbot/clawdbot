@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file fetch tool behavior.
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -65,6 +64,7 @@ export function createFileFetchTool(): AnyAgentTool {
         mimeType,
         FILE_TRANSFER_SUBDIR,
         FILE_FETCH_HARD_MAX_BYTES,
+        canonicalPath,
       );
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);

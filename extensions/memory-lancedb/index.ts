@@ -317,19 +317,19 @@ export default definePluginEntry({
             }
 
             const text = results
-              .map(({ result, text: memoryText }, i) => {
-                const visibleText = formatRecalledMemoryForModel(memoryText, recallMaxChars);
-                return `${i + 1}. [${result.entry.category}] ${visibleText} (${(result.score * 100).toFixed(0)}%)`;
+              .map(({ entry, score }, i) => {
+                const visibleText = formatRecalledMemoryForModel(entry.text, recallMaxChars);
+                return `${i + 1}. [${entry.category}] ${visibleText} (${(score * 100).toFixed(0)}%)`;
               })
               .join("\n");
 
             // Strip vector data for serialization (typed arrays can't be cloned)
-            const sanitizedResults = results.map(({ result, text: memoryText }) => ({
-              id: result.entry.id,
-              text: memoryText,
-              category: result.entry.category,
-              importance: result.entry.importance,
-              score: result.score,
+            const sanitizedResults = results.map(({ entry, score }) => ({
+              id: entry.id,
+              text: entry.text,
+              category: entry.category,
+              importance: entry.importance,
+              score,
             }));
 
             return textResult(

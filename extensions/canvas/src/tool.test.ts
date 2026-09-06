@@ -149,6 +149,24 @@ describe("Canvas presenter tool", () => {
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("accepts a versioned macOS platform reported by a connected node", async () => {
+    mocks.listNodes.mockResolvedValue([
+      {
+        ...eligibleMac,
+        platform: "macOS 26.6.2",
+      },
+    ]);
+
+    const result = await createCanvasTool().execute("tool-call", { action: "present" });
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 40_000 },
+      expect.objectContaining({ nodeId: "mac-1", command: "canvas.present" }),
+    );
+    expect(result.details).toMatchObject({ ok: true, node: "mac-1" });
+  });
+
   it("rejects malformed presenter arguments before invoking a node", async () => {
     const tool = createCanvasTool();
 

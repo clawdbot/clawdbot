@@ -59,9 +59,6 @@ export async function scanStatus(
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
         includeLiveChannelStatus: isFullScan,
         includeChannelSetupRuntimeFallback: isFullScan,
-        // Fast status avoids local secret resolution and relies on config/runtime hints.
-        channelCredentialResolutionSkipped: !isFullScan,
-        includeChannelSecretTargets: isFullScan ? undefined : false,
         fetchGitUpdate: isFullScan,
         includeRegistryUpdate: isFullScan,
         includeAdvertisedControlUiLinks: true,

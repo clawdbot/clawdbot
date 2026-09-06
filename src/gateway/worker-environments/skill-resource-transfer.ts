@@ -227,7 +227,13 @@ export async function transferSkillResources(params: {
       const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
       if (selected) {
-        selected.locationNote = `Read instructions at the location above. For remote execution, this exact bundle's scripts and resources are at ${remoteBase}; resolve relative execution paths against that directory.`;
+        selected.filePath = `${remoteBase}/SKILL.md`;
+        selected.baseDir = remoteBase;
+        // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
+        selected.readContent = bundle.files
+          .find((file) => file.path === "SKILL.md")!
+          .bytes.toString("utf8");
+        delete selected.locationNote;
       }
     }
     check();

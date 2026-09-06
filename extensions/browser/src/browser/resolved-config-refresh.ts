@@ -112,13 +112,12 @@ function applyResolvedConfig(
   }
   current.resolved = {
     ...freshResolved,
-    // Admission, security, relay authentication and cleanup belong to the running
+    // Admission, security and relay authentication belong to the running
     // service; a request must not adopt changes that are waiting for its restart.
     enabled: previousResolved.enabled,
     evaluateEnabled: previousResolved.evaluateEnabled,
     ssrfPolicy: previousResolved.ssrfPolicy,
     extensionRelay: previousResolved.extensionRelay,
-    tabCleanup: previousResolved.tabCleanup,
     // Only an exact live relay owns its process-local CDP credential; stale
     // config snapshots must never resurrect closed or replaced credentials.
     extensionRelayInternalTokens,

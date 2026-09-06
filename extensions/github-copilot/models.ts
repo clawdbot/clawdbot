@@ -1,8 +1,8 @@
-// Github Copilot plugin module implements models behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -323,8 +323,7 @@ type FetchCopilotModelCatalogParams = {
  * without manifest churn.
  *
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
- * On any HTTP/parse failure the caller should fall back to the static manifest
- * catalog; this function throws so the caller decides the recovery shape.
+ * Failures propagate so the catalog owner can publish a truthful outcome.
  */
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
@@ -353,9 +352,9 @@ export async function fetchCopilotModelCatalog(
       signal: params.signal ?? controller?.signal,
     });
     if (!res.ok) {
-      // Static catalog fallback never consumes this body, so release the transport before cleanup.
+      // Failed discovery never consumes this body, so release the transport before cleanup.
       await res.body?.cancel().catch(() => undefined);
-      throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
+      throw new LiveModelCatalogHttpError(PROVIDER_ID, res.status);
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
     const seen = new Set<string>();

@@ -471,21 +471,17 @@ describe("opencode-go provider plugin", () => {
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
+    const resolveProviderApiKey = vi.fn((providerId: string) =>
+      providerId === "opencode-go"
+        ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
+        : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+    );
 
     try {
       const result = await provider.catalog?.run({
         config: {},
         env: {},
-        resolveProviderApiKey: (providerId: string) =>
-          providerId === "opencode-go"
-            ? {
-                apiKey: NON_ENV_SECRETREF_MARKER,
-                discoveryApiKey: undefined,
-              }
-            : {
-                apiKey: "shared-opencode-key",
-                discoveryApiKey: "shared-opencode-key",
-              },
+        resolveProviderApiKey,
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never);
 
@@ -494,13 +490,36 @@ describe("opencode-go provider plugin", () => {
       }
       expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
       expect(result.provider.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+      expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }
   });
 
-  it("caches both catalog requests and falls back to trusted seeds on failure", async () => {
+  it("uses Zen credentials for the Go catalog only when Go has no credentials", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveProviderApiKey = vi.fn((providerId?: string) => ({
+      apiKey: providerId === "opencode" ? NON_ENV_SECRETREF_MARKER : undefined,
+    }));
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey,
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      },
+    });
+    expect(resolveProviderApiKey.mock.calls).toEqual([["opencode-go"], ["opencode"]]);
+  });
+
+  it("caches both catalog requests without concealing later acquisition failure", async () => {
     const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
     const fetchGuard = createCatalogFetchGuard({
       upstreamModels: Object.fromEntries(liveIds.map((id) => [id, upstreamModel(id)])),
@@ -525,15 +544,13 @@ describe("opencode-go provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValue(new Error("network unavailable"));
-    const fallback = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
-    expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-      ACTIVE_MODEL_IDS.toSorted(),
-    );
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
   });
 
   it.each([
@@ -541,7 +558,7 @@ describe("opencode-go provider plugin", () => {
     ["retired seed", "filtered"],
     ["activated preview", "failed"],
   ] as const)(
-    "uses refreshed %s lifecycle on the first fallback after %s model advertising",
+    "keeps refreshed %s metadata separate from %s model advertising",
     async (lifecycle, advertising) => {
       const retired = lifecycle === "retired seed";
       const modelId = retired ? "deepseek-v4-pro" : "hy3-preview";
@@ -562,19 +579,17 @@ describe("opencode-go provider plugin", () => {
         expect(buildStaticOpencodeGoProviderConfig().models.map((model) => model.id)).toEqual(
           ACTIVE_MODEL_IDS,
         );
-        const fallback = await buildOpencodeGoLiveProviderConfig({
+        const discovery = buildOpencodeGoLiveProviderConfig({
           apiKey: "runtime-key",
           discoveryApiKey: "discovery-key",
           fetchGuard,
         });
 
-        expect(fallback.apiKey).toBe("runtime-key");
-        expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-          (retired
-            ? ACTIVE_MODEL_IDS.filter((id) => id !== modelId)
-            : [...ACTIVE_MODEL_IDS, modelId]
-          ).toSorted(),
-        );
+        if (advertising === "failed") {
+          await expect(discovery).rejects.toThrow("model advertising unavailable");
+        } else {
+          await expect(discovery).resolves.toMatchObject({ models: [] });
+        }
         expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
           id: modelId,
         });

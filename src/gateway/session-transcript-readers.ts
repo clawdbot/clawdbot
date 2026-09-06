@@ -17,6 +17,7 @@ import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventLookup,
   readSessionTranscriptHistoryEventPage,
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
@@ -43,6 +44,8 @@ export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions
 export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
+  olderOffset?: number;
+  omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   displaySource?: string;
@@ -279,6 +282,24 @@ export async function readSessionMessageByIdAsync(
   return { found: false, oversized: false };
 }
 
+/** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+export async function readSessionMessagesMatchingIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+): Promise<unknown[]> {
+  const target = resolveTranscriptReadTarget(scope);
+  const lookup = readSessionTranscriptHistoryEventLookup(toTranscriptReadScope(target), messageId);
+  const messages = lookup.hasDisplayMessages
+    ? projectSqliteHistoryEvents(lookup.events)
+    : await archivedTranscriptReader(target).readMessageCandidatesById(messageId, {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      });
+  return messages.filter(
+    (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
+  );
+}
+
 /** Visits raw message payloads within the SQLite read snapshot. */
 export async function visitSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
@@ -350,7 +371,12 @@ export async function readRecentSessionMessagesWithStatsAsync(
 /** Reads one offset page with total-count metadata through the reader seam. */
 export async function readSessionMessagesPageWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  opts: {
+    offset: number;
+    maxMessages: number;
+    maxBytes?: number;
+    allowResetArchiveFallback?: boolean;
+  },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   const page = readSessionTranscriptHistoryEventPage(toTranscriptReadScope(target), opts);
@@ -361,6 +387,8 @@ export async function readSessionMessagesPageWithStatsAsync(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
+    ...(page.olderOffset !== undefined ? { olderOffset: page.olderOffset } : {}),
+    ...(page.omittedOversized ? { omittedOversized: true } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     displaySource: page.displaySource,

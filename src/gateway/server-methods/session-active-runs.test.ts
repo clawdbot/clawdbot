@@ -25,7 +25,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import {
-  collectTrackedActiveSessionRuns,
+  createVisibleActiveSessionRunProjector,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
   resolveVisibleActiveSessionRunState,
@@ -171,8 +171,7 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
     sessionId: "session-projected",
   });
   try {
-    const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
-    const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+    const project = createVisibleActiveSessionRunProjector(context);
     const cases = [
       { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
       { requestedKey: "agent:main:projected", canonicalKey: "agent:main:projected" },
@@ -190,14 +189,9 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
       { requestedKey: "agent:main:missing", canonicalKey: "agent:main:missing" },
     ];
     for (const activeCase of cases) {
-      expect(
-        resolveVisibleActiveSessionRunState({
-          context,
-          ...activeCase,
-          trackedActiveRuns,
-          projectedAgentRunIndex,
-        }),
-      ).toEqual(resolveVisibleActiveSessionRunState({ context, ...activeCase }));
+      expect(project(activeCase)).toEqual(
+        resolveVisibleActiveSessionRunState({ context, ...activeCase }),
+      );
     }
   } finally {
     clearAgentRunContext("projected-key");

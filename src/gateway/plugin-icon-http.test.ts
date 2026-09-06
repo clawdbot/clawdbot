@@ -464,24 +464,39 @@ describe("Control UI plugin and catalog icon routes", () => {
 
   it("closes the descriptor when rejecting an empty package icon", async () => {
     writeFileSync(localIconPath, "");
-    const opened = vi.spyOn(boundaryFileRead, "openRootFile");
-    const closed = vi.spyOn(fs, "closeSync");
+    let tracked: { fd: number; closed: boolean } | undefined;
+    const openRootFile = boundaryFileRead.openRootFile;
+    const opened = vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+      const receipt = await openRootFile(params);
+      if (receipt.ok) {
+        // Earlier closes of this fd number belong to a different open.
+        tracked = { fd: receipt.fd, closed: false };
+      }
+      return receipt;
+    });
+    const closeSync = fs.closeSync;
+    const closed = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closeSync(fd);
+      if (tracked?.fd === fd) {
+        tracked.closed = true;
+      }
+    });
     try {
-      // Sync the named builtin export to observe release itself; another worker
-      // thread may reuse the retired descriptor before the request resolves.
+      // The owner imports Node's named binding; observe release before the fd number can be reused.
       syncBuiltinESMExports();
       const response = await request("/__openclaw__/plugin-icon/empty-package");
       expect(response.status).toBe(404);
-      const receipt = await opened.mock.results[0]?.value;
-      expect(receipt?.ok).toBe(true);
-      if (!receipt?.ok) {
-        throw new Error("expected the real empty icon file to open");
-      }
-      expect(closed).toHaveBeenCalledWith(receipt.fd);
+      expect(tracked?.closed).toBe(true);
     } finally {
-      closed.mockRestore();
-      opened.mockRestore();
-      syncBuiltinESMExports();
+      try {
+        if (tracked && !tracked.closed) {
+          closeSync(tracked.fd);
+        }
+      } finally {
+        opened.mockRestore();
+        closed.mockRestore();
+        syncBuiltinESMExports();
+      }
     }
   });
 

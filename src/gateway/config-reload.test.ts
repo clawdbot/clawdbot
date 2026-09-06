@@ -36,6 +36,7 @@ import {
 } from "../plugins/current-plugin-metadata-state.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -181,8 +182,9 @@ describe("diffConfigPaths", () => {
     { prev: { mcp: { apps: { enabled: true } } }, next: {} },
   ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
     const changedPaths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
-    expect(changedPaths).toEqual(["mcp.apps"]);
-    expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(changedPaths);
   });
 
   it.each(["speech", "realtime"] as const)("reloads only changed Talk %s owners", (surface) => {
@@ -287,6 +289,50 @@ describe("diffConfigPaths", () => {
 
 describe("buildGatewayReloadPlan", () => {
   const emptyRegistry = createTestRegistry([]);
+  it("selects only attached service owners for their declared config and preserves unknown restart policy", () => {
+    const serviceRegistry = createTestRegistry([]);
+    serviceRegistry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: {
+        id: "exporter",
+        reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
+        start() {},
+      },
+    });
+    setActivePluginRegistry(serviceRegistry);
+    const plan = buildGatewayReloadPlan(["diagnostics.otel.endpoint", "diagnostics.enabled"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartServices).toEqual(new Set(["exporter"]));
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.restartChannels.size).toBe(0);
+    expect(resolveConfigReloadMetadata("diagnostics.otel.endpoint")).toEqual({ kind: "hot" });
+    expect(buildGatewayReloadPlan(["diagnostics.futurePolicy"]).restartGateway).toBe(true);
+    setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["diagnostics.otel.endpoint"]).restartGateway).toBe(true);
+  });
+  it("selects every service sharing a changed policy, including broader owners", () => {
+    const registry = createTestRegistry([]);
+    for (const [id, prefix] of [
+      ["parent", "shared.policy"],
+      ["first", "shared.policy.child"],
+      ["second", "shared.policy.child"],
+      ["sibling", "shared.other"],
+    ] as const) {
+      registry.services.push({
+        pluginId: id,
+        source: "test",
+        origin: "workspace",
+        service: { id, reload: { configPrefixes: [prefix] }, start() {} },
+      });
+    }
+    setActivePluginRegistry(registry);
+    expect(buildGatewayReloadPlan(["shared.policy.child.enabled"]).restartServices).toEqual(
+      new Set(["parent", "first", "second"]),
+    );
+    setActivePluginRegistry(emptyRegistry);
+  });
   const telegramPlugin: ChannelPlugin = {
     id: "telegram",
     meta: {
@@ -343,6 +389,114 @@ describe("buildGatewayReloadPlan", () => {
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
     { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
+  it.each([
+    { prefix: "gateway", path: "gateway.port", kind: "restart", services: [] },
+    { prefix: "discovery", path: "discovery.wideArea.enabled", kind: "restart", services: [] },
+    { prefix: "logging", path: "logging.level", kind: "none", services: [] },
+    { prefix: "mcp", path: "mcp.apps.enabled", kind: "restart", services: [] },
+    {
+      prefix: "plugins",
+      path: "plugins.entries.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
+    },
+    { prefix: "channels.whatsapp", path: "channels.whatsapp.enabled", kind: "none", services: [] },
+    {
+      prefix: "channels.whatsapp.exporter",
+      path: "channels.whatsapp.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
+    },
+  ] as const)("preserves explicit policy precedence for service $prefix", (entry) => {
+    const { prefix, path: changedPath, kind, services } = entry;
+    const serviceRegistry = createTestRegistry([
+      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    ]);
+    serviceRegistry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+    });
+    setActivePluginRegistry(serviceRegistry);
+    expect(resolveConfigReloadMetadata(changedPath)).toEqual({ kind });
+    const plan = buildGatewayReloadPlan([changedPath]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartServices).toEqual(new Set(services));
+    if (prefix === "plugins") {
+      expect(plan.reloadPlugins).toBe(true);
+      expect(plan.disposeMcpRuntimes).toBe(true);
+    }
+    setActivePluginRegistry(emptyRegistry);
+  });
+  it.each(
+    ["messages", "messages.inbound", "messages.inbound.debounceMs"].flatMap((prefix) =>
+      [false, true].flatMap((allChannelsLive) =>
+        [false, true].map((globalNoop) => ({ prefix, allChannelsLive, globalNoop })),
+      ),
+    ),
+  )(
+    "composes service $prefix with shared policy: all live=$allChannelsLive global noop=$globalNoop",
+    ({ prefix, allChannelsLive, globalNoop }) => {
+      const serviceRegistry = createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: { ...telegramPlugin, reload: { noopPrefixes: ["messages.inbound"] } },
+          source: "test",
+        },
+        {
+          pluginId: "whatsapp",
+          plugin: allChannelsLive
+            ? { ...whatsappPlugin, reload: { noopPrefixes: ["messages.inbound"] } }
+            : whatsappPlugin,
+          source: "test",
+        },
+      ]);
+      serviceRegistry.services.push({
+        pluginId: "exporter",
+        source: "test",
+        origin: "workspace",
+        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+      });
+      if (globalNoop) {
+        serviceRegistry.reloads.push({
+          pluginId: "policy-owner",
+          pluginName: "Policy owner",
+          source: "test",
+          registration: { noopPrefixes: ["messages.inbound.debounceMs"] },
+        });
+      }
+      setActivePluginRegistry(serviceRegistry);
+      const plan = buildGatewayReloadPlan(["messages.inbound.debounceMs"]);
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartServices).toEqual(new Set(globalNoop ? [] : ["exporter"]));
+      expect(plan.restartChannels).toEqual(
+        new Set(allChannelsLive || globalNoop ? [] : ["whatsapp"]),
+      );
+      setActivePluginRegistry(emptyRegistry);
+    },
+  );
+  it.each(["channels.mattermost", "channels.mattermost.accounts.work"])(
+    "preserves channel account ownership when a service reloads %s",
+    (prefix) => {
+      const serviceRegistry = createTestRegistry([
+        { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
+      ]);
+      serviceRegistry.services.push({
+        pluginId: "exporter",
+        source: "test",
+        origin: "workspace",
+        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+      });
+      setActivePluginRegistry(serviceRegistry);
+      const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.work.token"]);
+      expect(plan.restartServices).toEqual(new Set(["exporter"]));
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["work"])]]));
+      expect(plan.restartChannels.size).toBe(0);
+      expect(plan.restartGateway).toBe(false);
+      setActivePluginRegistry(emptyRegistry);
+    },
+  );
   registry.reloads = [
     {
       pluginId: "browser",
@@ -414,19 +568,22 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.port",
     "gateway.bind",
     "gateway.tls.enabled",
-    "gateway.controlUi.enabled",
     "gateway.controlUi.basePath",
     "gateway.controlUi.root",
+    "gateway.controlUi.experimental.customPlugins",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
     "browser.evaluateEnabled",
     "browser.ssrfPolicy.allowedHostnames",
-    "browser.extensionRelay.enabled",
-    "browser.tabCleanup.enabled",
+    "browser.extensionRelay.allowLegacyAuth",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "discovery.wideArea.domain",
+    "diagnostics.otel.endpoint",
+    "acp.backend",
+    "memory.search.enabled",
+    "security.unknownPolicy",
     "secrets.egressProxy.enabled",
     "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
@@ -457,10 +614,10 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.tools.allow",
     "gateway.tools.deny",
     "gateway.cliAgents.enabled",
+    "gateway.controlUi.enabled",
     "gateway.controlUi.environment.label",
     "gateway.controlUi.communityInvite",
     "gateway.controlUi.github.token",
-    "gateway.controlUi.toolTitles",
     "gateway.controlUi.sessionObserver",
     "gateway.controlUi.embedSandbox",
     "gateway.controlUi.allowExternalEmbedUrls",
@@ -474,7 +631,26 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
-  ])("hot-applies Gateway request policy without restarting subsystems: %s", (path) => {
+    "mcp.apps.sandboxOrigin",
+    "approvals.exec.enabled",
+    "approvals.plugin.targets",
+    "auth.order.openai",
+    "auth.profiles.primary.mode",
+    "broadcast.strategy",
+    "memory.citations",
+    "worktreeRoot",
+    "cloudWorkers.projectProfiles.project",
+    "security.audit.suppressions",
+    "security.installPolicy",
+    "diagnostics.cacheTrace.enabled",
+    "acp.runtime.installCommand",
+    "attachments.ttlHours",
+    "update.checkOnStart",
+    "update.channel",
+    "update.auto.enabled",
+    "telemetry.enabled",
+    "telemetry.consentedAt",
+  ])("hot-applies operation policy without restarting subsystems: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
     expect(plan).toMatchObject({
@@ -506,6 +682,9 @@ describe("buildGatewayReloadPlan", () => {
           auth: { rateLimit: { maxAttempts: 5 } },
         },
         discovery: { mdns: { mode: "off" } },
+        mcp: { apps: { sandboxOrigin: "https://sandbox.example" } },
+        auth: { order: { openai: ["primary"] } },
+        diagnostics: { cacheTrace: { enabled: true } },
       },
       restartReasons: [],
     },
@@ -521,8 +700,9 @@ describe("buildGatewayReloadPlan", () => {
           controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
           nodes: { pairing: { sshVerify: false } },
         },
+        mcp: { apps: { sandboxOrigin: "https://sandbox.example", sandboxPort: 18792 } },
       },
-      restartReasons: ["gateway.port", "gateway.controlUi.basePath"],
+      restartReasons: ["gateway.port", "gateway.controlUi.basePath", "mcp.apps.sandboxPort"],
     },
   ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
     "preserves $name when adding or removing Gateway config",
@@ -548,11 +728,31 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     {
+      path: "agents.defaults.workspace",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
+    },
+    {
+      path: "agents.entries.qa.workspace",
+      expected: { reloadInternalHooks: true, refreshHooksPolicy: true, restartHeartbeat: true },
+    },
+    {
       path: "hooks.gmail.account",
       expected: { restartGmailWatcher: true, reloadHooks: true },
     },
     {
+      path: "hooks.internal.enabled",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
+    },
+    {
+      path: "hooks.internal.entries.session-memory.enabled",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
+    },
+    {
       path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "gateway.publicOrigin",
       expected: { disposeMcpRuntimes: true },
     },
     {
@@ -603,6 +803,11 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       reconcileSystemJobs: true,
     });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it("keeps an internal hook reconciliation action out of the no-op commit path", () => {
+    const plan = { ...buildGatewayReloadPlan([]), reloadInternalHooks: true };
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
@@ -718,7 +923,72 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each<[OpenClawConfig, OpenClawConfig]>([
+    [{}, { messages: { ackReactionScope: "all" } }],
+    [{ messages: { ackReactionScope: "all" } }, {}],
+    [{ messages: { ackReactionScope: "off" } }, { messages: { ackReactionScope: "all" } }],
+  ])("refreshes undeclared owners when acknowledgement scope changes: %j → %j", (prev, next) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        ...[telegramPlugin, whatsappPlugin].map((plugin) => ({
+          pluginId: plugin.id,
+          plugin: {
+            ...plugin,
+            reload: { ...plugin.reload, noopPrefixes: ["messages.ackReactionScope"] },
+          },
+          source: "test",
+        })),
+        { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
+      ]),
+    );
+    const paths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
+    const plan = buildGatewayReloadPlan(paths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+  });
+
+  it.each(["messages.inbound", "messages.ackReactionScope"])(
+    "keeps channels connected only when every loaded owner opts out of %s",
+    (prefix) => {
+      setActivePluginRegistry(
+        createTestRegistry(
+          [telegramPlugin, whatsappPlugin].map((plugin) => ({
+            pluginId: plugin.id,
+            plugin: { ...plugin, reload: { ...plugin.reload, noopPrefixes: [prefix] } },
+            source: "test",
+          })),
+        ),
+      );
+      expect(isNoopGatewayReloadPlan(buildGatewayReloadPlan([prefix]))).toBe(true);
+    },
+  );
+
   const sharedChannelSettings = [
+    {
+      path: "tts",
+      before: { tts: { auto: "off" } },
+      after: { tts: { auto: "always" } },
+      empty: {},
+    },
+    {
+      path: "surfaces",
+      before: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
+      after: { surfaces: { telegram: { silentReply: { group: "disallow" } } } },
+      empty: {},
+    },
+    {
+      path: "acp.stream",
+      before: { acp: { stream: { deliveryMode: "final_only" } } },
+      after: { acp: { stream: { deliveryMode: "live" } } },
+      empty: { acp: {} },
+    },
+    {
+      path: "diagnostics.flags",
+      before: { diagnostics: { flags: [] } },
+      after: { diagnostics: { flags: ["timeline"] } },
+      empty: { diagnostics: {} },
+    },
     {
       path: "agents.defaults.mediaMaxMb",
       before: { agents: { defaults: { mediaMaxMb: 4 } } },
@@ -736,6 +1006,28 @@ describe("buildGatewayReloadPlan", () => {
       before: { channels: { modelByChannel: { telegram: { "123": "openai/before" } } } },
       after: { channels: { modelByChannel: { telegram: { "123": "openai/after" } } } },
       empty: { channels: {} },
+    },
+    {
+      path: "messages.inbound",
+      before: { messages: { inbound: { debounceMs: 100 } } },
+      after: { messages: { inbound: { debounceMs: 500 } } },
+      empty: { messages: {} },
+    },
+    {
+      path: "commands",
+      before: { commands: { native: true } },
+      after: { commands: { native: false } },
+      empty: {},
+    },
+    {
+      path: "accessGroups",
+      before: {
+        accessGroups: { reviewers: { type: "message.senders", members: { telegram: ["100"] } } },
+      },
+      after: {
+        accessGroups: { reviewers: { type: "message.senders", members: { telegram: ["200"] } } },
+      },
+      empty: {},
     },
   ] satisfies Array<{
     path: string;
@@ -778,6 +1070,8 @@ describe("buildGatewayReloadPlan", () => {
       ...sharedChannelSettings.map(({ path }) => path),
       "channels.defaults.groupPolicy",
       "channels.modelByChannel.telegram",
+      "session.scope",
+      "session.store",
     ].flatMap((path) => [
       { path, registration: { restartPrefixes: [path] }, kind: "restart" },
       { path, registration: { hotPrefixes: [path] }, kind: "hot" },
@@ -799,20 +1093,61 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each(
     sharedChannelSettings.flatMap(({ path }) => [
-      { path, reload: { configPrefixes: [path] }, kind: "hot", channels: ["telegram"] },
-      { path, reload: { configPrefixes: [], noopPrefixes: [path] }, kind: "none", channels: [] },
+      { path, reload: { configPrefixes: [path] }, channels: ["telegram", "whatsapp"] },
+      { path, reload: { configPrefixes: [], noopPrefixes: [path] }, channels: ["whatsapp"] },
     ]),
-  )("preserves explicit channel $kind policy for $path", ({ path, reload, kind, channels }) => {
+  )("preserves sibling reloads with channel policy for $path", ({ path, reload, channels }) => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
         { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
       ]),
     );
-    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
     const plan = buildGatewayReloadPlan([path]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(channels));
+  });
+
+  it("applies each channel's narrowest shared policy independently", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...telegramPlugin,
+            reload: {
+              configPrefixes: ["messages.inbound.byChannel.telegram"],
+              noopPrefixes: ["messages.inbound"],
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...whatsappPlugin,
+            reload: { configPrefixes: [], noopPrefixes: ["messages"] },
+          },
+          source: "test",
+        },
+        { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
+      ]),
+    );
+    expect(buildGatewayReloadPlan(["messages.inbound.debounceMs"]).restartChannels).toEqual(
+      new Set(["mattermost"]),
+    );
+    expect(buildGatewayReloadPlan(["messages.inbound.byChannel.telegram"]).restartChannels).toEqual(
+      new Set(["telegram", "mattermost"]),
+    );
+    const paths = diffGatewayReloadPaths(
+      {},
+      { messages: { inbound: { debounceMs: 20, byChannel: { telegram: 10 } } } },
+      listConfigReloadRefinementPrefixes(),
+    );
+    expect(buildGatewayReloadPlan(paths).restartChannels).toEqual(
+      new Set(["telegram", "mattermost"]),
+    );
   });
 
   const mattermostAccountConfig = {
@@ -4935,16 +5270,38 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("preserves intent when the direct in-process reload fails before its watcher echo", async () => {
+  it("retries a failed RPC write under independent watcher admission after its request settles", async () => {
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("direct-retry"));
-    const harness = createReloaderHarness(readSnapshot);
-    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
-
-    harness.emitWrite({
-      ...makeZeroDebounceHookWrite("direct-retry"),
-      afterWrite: { mode: "restart", reason: "retry direct intent" },
+    const harness = createReloaderHarness(readSnapshot, {
+      runTransaction: runWithGatewayIndependentRootWorkAdmission,
     });
-    await vi.runAllTimersAsync();
+    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
+    const request = tryBeginGatewayRootWorkAdmission();
+    if (!request) {
+      throw new Error("expected gateway request admission");
+    }
+    try {
+      await request.run(async () => {
+        const continuation = captureGatewayRootWorkAdmissionContinuationScope();
+        if (!continuation) {
+          throw new Error("expected originating gateway request continuation");
+        }
+        const application = createRuntimeConfigWriteApplication(continuation.run);
+        harness.emitWrite(
+          attachRuntimeConfigWriteApplication(
+            {
+              ...makeZeroDebounceHookWrite("direct-retry"),
+              afterWrite: { mode: "restart", reason: "retry direct intent" },
+            },
+            application,
+          ),
+        );
+        await vi.runAllTimersAsync();
+        await expect(application.result).resolves.toBe("failed");
+      });
+    } finally {
+      request.release();
+    }
 
     await flushWatcherChange(harness);
 

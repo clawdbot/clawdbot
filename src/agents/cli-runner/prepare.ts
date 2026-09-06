@@ -65,10 +65,8 @@ import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-c
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import {
-  loadAuthProfileStoreForRuntime,
-  resolveRuntimeAuthProfileAgentDir,
-} from "../auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
+import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
@@ -138,6 +136,7 @@ import {
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
@@ -1146,11 +1145,6 @@ export async function prepareCliRunContext(
           modelId,
         })
       : undefined;
-  // Callable authoring authority stays host-owned; only proposal metadata enters the cloned grant context.
-  const skillWorkshop =
-    mcpContextBase?.skillWorkshop || skillLibraryAuthoring
-      ? { ...mcpContextBase?.skillWorkshop, libraryAuthoring: skillLibraryAuthoring }
-      : undefined;
   const mcpToolAuthAgentDir = mcpContextBase
     ? resolveRuntimeAuthProfileAgentDir(agentDir)
     : undefined;
@@ -1177,8 +1171,8 @@ export async function prepareCliRunContext(
           await resolveProjectedTools({
             cfg: runConfig,
             signal: params.abortSignal,
-            ...mcpProjectionContext,
-            ...(skillWorkshop ? { skillWorkshop } : {}),
+            context: mcpProjectionContext,
+            ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
             ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
           })
@@ -1862,7 +1856,6 @@ export async function prepareCliRunContext(
             workspaceDir,
             cwd,
             config: params.config,
-            defaultThinkLevel: params.thinkLevel,
             extraSystemPrompt,
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
@@ -2218,7 +2211,9 @@ export async function prepareCliRunContext(
     };
   } catch (err) {
     try {
-      await cleanupPreparedResources?.();
+      await runCliCleanup(params, "cli-prepare-failure", async () => {
+        await cleanupPreparedResources?.();
+      });
     } catch (cleanupErr) {
       cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
     }

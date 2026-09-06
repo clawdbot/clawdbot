@@ -5,10 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
-import {
-  cleanupFailedAcpSpawn,
-  type AcpSpawnRuntimeCloseHandle,
-} from "../../../acp/control-plane/spawn.js";
+import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import {
   isAcpEnabledByPolicy,
   resolveAcpAgentPolicyError,
@@ -31,7 +28,7 @@ import {
   type ChannelAdmissionEvidence,
 } from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -52,23 +49,6 @@ import {
   withAcpCommandErrorBoundary,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
-async function cleanupFailedSpawn(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  shouldDeleteSession: boolean;
-  initializedRuntime?: AcpSpawnRuntimeCloseHandle;
-}) {
-  await cleanupFailedAcpSpawn({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    shouldDeleteSession: params.shouldDeleteSession,
-    deleteTranscript: false,
-    runtimeCloseHandle: params.initializedRuntime,
-  });
-}
-
 async function persistSpawnedSessionLabel(params: {
   commandParams: HandleCommandsParams;
   sessionKey: string;
@@ -172,7 +152,8 @@ export async function handleAcpSpawnAction(
 
   let initializedBackend;
   let initializedMeta: SessionAcpMeta | undefined;
-  let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let sessionEntry: SessionEntry;
+  let closeRuntimeOnFailure: () => Promise<void>;
   try {
     const initialized = await acpManager.initializeSession({
       cfg: params.cfg,
@@ -182,10 +163,8 @@ export async function handleAcpSpawnAction(
       mode: spawn.mode,
       cwd: runtimeCwd,
     });
-    initializedRuntime = {
-      runtime: initialized.runtime,
-      handle: initialized.handle,
-    };
+    sessionEntry = initialized.sessionEntry;
+    closeRuntimeOnFailure = initialized.closeRuntimeOnFailure;
     initializedBackend = initialized.handle.backend || initialized.meta.backend;
     initializedMeta = initialized.meta;
   } catch (err) {
@@ -214,12 +193,13 @@ export async function handleAcpSpawnAction(
       sessionMeta: initializedMeta,
     });
     if (!result.ok) {
-      await cleanupFailedSpawn({
+      await cleanupFailedAcpSpawn({
         cfg: params.cfg,
         sessionKey,
         agentId: spawn.agentId,
-        shouldDeleteSession: true,
-        initializedRuntime,
+        sessionEntry,
+        deleteTranscript: false,
+        closeRuntimeOnFailure,
       });
       return commandReply(`⚠️ ${result.error}`);
     }
@@ -234,12 +214,13 @@ export async function handleAcpSpawnAction(
       label: spawn.label,
     });
   } catch (err) {
-    await cleanupFailedSpawn({
+    await cleanupFailedAcpSpawn({
       cfg: params.cfg,
       sessionKey,
       agentId: spawn.agentId,
-      shouldDeleteSession: true,
-      initializedRuntime,
+      sessionEntry,
+      deleteTranscript: false,
+      closeRuntimeOnFailure,
     });
     const message = formatErrorMessage(err);
     return commandReply(`⚠️ ACP spawn failed: ${message}`);

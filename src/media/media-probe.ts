@@ -152,12 +152,11 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
 }
 
 function isMissingFdProtocolError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const stderr = (error as { stderr?: unknown }).stderr;
+  const stderr = readRecord(error)?.stderr;
   const message = typeof stderr === "string" ? stderr : error instanceof Error ? error.message : "";
-  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option fd not found)/is.test(
+  // ffprobe < 6.0 (no fd: protocol, e.g. 4.4 and 5.1) rejects `-fd` with
+  // "Failed to set value '0' for option 'fd': Option not found".
+  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option ['"]?fd\b.*not found)/is.test(
     message,
   );
 }
@@ -226,16 +225,16 @@ async function probeMediaFile(
   }
 }
 
-/** Probes a bounded local-file batch under one shared wall-clock budget. */
+/** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
   options: MediaProbeBatchOptions,
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
-  const deadlineMs = Date.now() + options.budgetMs;
+  const deadlineMs = performance.now() + options.budgetMs;
   const probeCount = Math.min(inputs.length, options.maxProbes);
   for (let offset = 0; offset < probeCount; offset += options.concurrency) {
-    const timeoutMs = deadlineMs - Date.now();
+    const timeoutMs = deadlineMs - performance.now();
     if (timeoutMs <= 0) {
       break;
     }

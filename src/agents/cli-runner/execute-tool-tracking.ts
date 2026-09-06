@@ -259,26 +259,24 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
     const confirmedTarget =
       params.target && extractMessagingToolSendResult(params.target, params.result);
-    const deliveredCurrentSourceReply =
-      isMessagingSend &&
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-        toolName: params.toolName,
-        args: params.args,
-        result: params.result,
-        isError: params.isError,
-        allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
-          send: confirmedTarget,
-          config: context.params.config,
-          currentProvider: context.params.messageChannel ?? context.params.messageProvider,
-          currentAccountId: context.params.agentAccountId,
-          currentChannelId: context.params.currentChannelId,
-          currentThreadId: context.params.currentThreadTs,
-          sessionKey: context.params.sessionKey,
-          deliveredPayload: params.result,
-        }),
-        deliveryConfirmed: true,
-      });
+    const deliveredCurrentSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+      toolName: params.toolName,
+      args: params.args,
+      result: params.result,
+      isError: params.isError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+        send: confirmedTarget,
+        config: context.params.config,
+        currentProvider: context.params.messageChannel ?? context.params.messageProvider,
+        currentAccountId: context.params.agentAccountId,
+        currentChannelId: context.params.currentChannelId,
+        currentThreadId: context.params.currentThreadTs,
+        sessionKey: context.params.sessionKey,
+        deliveredPayload: params.result,
+      }),
+      deliveryConfirmed: true,
+    });
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)
       : undefined;
@@ -293,20 +291,20 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         messagingToolSentMediaUrlKeys,
         content.mediaUrls ?? [],
       );
-      if (deliveredCurrentSourceReply) {
-        didDeliverSourceReplyViaMessageTool = true;
-        const payload = extractMessagingToolSourceReplyPayload(params.result);
-        if (payload) {
-          if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-            messagingToolSourceReplyPayloads.shift();
-          }
-          // Each internal source-reply send is a distinct delivery, even when
-          // two intentional sends have identical text or media.
-          messagingToolSourceReplyPayloads.push({
-            ...payload,
-            ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
-          });
+    }
+    if (deliveredCurrentSourceReply) {
+      didDeliverSourceReplyViaMessageTool = true;
+      const payload = extractMessagingToolSourceReplyPayload(params.result);
+      if (payload) {
+        if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+          messagingToolSourceReplyPayloads.shift();
         }
+        // Each internal source-reply send is a distinct delivery, even when
+        // two intentional sends have identical text or media.
+        messagingToolSourceReplyPayloads.push({
+          ...payload,
+          ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+        });
       }
     }
     if (!confirmedTarget) {

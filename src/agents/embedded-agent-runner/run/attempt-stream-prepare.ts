@@ -46,8 +46,6 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { hashToolCall } from "../../tool-loop-detection.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
@@ -63,7 +61,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import { recordEmbeddedToolReceipt, snapshotEmbeddedToolReceipt } from "../tool-send-receipts.js";
+import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
@@ -72,8 +70,6 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import { registerCodeModeRecoveryJournalEntry } from "./code-mode-recovery-journal.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -85,7 +81,7 @@ import {
 } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type StreamRunState = {
@@ -441,13 +437,6 @@ export function prepareEmbeddedAttemptStream(input: {
               if (!recorded) {
                 throw new Error("Nested activity became invalid during transcript redaction");
               }
-              registerCodeModeRecoveryJournalEntry(recorded, {
-                actionKey: hashToolCall(
-                  normalizeToolPolicyName(toolParams.toolName),
-                  terminal.executedArguments,
-                ),
-                effectState: terminal.effectReceipt.state,
-              });
               input.nestedToolActivities.push(recorded);
             },
           );
@@ -490,15 +479,14 @@ export function prepareEmbeddedAttemptStream(input: {
               signal.throwIfAborted();
               // Nested tools bypass the session's tool_result middleware hook.
               // Preserve committed delivery before output acceptance can reject it.
-              const receipt = snapshotEmbeddedToolReceipt(
+              recordEmbeddedToolReceipt(
+                manager,
+                toolParams.toolCallId,
                 result.details,
                 toolParams.source === "openclaw" &&
                   toolParams.sourceName === "core" &&
                   toolParams.toolName === "message",
               );
-              if (receipt) {
-                recordEmbeddedToolReceipt(manager, toolParams.toolCallId, receipt);
-              }
               return toolParams.acceptResultBeforeProjection(result);
             }),
             signal,

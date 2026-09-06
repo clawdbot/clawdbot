@@ -25,6 +25,7 @@ import {
   isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
+  isReplayInvalidErrorMessage,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
   toReasonClassification,
@@ -69,16 +70,6 @@ export {
 export { extractFailoverSignalDetails } from "./signal-details.js";
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
-const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
-const THINKING_SIGNATURE_ERROR_RE =
-  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
-function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
-}
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {

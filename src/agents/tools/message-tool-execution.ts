@@ -33,11 +33,7 @@ import type {
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
-import {
-  isCurrentSourceReplyActionName,
-  isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction,
-} from "../../infra/outbound/source-reply-mirror.js";
+import { isDeliveredCurrentSourceReply } from "../../infra/outbound/source-reply-mirror.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -56,7 +52,6 @@ import {
   resolveMessageActionAgentRuntimeIdentityToken,
 } from "./gateway.js";
 import { createMessageToolDecisionRecorder } from "./message-tool-decision.js";
-import { appendMessageToolVisibleReplyHint } from "./message-tool-description.js";
 import {
   buildMessageToolDescription,
   buildMessageToolSchema,
@@ -278,18 +273,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     : messageToolDiscoveryParams
       ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
       : MessageToolSchema;
-  const schema = addSourceReplyFinalControl(baseSchema, sourceReplySinkDeliveryMode);
+  const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
-    ? appendMessageToolVisibleReplyHint(
-        "Send a message to the current source conversation. Supports actions: send.",
-        options.sourceReplyDeliveryMode,
-        options.requireExplicitTarget,
-      )
-    : buildMessageToolDescription(
-        actions,
-        options?.sourceReplyDeliveryMode,
-        options?.requireExplicitTarget,
-      );
+    ? "Send a message to the current source conversation. Supports actions: send."
+    : buildMessageToolDescription(actions);
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -685,9 +672,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Compare the completed send with that route, independently of display mirrors.
       const currentSourceReply =
         result.handledBy !== "internal-source" &&
-        (isCurrentSourceReplyActionName(action)
-          ? isDeliveredCurrentSourceReplyAction
-          : isDeliveredCurrentSourceReply)({
+        isDeliveredCurrentSourceReply({
           action,
           cfg,
           channel: result.channel,

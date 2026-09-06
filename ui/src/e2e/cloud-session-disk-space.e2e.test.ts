@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -104,11 +105,10 @@ suite.define(() => {
       if (!captureUiProof) {
         return;
       }
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, name),
-      });
+      await writeFile(
+        path.join(artifactDir, name),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [cloudBadge]),
+      );
     };
     const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
     const cloudBadge = sidebarRow.locator(".session-row-badge--cloud");

@@ -66,7 +66,7 @@ function buildOpenAICompatibleSelfHostedProviderConfig(params: {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-}): { config: OpenClawConfig; modelId: string; modelRef: string; profileId: string } {
+}): { config: OpenClawConfig; modelRef: string; profileId: string } {
   const modelRef = `${params.providerId}/${params.modelId}`;
   const profileId = `${params.providerId}:default`;
   return {
@@ -96,7 +96,6 @@ function buildOpenAICompatibleSelfHostedProviderConfig(params: {
         },
       },
     },
-    modelId: params.modelId,
     modelRef,
     profileId,
   };
@@ -116,17 +115,9 @@ type OpenAICompatibleSelfHostedProviderSetupParams = {
   maxTokens?: number;
 };
 
-type OpenAICompatibleSelfHostedProviderPromptResult = {
-  config: OpenClawConfig;
-  credential: AuthProfileCredential;
-  modelId: string;
-  modelRef: string;
-  profileId: string;
-};
-
-async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
+export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
-): Promise<OpenAICompatibleSelfHostedProviderPromptResult> {
+): Promise<ProviderAuthResult> {
   const baseUrlRaw = await params.prompter.text({
     message: `${params.providerLabel} base URL`,
     initialValue: params.defaultBaseUrl,
@@ -166,22 +157,9 @@ async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
   });
 
   return {
-    config: configured.config,
-    credential,
-    modelId: configured.modelId,
-    modelRef: configured.modelRef,
-    profileId: configured.profileId,
-  };
-}
-
-export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
-  params: OpenAICompatibleSelfHostedProviderSetupParams,
-): Promise<ProviderAuthResult> {
-  const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider(params);
-  return {
-    profiles: [{ profileId: result.profileId, credential: result.credential }],
-    configPatch: result.config,
-    defaultModel: result.modelRef,
+    profiles: [{ profileId: configured.profileId, credential }],
+    configPatch: configured.config,
+    defaultModel: configured.modelRef,
   };
 }
 

@@ -8,6 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -15,7 +16,7 @@ import {
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -317,14 +318,7 @@ function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
       },
     },
   ];
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(res, events);
 }
 
 async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {

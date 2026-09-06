@@ -90,16 +90,6 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       mode: isTerminalInteractive() ? "interactive" : "non-interactive",
       invocationCwd,
     });
-    const completeFailedUpdate = async (
-      result: UpdateRunResult,
-      serviceEnv?: NodeJS.ProcessEnv,
-    ) => {
-      await runTriage({
-        failure: { result },
-        target: { root: updateRoot, env: serviceEnv ?? operatorEnv },
-      });
-      exitCliAfterOutput(params.runtime, 1);
-    };
     const externallyManaged = isServiceRepairExternallyManaged();
     const serviceLifecycle =
       isDefaultInstallIdentity(process.env) && !externallyManaged
@@ -154,6 +144,26 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         durationMs,
       };
     };
+    const completeUpdate = async (input: UpdateRunResult, serviceEnv?: NodeJS.ProcessEnv) => {
+      let completed = input;
+      try {
+        // Keep compensation armed through activation; settle native autostart
+        // before triage can start another update against the same installation.
+        await inspection?.windowsTaskAutoStartRecovery?.complete(restartSafe);
+      } catch (error) {
+        completed = failedUpdate(
+          error,
+          completed.reason ?? "windows-task-autostart-restore-failed",
+        );
+      }
+      if (classifyUpdateOutcome(completed) === "failed") {
+        await runTriage({
+          failure: { result: completed },
+          target: { root: updateRoot, env: serviceEnv ?? operatorEnv },
+        });
+        exitCliAfterOutput(params.runtime, 1);
+      }
+    };
     try {
       result = await runGatewayUpdate({
         cwd: updateRoot,
@@ -204,6 +214,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         // return an inspection. Carry its recorded failure and target to triage.
         recoveryEnv = err.serviceEnv;
       } else if (!gitMutationAuthorized) {
+        await inspection?.windowsTaskAutoStartRecovery?.complete(true);
         throw err;
       }
       const reason =
@@ -218,8 +229,6 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         note("The source checkout may be partially mutated.", "Update");
       }
     } finally {
-      // Release native recovery before triage can start another update.
-      inspection?.windowsTaskAutoStartRecovery?.complete(restartSafe);
       stop();
     }
     const ownedServiceEnv =
@@ -262,6 +271,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           invocationCwd,
         });
         if (recovered) {
+          restartSafe = recovered === "healthy";
           result = {
             ...result,
             status: recovered === "failed" ? "error" : result.status,
@@ -269,10 +279,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           };
         }
       }
-      if (classifyUpdateOutcome(result) === "failed") {
-        await completeFailedUpdate(result, ownedServiceEnv);
-        return { updated: true, handled: true };
-      }
+      await completeUpdate(result, ownedServiceEnv);
       return { updated: true, handled: false };
     }
     if (externallyManaged) {
@@ -293,7 +300,6 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         const activated = await serviceLifecycle.maybeRestartService({
           shouldRestart: true,
           result,
-          channel: "dev",
           opts: {},
           refreshServiceEnv: false,
           serviceUpdateVerdict:
@@ -306,23 +312,25 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           requireRunningServiceAfterRestart: true,
           timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
         });
-        if (!activated) {
+        if (activated !== "ok") {
           throw new Error(
             "Gateway restart was not verified; run `openclaw gateway status --deep` before restarting manually.",
           );
         }
         note("Restarted the running gateway service after updating OpenClaw.", "Update");
       } catch (err) {
+        restartSafe = false;
         const message = "Update completed, but gateway service restart failed";
         result = failedUpdate(
           new Error(`${message}: ${formatErrorMessage(err)}`),
           "gateway-restart-failed",
         );
         params.outro(`${message}.`);
-        await completeFailedUpdate(result, ownedServiceEnv);
+        await completeUpdate(result, ownedServiceEnv);
         return { updated: true, handled: true };
       }
     }
+    await completeUpdate(result, ownedServiceEnv);
     params.outro("Update completed (doctor already ran as part of the update).");
     return { updated: true, handled: true };
   }

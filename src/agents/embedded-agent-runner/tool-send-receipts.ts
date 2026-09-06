@@ -10,10 +10,12 @@ type EmbeddedToolReceiptResult = {
 
 const registry = createSessionManagerRuntimeRegistry<Map<string, EmbeddedToolReceiptResult>>();
 
-export function snapshotEmbeddedToolReceipt(
+export function recordEmbeddedToolReceipt(
+  sessionManager: unknown,
+  toolCallId: string,
   details: unknown,
   includeMessageDelivery: boolean,
-): { toolSend?: unknown; messageDelivery?: unknown } | undefined {
+): void {
   const record = asOptionalRecord(details);
   const snapshot = (value: unknown) => {
     const valueRecord = asOptionalRecord(value);
@@ -22,21 +24,15 @@ export function snapshotEmbeddedToolReceipt(
   const toolSend = record?.toolSend;
   const messageDelivery = includeMessageDelivery ? record?.messageDelivery : undefined;
   if (toolSend === undefined && messageDelivery === undefined) {
-    return undefined;
+    return;
   }
-  return {
-    ...(toolSend !== undefined ? { toolSend: snapshot(toolSend) } : {}),
-    ...(messageDelivery !== undefined ? { messageDelivery: snapshot(messageDelivery) } : {}),
-  };
-}
-
-export function recordEmbeddedToolReceipt(
-  sessionManager: unknown,
-  toolCallId: string,
-  details: EmbeddedToolReceiptResult["details"],
-): void {
   const receipts = registry.get(sessionManager) ?? new Map<string, EmbeddedToolReceiptResult>();
-  receipts.set(toolCallId, { details });
+  receipts.set(toolCallId, {
+    details: {
+      ...(toolSend !== undefined ? { toolSend: snapshot(toolSend) } : {}),
+      ...(messageDelivery !== undefined ? { messageDelivery: snapshot(messageDelivery) } : {}),
+    },
+  });
   registry.set(sessionManager, receipts);
 }
 

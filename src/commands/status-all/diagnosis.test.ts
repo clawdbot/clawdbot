@@ -243,58 +243,38 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Detected OpenClaw Gateway listener");
   });
 
-  it("adds direct update restart guidance for failed update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "error",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          steps: [],
+  it.each([
+    {
+      status: "error",
+      reason: "managed-service-handoff-failed",
+      headline: "⚠️ OpenClaw update failed: managed-service-handoff-failed.",
+      hint: "Run openclaw triage to diagnose and repair the failed update.",
+    },
+    {
+      status: "skipped",
+      reason: "restart-health-pending",
+      headline: "⬆️ OpenClaw update in progress: restarting.",
+      hint: "Check progress with openclaw update status.",
+    },
+  ] as const)(
+    "includes the shared update report for $status sentinels",
+    async ({ status, reason, headline, hint }) => {
+      const params = createBaseParams([]);
+      params.sentinel = {
+        payload: {
+          kind: "update",
+          status,
+          ts: Date.now() - 60_000,
+          stats: { mode: "npm", reason, steps: [] },
         },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
-    );
-    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
-    expect(output).toContain(
-      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
-    );
-  });
-
-  it("adds direct update restart guidance for pending update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "skipped",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "restart-health-pending",
-          steps: [],
-        },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: restart pending health verification · run openclaw gateway status --deep",
-    );
-    expect(output).toContain(
-      "Update restart is still pending; run openclaw update status --json for handoff state.",
-    );
-  });
+      };
+      await appendStatusAllDiagnosis(params);
+      const output = params.lines.join("\n");
+      expect(output).toContain(`Update restart: ${headline}`);
+      expect(output).toContain(hint);
+      expect(output).not.toContain("run openclaw gateway restart");
+    },
+  );
 
   it("emits a soft warning when no agent sessions were active in the last 30m", async () => {
     const params = createBaseParams([]);

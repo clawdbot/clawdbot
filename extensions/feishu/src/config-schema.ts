@@ -59,7 +59,11 @@ const FeishuGroupPolicySchema = z.union([
 ]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
-  z.string().url().startsWith("https://"),
+  // Keep URL last for its JSON Schema format; regex flags are not exported.
+  z
+    .string()
+    .regex(/^[Hh][Tt][Tt][Pp][Ss]:\/\//)
+    .url(),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
 const FeishuWebhookPathSchema = z

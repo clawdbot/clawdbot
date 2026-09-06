@@ -17,7 +17,7 @@ vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnly: authMocks.loadExecApprovalsReadOnly,
 }));
 
-vi.mock("../auth-profiles/store.js", () => ({
+vi.mock("../auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 

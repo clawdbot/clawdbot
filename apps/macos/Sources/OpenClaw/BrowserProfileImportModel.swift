@@ -84,6 +84,7 @@ final class BrowserProfileImportModel {
     static let shared = BrowserProfileImportModel()
 
     private(set) var phase: Phase = .hidden
+    private(set) var importAvailable = false
     /// Bumped by setPhase; see refresh(force:) for the staleness contract.
     @ObservationIgnored private var phaseGeneration = 0
     /// A dismissal must stick for this app session even while its
@@ -108,6 +109,17 @@ final class BrowserProfileImportModel {
 
     static func shouldOffer(status: BrowserProfileImportStatus, force: Bool) -> Bool {
         status.enabled && !status.importableProfiles.isEmpty && (force || status.state == nil)
+    }
+
+    /// Read availability without changing the banner or overriding a remembered dismissal.
+    func refreshAvailability() async {
+        guard self.isLocalMode() else {
+            self.importAvailable = false
+            return
+        }
+        let status: BrowserProfileImportStatus? = try? await self.request(
+            method: "GET", path: "/system-profile-import/status", timeoutMs: 5000)
+        self.importAvailable = self.isLocalMode() && status.map { Self.shouldOffer(status: $0, force: true) } == true
     }
 
     /// Every phase change goes through here. The generation lets an awaited
@@ -141,7 +153,7 @@ final class BrowserProfileImportModel {
         return await self.refreshIfIdle(while: shouldApply)
     }
 
-    /// Force (Settings → Import…) re-offers even after a persisted dismissal
+    /// Dashboard → Settings → This Mac → Browser re-offers even after a persisted dismissal
     /// and reports why nothing can be offered so the caller can tell the user.
     @discardableResult
     func refresh(force: Bool) async -> ForceRefreshOutcome {
@@ -169,6 +181,7 @@ final class BrowserProfileImportModel {
             let status: BrowserProfileImportStatus = try await self.request(
                 method: "GET",
                 path: "/system-profile-import/status")
+            self.importAvailable = self.isLocalMode() && Self.shouldOffer(status: status, force: true)
             // The status await interleaves with user actions. Idle polls apply
             // only if nothing changed since they started (a dismissal mid-poll
             // must stay dismissed); a forced refresh wins over everything
@@ -257,6 +270,7 @@ final class BrowserProfileImportModel {
     /// import system profiles, so the banner withdraws on mode switches.
     func handleConnectionModeChange() {
         guard !self.isLocalMode() else { return }
+        self.importAvailable = false
         self.setPhase(.hidden)
     }
 

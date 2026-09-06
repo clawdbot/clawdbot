@@ -330,7 +330,7 @@
   flex-direction: column;
   gap: 0;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 
 .settings-row__title {

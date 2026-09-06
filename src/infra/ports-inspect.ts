@@ -27,6 +27,7 @@ import type {
   PortUsage,
   PortUsageStatus,
 } from "./ports-types.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -58,7 +59,11 @@ const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {
-    const res = await runCommandWithTimeout(argv, { timeoutMs });
+    // env overrides alone would merge the ambient application environment back in.
+    const res = await runCommandWithTimeout(argv, {
+      timeoutMs,
+      baseEnv: resolveDiagnosticProcessEnv(),
+    });
     return {
       stdout: res.stdout,
       stderr: res.stderr,

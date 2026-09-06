@@ -43,7 +43,7 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   };
 });
 
-describe.sequential("Gateway request entry lifetime", () => {
+describe("Gateway request entry lifetime", { concurrent: false }, () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>>;
   let port: number;
@@ -148,6 +148,7 @@ describe.sequential("Gateway request entry lifetime", () => {
       });
       let closeSettled = false;
       let closing: Promise<void> | undefined;
+      let dispatch: Promise<void> | undefined;
       const lateResponses: unknown[] = [];
       harness.send.mockImplementation((frame) => {
         if (closeSettled) {
@@ -162,7 +163,7 @@ describe.sequential("Gateway request entry lifetime", () => {
         }
       });
       try {
-        await harness.dispatcher.dispatch(
+        dispatch = harness.dispatcher.dispatch(
           { type: "req", id: "held", method: "test.entry", params: {} },
           client,
         );
@@ -174,6 +175,7 @@ describe.sequential("Gateway request entry lifetime", () => {
         expect.soft(closeSettled).toBe(false);
         held.resolve();
         await harness.awaitResponseFrame("held");
+        await dispatch;
         await closing;
         expect.soft(handler).not.toHaveBeenCalled();
         expect.soft(lateResponses).toEqual([]);
@@ -181,6 +183,7 @@ describe.sequential("Gateway request entry lifetime", () => {
       } finally {
         held.resolve();
         await harness.awaitResponseFrame("held");
+        await dispatch;
         await closing;
       }
     },
@@ -215,9 +218,10 @@ describe.sequential("Gateway request entry lifetime", () => {
         return { kind: "sent" };
       });
       let queued: Promise<void> | undefined;
+      let dispatchedMutation: Promise<void> | undefined;
       let closing: Promise<void> | undefined;
       try {
-        await harness.dispatcher.dispatch(
+        dispatchedMutation = harness.dispatcher.dispatch(
           { type: "req", id: "mutation", method: "device.token.revoke", params: {} },
           client,
         );
@@ -245,6 +249,7 @@ describe.sequential("Gateway request entry lifetime", () => {
       } finally {
         held.resolve();
         await finished.promise;
+        await dispatchedMutation;
         await queued;
         await closing;
         await harness.awaitResponseFrame("mutation");
@@ -269,8 +274,9 @@ describe.sequential("Gateway request entry lifetime", () => {
       extraHandlers: { "test.entry": handler },
       isClosed: () => disconnected,
     });
+    let dispatch: Promise<void> | undefined;
     try {
-      await harness.dispatcher.dispatch(
+      dispatch = harness.dispatcher.dispatch(
         { type: "req", id: "disconnected", method: "test.entry" },
         client,
       );
@@ -283,6 +289,7 @@ describe.sequential("Gateway request entry lifetime", () => {
     } finally {
       held.resolve();
       await harness.awaitResponseFrame("disconnected");
+      await dispatch;
     }
   });
 

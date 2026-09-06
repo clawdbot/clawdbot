@@ -5,6 +5,7 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveStateDir } from "../config/paths.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -21,7 +22,7 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
     import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
-  const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
+  const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
@@ -150,7 +151,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
         await import("../state/openclaw-database-preflight.js");
       const { resolveConfiguredAgentDatabaseTargets } =
         await import("../config/sessions/targets.js");
-      assertOpenClawDatabasesReady({
+      await assertOpenClawDatabasesReady({
         env: process.env,
         operation: "doctor",
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
@@ -182,7 +183,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       }
     }
   } catch (error) {
-    if (maintenance) {
+    if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
       effectiveRuntime.error(
         "Doctor could not complete maintenance. Check the reported service state, resolve the failure, and rerun doctor --fix.",
       );

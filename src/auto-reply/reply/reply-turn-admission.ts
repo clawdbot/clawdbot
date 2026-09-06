@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -25,6 +26,12 @@ import {
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
@@ -89,7 +96,11 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const admission = lifecycleAdmissionByOperation.get(operation);
-  return admission ? await admission.run(run) : await run();
+  if (admission) {
+    return await admission.run(run);
+  }
+  const resolver = getGatewayContextResolver(operation);
+  return await withPluginRuntimeGatewayContextResolver(resolver, run);
 }
 
 function rejectLifecycleInvalidatedWork(params: {
@@ -166,6 +177,7 @@ type ReplyTurnAdmissionParams = {
    */
   adoptOperation?: ReplyOperation;
   upstreamAbortSignal?: AbortSignal;
+  resolveGatewayContext?: GatewayContextResolver;
   waitTimeoutMs?: number;
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
@@ -177,6 +189,11 @@ export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
+  const resolveGatewayContext = params.adoptOperation
+    ? getGatewayContextResolver(params.adoptOperation)
+    : Object.hasOwn(params, "resolveGatewayContext")
+      ? params.resolveGatewayContext
+      : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
@@ -215,6 +232,7 @@ export async function admitReplyTurn(
       const admission = storePath
         ? await beginSessionWorkAdmission({
             scope: storePath,
+            resolveGatewayContext,
             identities: [params.sessionKey],
             signal: params.upstreamAbortSignal,
             onInterrupt: () => {
@@ -361,6 +379,7 @@ export async function admitReplyTurn(
             respectFollowupAdmissionBarrier:
               params.kind === "queued_followup" || params.kind === "heartbeat",
           });
+          bindGatewayContextResolver(operation, resolveGatewayContext);
         }
       } catch (error) {
         const pendingRecovery = recoveryOwnerLease

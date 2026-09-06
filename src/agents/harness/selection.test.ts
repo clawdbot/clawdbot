@@ -63,6 +63,7 @@ import {
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
@@ -70,6 +71,7 @@ import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl 
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
@@ -114,10 +116,6 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 const privateHarnessParamCases = [
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
-  {
-    field: "codeModeRecovery",
-    value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
-  },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
 ] as const;
@@ -358,14 +356,7 @@ function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssis
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -614,84 +605,97 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("binds native provenance to staged input before dispatch and preserves it on a suppressed retry", async () => {
-    const root = trajectoryTempDirs.make("openclaw-harness-staged-annotation-");
-    const target = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
-    };
-    await replaceSessionEntry(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      activeWriterRunId: "run-1",
-    });
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "hello", idempotencyKey: "run-1:user", timestamp: 1 },
-      target: { ...target, sessionEntry: undefined },
-    });
-    expect(await recorder.stageApproved?.({ runId: "run-1", assertCurrent: () => {} })).toBe(true);
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    const annotation = {
-      mirrorIdentity: "native-turn:prompt",
-      upstreamUserText: "native prompt",
-      mirrorOrigin: "native-harness",
-      mirrorSourceFingerprint: sha256HexPrefixCore(
-        JSON.stringify({ role: "user", content: "hello", upstreamUserText: "native prompt" }),
-        32,
-      ),
-    };
-    registerAgentHarness(
-      {
-        id: "native",
-        label: "Native",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: async (attempt) => {
-          if (attempt.suppressNextUserMessagePersistence) {
-            expect(attempt.hostCapabilities?.annotateCurrentUserTurn).toBeUndefined();
-          } else {
-            const annotate = attempt.hostCapabilities?.annotateCurrentUserTurn;
-            expect(annotate).toBeTypeOf("function");
-            await annotate?.(annotation);
-          }
-          return createAttemptResult(target.sessionId);
+  it.each(["workspace", "explicit cwd"] as const)(
+    "binds native provenance to staged input before dispatch and preserves it on a suppressed retry (%s)",
+    async (directorySource) => {
+      const root = trajectoryTempDirs.make("openclaw-harness-staged-annotation-");
+      const workspaceDir = path.join(root, "workspace");
+      const cwd = directorySource === "explicit cwd" ? path.join(root, "worktree") : undefined;
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+      };
+      await replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        activeWriterRunId: "run-1",
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "hello", idempotencyKey: "run-1:user", timestamp: 1 },
+        target: { ...target, sessionEntry: undefined },
+      });
+      expect(await recorder.stageApproved?.({ runId: "run-1", assertCurrent: () => {} })).toBe(
+        true,
+      );
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      const annotation = {
+        mirrorIdentity: "native-turn:prompt",
+        upstreamUserText: "native prompt",
+        mirrorOrigin: "native-harness",
+        mirrorSourceFingerprint: sha256HexPrefixCore(
+          JSON.stringify({ role: "user", content: "hello", upstreamUserText: "native prompt" }),
+          32,
+        ),
+      };
+      registerAgentHarness(
+        {
+          id: "native",
+          label: "Native",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: async (attempt) => {
+            expect((await loadTranscriptEvents(target))[0]).toMatchObject({
+              type: "session",
+              cwd: cwd ?? workspaceDir,
+            });
+            if (attempt.suppressNextUserMessagePersistence) {
+              expect(attempt.hostCapabilities?.annotateCurrentUserTurn).toBeUndefined();
+            } else {
+              const annotate = attempt.hostCapabilities?.annotateCurrentUserTurn;
+              expect(annotate).toBeTypeOf("function");
+              await annotate?.(annotation);
+            }
+            return createAttemptResult(target.sessionId);
+          },
         },
-      },
-      { ownerPluginId: "native" },
-    );
-    const params = {
-      ...createAttemptParams(providerRuntimeConfig("codex", "native")),
-      ...target,
-      sessionTarget: target,
-      userTurnTranscriptRecorder: recorder,
-    };
-    try {
-      await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
-      const admission = recorder.getAdmissionReceipt();
-      expect(admission).toBeDefined();
-      const committed = await loadTranscriptEvents(target);
-      expect(committed.filter((event) => asOptionalRecord(event)?.type === "message")).toHaveLength(
-        1,
+        { ownerPluginId: "native" },
       );
-      expect(committed).toContainEqual(
-        expect.objectContaining({
-          id: admission?.entryId,
-          message: expect.objectContaining({
-            role: "user",
-            content: "hello",
-            idempotencyKey: "run-1:user",
-            __openclaw: expect.objectContaining({ ...annotation, runId: "run-1" }),
+      const params = {
+        ...createAttemptParams(providerRuntimeConfig("codex", "native")),
+        ...target,
+        workspaceDir,
+        cwd,
+        sessionTarget: target,
+        userTurnTranscriptRecorder: recorder,
+      };
+      try {
+        await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
+        const admission = recorder.getAdmissionReceipt();
+        expect(admission).toBeDefined();
+        const committed = await loadTranscriptEvents(target);
+        expect(
+          committed.filter((event) => asOptionalRecord(event)?.type === "message"),
+        ).toHaveLength(1);
+        expect(committed).toContainEqual(
+          expect.objectContaining({
+            id: admission?.entryId,
+            message: expect.objectContaining({
+              role: "user",
+              content: "hello",
+              idempotencyKey: "run-1:user",
+              __openclaw: expect.objectContaining({ ...annotation, runId: "run-1" }),
+            }),
           }),
-        }),
-      );
-      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
-      await runAgentHarnessAttempt({ ...params, suppressNextUserMessagePersistence: true });
-      expect(await loadTranscriptEvents(target)).toEqual(committed);
-    } finally {
-      recorder.finishPendingInput?.("interrupted");
-    }
-  });
+        );
+        expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+        await runAgentHarnessAttempt({ ...params, suppressNextUserMessagePersistence: true });
+        expect(await loadTranscriptEvents(target)).toEqual(committed);
+      } finally {
+        recorder.finishPendingInput?.("interrupted");
+      }
+    },
+  );
 
   it("uses registry ownership rather than declared harness metadata for approvals", async () => {
     let observedApprovalOwner: string | undefined;
@@ -1499,6 +1503,13 @@ describe("runAgentHarnessAttempt", () => {
       runtimeSource: "implicit",
     });
 
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: getActivePluginRegistry() ?? undefined,
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
@@ -1547,15 +1558,9 @@ describe("runAgentHarnessAttempt", () => {
     );
 
     const params = createAttemptParams();
-    params.codeModeRecovery = {
-      kind: "resume",
-      blockedActionKeys: new Set(),
-      mutationAttempt: "available",
-    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
-    expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toEqual(
       expect.objectContaining({
@@ -1566,7 +1571,6 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
-    expect(classifyCall?.[1]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
@@ -3129,11 +3133,18 @@ describe("selectAgentHarness", () => {
 
   it.each(["default", "auto"] as const)(
     "falls back from configured %s to OpenClaw when implicit Codex is unavailable or unsupported",
-    (runtime) => {
+    async (runtime) => {
       const config = providerRuntimeConfig("openai", runtime);
       expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4", config })).toEqual(
         { runtime: "codex", runtimeSource: "implicit" },
       );
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        config,
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: getActivePluginRegistry() ?? undefined,
+      });
       expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe(
         "openclaw",
       );

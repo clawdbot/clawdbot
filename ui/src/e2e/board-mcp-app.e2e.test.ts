@@ -1,10 +1,12 @@
 // Dashboard MCP App E2E covers the real Control UI, sandbox proxy, and mocked Gateway lease flow.
+import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -14,12 +16,14 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-mcp-app";
+const rosterMatch = { includeGlobal: true };
 
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
@@ -374,7 +378,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       mcpView: (await gateway.getRequests("mcp.app.view")).length,
     };
     const stablePatchCount = (await gateway.getRequests("sessions.patch")).length;
-    const stableListCount = (await gateway.getRequests("sessions.list")).length;
+    const stableListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
     const sidePanel = page.locator(".sidebar-region__right-runtime .side-panel");
     const appContent = page
       .frameLocator("mcp-app-view iframe")
@@ -383,14 +387,21 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expectRetainedBoardPresentation(page, "split");
     if (artifactDir) {
       await appContent.waitFor();
-      await page.screenshot({ path: `${artifactDir}/01-dashboard.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/01-dashboard.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [appContent]),
+      );
     }
 
-    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
 
-    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await page
+      .locator(".chat-pane__header")
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
     await expectRetainedBoardPresentation(page, "split");
+    await restoreChatAsMain(page);
 
     const draftNote = page
       .frameLocator("mcp-app-view iframe")
@@ -400,7 +411,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     if (artifactDir) {
       await page.screenshot({ path: `${artifactDir}/04-note-before-minimize.png` });
     }
-    await sidePanel.locator(".side-panel__minimize").click();
+    await sidePanel
+      .locator('[data-region-header="side"]')
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
     await page.locator(".chat-thread").waitFor();
     await expect
       .poll(() => readBoardIdentity(page))
@@ -427,20 +441,28 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
-      await page.screenshot({ path: `${artifactDir}/02-tasks.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/02-tasks.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          sidePanel.getByRole("tab", { name: "Tasks", exact: true }),
+        ]),
+      );
     }
 
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
     if (artifactDir) {
       await appContent.waitFor();
-      await page.screenshot({ path: `${artifactDir}/03-dashboard-restored.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/03-dashboard-restored.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [appContent]),
+      );
     }
     expect(inactiveIdentity).toEqual({ connected: true, hidden: true, inert: true, same: true });
     await expectRetainedBoardPresentation(page, "split");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(stablePatchCount);
-    expect(await gateway.getRequests("sessions.list")).toHaveLength(stableListCount);
+    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(stableListCount);
     expect(await gateway.getRequests("board.get")).toHaveLength(stableCounts.boardGet);
     expect(await gateway.getRequests("board.widget.appView")).toHaveLength(stableCounts.appView);
     expect(await gateway.getRequests("mcp.app.view")).toHaveLength(stableCounts.mcpView);

@@ -32,39 +32,6 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
-type MockProviderModel = {
-  id: string;
-  cost?: import("../../utils/usage-format.js").ModelCostConfig;
-};
-
-type MockUsageFormatConfig = {
-  models?: {
-    providers?: Record<string, { models?: MockProviderModel[] }>;
-  };
-};
-
-vi.mock("../../utils/usage-format.js", async (importOriginal) => {
-  const { estimateAggregateUsageCost } =
-    await importOriginal<typeof import("../../utils/usage-format.js")>();
-  return {
-    estimateAggregateUsageCost,
-    resolveModelCostConfig: (params: {
-      provider?: string;
-      model?: string;
-      config?: unknown;
-      agentDir?: string;
-    }) => {
-      const agents = (params.config as OpenClawConfig | undefined)?.agents?.list ?? [];
-      if (agents.length > 1 && !params.agentDir) {
-        throw new Error("multi-agent cost resolution requires an explicit agent directory");
-      }
-      const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
-      return providers?.[params.provider ?? ""]?.models?.find((entry) => entry.id === params.model)
-        ?.cost;
-    },
-  };
-});
-
 function acpMeta() {
   return {
     backend: "acpx",
@@ -247,10 +214,24 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionKey = "agent:marie:dashboard:cost-accounting";
       const sessionId = "cost-accounting-session";
       const sessionStore: Record<string, SessionEntry> = {};
+      const agentDir = path.join(dir, "agents", "marie", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            openai: {
+              models: [
+                { id: "gpt-5.5", cost: { input: 3, output: 5, cacheRead: 0, cacheWrite: 0 } },
+              ],
+            },
+          },
+        }),
+      );
 
       await updateSessionStoreAfterAgentRun({
         cfg: {
-          agents: { list: [{ id: "main" }, { id: "marie" }] },
+          agents: { ownership: "explicit", entries: { main: {}, marie: {} } },
           models: {
             providers: {
               openai: {
@@ -270,7 +251,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             },
           },
         } satisfies OpenClawConfig,
-        agentDir: path.join(dir, "agents", "marie", "agent"),
+        agentDir,
         sessionId,
         sessionKey,
         storePath,
@@ -290,7 +271,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       });
 
-      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBe(6);
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBe(8);
     });
   });
 
@@ -2847,6 +2828,7 @@ describe("recordCliCompactionInStore", () => {
           outputTokens: 100,
           cacheRead: 2_900,
           cacheWrite: 0,
+          estimatedCostUsd: 0.04,
           contextBudgetStatus: {
             schemaVersion: 1,
             source: "pre-prompt-estimate",
@@ -2896,12 +2878,14 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeUndefined();
       expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
         sessionId: "stale-cli-session",
       });
       expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
       expect(persisted[sessionKey]?.totalTokens).toBe(3_210);
+      expect(persisted[sessionKey]?.estimatedCostUsd).toBeUndefined();
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
       expect(resolveFreshSessionTotalTokens(persisted[sessionKey])).toBe(3_210);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
