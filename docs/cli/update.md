@@ -445,11 +445,12 @@ the service is absent and the selected Gateway has no active lock or listener.
 The command reports that there is no Gateway to restart. Existing service files,
 manager runtime state, or failed filesystem inspection still require service access.
 
-If service inspection is unavailable, a restart-enabled code update refuses to
-mutate the checkout or package tree; it does not assume that no service exists.
-Run `openclaw gateway status --deep` and retry when access is restored. Use
-`--no-restart` only after manually stopping the Gateway, then restart it
-manually after the update. Services owned by another install remain untouched.
+If service inspection is unavailable or installation ownership is unresolved,
+the update refuses to mutate the checkout or package tree, including with
+`--no-restart`. It cannot assess another service-owned profile's databases from
+the invoking profile alone. Run `openclaw gateway status --deep` and retry when
+ownership can be inspected. Proven-absent services and inspectable stopped
+services remain supported. Services owned by another install remain untouched.
 
 The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
 Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway

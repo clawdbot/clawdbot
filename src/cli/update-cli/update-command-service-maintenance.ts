@@ -39,6 +39,7 @@ import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
+  assertGatewayServiceAdmissionUnchanged,
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   GatewayServiceUpdateOwnershipError,
@@ -49,7 +50,7 @@ import {
 const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
   "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
-  "Gateway service inspection is unavailable. Refusing to mutate code while automatic restart is enabled; run `openclaw gateway status --deep` and retry when service access is restored. To use `--no-restart`, stop the Gateway manually before the update, then restart it manually afterward.";
+  "Gateway service inspection is unavailable. Refusing to mutate code because managed service ownership cannot be verified. Run `openclaw gateway status --deep` and retry when service access is restored.";
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -427,14 +428,12 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
     message: string,
-  ): PreManagedServiceStop =>
-    params.shouldRestart
-      ? {
-          ...base,
-          serviceMutationAllowed: false,
-          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
-        }
-      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
+  ): PreManagedServiceStop => ({
+    ...base,
+    serviceMutationAllowed: false,
+    serviceUpdateVerdict: { kind: "unavailable", message },
+    blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+  });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -462,6 +461,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     state: serviceState,
     preManagedServiceStop: params.expectedService,
   });
+  assertGatewayServiceAdmissionUnchanged(params.expectedService, serviceUpdateVerdict);
   const inspected = {
     stopped: false,
     inspected: true,
@@ -483,6 +483,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
               ?.status === "stopped"
           : process.platform === "linux"),
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv:
+      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
@@ -496,16 +498,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.",
     };
   }
-  // Transfer before either inspection-only Git planning or native shutdown can
-  // return control to an updater still owned by this service.
-  if (
-    serviceUpdateVerdict.kind === "owned" &&
-    params.shouldRestart &&
-    serviceState.running &&
-    (await params.handoffFromGateway?.(serviceState))
-  ) {
-    throw new UpdateCommandAbort();
-  }
   if (serviceUpdateVerdict.kind === "absent") {
     return {
       ...inspected,
@@ -516,6 +508,14 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   }
   if (params.phase === "inspect") {
     return inspected;
+  }
+  // Read-only admission must finish before starting another updater or stopping this service.
+  if (
+    params.shouldRestart &&
+    serviceState.running &&
+    (await params.handoffFromGateway?.(serviceState))
+  ) {
+    throw new UpdateCommandAbort();
   }
   const suspendTask = () =>
     maybeSuspendWindowsTaskAutoStartForUpdate({

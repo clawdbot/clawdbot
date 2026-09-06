@@ -14,6 +14,10 @@ import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
+import type {
+  ManagedGatewayUpdateVerdict,
+  PreManagedServiceStop,
+} from "./update-command-service-maintenance.js";
 
 export type ManagedServiceRootRedirect = {
   root: string;
@@ -24,6 +28,31 @@ export class GatewayServiceUpdateOwnershipError extends Error {
   constructor(message: string, cause: unknown) {
     super(message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
+  }
+}
+
+export function assertGatewayServiceAdmissionUnchanged(
+  expectedService: Pick<PreManagedServiceStop, "serviceUpdateVerdict"> | undefined,
+  serviceUpdateVerdict: ManagedGatewayUpdateVerdict,
+): void {
+  const expectedVerdict = expectedService?.serviceUpdateVerdict;
+  if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
+      undefined,
+    );
+  }
+  if (
+    expectedVerdict?.kind === "owned" &&
+    serviceUpdateVerdict.kind === "owned" &&
+    expectedVerdict.fingerprint !== serviceUpdateVerdict.fingerprint
+  ) {
+    // Permission to refresh a writable definition after install does not allow
+    // its environment to change between database admission and native preparation.
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service definition changed after database admission; retry against its current configuration.",
+      undefined,
+    );
   }
 }
 

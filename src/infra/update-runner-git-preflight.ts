@@ -431,6 +431,7 @@ export async function runGitDevPreflight(params: {
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
   steps: UpdateStepResult[];
   step: StepFactory;
+  beforeCandidate?: (revision: string) => Promise<void>;
 }): Promise<GitDevPreflightResult> {
   const devTargetRef = params.devTarget
     ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
@@ -477,6 +478,9 @@ export async function runGitDevPreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
+  // Worktree checkout can execute filters, and subsequent checks run target code.
+  // Admit its metadata before either operation, then admit each distinct fallback.
+  await params.beforeCandidate?.(preflightBaseSha);
   let preflightRoot: string;
   try {
     preflightRoot = await createPreflightRoot(params.gitRoot);
@@ -509,6 +513,9 @@ export async function runGitDevPreflight(params: {
       };
     }
     for (const sha of candidates) {
+      if (sha !== preflightBaseSha) {
+        await params.beforeCandidate?.(sha);
+      }
       const candidate = await testPreflightCandidate({ ...params, worktreeDir, sha });
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
         tested = candidate;

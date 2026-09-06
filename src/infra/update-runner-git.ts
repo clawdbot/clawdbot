@@ -34,6 +34,8 @@ import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
+  selectGitInspectionTarget,
+  withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import type {
   CommandRunner,
@@ -51,7 +53,14 @@ export async function updateGitCheckout(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, gitRoot, runCommand, defaultCommandEnv, timeoutMs, startedAt } = params;
+  const { opts, defaultCommandEnv, timeoutMs, startedAt } = params;
+  let gitRoot = params.gitRoot;
+  const runCommand: CommandRunner = (argv, options) =>
+    params.runCommand(argv, {
+      ...options,
+      // Read-only status must not refresh the installed index before admission.
+      ...(argv[0] === "git" ? { env: { ...options.env, GIT_OPTIONAL_LOCKS: "0" } } : {}),
+    });
   const channel: UpdateChannel = opts.channel ?? "dev";
   if (channel === "extended-stable") {
     return {
@@ -104,10 +113,24 @@ export async function updateGitCheckout(params: {
   let runtimeMutationStarted = false;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-  const prepareMutation = async (revision: string) => {
+  const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
+    if (mutationPrepared) {
+      // Remote transport can outlive the earlier service inspection. Recheck
+      // its frozen contexts before checkout without repeating stop/preparation.
+      if (opts.inspectGitTarget) {
+        await prepareGitMutation({
+          runCommand: runner,
+          root,
+          revision,
+          timeoutMs,
+          beforeGitMutation: opts.inspectGitTarget,
+        });
+      }
+      return;
+    }
     const preparation = await prepareGitMutation({
-      runCommand,
-      root: gitRoot,
+      runCommand: runner,
+      root,
       revision,
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
@@ -276,6 +299,85 @@ export async function updateGitCheckout(params: {
     return buildError("dirty", "skipped");
   }
 
+  let inspectedTarget: { revision: string; devPreflight?: typeof devPreflight } | undefined;
+  if (opts.beforeGitMutation || opts.inspectGitTarget) {
+    const selected = await withGitTargetInspectionRoot(
+      { root: gitRoot, runCommand, timeoutMs },
+      async (inspectionRoot, runInspectionCommand) => {
+        const inspectionStep: typeof step = (...args) => ({
+          ...step(...args),
+          runCommand: runInspectionCommand,
+        });
+        const fetched = await runStep(
+          inspectionStep(
+            "git target inspection fetch",
+            [
+              "git",
+              "-C",
+              inspectionRoot,
+              "fetch",
+              "--all",
+              "--prune",
+              channel === "dev" ? "--no-tags" : "--tags",
+            ],
+            inspectionRoot,
+          ),
+        );
+        if (fetched.exitCode !== 0) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+        const inspectTarget = async (targetRevision: string) => {
+          if (opts.inspectGitTarget) {
+            await prepareGitMutation({
+              runCommand: runInspectionCommand,
+              root: inspectionRoot,
+              revision: targetRevision,
+              timeoutMs,
+              beforeGitMutation: opts.inspectGitTarget,
+            });
+          }
+        };
+        const target = await selectGitInspectionTarget({
+          gitRoot: inspectionRoot,
+          runCommand: runInspectionCommand,
+          step: inspectionStep,
+          channel,
+          devTarget,
+          needsCheckoutMain,
+          timeoutMs,
+          defaultCommandEnv,
+          steps,
+          beforeCandidate: inspectTarget,
+        });
+        if (target.status !== "ok") {
+          return target;
+        }
+        const { revision, devPreflight: selectedDevPreflight } = target;
+        // The existing admission callback checks every context and prepares the native service
+        // before the first installed-repository write. Selection stays pinned across remote movement.
+        await prepareMutation(revision, inspectionRoot, runInspectionCommand);
+        const imported = await runStep(
+          step(
+            "git import admitted target",
+            ["git", "-C", gitRoot, "fetch", "--no-tags", inspectionRoot, revision],
+            gitRoot,
+          ),
+        );
+        if (imported.exitCode !== 0) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+        gitRoot = (await opts.publishGitCheckout?.()) ?? gitRoot;
+        return { status: "ok" as const, revision, devPreflight: selectedDevPreflight };
+      },
+    );
+    if (selected.status !== "ok") {
+      return buildError(selected.reason, selected.status);
+    }
+    inspectedTarget = selected;
+  } else if (opts.publishGitCheckout) {
+    return buildError("target-metadata-preflight");
+  }
+
   if (channel === "dev") {
     const fetchFailure = await runRequiredStep(
       "git fetch",
@@ -285,16 +387,18 @@ export async function updateGitCheckout(params: {
     if (fetchFailure) {
       return fetchFailure;
     }
-    devPreflight = await runGitDevPreflight({
-      gitRoot,
-      devTarget,
-      needsCheckoutMain,
-      runCommand,
-      timeoutMs,
-      defaultCommandEnv,
-      steps,
-      step,
-    });
+    devPreflight =
+      inspectedTarget?.devPreflight ??
+      (await runGitDevPreflight({
+        gitRoot,
+        devTarget,
+        needsCheckoutMain,
+        runCommand,
+        timeoutMs,
+        defaultCommandEnv,
+        steps,
+        step,
+      }));
     const preflight = devPreflight;
     if (preflight.status !== "ok") {
       return buildError(preflight.reason, preflight.status);
@@ -383,7 +487,9 @@ export async function updateGitCheckout(params: {
     if (fetchFailure) {
       return fetchFailure;
     }
-    const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
+    const tag =
+      inspectedTarget?.revision ??
+      (await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel));
     if (!tag) {
       return buildError("no-release-tag");
     }

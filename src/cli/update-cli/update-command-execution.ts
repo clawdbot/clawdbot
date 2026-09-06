@@ -14,7 +14,8 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateProgress } from "./progress.js";
 import {
-  checkTargetDatabaseSchemas,
+  captureTargetDatabaseSchemaContext,
+  checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
 } from "./schema-preflight.js";
@@ -31,9 +32,14 @@ import {
 } from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
+  captureOwnedManagedUpdatePreflightContext,
+  revalidateUpdateDatabaseContext,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import {
+  GatewayServiceUpdateOwnershipError,
+  type ManagedServiceRootRedirect,
+} from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -50,6 +56,76 @@ import {
 } from "./update-package-executor.js";
 
 const CLI_NAME = resolveCliName();
+
+export async function inspectUpdateDatabaseContexts(params: {
+  roots: readonly string[];
+  updateInstallKind: "package" | "git";
+  shouldRestart: boolean;
+  jsonMode: boolean;
+  timeoutMs: number;
+  invocationCwd?: string;
+  managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
+}) {
+  let service: PreManagedServiceStop | undefined;
+  const services = new Map<string, PreManagedServiceStop>();
+  for (const root of new Set(params.roots)) {
+    const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+      root,
+      updateInstallKind: params.updateInstallKind,
+      shouldRestart: params.shouldRestart,
+      jsonMode: params.jsonMode,
+      timeoutMs: params.timeoutMs,
+      phase: "inspect",
+      expectedService: params.expectedServices?.get(root),
+    }).catch((error: unknown) => {
+      if (error instanceof GatewayServiceUpdateOwnershipError) {
+        throw new UpdatePreMutationError("managed-service-preflight", error.message);
+      }
+      throw error;
+    });
+    const unavailable =
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+        ? inspected.serviceUpdateVerdict.message
+        : undefined;
+    if (inspected.blockMessage || unavailable) {
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        formatUpdateAncestryBlockMessage(inspected.blockMessage ?? unavailable!),
+      );
+    }
+    if (inspected.serviceUpdateVerdict?.kind === "unresolved") {
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        "Gateway service installation ownership is unresolved. Run `openclaw gateway status --deep` and retry before changing package or Git files.",
+      );
+    }
+    services.set(root, inspected);
+    if (inspected.serviceUpdateVerdict?.kind === "owned") {
+      service = inspected;
+      break;
+    }
+  }
+  const managed = await captureOwnedManagedUpdatePreflightContext({
+    stopState: service,
+    processEnv: process.env,
+    invocationCwd: params.invocationCwd,
+  });
+  if (params.managedServiceRootRedirect && !managed) {
+    throw new UpdatePreMutationError(
+      "managed-service-preflight",
+      "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",
+    );
+  }
+  // Redirected package replacement does not own the invoking installation's stores.
+  const contexts = params.managedServiceRootRedirect
+    ? []
+    : [await captureTargetDatabaseSchemaContext(process.env)];
+  if (managed) {
+    contexts.push(managed);
+  }
+  return { service, services, contexts, managedEnv: managed?.env };
+}
 
 type MutableUpdateExecutionResult = {
   result: UpdateRunResult;
@@ -83,9 +159,37 @@ export async function executeMutableUpdate(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   invocationCwd?: string;
   recoveryState: UpdateCommandRecoveryState;
+  prepareMutableUpdate: (env?: NodeJS.ProcessEnv) => Promise<void>;
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  let admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined;
+  const recheckSchemas = async (versions: OpenClawSchemaVersions | undefined) => {
+    if (!admission) {
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        "Database admission was not inspected.",
+      );
+    }
+    await inspectUpdateDatabaseContexts({
+      roots: [...admission.services.keys()],
+      updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
+      shouldRestart: params.shouldRestart,
+      jsonMode: Boolean(params.opts.json),
+      timeoutMs: params.updateStepTimeoutMs,
+      invocationCwd: params.invocationCwd,
+      managedServiceRootRedirect: params.managedServiceRootRedirect,
+      expectedServices: admission.services,
+    });
+    admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
+    const schemas = await checkTargetDatabaseSchemasForContexts(versions, admission.contexts);
+    if (hasSchemaRefusal(schemas)) {
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(schemas).join("\n"),
+      );
+    }
+  };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   const originalRecovery = () =>
     params.installKind === "git"
@@ -123,6 +227,7 @@ export async function executeMutableUpdate(params: {
           jsonMode: Boolean(params.opts.json),
           timeoutMs: params.updateStepTimeoutMs,
           phase,
+          expectedService: admission?.services.get(mutationRoot),
           updateRun: params.opts.run,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
@@ -169,6 +274,9 @@ export async function executeMutableUpdate(params: {
       }
       if (err instanceof UpdateCommandAbort || err instanceof UpdatePreMutationError) {
         throw err;
+      }
+      if (err instanceof GatewayServiceUpdateOwnershipError) {
+        throw new UpdatePreMutationError("managed-service-preflight", err.message);
       }
       params.stop();
       throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
@@ -243,25 +351,24 @@ export async function executeMutableUpdate(params: {
   let preparedPackageUpdate: PreparedPackageUpdate | undefined;
   let packageActivationStarted = false;
   try {
-    preparedPackageUpdate = await packageExecutor?.prepare(buildPackagePreparation());
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
-      await stopManagedServiceBeforeMutableUpdate(
-        gitMutationRoots ?? undefined,
-        params.updateInstallKind === "git" ? "inspect" : "prepare",
-      );
+      admission = await inspectUpdateDatabaseContexts({
+        roots: gitMutationRoots ?? [params.root],
+        updateInstallKind: params.updateInstallKind,
+        shouldRestart: params.shouldRestart,
+        jsonMode: Boolean(params.opts.json),
+        timeoutMs: params.updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
+        managedServiceRootRedirect: params.managedServiceRootRedirect,
+      });
     }
-    const postStopPackageSchemaPreflight =
-      params.updateInstallKind === "package"
-        ? await checkTargetDatabaseSchemas(
-            params.packageTargetSchemaVersions,
-            preManagedServiceStop?.serviceEnv ?? process.env,
-          )
-        : { incompatible: [], indeterminate: [] };
-    if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"),
-      );
+    if (params.updateInstallKind === "package") {
+      await recheckSchemas(params.packageTargetSchemaVersions);
+      preparedPackageUpdate = await packageExecutor?.prepare(buildPackagePreparation());
+      await recheckSchemas(params.packageTargetSchemaVersions);
+      await params.prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
+      await stopManagedServiceBeforeMutableUpdate();
+      await recheckSchemas(params.packageTargetSchemaVersions);
     }
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     if (params.opts.run && params.updateInstallKind === "package") {
@@ -289,6 +396,15 @@ export async function executeMutableUpdate(params: {
         channel: params.channel,
         tag: params.tag,
         devTarget: params.devTarget,
+        inspectGitTarget: async (target) => {
+          if (target.metadataUnreadable) {
+            throw new UpdatePreMutationError(
+              "target-metadata-preflight",
+              `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}).`,
+            );
+          }
+          await recheckSchemas(target.schemaVersions);
+        },
         beforeGitMutation:
           params.updateInstallKind === "git"
             ? createBeforeGitMutation({
@@ -297,6 +413,11 @@ export async function executeMutableUpdate(params: {
                 shouldRestart: params.shouldRestart,
                 stopManagedService: stopManagedServiceBeforeMutableUpdate,
                 getPreManagedServiceStop: () => preManagedServiceStop,
+                checkTargetSchemas: recheckSchemas,
+                prepareMutableUpdate: () =>
+                  params.prepareMutableUpdate(
+                    ownedManagedUpdateContext?.env ?? admission?.managedEnv,
+                  ),
                 switchToGit: params.switchToGit,
               })
             : undefined,

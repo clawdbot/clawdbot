@@ -387,6 +387,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
+      [`git -C ${tempDir} rev-parse ${stableTag}^{commit}`]: { stdout: "b".repeat(40) },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
@@ -580,7 +581,7 @@ describe("runGatewayUpdate", () => {
               worktree = argv.at(-2);
               assert.ok(worktree);
               // Git can retain this lock when creation is forcibly terminated during checkout.
-              await runRealGit(localRoot, "worktree", "lock", "--reason", "initializing", worktree);
+              await runRealGit(worktree, "worktree", "lock", "--reason", "initializing", worktree);
               controller.abort(stopped);
             }
             return result;
@@ -686,9 +687,40 @@ describe("runGatewayUpdate", () => {
       } | void>;
     },
   ) {
+    // These callers script Git responses, including clone's filesystem result.
+    // Native Git cases call runGatewayUpdate directly and never use this adapter.
+    const mirrors = new Map<string, string>();
+    const scriptedCommand = async (
+      argv: string[],
+      runOptions: Parameters<typeof runCommand>[1],
+    ) => {
+      if (argv[0] === "git" && argv[1] === "-C") {
+        const commandRoot = argv[2];
+        assert.ok(commandRoot);
+        if (argv[3] === "clone" && argv[4] === "--mirror") {
+          const result = await runCommand(argv, runOptions);
+          if (result.code === 0) {
+            const mirror = argv.at(-1);
+            assert.ok(mirror);
+            await fs.mkdir(mirror);
+            mirrors.set(mirror, commandRoot);
+          }
+          return result;
+        }
+        const mirror = argv[3]?.startsWith("--git-dir=") ? argv[3].slice(10) : commandRoot;
+        const original = mirrors.get(mirror);
+        if (original) {
+          return runCommand(
+            ["git", "-C", original, ...argv.slice(argv[3]?.startsWith("--git-dir=") ? 4 : 3)],
+            runOptions,
+          );
+        }
+      }
+      return runCommand(argv, runOptions);
+    };
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
-      runCommand: async (argv, runOptions) => runCommand(argv, runOptions),
+      runCommand: scriptedCommand,
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
@@ -1816,9 +1848,15 @@ describe("runGatewayUpdate", () => {
     expect(preflightInstallCommands).toEqual(["pnpm install"]);
   });
 
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "stages dev preflight in artifact storage without dirtying the checkout (redirected: %s)",
-    async (redirected) => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(
+      [false, true].flatMap((redirected) =>
+        [false, true].map((admission) => ({ redirected, admission })),
+      ),
+    )(
+    "stages dev preflight without dirtying the checkout (redirected: $redirected, admission: $admission)",
+    async ({ redirected, admission }) => {
       const parent = path.join(tempDir, "parent");
       const checkout = path.join(parent, "checkout");
       const alias = path.join(tempDir, "checkout-link");
@@ -1880,21 +1918,31 @@ describe("runGatewayUpdate", () => {
             }
             return runner(argv, options);
           },
-          beforeGitMutation: async () => {
-            for (const root of preflightRoots) {
-              expect(await pathExists(root)).toBe(false);
-            }
-            expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
-          },
+          ...(admission
+            ? {
+                beforeGitMutation: async () => {
+                  for (const root of preflightRoots) {
+                    expect(await pathExists(root)).toBe(false);
+                  }
+                  expect(await runRealGit(checkout, "status", "--porcelain")).toBe("");
+                },
+              }
+            : {}),
         });
         expect(result.status).toBe("ok");
         expect(stagedStatuses).toEqual([initialStatus]);
         expect(preflightRoots).toHaveLength(1);
         for (const root of preflightRoots) {
-          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(true);
+          expect(root.startsWith(`${artifacts}${path.sep}`)).toBe(!admission);
+          if (admission) {
+            expect(root.startsWith(`${checkout}${path.sep}`)).toBe(false);
+          }
+          expect(await pathExists(root)).toBe(false);
         }
         expect(modes).toEqual([0o700]);
-        expect(devices).toEqual([artifactDevice]);
+        if (!admission) {
+          expect(devices).toEqual([artifactDevice]);
+        }
         expect((await fs.stat(checkout)).mode & 0o777).toBe(0o755);
         expect((await fs.stat(parent)).mode & 0o777).toBe(0o555);
         expect((await fs.stat(artifacts)).mode & 0o777).toBe(0o750);
@@ -1917,11 +1965,19 @@ describe("runGatewayUpdate", () => {
     "returns a structured preflight failure when $operation rejects with $code",
     async ({ operation, code, reason }) => {
       await setupGitPackageManagerFixture();
-      const { runCommand } = createDevGitRunner();
       const beforeGitMutation = vi.fn<() => Promise<void>>();
-      const allocator = vi
-        .spyOn(fs, operation)
-        .mockRejectedValueOnce(Object.assign(new Error("preflight allocation failed"), { code }));
+      const allocator = vi.spyOn(fs, operation);
+      const { runCommand } = createDevGitRunner({
+        onCommand: (key) => {
+          // Inject at the worktree allocator, after private target inspection setup.
+          if (key === `git -C ${tempDir} rev-list --max-count=10 upstream123`) {
+            allocator.mockRejectedValueOnce(
+              Object.assign(new Error("preflight allocation failed"), { code }),
+            );
+          }
+          return undefined;
+        },
+      });
       try {
         await expect(
           runWithCommand(runCommand, { channel: "dev", beforeGitMutation }),
