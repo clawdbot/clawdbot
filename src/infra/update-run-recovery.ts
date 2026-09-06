@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -15,6 +16,9 @@ import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { ensureUpdateRunLedgerSchema } from "./update-run-ledger.js";
 import {
   UpdateRecoveryRecordSchema,
+  UpdateRecoveryConflictError,
+  UpdateRecoveryRequiredError,
+  parseUpdateRecoveryCheckpoint,
   UpdateRecoveryRestoreProgressSchema,
   type UpdateRecoveryRestoreProgress,
   type UpdateRecoveryEffect,
@@ -22,6 +26,10 @@ import {
 } from "./update-run-recovery-schema.js";
 import { digestUpdateRecoveryDatabase } from "./update-run-recovery-snapshot.js";
 
+export {
+  UpdateRecoveryConflictError,
+  UpdateRecoveryRequiredError,
+} from "./update-run-recovery-schema.js";
 export type {
   UpdateRecoveryRecord,
   UpdateRecoveryEffect,
@@ -41,20 +49,6 @@ export type UpdateRecoveryRevision = Pick<
 /** Correlation only. The receiving runtime must independently reacquire authority. */
 export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
 
-export class UpdateRecoveryConflictError extends Error {
-  constructor() {
-    super("Update recovery changed; reload and reconcile before continuing.");
-    this.name = "UpdateRecoveryConflictError";
-  }
-}
-export class UpdateRecoveryRequiredError extends Error {
-  constructor(readonly record: UpdateRecoveryRecord) {
-    super(
-      `Update ${record.runId} has unfinished recovery; reconcile it before starting another update.`,
-    );
-    this.name = "UpdateRecoveryRequiredError";
-  }
-}
 function decodeRecovery(raw: string, runId: string): UpdateRecoveryRecord {
   if (Buffer.byteLength(raw) > MAX_RECOVERY_BYTES) {
     throw new Error("Update recovery record exceeds its storage limit");
@@ -209,8 +203,11 @@ export function beginUpdateRecovery(
         throw new Error("Recovery requires an existing running update history record");
       }
       const now = Date.now();
+      const env = options.env ?? process.env;
+      const stateDir = resolveStateDir(env);
       const record: UpdateRecoveryRecord = {
         ...input,
+        source: { stateDir, configPath: resolveConfigPath(env, stateDir) },
         transactionId: randomUUID(),
         revision: 0,
         claimId: randomUUID(),
@@ -239,6 +236,28 @@ export function beginUpdateRecovery(
     options,
   );
 }
+/**
+ * Bind the actual reopened checkpoint before any update effects. The consumer
+ * awaits capture/reopen against current owned state/config/runtime, then passes
+ * ref + manifest.binding here under the post-stop schema/exclusion fence. This
+ * only persists verified facts; replay must reopen the immutable artifact again.
+ */
+export function bindUpdateRecoveryCheckpoint(
+  expected: UpdateRecoveryRevision,
+  checkpoint: NonNullable<UpdateRecoveryRecord["checkpoint"]>,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRecoveryRecord {
+  return mutateRecovery(
+    expected,
+    fence,
+    (record) => {
+      record.checkpoint = parseUpdateRecoveryCheckpoint(record, checkpoint);
+    },
+    options,
+  );
+}
+
 /** Call only after read-only effect reconciliation and reacquiring current exclusion. */
 export function claimUpdateRecovery(
   expected: UpdateRecoveryRevision,
@@ -368,6 +387,9 @@ export function recordUpdateRecoveryIntent(
         throw new Error(
           "Reconcile the outstanding recovery effect before recording another intent",
         );
+      }
+      if (effect.kind === "package-activation" && !record.checkpoint) {
+        throw new Error("Package activation requires a durable checkpoint binding");
       }
       record.effects.push({ ...effect, state: "intent", observedIdentity: null });
       if (effect.kind !== "retirement") {

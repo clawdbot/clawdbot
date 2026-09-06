@@ -18,6 +18,7 @@ import {
   assertNoPendingUpdateRecovery,
   assertUpdateRecoveryClaim,
   beginUpdateRecovery,
+  bindUpdateRecoveryCheckpoint,
   claimUpdateRecovery,
   loadUpdateRecoveries,
   loadUpdateRecovery,
@@ -47,13 +48,37 @@ function setup() {
   const to = { ...from, root: path.join(root, "new"), version: "2.0.0", buildId: "new-build" };
   return { root, options, run, from, to };
 }
-function setupServing(runtime: "candidate" | "previous" = "candidate") {
-  const fixture = setup();
+function checkpointFor(fixture: ReturnType<typeof setup>) {
+  const checkpointId = randomUUID();
+  return {
+    ref: {
+      checkpointId,
+      manifestPath: path.join(fixture.root, "checkpoints", checkpointId, "manifest.json"),
+      manifestSha256: "c".repeat(64),
+    },
+    binding: {
+      runId: fixture.run.runId,
+      stateDir: fixture.root,
+      configPath: path.join(fixture.root, "openclaw.json"),
+      fromRuntime: {
+        root: fixture.from.root,
+        version: fixture.from.version,
+        nodePath: fixture.from.nodePath,
+      },
+    },
+  };
+}
+function beginCapturedRecovery(fixture: ReturnType<typeof setup>) {
   const record = beginUpdateRecovery(
     { runId: fixture.run.runId, from: fixture.from, to: fixture.to },
     fence,
     fixture.options,
   );
+  return bindUpdateRecoveryCheckpoint(record, checkpointFor(fixture), fence, fixture.options);
+}
+function setupServing(runtime: "candidate" | "previous" = "candidate") {
+  const fixture = setup();
+  const record = beginCapturedRecovery(fixture);
   const restartEffectId = randomUUID();
   const intent = recordUpdateRecoveryIntent(
     record,
@@ -118,6 +143,145 @@ afterEach(() => {
 });
 
 describe("durable update recovery", () => {
+  it("pins source paths at admission instead of deriving them from a later checkpoint", () => {
+    const fixture = setup();
+    const { options, run, from, to } = fixture;
+    const selectedConfig = path.join(fixture.root, "selected.json");
+    const selectedOptions = { env: { ...options.env, OPENCLAW_CONFIG_PATH: selectedConfig } };
+    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, selectedOptions);
+    expect(record.source).toEqual({ stateDir: fixture.root, configPath: selectedConfig });
+    const checkpoint = checkpointFor(fixture);
+    expect(() => bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options)).toThrow(
+      "admitted source",
+    );
+    checkpoint.binding.configPath = selectedConfig;
+    // The admitted identity survives a changed environment and database reopen.
+    closeOpenClawStateDatabaseForTest();
+    expect(bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options).source).toEqual(
+      record.source,
+    );
+  });
+
+  it("preserves exact checkpoint identity across reopen without diagnostic disclosure", () => {
+    const fixture = setup();
+    const { root, options, run, from, to } = fixture;
+    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+    const checkpoint = checkpointFor(fixture);
+    checkpoint.ref.manifestPath = path.join(root, "x".repeat(900), "manifest.json");
+    const first = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
+    // A fresh consumer may reconstruct the same facts with different property order.
+    const bound = bindUpdateRecoveryCheckpoint(
+      first,
+      { binding: checkpoint.binding, ref: checkpoint.ref },
+      fence,
+      options,
+    );
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(root);
+    expect(loadUpdateRecovery(run.runId, options)?.checkpoint).toEqual(checkpoint);
+    expect(snapshot(root)).toEqual(before);
+    expect(JSON.stringify(getUpdateRun(run.runId, options))).not.toContain(
+      checkpoint.ref.manifestPath,
+    );
+    const intent = recordUpdateRecoveryIntent(
+      bound,
+      {
+        effectId: randomUUID(),
+        kind: "package-activation",
+        resourceId: to.root,
+        runtime: "candidate",
+      },
+      fence,
+      options,
+    );
+    expect(intent.checkpoint).toEqual(checkpoint);
+    expect(() => bindUpdateRecoveryCheckpoint(bound, checkpoint, fence, options)).toThrow(
+      UpdateRecoveryConflictError,
+    );
+    expect(() => bindUpdateRecoveryCheckpoint(intent, checkpoint, fence, options)).toThrow(
+      "before update effects",
+    );
+  });
+
+  it.each(["run", "root", "version", "node", "state", "config"])(
+    "rejects a checkpoint for another %s without changing the record",
+    (mismatch) => {
+      const fixture = setup();
+      const { options, run, from, to } = fixture;
+      const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+      const checkpoint = checkpointFor(fixture);
+      if (mismatch === "state") {
+        checkpoint.binding.stateDir = path.join(fixture.root, "other-state");
+      }
+      if (mismatch === "config") {
+        checkpoint.binding.configPath = path.join(fixture.root, "other-config.json");
+      }
+      if (mismatch === "run") {
+        checkpoint.binding.runId = randomUUID();
+      }
+      if (mismatch === "root") {
+        checkpoint.binding.fromRuntime.root = to.root;
+      }
+      if (mismatch === "version") {
+        checkpoint.binding.fromRuntime.version = to.version;
+      }
+      if (mismatch === "node") {
+        checkpoint.binding.fromRuntime.nodePath = path.join(fixture.root, "other-node");
+      }
+      expect(() => bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options)).toThrow(
+        "admitted source",
+      );
+      expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
+    },
+  );
+
+  it("rejects checkpoint replacement and rolls back binding when the live fence is lost", () => {
+    const fixture = setup();
+    const { options, run, from, to } = fixture;
+    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+    const checkpoint = checkpointFor(fixture);
+    let calls = 0;
+    expect(() =>
+      bindUpdateRecoveryCheckpoint(
+        record,
+        checkpoint,
+        {
+          assertCurrent() {
+            if (++calls === 3) {
+              throw new Error("exclusion lost");
+            }
+          },
+        },
+        options,
+      ),
+    ).toThrow("exclusion lost");
+    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
+    const bound = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
+    expect(() =>
+      bindUpdateRecoveryCheckpoint(bound, checkpointFor(fixture), fence, options),
+    ).toThrow(UpdateRecoveryConflictError);
+    expect(loadUpdateRecovery(run.runId, options)).toEqual(bound);
+  });
+
+  it("refuses package activation without a durable checkpoint binding", () => {
+    const { options, run, from, to } = setup();
+    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+    expect(() =>
+      recordUpdateRecoveryIntent(
+        record,
+        {
+          effectId: randomUUID(),
+          kind: "package-activation",
+          resourceId: to.root,
+          runtime: "candidate",
+        },
+        fence,
+        options,
+      ),
+    ).toThrow("durable checkpoint binding");
+    expect(loadUpdateRecovery(run.runId, options)).toEqual(record);
+  });
+
   it("fences the parent before a single-use handoff and accepts the fresh candidate after reopening", () => {
     const { root, options, run, observed, receipt, to } = setupServing();
     const verified = recordUpdateRecoveryVerification(
@@ -206,8 +370,9 @@ describe("durable update recovery", () => {
   });
 
   it("does not transfer unresolved effects or consume a handoff after losing live exclusion", () => {
-    const { options, run, from, to } = setup();
-    const initial = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+    const fixture = setup();
+    const { options, run, to } = fixture;
+    const initial = beginCapturedRecovery(fixture);
     const effectId = randomUUID();
     const intent = recordUpdateRecoveryIntent(
       initial,
@@ -349,8 +514,9 @@ describe("durable update recovery", () => {
   });
 
   it("reopens exact identity and detects interruption without writing any database artifact", () => {
-    const { root, options, run, from, to } = setup();
-    const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, options);
+    const fixture = setup();
+    const { root, options, run, from } = fixture;
+    const record = beginCapturedRecovery(fixture);
     const effectId = randomUUID();
     const pending = recordUpdateRecoveryIntent(
       record,
