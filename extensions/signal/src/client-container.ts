@@ -8,11 +8,7 @@
 
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import {
-  detectMime,
-  extractOriginalFilename,
-  parseMediaContentLength,
-} from "openclaw/plugin-sdk/media-runtime";
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
@@ -21,8 +17,13 @@ import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
-import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
+import {
+  filesToBase64DataUris,
+  formatGroupIdForContainer,
+  renderContainerStyledText,
+  stripUuidPrefix,
+} from "./client-container-payload.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -64,17 +65,6 @@ const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const WS_MAX_PAYLOAD = 1024 * 1024;
 const WS_HANDSHAKE_MS = 30_000;
 const WS_SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500;
-// Outbound file paths are converted to base64 before posting to the container. Cap
-// reads to the same default the native signal send path uses (8 MiB) so a path to a
-// huge or symlinked file cannot OOM the gateway before encoding.
-const DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
-  BOLD: "**",
-  ITALIC: "*",
-  STRIKETHROUGH: "~",
-  MONOSPACE: "`",
-  SPOILER: "||",
-};
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();
@@ -554,83 +544,6 @@ export async function streamContainerEvents(params: {
   });
 }
 
-/**
- * Convert local file paths to base64 data URIs for the container REST API.
- * The bbernhard container /v2/send only accepts `base64_attachments` (not file paths).
- */
-async function filesToBase64DataUris(
-  filePaths: string[],
-  maxAttachmentBytes: number,
-): Promise<string[]> {
-  const results: string[] = [];
-  let remainingBytes = maxAttachmentBytes;
-  for (const filePath of filePaths) {
-    // One send owns one raw-byte budget. A per-file cap would let attachment
-    // count multiply the memory consumed before the container request starts.
-    const { buffer } = await readRegularFile({
-      filePath,
-      maxBytes: remainingBytes,
-    });
-    remainingBytes -= buffer.byteLength;
-    const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
-    // Signal splits on semicolons; commas and fragments break RFC 2397 attachment data.
-    const filename = extractOriginalFilename(filePath).replace(/[,;#]/g, "_");
-    const b64 = buffer.toString("base64");
-    results.push(`data:${mime};filename=${filename};base64,${b64}`);
-  }
-  return results;
-}
-
-function escapeContainerStyledText(text: string): string {
-  return text.replace(/[*~`|]/g, (char) => `\\${char}`);
-}
-
-function renderContainerStyledText(
-  text: string,
-  styles: Array<{ start: number; length: number; style: string }>,
-): string {
-  const spans = styles
-    .map((style) => {
-      const marker = CONTAINER_TEXT_STYLE_MARKERS[style.style];
-      if (!marker) {
-        return null;
-      }
-      const start = Math.max(0, Math.min(style.start, text.length));
-      const end = Math.max(start, Math.min(style.start + style.length, text.length));
-      if (end <= start) {
-        return null;
-      }
-      return { start, end, marker };
-    })
-    .filter((span): span is { start: number; end: number; marker: string } => span !== null);
-
-  if (spans.length === 0) {
-    return text;
-  }
-
-  const positions = [
-    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
-  ].toSorted((a, b) => a - b);
-  let rendered = "";
-  for (const [index, pos] of positions.entries()) {
-    for (const span of spans
-      .filter((candidate) => candidate.end === pos)
-      .toSorted((a, b) => b.start - a.start)) {
-      rendered += span.marker;
-    }
-    for (const span of spans
-      .filter((candidate) => candidate.start === pos)
-      .toSorted((a, b) => b.end - a.end)) {
-      rendered += span.marker;
-    }
-    const next = positions[index + 1];
-    if (next !== undefined && next > pos) {
-      rendered += escapeContainerStyledText(text.slice(pos, next));
-    }
-  }
-  return rendered;
-}
-
 function parseContainerSendTimestamp(raw: unknown): number | undefined {
   if (raw == null) {
     return undefined;
@@ -640,10 +553,6 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
     throw new Error("Signal REST send returned invalid timestamp");
   }
   return timestamp;
-}
-
-function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(raw) ?? undefined;
 }
 
 function normalizeContainerQuoteText(raw: unknown): string | undefined {
@@ -678,17 +587,9 @@ async function containerSendMessage(params: {
   }
 
   if (params.attachments && params.attachments.length > 0) {
-    // Container API only accepts base64-encoded attachments, not file paths.
-    const configuredMaxBytes = params.maxAttachmentBytes;
-    const maxAttachmentBytes =
-      typeof configuredMaxBytes === "number" &&
-      Number.isFinite(configuredMaxBytes) &&
-      configuredMaxBytes >= 0
-        ? Math.floor(configuredMaxBytes)
-        : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
     payload.base64_attachments = await filesToBase64DataUris(
       params.attachments,
-      maxAttachmentBytes,
+      params.maxAttachmentBytes,
     );
   }
   if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
@@ -788,24 +689,6 @@ async function containerSendReaction(params: {
 }
 
 /**
- * Strip the "uuid:" prefix that native signal-cli accepts but the container API rejects.
- */
-function stripUuidPrefix(id: string): string {
-  return id.startsWith("uuid:") ? id.slice(5) : id;
-}
-
-/**
- * Convert a group internal_id to the container-expected format.
- * The bbernhard container expects groups as "group.{base64(internal_id)}".
- */
-function formatGroupIdForContainer(groupId: string): string {
-  if (groupId.startsWith("group.")) {
-    return groupId;
-  }
-  return `group.${Buffer.from(groupId).toString("base64")}`;
-}
-
-/**
  * Drop-in replacement for native signalRpcRequest that translates
  * JSON-RPC method + params into the equivalent container REST API calls.
  * This keeps all container protocol details (uuid: stripping, group ID
@@ -841,7 +724,7 @@ export async function containerRpcRequest<T = unknown>(
         return [{ start: Number(start), length: Number(length), style }];
       });
 
-      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+      const quoteTimestamp = parseStrictNonNegativeInteger(
         p.quoteTimestamp ?? p["quote-timestamp"],
       );
       const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
@@ -936,4 +819,3 @@ export async function containerRpcRequest<T = unknown>(
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
