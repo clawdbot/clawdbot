@@ -33,6 +33,7 @@ import {
   projectUpdateAvailable,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
+import { observeGatewayProviderUsageMetrics } from "./provider-usage-metrics-observer.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
@@ -817,6 +818,7 @@ export async function startGatewaySidecars(params: {
             startupTrace: params.startupTrace,
             broadcastPluginEvent: params.broadcastPluginEvent,
             getCronService: params.getCronService,
+            observeProviderUsage: observeGatewayProviderUsageMetrics,
             onHandle: resolvePluginServicesOwner,
           });
           resolvePluginServicesOwner?.(startedPluginServices);

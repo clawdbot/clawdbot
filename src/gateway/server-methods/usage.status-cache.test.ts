@@ -50,6 +50,7 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 
 import {
   clearModelAuthStatusUsageCache,
+  observeProviderUsageMetrics,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
@@ -406,6 +407,107 @@ describe("usage.status provider usage cache", () => {
       expect(retained.updatedAt).toBe(first.updatedAt);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("observes sanitized cache-owned allowance metrics and retains them across timeouts", async () => {
+    await runUsageStatus();
+    now = 61_000;
+    mocks.loadProviderUsageSummary.mockResolvedValueOnce({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [],
+          accountEmail: "must-not-escape@example.com",
+          error: "Timeout",
+        },
+      ],
+    });
+
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers).toEqual([
+          {
+            provider: "openai",
+            windows: [{ window: "5h", usedRatio: 0.1 }],
+            lastAttemptTimestampSeconds: 61,
+            lastSuccessTimestampSeconds: 1,
+            refreshSuccess: false,
+            refreshOutcome: "timeout",
+          },
+        ]);
+      });
+      expect(JSON.stringify(snapshots)).not.toContain("must-not-escape@example.com");
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("classifies a refresh exception as a failed provider observation", async () => {
+    mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("401 Unauthorized"));
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers).toEqual([
+          {
+            provider: "openai",
+            windows: [],
+            lastAttemptTimestampSeconds: 1,
+            refreshSuccess: false,
+            refreshOutcome: "auth",
+          },
+        ]);
+      });
+    } finally {
+      release();
+    }
+  });
+
+  it("withdraws allowance metrics until a changed credential selection succeeds", async () => {
+    const snapshots: Parameters<
+      Parameters<typeof observeProviderUsageMetrics>[0]["listener"]
+    >[0][] = [];
+    const release = observeProviderUsageMetrics({
+      config,
+      listener: (snapshot) => snapshots.push(snapshot),
+      refreshIntervalMs: 3_600_000,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.1 }]);
+      });
+
+      const agentId = resolveDefaultAgentId(config);
+      const agentDir = resolveAgentDir(config, agentId);
+      store = createStore("access-two");
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+      now += 1;
+      await runCapableUsageStatus();
+
+      expect(snapshots.some((snapshot) => snapshot.providers.length === 0)).toBe(true);
+      await vi.waitFor(() => {
+        expect(snapshots.at(-1)?.providers[0]?.windows).toEqual([{ window: "5h", usedRatio: 0.2 }]);
+      });
+    } finally {
+      release();
+    }
   });
 
   it("invalidates cached usage when the runtime config changes", async () => {

@@ -1,6 +1,12 @@
 // Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ProviderUsageMetricsListener,
+  ProviderUsageMetricsProvider,
+  ProviderUsageMetricsRefreshOutcome,
+  ProviderUsageMetricsSnapshot,
+} from "../../infra/provider-usage-metrics.types.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_USAGE_TIMEOUT_MS } from "../../infra/provider-usage.shared.js";
 import type {
@@ -44,12 +50,181 @@ type ProviderUsageRefresh = {
 
 const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
+const usageMetricsByAgentId = new Map<
+  string,
+  {
+    generation: number;
+    selectionKey: string;
+    providers: Map<string, ProviderUsageMetricsProvider>;
+  }
+>();
+const usageMetricsListenersByAgentId = new Map<string, Set<ProviderUsageMetricsListener>>();
 let cacheGeneration = 0;
+let usageMetricsGeneration = 0;
+
+const PROVIDER_USAGE_METRICS_REFRESH_INTERVAL_MS = 60_000;
+const SAFE_METRIC_DIMENSION_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+
+function safeMetricDimension(value: string): string {
+  const trimmed = value.trim();
+  return SAFE_METRIC_DIMENSION_RE.test(trimmed) ? trimmed : "unknown";
+}
+
+function providerUsageRefreshOutcome(
+  error: string | undefined,
+): ProviderUsageMetricsRefreshOutcome {
+  if (!error) {
+    return "success";
+  }
+  const normalized = error.toLowerCase();
+  if (normalized.includes("timeout") || normalized.includes("timed out")) {
+    return "timeout";
+  }
+  if (
+    normalized.includes("unauthor") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("credential") ||
+    normalized.includes("oauth") ||
+    normalized.includes("token") ||
+    /(?:^|\D)(?:401|403)(?:\D|$)/u.test(normalized)
+  ) {
+    return "auth";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests") ||
+    /(?:^|\D)429(?:\D|$)/u.test(normalized)
+  ) {
+    return "rate_limit";
+  }
+  if (
+    normalized.includes("billing") ||
+    normalized.includes("payment") ||
+    normalized.includes("credit") ||
+    /(?:^|\D)402(?:\D|$)/u.test(normalized)
+  ) {
+    return "billing";
+  }
+  if (
+    normalized.includes("malformed") ||
+    normalized.includes("parse") ||
+    normalized.includes("invalid response") ||
+    normalized.includes("unexpected response")
+  ) {
+    return "format";
+  }
+  return "unknown";
+}
+
+function usageMetricsSnapshot(agentId: string): ProviderUsageMetricsSnapshot {
+  const state = usageMetricsByAgentId.get(agentId);
+  return {
+    generation: state?.generation ?? usageMetricsGeneration,
+    providers: [...(state?.providers.values() ?? [])].toSorted((left, right) =>
+      left.provider.localeCompare(right.provider),
+    ),
+  };
+}
+
+function publishUsageMetrics(agentId: string): void {
+  const listeners = usageMetricsListenersByAgentId.get(agentId);
+  if (!listeners || listeners.size === 0) {
+    return;
+  }
+  const snapshot = usageMetricsSnapshot(agentId);
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch (err) {
+      log.debug(`provider usage metrics listener failed: ${formatForLog(err)}`);
+    }
+  }
+}
+
+function reconcileUsageMetricsSelection(params: {
+  agentId: string;
+  credentialKey: string;
+  providerKey: string;
+}): void {
+  const selectionKey = `${params.credentialKey}\0${params.providerKey}`;
+  if (usageMetricsByAgentId.get(params.agentId)?.selectionKey === selectionKey) {
+    return;
+  }
+  usageMetricsGeneration += 1;
+  usageMetricsByAgentId.set(params.agentId, {
+    generation: usageMetricsGeneration,
+    selectionKey,
+    providers: new Map(),
+  });
+  // Selection changes withdraw prior allowance series until the new owner succeeds.
+  publishUsageMetrics(params.agentId);
+}
+
+function recordProviderUsageMetricsRefresh(params: {
+  agentId: string;
+  attemptAt: number;
+  credentialKey: string;
+  error?: unknown;
+  providerIds: readonly UsageProviderId[];
+  providerKey: string;
+  summary?: UsageSummary;
+}): void {
+  const state = usageMetricsByAgentId.get(params.agentId);
+  if (!state || state.selectionKey !== `${params.credentialKey}\0${params.providerKey}`) {
+    return;
+  }
+  const snapshots = new Map(
+    (params.summary?.providers ?? []).map((provider) => [provider.provider, provider]),
+  );
+  const completedAt = Date.now();
+  for (const providerId of params.providerIds) {
+    const provider = safeMetricDimension(providerId);
+    const snapshot = snapshots.get(providerId);
+    const outcome = snapshot
+      ? providerUsageRefreshOutcome(snapshot.error)
+      : params.error
+        ? providerUsageRefreshOutcome(formatForLog(params.error))
+        : "unknown";
+    const previous = state.providers.get(provider);
+    const succeeded = snapshot !== undefined && outcome === "success";
+    state.providers.set(provider, {
+      provider,
+      windows: succeeded
+        ? snapshot.windows.map((window) =>
+            window.resetAt === undefined
+              ? {
+                  window: safeMetricDimension(window.label),
+                  usedRatio: Math.min(1, Math.max(0, window.usedPercent / 100)),
+                }
+              : {
+                  window: safeMetricDimension(window.label),
+                  usedRatio: Math.min(1, Math.max(0, window.usedPercent / 100)),
+                  resetTimestampSeconds: window.resetAt / 1000,
+                },
+          )
+        : (previous?.windows ?? []),
+      lastAttemptTimestampSeconds: params.attemptAt / 1000,
+      ...(succeeded
+        ? { lastSuccessTimestampSeconds: completedAt / 1000 }
+        : previous?.lastSuccessTimestampSeconds !== undefined
+          ? { lastSuccessTimestampSeconds: previous.lastSuccessTimestampSeconds }
+          : {}),
+      refreshSuccess: succeeded,
+      refreshOutcome: outcome,
+    });
+  }
+  publishUsageMetrics(params.agentId);
+}
 
 export function clearModelAuthStatusUsageCache(): void {
   cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
+  usageMetricsGeneration += 1;
+  for (const [agentId] of usageMetricsByAgentId) {
+    usageMetricsByAgentId.delete(agentId);
+    publishUsageMetrics(agentId);
+  }
   clearProviderUsageRuntimeSnapshot();
 }
 
@@ -132,6 +307,8 @@ function scheduleProviderUsageRefresh(params: {
   ) {
     return active.promise;
   }
+  reconcileUsageMetricsSelection(params);
+  const attemptAt = Date.now();
   const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
@@ -143,6 +320,14 @@ function scheduleProviderUsageRefresh(params: {
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
+        recordProviderUsageMetricsRefresh({
+          agentId: params.agentId,
+          attemptAt,
+          credentialKey: params.credentialKey,
+          providerIds: params.providerIds,
+          providerKey: params.providerKey,
+          summary: freshUsage,
+        });
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
         if (
           publishGeneration === cacheGeneration &&
@@ -161,6 +346,14 @@ function scheduleProviderUsageRefresh(params: {
         return usage;
       })
       .catch((err: unknown) => {
+        recordProviderUsageMetricsRefresh({
+          agentId: params.agentId,
+          attemptAt,
+          credentialKey: params.credentialKey,
+          error: err,
+          providerIds: params.providerIds,
+          providerKey: params.providerKey,
+        });
         // Usage is auxiliary and stale data remains valid. A failed refresh
         // publishes nothing, so a capable client keeps seeing the incomplete
         // marker and reports it once its retry budget is spent.
@@ -288,4 +481,83 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   }
   void refresh.catch(() => {});
   return { updatedAt: params.now, providers: [], refreshing: true };
+}
+/**
+ * Observes privacy-safe allowance snapshots owned by the default-agent usage cache.
+ * The returned lease schedules refreshes; listeners and Prometheus scrapes never fetch providers.
+ */
+export function observeProviderUsageMetrics(params: {
+  config: OpenClawConfig;
+  listener: ProviderUsageMetricsListener;
+  refreshIntervalMs?: number;
+}): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let agentId: string | undefined;
+
+  const removeListener = (targetAgentId: string | undefined) => {
+    if (!targetAgentId) {
+      return;
+    }
+    const listeners = usageMetricsListenersByAgentId.get(targetAgentId);
+    listeners?.delete(params.listener);
+    if (listeners?.size === 0) {
+      usageMetricsListenersByAgentId.delete(targetAgentId);
+    }
+  };
+
+  const refresh = async () => {
+    try {
+      const snapshot = getProviderUsageRuntimeSnapshot({ config: params.config });
+      if (agentId !== snapshot.agentId) {
+        removeListener(agentId);
+      }
+      agentId = snapshot.agentId;
+      const { credentialKey, matching, providerIds, providerKey } = resolveProviderUsageCacheRead({
+        agentId,
+        agentDir: snapshot.agentDir,
+        authStore: snapshot.store,
+        configRef: snapshot.configRef,
+        credentialKey: snapshot.credentialKey,
+        providerIds: snapshot.providerIds,
+        forceRefresh: true,
+        now: Date.now(),
+      });
+      reconcileUsageMetricsSelection({ agentId, credentialKey, providerKey });
+      let listeners = usageMetricsListenersByAgentId.get(agentId);
+      if (!listeners) {
+        listeners = new Set();
+        usageMetricsListenersByAgentId.set(agentId, listeners);
+      }
+      listeners.add(params.listener);
+      publishUsageMetrics(agentId);
+      await scheduleProviderUsageRefresh({
+        agentId,
+        agentDir: snapshot.agentDir,
+        authStore: snapshot.store,
+        configRef: snapshot.configRef,
+        credentialKey,
+        providerIds,
+        providerKey,
+        lastGood: matching?.summary,
+      });
+    } catch (err) {
+      log.debug(`provider usage metrics refresh failed: ${formatForLog(err)}`);
+    } finally {
+      if (!stopped) {
+        timer = setTimeout(
+          () => void refresh(),
+          params.refreshIntervalMs ?? PROVIDER_USAGE_METRICS_REFRESH_INTERVAL_MS,
+        );
+        timer.unref?.();
+      }
+    }
+  };
+
+  void refresh();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    removeListener(agentId);
+  };
 }
