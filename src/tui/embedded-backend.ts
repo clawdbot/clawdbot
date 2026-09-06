@@ -781,13 +781,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(applied.error.message);
     }
 
-    return projectSessionPatchResult({
+    const projected = projectSessionPatchResult({
       canonicalKey: target.canonicalKey ?? opts.key,
       cfg,
       entry: applied.entry,
       storePath: target.storePath,
       targetAgentId: target.agentId,
     });
+    return { ...projected, entry: { ...projected.entry } };
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
