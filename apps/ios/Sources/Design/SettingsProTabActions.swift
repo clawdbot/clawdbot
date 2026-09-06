@@ -249,9 +249,11 @@ extension SettingsProTab {
         self.gatewayCredentialFieldStableID = ownsFields ? stableID : nil
         self.gatewayToken = credentials.token ?? ""
         self.gatewayPassword = credentials.password ?? ""
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: self.pendingManualAuthOverride,
             instanceId: trimmedInstanceId,
-            targetStableID: stableID)
+            targetStableID: stableID,
+            allowManualOverride: true)
     }
 
     func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
@@ -524,7 +526,8 @@ extension SettingsProTab {
         }
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: port)
+            port: port,
+            contextPath: self.manualGatewayContextPath)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
         if GatewayStableIdentifier.matches(
             self.appModel.activeGatewayConnectConfig?.effectiveStableID,
@@ -920,9 +923,11 @@ extension SettingsProTab {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -938,9 +943,11 @@ extension SettingsProTab {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -967,13 +974,13 @@ extension SettingsProTab {
         }
     }
 
-    func sendDirectWatchSetup() async {
+    func sendDirectWatchSetup(includeVoice: Bool = false) async {
         guard !self.isSendingWatchDirectSetup else { return }
         self.isSendingWatchDirectSetup = true
         self.watchDirectSetupStatusText = String(localized: "Preparing one-time setup…")
         defer { self.isSendingWatchDirectSetup = false }
         do {
-            let result = try await self.appModel.sendDirectWatchSetup()
+            let result = try await self.appModel.sendDirectWatchSetup(includeVoice: includeVoice)
             self.watchDirectSetupStatusText = result.deliveredImmediately
                 ? String(localized: "Setup sent. Open OpenClaw on the watch to connect.")
                 : String(
@@ -1017,15 +1024,11 @@ extension SettingsProTab {
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
         }
-        guard allowManualOverride else {
-            self.pendingManualAuthOverride = nil
-            return
-        }
-        // Each attempt consumes the in-memory override. Reload durable bootstrap auth even
-        // when the endpoint fields did not change so retry never erases a one-time token.
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: self.pendingManualAuthOverride,
             instanceId: instanceId,
-            targetStableID: stableID)
+            targetStableID: stableID,
+            allowManualOverride: allowManualOverride)
     }
 
     var manualPortIsValid: Bool {

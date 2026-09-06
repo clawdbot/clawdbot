@@ -26,7 +26,7 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       WHERE queue_name = ? AND id = ? AND status = 'pending' AND entry_json = ?`,
   );
   const select = db.prepare(
-    `SELECT queue_name, id, status, retry_count, entry_json, updated_at, failed_at
+    `SELECT queue_name, id, status, retry_count, entry_json, updated_at, failed_at, recovery_state
        FROM delivery_queue_entries WHERE status IN ('pending', 'failed')`,
   );
   select.setReadBigInts(true);
@@ -43,6 +43,10 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       WHERE queue_name = @queueName AND id = @id AND status = 'failed'`,
   );
   for (const row of rows) {
+    // Failed send custody can still own a restartable completion projection.
+    if (row.recovery_state === "settlement_pending") {
+      continue;
+    }
     const parsedEntry = safeParseJsonRecord(String(row.entry_json));
     const queueName = String(row.queue_name);
     const id = String(row.id);

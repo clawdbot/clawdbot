@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -12,10 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/browser-screenshot-body-cancel",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDir = createControlUiE2eArtifactDir("browser-screenshot-body-cancel");
+  }
+});
 
 suite.define(() => {
   it("keeps the status error visible and cancels the unread media body", async () => {
@@ -175,7 +178,6 @@ suite.define(() => {
         });
 
         if (captureUiProofEnabled) {
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             path: path.join(proofDir, "failed-screenshot.png"),

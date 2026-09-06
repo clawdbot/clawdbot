@@ -51,6 +51,18 @@ describe("plugin install record maps", () => {
     ).toBeNull();
   });
 
+  it("rejects malformed accepted capability surfaces", () => {
+    expect(
+      parsePluginInstallRecordMap({
+        demo: {
+          source: "npm",
+          acceptedSurface: { tools: ["read"] },
+          acceptedSurfaceHash: "claimed-hash",
+        },
+      }),
+    ).toBeNull();
+  });
+
   it.each(["constructor", "toString", "__proto__"])(
     "rejects an invalid %s record atomically",
     (pluginId) => {

@@ -40,8 +40,10 @@ Common:
 ```bash
 openclaw security audit --deep
 openclaw gateway status --deep
-openclaw doctor
+openclaw doctor --lint
 ```
+
+`doctor --lint` can exit `1` for findings: read the report and continue the remaining checks. Ordinary `doctor` and `doctor --non-interactive` can copy legacy config and migrate state without `--fix`; reserve repairs for explicit approval. Read-only checks exclude config/service repairs and state migrations, but may produce incidental logs or cache bookkeeping.
 
 macOS:
 

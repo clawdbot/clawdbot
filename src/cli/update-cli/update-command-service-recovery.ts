@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayService } from "../../daemon/service.js";
+import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
@@ -7,6 +8,7 @@ import {
   waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
@@ -32,26 +34,49 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  updateRun?: UpdateCommandOptions["run"];
+  preserveDefinition?: boolean;
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
   expectedVersion?: string;
+  expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
 }> {
-  if (params.health.healthy) {
+  if (params.health.healthy || params.preserveDefinition) {
     return { health: params.health, launchAgentRecovery: null };
   }
 
   const recoverLaunchAgent =
     params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
+  const startedAtMs = Date.now();
   const launchAgentRecovery = await recoverLaunchAgent({
     service: params.service,
     env: params.env,
   });
+  // Native repair can succeed while readiness still fails; retain both observed outcomes.
+  if (launchAgentRecovery.attempted && params.updateRun) {
+    const endedAtMs = Date.now();
+    const { runId, env } = params.updateRun;
+    const repair = getUpdateRun(runId, { env })?.repair ?? [];
+    recordUpdateRunRepairAttempt(
+      runId,
+      {
+        attempt: Math.max(0, ...repair.map((entry) => entry.attempt)) + 1,
+        status: launchAgentRecovery.recovered ? "succeeded" : "failed",
+        startedAtMs,
+        endedAtMs,
+        summary: launchAgentRecovery.recovered
+          ? launchAgentRecovery.message
+          : launchAgentRecovery.detail,
+      },
+      { env },
+    );
+  }
   if (!launchAgentRecovery.recovered) {
     return { health: params.health, launchAgentRecovery };
   }
@@ -61,8 +86,10 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     service: params.service,
     port: params.port,
     expectedVersion: params.expectedVersion,
+    ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
     supervisorKeepsAlive: true,
+    settle: { probes: 12 },
   });
   return { health, launchAgentRecovery };
 }

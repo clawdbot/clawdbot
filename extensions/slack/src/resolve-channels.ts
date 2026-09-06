@@ -3,7 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
-import { collectSlackCursorPages } from "./cursor-pages.js";
+import { collectSlackCursorPages, fetchSlackChannelListPage } from "./cursor-pages.js";
 import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
 export type SlackChannelLookup = {
@@ -61,13 +61,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
 
 async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: (cursor) =>
-      client.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 1000,
-        cursor,
-      }),
+    fetchPage: (cursor) => fetchSlackChannelListPage(client, cursor),
     collectPageItems: (res) =>
       (res.channels ?? [])
         .map((channel) => {

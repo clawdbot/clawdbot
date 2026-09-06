@@ -1,5 +1,6 @@
 // Full-entry coverage for current-attempt error context across model fallback.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -14,13 +15,14 @@ import {
   mockedIsRateLimitAssistantError,
   mockedRunEmbeddedAttempt,
   mockedResolveAuthProfileOrder,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 const DEEPSEEK_ERROR_MESSAGE = "429 insufficient quota";
 const COMPACTION_REMOVED_ERROR_MESSAGE = "current candidate model unavailable";
@@ -119,26 +121,28 @@ function setupCompactionRemovedFallbackAttempt() {
     return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
   });
   mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+  const assistant = makeAssistantMessageFixture({
+    stopReason: "error",
+    errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
+    provider: "anthropic",
+    model: "test-model",
+    content: [],
+  });
   // The pinned profile may rotate to another same-provider credential before
   // the outer model fallback runs, so every credential attempt must fail alike.
   mockedRunEmbeddedAttempt.mockResolvedValue(
     makeAttemptResult({
       assistantTexts: [],
-      lastAssistant: makeAssistantMessageFixture({
-        stopReason: "error",
-        errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
-        provider: "anthropic",
-        model: "test-model",
-        content: [],
-      }),
+      lastAssistant: assistant,
       currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: assistant,
     }),
   );
 }
 
-function runCompactionRemovedFallbackAttempt() {
+function runCompactionRemovedFallbackAttempt(ownedState: OpenClawTestState) {
   return runEmbeddedAgent({
-    ...overflowBaseRunParams,
+    ...createOverflowRunParams(ownedState),
     runId: "run-compaction-fallback-error-context",
     config: makeCrossProviderFallbackConfig(),
     agentHarnessRuntimeOverride: "openclaw",
@@ -150,40 +154,46 @@ function runCompactionRemovedFallbackAttempt() {
   });
 }
 
-async function expectDeepseekFallbackError(
-  promise: Promise<unknown>,
-  getLastFormattedAssistant: () => unknown,
-) {
+async function expectDeepseekFallbackError(promise: Promise<unknown>) {
   await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-  await expect(promise).rejects.toThrow(`deepseek/deepseek-chat: ${DEEPSEEK_ERROR_MESSAGE}`);
+  // The user-facing copy is composed by the real (unmocked) renderer; the
+  // current-attempt provider/model appearing in it is the attribution proof.
+  await expect(promise).rejects.toThrow("deepseek (deepseek-chat) returned a billing error");
   expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
   const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
   expectDeepseekAssistant(rateLimitCalls.at(-1)?.[0]);
-  expectDeepseekAssistant(getLastFormattedAssistant());
 }
 
 describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent, {
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "deepseek",
-      model: "deepseek-chat",
+    const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    await withOpenClawTestState({ label: "cross-provider-warmup" }, async (warmupState) => {
+      await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState, {
+        config: makeCrossProviderFallbackConfig(),
+        agentHarnessRuntimeOverride: "openclaw",
+        provider: "deepseek",
+        model: "deepseek-chat",
+      });
+      setupCompactionRemovedFallbackAttempt();
+      await runCompactionRemovedFallbackAttempt(warmupState).catch(() => undefined);
     });
-    setupCompactionRemovedFallbackAttempt();
-    await runCompactionRemovedFallbackAttempt().catch(() => undefined);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.cross-provider-fallback-error-context" });
     useCrossProviderAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
+  afterEach(async () => {
+    await state?.cleanup();
+  });
+
   it("uses the current attempt assistant for fallback errors instead of stale session history", async () => {
     setupDeepseekFallbackErrorMatchers();
-    const getLastFormattedAssistant = captureFormattedAssistant();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -205,7 +215,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     );
 
     const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-cross-provider-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
       agentHarnessRuntimeOverride: "openclaw",
@@ -216,18 +226,16 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
-    await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
+    await expectDeepseekFallbackError(promise);
   });
 
-  it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
+  it("uses the completed assistant when compaction removes the current attempt slice", async () => {
     const getLastFormattedAssistant = captureFormattedAssistant();
     setupCompactionRemovedFallbackAttempt();
-    const promise = runCompactionRemovedFallbackAttempt();
+    const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(
-      `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
-    );
+    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
@@ -256,7 +264,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     );
 
     const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-stale-session-assistant-timeout",
       config: makeCrossProviderFallbackConfig(),
       agentHarnessRuntimeOverride: "openclaw",
@@ -294,7 +302,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       runId: "run-stale-session-assistant-non-timeout",
       config: makeCrossProviderFallbackConfig(),
       agentHarnessRuntimeOverride: "openclaw",
@@ -312,5 +320,80 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       provider: "deepseek",
       model: "deepseek-chat",
     });
+  });
+
+  it("does not present stale successful-assistant errors as the current timeout", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+        currentAttemptAssistant: makeAssistantMessageFixture({
+          stopReason: "stop",
+          errorMessage: "500 stale provider diagnostic",
+          provider: "deepseek",
+          model: "deepseek-chat",
+          content: [],
+        }),
+      }),
+    );
+
+    const promise = runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      runId: "run-successful-assistant-stale-error-timeout",
+      config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      authProfileId: "deepseek:test",
+      authProfileIdSource: "user",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("LLM request timed out.");
+    await expect(promise).rejects.not.toThrow("500");
+    await expect(promise).rejects.not.toThrow("stale provider diagnostic");
+  });
+
+  it("does not retry successful replies for stale unsupported-thinking errors", async () => {
+    const helpers = await import("../embedded-agent-helpers.js");
+    const thinking = await import("../embedded-agent-helpers/thinking.js");
+    const thinkingMock = vi.mocked(helpers.pickFallbackThinkingLevel);
+    const previousThinking = thinkingMock.getMockImplementation();
+    thinkingMock.mockImplementation(thinking.pickFallbackThinkingLevel);
+    try {
+      mockedRunEmbeddedAttempt.mockResolvedValue(
+        makeAttemptResult({
+          assistantTexts: ["Successful reply"],
+          currentAttemptAssistant: makeAssistantMessageFixture({
+            stopReason: "stop",
+            errorMessage: 'think value "high" is not supported for this model',
+            provider: "deepseek",
+            model: "deepseek-chat",
+            content: [{ type: "text", text: "Successful reply" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        runId: "run-successful-assistant-stale-thinking",
+        config: makeCrossProviderFallbackConfig(),
+        agentHarnessRuntimeOverride: "openclaw",
+        provider: "deepseek",
+        model: "deepseek-chat",
+        thinkLevel: "high",
+        authProfileId: "deepseek:test",
+        authProfileIdSource: "user",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(result.meta.finalAssistantVisibleText).toBe("Successful reply");
+    } finally {
+      thinkingMock.mockReset();
+      if (previousThinking) {
+        thinkingMock.mockImplementation(previousThinking);
+      }
+    }
   });
 });

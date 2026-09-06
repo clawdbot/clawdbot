@@ -13,6 +13,7 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.gatewayConnectionDisplay
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
@@ -32,13 +33,6 @@ import java.util.Locale
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ShellScreenLogicTest {
-  @Test
-  fun bottomNavHidesForKeyboardAndCommandPalette() {
-    assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
-  }
-
   @Test
   fun localizedUppercaseUsesTheSelectedAppLocale() {
     assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
@@ -75,7 +69,7 @@ class ShellScreenLogicTest {
   @Test
   fun settingsRouteOpenedCrossTabReturnsToOriginTab() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Gateway)
     assertEquals(Tab.Settings, nav.activeTab)
     assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
@@ -100,7 +94,7 @@ class ShellScreenLogicTest {
   @Test
   fun tabBarSettingsSelectionOpensHomeAndBacksToOverview() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Voice)
     nav.selectTab(Tab.Settings)
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
@@ -112,7 +106,7 @@ class ShellScreenLogicTest {
   @Test
   fun settingsDetailOpenedFromHomeUnwindsToHomeBeforeLeavingSettings() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Home)
     nav.openSettingsRouteFromHome(SettingsRoute.Gateway)
 
@@ -132,7 +126,7 @@ class ShellScreenLogicTest {
     nav.back()
     assertEquals(Tab.Chat, nav.activeTab)
 
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openDetailTab(Tab.ProvidersModels)
     nav.back()
     assertEquals(Tab.Chat, nav.activeTab)
@@ -156,7 +150,7 @@ class ShellScreenLogicTest {
     val nav = ShellNavigation()
     nav.selectTab(Tab.Chat)
     nav.openDetailTab(Tab.Sessions)
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.back()
     assertEquals(Tab.Overview, nav.activeTab)
   }
@@ -164,7 +158,7 @@ class ShellScreenLogicTest {
   @Test
   fun shellNavigationSaverRoundTripsCrossTabState() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Gateway)
 
     val saveAnything = SaverScope { true }
@@ -175,6 +169,20 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
     restored.back()
     assertEquals(Tab.Chat, restored.activeTab)
+  }
+
+  @Test
+  fun shellNavigationSaverRestoresLegacyVoiceDestinationsToChat() {
+    val activeVoice = ShellNavigation.Saver.restore(listOf("Voice", "Home", "", "false", "main"))!!
+    assertEquals(Tab.Chat, activeVoice.activeTab)
+
+    val returnToVoice = ShellNavigation.Saver.restore(listOf("Settings", "Gateway", "Voice", "false", "main"))!!
+    returnToVoice.back()
+    assertEquals(Tab.Chat, returnToVoice.activeTab)
+
+    val saveAnything = SaverScope { true }
+    val saved = with(ShellNavigation.Saver) { saveAnything.save(returnToVoice) }!!
+    assertEquals(listOf("Chat", "Home", "", "false", "main"), saved)
   }
 
   @Test
@@ -778,41 +786,33 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
-  }
-
-  @Test
   fun settingsSectionsPreserveMeaningfulOrder() {
     val sections =
       settingsSections(
         listOf(
           settingsRow(SettingsRoute.Voice),
-          settingsRow(SettingsRoute.Agents),
+          settingsRow(SettingsRoute.SystemAgent),
           settingsRow(SettingsRoute.Gateway),
           settingsRow(SettingsRoute.Appearance),
+          settingsRow(SettingsRoute.ProvidersModels),
+          settingsRow(SettingsRoute.Approvals),
+          settingsRow(SettingsRoute.NodesDevices),
+          settingsRow(SettingsRoute.CronJobs),
+          settingsRow(SettingsRoute.PhoneCapabilities),
+          settingsRow(SettingsRoute.Notifications),
           settingsRow(SettingsRoute.Health),
         ),
       )
 
     assertEquals(
       listOf(
-        "Connection",
-        "Agents & automation",
-        "Phone context & privacy",
-        "Profile & device",
-        "Diagnostics",
+        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
+        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Profile & device" to listOf(SettingsRoute.Appearance),
+        "Diagnostics" to listOf(SettingsRoute.Health),
       ),
-      sections.map { it.title.resolveNativeText() },
+      sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )
   }
 
@@ -843,6 +843,21 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun gatewaySummaryPreservesNodeFailureWhileOperatorStaysConnected() {
+    val display =
+      gatewayConnectionDisplay(
+        operatorConnected = true,
+        nodeConnected = false,
+        operatorStatusText = "Connected",
+        nodeStatusText = "Gateway error: pairing required",
+        operatorProblem = null,
+        nodeProblem = authProblem("PAIRING_REQUIRED"),
+      )
+
+    assertEquals("Connected (node offline)", gatewaySummary(display))
+  }
+
+  @Test
   fun gatewaySummaryLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
     val problem = authProblem("AUTH_TOKEN_MISSING")
     assertEquals("Online and ready", gatewaySummary("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
@@ -867,7 +882,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route, verbatimText("Value"))
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(

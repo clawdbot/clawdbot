@@ -10,7 +10,7 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadTranscriptEvents,
+  loadTranscriptEventsSync,
   readSessionTranscriptBoundedMessageTailPage,
   replaceTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
@@ -59,7 +59,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
     await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    loadTranscriptEvents: vi.fn(actual.loadTranscriptEvents),
+    loadTranscriptEventsSync: vi.fn(actual.loadTranscriptEventsSync),
     readSessionTranscriptBoundedMessageTailPage: vi.fn(
       actual.readSessionTranscriptBoundedMessageTailPage,
     ),
@@ -560,7 +560,9 @@ describe("session-memory hook", () => {
     vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
       throw new Error("bounded capture unavailable");
     });
-    vi.mocked(loadTranscriptEvents).mockRejectedValueOnce(failure);
+    vi.mocked(loadTranscriptEventsSync).mockImplementationOnce(() => {
+      throw failure;
+    });
     loggerMocks.warn.mockClear();
 
     const { memoryContent } = await runNewWithPreviousSessionEntry({

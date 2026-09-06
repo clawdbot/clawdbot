@@ -1,3 +1,8 @@
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns steer replacement and restart-recovery receipt transitions. */
 import {
@@ -9,7 +14,8 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
+import { prepareCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import {
@@ -17,16 +23,19 @@ import {
   ensureCompletionState,
   normalizeSubagentRunState,
 } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { commitSubagentTaskReplacement } from "./subagent-registry-replacement-store.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type {
   RequesterSettleWakeState,
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { nextSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  nextSubagentRunGeneration,
+} from "./subagent-run-generation.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -35,96 +44,10 @@ import {
 const log = createSubsystemLogger("agents/subagent-registry");
 
 export class SubagentRecoveryManager extends SubagentWaitManager {
-  readonly markSubagentRunForSteerRestart = (
-    runId: string,
-    expected?: SubagentRunRecord,
-  ): boolean => {
-    const key = runId.trim();
-    if (!key) {
-      return false;
-    }
-    const entry = this.options.runs.get(key);
-    if (
-      !entry ||
-      (expected && entry !== expected) ||
-      entry.execution.restartRecovery ||
-      entry.killIntent ||
-      entry.killReconciliation
-    ) {
-      return false;
-    }
-    if (entry.suppressAnnounceReason === "steer-restart") {
-      return false;
-    }
-    entry.suppressAnnounceReason = "steer-restart";
-    try {
-      this.options.persistOrThrow(entry.runId);
-    } catch (error) {
-      entry.suppressAnnounceReason = undefined;
-      throw error;
-    }
-    return true;
-  };
-
-  readonly clearSubagentRunSteerRestart = (
-    runId: string,
-    expected?: SubagentRunRecord,
-  ): boolean => {
-    const key = runId.trim();
-    if (!key) {
-      return false;
-    }
-    const entry = this.options.runs.get(key);
-    if (!entry || (expected && entry !== expected)) {
-      return false;
-    }
-    if (entry.suppressAnnounceReason !== "steer-restart") {
-      return true;
-    }
-    if (typeof entry.execution.endedAt === "number") {
-      const taskResolution = this.options.resolveSubagentTask(entry);
-      const task = taskResolution.lookup === "available" ? taskResolution.task : undefined;
-      const terminal =
-        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED
-          ? {
-              status: "cancelled" as const,
-              endedAt: entry.execution.endedAt,
-              lastEventAt: entry.execution.endedAt,
-              error: "Subagent restart failed after the prior run was interrupted.",
-            }
-          : resolveFinalizedSubagentTaskState(entry);
-      if (terminal) {
-        const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
-        const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
-        try {
-          finalizeTaskRunByRunId({
-            runId: targetRunId,
-            runtime: "subagent",
-            sessionKey: targetSessionKey,
-            ...terminal,
-            suppressDelivery: true,
-          });
-        } catch (err) {
-          // A task-runtime failure must not leave the interrupted run's
-          // announcement and cleanup path permanently suppressed.
-          log.warn("failed to finalize abandoned steer-restart task run", {
-            err,
-            runId: targetRunId,
-            childSessionKey: targetSessionKey,
-          });
-        }
-      }
-    }
-    entry.suppressAnnounceReason = undefined;
-    this.options.persist(entry.runId);
-    // If the interrupted run already finished while suppression was active, retry
-    // cleanup now so completion output is not lost when restart dispatch fails.
-    this.options.resumedRuns.delete(key);
-    if (typeof entry.execution.endedAt === "number" && !entry.cleanupCompletedAt) {
-      this.options.resumeSubagentRun(key);
-    }
-    return true;
-  };
+  private readonly unpersistedAcceptances = new WeakMap<
+    SubagentRunRecord,
+    SubagentRestartRecoveryReceipt
+  >();
 
   readonly replaceSubagentRunAfterSteer = (replaceParams: {
     previousRunId: string;
@@ -177,6 +100,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!source) {
       return false;
     }
+    const sourceSnapshot = structuredClone(source);
 
     const now = Date.now();
     const generation = nextSubagentRunGeneration(
@@ -184,6 +108,17 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       source.childSessionKey,
     );
     const cfg = this.options.getRuntimeConfig();
+    const acceptedReceipt = this.unpersistedAcceptances.get(source);
+    const acceptanceSessionTarget =
+      acceptedReceipt && this.currentRunOwnsSession(source)
+        ? {
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(source.childSessionKey),
+            }),
+            sessionKey: source.childSessionKey,
+            clone: false,
+          }
+        : undefined;
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
@@ -230,10 +165,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
-      // New rows carry an exact owner. Legacy replacement rows must retain an
-      // unknown owner so their bounded session fallback can still find the
-      // original detached task across another restart.
-      taskRunId: source.taskRunId,
+      // Materialize the legacy run-id fallback so later replacements keep the
+      // same canonical task owner after this source row is retired.
+      taskRunId: source.taskRunId ?? source.runId,
       task: nextTask,
       generation,
       createdAt: now,
@@ -282,6 +216,22 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     );
     clearDeliveryState(next);
 
+    const taskActivation =
+      source.expectsCompletionMessage === false
+        ? undefined
+        : prepareCanonicalTaskActivation({
+            runtime: "subagent",
+            childSessionKey: next.childSessionKey,
+            runId: source.taskRunId ?? source.runId,
+            detail: createSubagentTaskBackingDetail(generation),
+            startedAt: now,
+            // An admitted kill owns the provisional task projection until its
+            // reconciliation settles. An unclaimed marker yields to the admitted
+            // successor and must not leave its task cancelled.
+            preserveProvisionalCancellation:
+              source.killReconciliation?.taskCancellationAccepted === true,
+          });
+
     if (previousRunId !== nextRunId) {
       this.options.runs.delete(previousRunId);
     }
@@ -292,55 +242,107 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       nextRunId,
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
     ];
-    try {
-      this.options.persistOrThrow(...changedRunIds);
-    } catch (error) {
-      if (
-        replaceParams.persistenceFailure !== undefined ||
-        replaceParams.lifecycleGeneration !== undefined
-      ) {
-        this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
-        this.options.runs.delete(nextRunId);
-        this.options.runs.set(previousRunId, source);
-        log.warn("failed to persist replacement subagent recovery run; restored source lease", {
-          error,
-          previousRunId,
-          nextRunId,
-        });
-        if (replaceParams.persistenceFailure === "throw") {
-          throw error;
+    const rollbackReplacement = () => {
+      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      this.options.runs.delete(nextRunId);
+      this.options.runs.set(previousRunId, source);
+    };
+    const adoptSuccessorOwner = () => {
+      if (!taskActivation) {
+        subagentRuns.commitOwnership(next);
+      }
+      if (previousRunId !== nextRunId) {
+        this.options.clearPendingLifecycleError(previousRunId);
+        this.options.resumedRuns.delete(previousRunId);
+        if (this.shouldDeleteAttachments(source)) {
+          void safeRemoveAttachmentsDir(source);
         }
+        if (
+          source.execution.transcriptTarget &&
+          source.execution.transcriptTarget !== replaceParams.transcriptTarget
+        ) {
+          void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
+        }
+      }
+      this.options.ensureListener();
+      // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+      this.options.startSweeper();
+      if (!next.execution.restartRecovery) {
+        void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
+      }
+    };
+    const canReconcileAcceptedReceipt = () => {
+      // Staging replaces the map entry before commit. Only this exact
+      // live acceptance may bridge its failed write, never a restored copy.
+      if (
+        !acceptedReceipt ||
+        !acceptanceSessionTarget ||
+        this.unpersistedAcceptances.get(source) !== acceptedReceipt ||
+        source.execution.restartRecovery !== acceptedReceipt ||
+        replaceParams.restartRecovery !== acceptedReceipt ||
+        acceptedReceipt.idempotencyKey !== nextRunId ||
+        !acceptedReceipt.lifecycleGeneration ||
+        !isAgentEventLifecycleGenerationCurrent(acceptedReceipt.lifecycleGeneration) ||
+        this.options.runs.get(nextRunId) !== next ||
+        source.generation !== sourceSnapshot.generation ||
+        source.createdAt !== sourceSnapshot.createdAt ||
+        typeof source.execution.endedAt === "number" ||
+        source.killIntent ||
+        source.killReconciliation ||
+        source.pauseReason === "sessions_yield" ||
+        source.suppressAnnounceReason === "steer-restart" ||
+        Array.from(this.options.getRunsForChildSession(source.childSessionKey)).some(
+          (candidate) =>
+            candidate !== next && compareSubagentRunGeneration(candidate, sourceSnapshot) > 0,
+        )
+      ) {
         return false;
       }
-      // The gateway has already started nextRunId. Keep its in-memory owner
-      // authoritative and retry best-effort persistence; rolling back here
-      // would orphan a live run that can still mutate the shared session.
-      log.warn("failed to persist replacement subagent run; retaining live successor", {
+      const session = loadSessionEntryReadOnly(acceptanceSessionTarget);
+      return (
+        session?.sessionId === acceptedReceipt.sessionId &&
+        (acceptedReceipt.sessionLifecycleRevision === undefined ||
+          session.lifecycleRevision === acceptedReceipt.sessionLifecycleRevision)
+      );
+    };
+    const persistReplacement = (): void => {
+      if (taskActivation) {
+        commitSubagentTaskReplacement({
+          runs: this.options.runs,
+          changedRunIds,
+          source: sourceSnapshot,
+          successor: next,
+          task: taskActivation,
+          canReconcileAcceptedReceipt,
+        });
+        return;
+      }
+      this.options.persistOrThrow(...changedRunIds);
+    };
+    try {
+      persistReplacement();
+    } catch (error) {
+      rollbackReplacement();
+      log.warn("failed to persist replacement subagent recovery run; restored source lease", {
         error,
         previousRunId,
         nextRunId,
       });
-      this.options.persist(...changedRunIds);
-    }
-    if (previousRunId !== nextRunId) {
-      this.options.clearPendingLifecycleError(previousRunId);
-      this.options.resumedRuns.delete(previousRunId);
-      if (this.shouldDeleteAttachments(source)) {
-        void safeRemoveAttachmentsDir(source);
-      }
       if (
-        source.execution.transcriptTarget &&
-        source.execution.transcriptTarget !== replaceParams.transcriptTarget
+        replaceParams.persistenceFailure === "return-false" ||
+        replaceParams.lifecycleGeneration !== undefined
       ) {
-        void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
+        return false;
       }
+      throw error;
     }
-    this.options.ensureListener();
-    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
-    this.options.startSweeper();
-    if (!next.execution.restartRecovery) {
-      void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
+    this.unpersistedAcceptances.delete(source);
+    // Atomic publication can synchronously trigger another replacement. Do not
+    // start stale cleanup or completion work after that newer owner takes over.
+    if (this.options.runs.get(nextRunId) !== next) {
+      return true;
     }
+    adoptSuccessorOwner();
     return true;
   };
 
@@ -531,13 +533,14 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (receipt.phase !== "consumed") {
       return receipt;
     }
-    const accepted = { ...receipt, phase: "accepted" as const };
+    const accepted = Object.freeze({ ...receipt, phase: "accepted" as const });
     entry.execution.restartRecovery = accepted;
     try {
       this.options.persistOrThrow(runId);
     } catch (error) {
       // Gateway acceptance is irreversible. Keep the in-memory fact and let the
       // caller immediately attempt the strict successor remap.
+      this.unpersistedAcceptances.set(entry, accepted);
       log.warn("failed to persist accepted subagent restart recovery receipt", {
         error,
         runId,
@@ -551,6 +554,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     expected: SubagentRunRecord;
     sessionId: string;
     idempotencyKey: string;
+    pendingNoticeIdempotencyKey?: string;
   }): boolean => {
     const runId = clearParams.runId.trim();
     const entry = this.options.runs.get(runId);
@@ -564,11 +568,43 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     ) {
       return false;
     }
+    const previousNotice = entry.resumptionNotice;
     entry.execution.restartRecovery = undefined;
+    if (clearParams.pendingNoticeIdempotencyKey) {
+      entry.resumptionNotice = {
+        idempotencyKey: clearParams.pendingNoticeIdempotencyKey,
+      };
+    }
     try {
       this.options.persistOrThrow(runId);
     } catch (error) {
       entry.execution.restartRecovery = receipt;
+      entry.resumptionNotice = previousNotice;
+      throw error;
+    }
+    return true;
+  };
+
+  readonly clearPendingSubagentRecoveryNotice = (noticeParams: {
+    runId: string;
+    expected: SubagentRunRecord;
+    idempotencyKey: string;
+  }): boolean => {
+    const runId = noticeParams.runId.trim();
+    const entry = this.options.runs.get(runId);
+    if (
+      !runId ||
+      entry !== noticeParams.expected ||
+      entry.resumptionNotice?.idempotencyKey !== noticeParams.idempotencyKey
+    ) {
+      return false;
+    }
+    const previous = entry.resumptionNotice;
+    entry.resumptionNotice = undefined;
+    try {
+      this.options.persistOrThrow(runId);
+    } catch (error) {
+      entry.resumptionNotice = previous;
       throw error;
     }
     return true;
@@ -580,16 +616,14 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
   }): boolean => {
     const runId = resumeParams.runId.trim();
     const entry = this.options.runs.get(runId);
-    if (
-      !runId ||
-      entry !== resumeParams.expected ||
-      entry.execution.restartRecovery !== undefined
-    ) {
+    const receipt = entry?.execution.restartRecovery;
+    if (!runId || entry !== resumeParams.expected || receipt !== undefined) {
       return false;
     }
     if (entry.killIntent || entry.killReconciliation) {
       return true;
     }
+    this.options.resumedRuns.delete(runId);
     this.options.resumeSubagentRun(runId);
     return true;
   };

@@ -23,6 +23,8 @@ type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Use the bounded subagent prompt instead of the full conversation prompt. */
+  promptMode?: "minimal";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
@@ -30,6 +32,15 @@ type SubagentRunParams = {
   completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
+};
+
+type SubagentCompleteParams = {
+  agentId: string;
+  message: string;
+  extraSystemPrompt?: string;
+  model?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type PluginManagedWorktree = {
@@ -132,6 +143,8 @@ export type PluginRuntime = PluginRuntimeCore & {
     ) => Promise<T>;
   };
   subagent: {
+    /** Fresh, tool-free background inference under the existing subagent model policy. */
+    complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
@@ -144,7 +157,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
     /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
     openDuplex: (
-      params: RuntimeNodeInvokeParams & { maxMessageBytes?: number },
+      params: RuntimeNodeInvokeParams & {
+        maxMessageBytes?: number;
+        maxOutstandingDeliveryBytes?: number;
+      },
     ) => Promise<RuntimeNodeDuplexChannel>;
   };
   sandbox: {
@@ -199,7 +215,14 @@ export type PluginRuntime = PluginRuntimeCore & {
 export type CreatePluginRuntimeOptions = {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   gateway?: PluginRuntime["gateway"];
+  hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
 };
+
+/** Checked contract for both the path-loaded factory and its implementation. */
+export type PluginRuntimeFactory = (
+  options?: CreatePluginRuntimeOptions,
+  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+) => PluginRuntime;

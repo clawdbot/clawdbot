@@ -94,6 +94,87 @@ describe("temporal decay", () => {
     expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
   });
 
+  it("decays dated and slugged memory files at any depth by their embedded date", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "nested-old",
+        path: "memory/dreaming/light/2025-01-01.md",
+        snippet: "stale dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-old",
+        path: "memory/2025-01-01.md",
+        snippet: "stale daily note",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-timestamp",
+        path: "memory/2025-01-01-1430.md",
+        snippet: "stale session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-collision",
+        path: "memory/2025-01-01-1430-2.md",
+        snippet: "stale colliding session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "nested-slug",
+        path: "memory/dreaming/light/2025-01-01-vendor-pitch.md",
+        snippet: "stale named dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "nested-undated",
+        path: "memory/dreaming/light/report.md",
+        snippet: "undated evergreen",
+        vectorScore: 0.7,
+      }),
+    ]);
+
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+    const nestedOld = byPath.get("memory/dreaming/light/2025-01-01.md");
+    const rootOld = byPath.get("memory/2025-01-01.md");
+    expect(nestedOld?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(nestedOld?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory/2025-01-01-1430.md")?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(byPath.get("memory/2025-01-01-1430-2.md")?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(byPath.get("memory/dreaming/light/2025-01-01-vendor-pitch.md")?.score).toBeCloseTo(
+      rootOld?.score ?? 0,
+    );
+    expect(byPath.get("memory/dreaming/light/report.md")?.score).toBeCloseTo(0.7);
+  });
+
+  it("decays nested dated and slugged memory files with Windows-style separators", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "win-nested-old",
+        path: "memory\\dreaming\\light\\2025-01-01.md",
+        snippet: "stale dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "win-nested-slug",
+        path: "memory\\dreaming\\light\\2025-01-01-1430.md",
+        snippet: "stale session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "win-nested-undated",
+        path: "memory\\dreaming\\light\\report.md",
+        snippet: "undated evergreen",
+        vectorScore: 0.7,
+      }),
+    ]);
+
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+    expect(byPath.get("memory\\dreaming\\light\\2025-01-01.md")?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory\\dreaming\\light\\2025-01-01-1430.md")?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory\\dreaming\\light\\report.md")?.score).toBeCloseTo(0.7);
+  });
+
   it("handles future dates, zero age, and very old memories", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({
@@ -122,21 +203,33 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
   });
 
-  it("uses file mtime fallback for non-memory sources", async () => {
+  it("uses file mtime for additional memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
-    const sessionPath = path.join(dir, "sessions", "thread.jsonl");
-    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-    await fs.writeFile(sessionPath, "{}\n");
+    const filePath = path.join(dir, "notes", "topic.md");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "notes\n");
     const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
-    await fs.utimes(sessionPath, oldMtime, oldMtime);
+    await fs.utimes(filePath, oldMtime, oldMtime);
 
     const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "sessions/thread.jsonl", score: 1, source: "sessions" }],
+      results: [{ path: "notes/topic.md", score: 1, source: "memory" }],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,
     });
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  it("leaves session timestamps unknown when their indexed source is missing", async () => {
+    const entry = { path: "sessions/main/missing.jsonl", score: 1, source: "sessions" };
+    expect(
+      await applyTemporalDecayToHybridResults({
+        results: [entry],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        sessionSourceMtimes: new Map(),
+        nowMs: NOW_MS,
+      }),
+    ).toEqual([entry]);
   });
 });

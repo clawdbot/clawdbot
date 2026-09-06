@@ -703,6 +703,18 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     });
   });
 
+  it("rejects deep-profile failures from the current producer contract", () => {
+    expect(
+      evaluateToleratedProfiledKovaReport(
+        profiledResourceReport(),
+        STRICT_INSTRUMENTED_PERFORMANCE_OPTIONS,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "current producer retained failure",
+    });
+  });
+
   it("accepts independently matching non-regressing baseline evidence", () => {
     const partial = partialReport();
     const profiled = profiledResourceReport();
@@ -1324,6 +1336,21 @@ describe("scripts/lib/kova-report-gate.mts", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("profiled-resource-only");
+  });
+
+  it("keeps current-producer deep-profile failures non-zero at the CLI boundary", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        SCRIPT_PATH,
+        writeReport(profiledResourceReport()),
+        "--require-instrumented-performance-contract",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("current producer retained failure");
   });
 
   it("keeps required instrumented PARTIAL evidence non-zero at the CLI boundary", () => {

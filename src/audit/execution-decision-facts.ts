@@ -26,9 +26,15 @@ type ExecutionDecisionRow = Selectable<OpenClawStateKyselyDatabase["execution_de
 type ExecutionDecisionMetadataRow = Omit<ExecutionDecisionRow, "receipt_json"> & {
   receipt_rowid: number;
   payload_bytes: number;
+  bounded_receipt_json: string | null;
 };
 type ExecutionDecisionFactCursor = { occurredAt: number; rowId: number };
+type ExecutionDecisionFactPageEntry = {
+  receipt: DecisionReceiptV1;
+  selectorId: string;
+};
 type ExecutionDecisionFactPage = {
+  entries: ExecutionDecisionFactPageEntry[];
   receipts: DecisionReceiptV1[];
   nextCursor?: ExecutionDecisionFactCursor;
 };
@@ -38,6 +44,7 @@ const EXECUTION_DECISION_FACT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const EXECUTION_DECISION_FACT_MAX_ROWS = 250_000;
 const EXECUTION_DECISION_FACT_PRUNE_BATCH_ROWS = 1_024;
 const EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS = 128;
+const EXECUTION_DECISION_SELECTOR_PREFIX = "decision-fact:";
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 
@@ -321,6 +328,20 @@ function executionDecisionPayloadBytes() {
   return /* kysely-allow-raw: SQLite byte length excludes oversized retained receipt JSON before materialization. */ sql<number>`length(CAST(execution_decision_facts.receipt_json AS BLOB))`;
 }
 
+function executionDecisionBoundedPayload() {
+  return /* kysely-allow-raw: one page snapshot returns bounded payload bytes beside the owning rowid. */ sql<
+    string | null
+  >`CASE WHEN length(CAST(execution_decision_facts.receipt_json AS BLOB)) <= ${EXECUTION_DECISION_FACT_MAX_BYTES} THEN execution_decision_facts.receipt_json ELSE NULL END`;
+}
+
+function executionDecisionSelectorId(row: ExecutionDecisionMetadataRow): string {
+  const rowId = normalizeSqliteNumber(row.receipt_rowid);
+  if (rowId === undefined || rowId < 1) {
+    throw new Error("invalid execution decision fact rowid");
+  }
+  return `${EXECUTION_DECISION_SELECTOR_PREFIX}${rowId}`;
+}
+
 function retainedDecisionFactMetadata(params: {
   db: DatabaseSync;
   contextId: string;
@@ -375,30 +396,13 @@ function retainedDecisionFactMetadata(params: {
       .select([
         executionDecisionRowId().as("receipt_rowid"),
         executionDecisionPayloadBytes().as("payload_bytes"),
+        executionDecisionBoundedPayload().as("bounded_receipt_json"),
       ])
       .orderBy("occurred_at", "asc")
       .orderBy("receipt_id", "asc")
       .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
       .limit(params.limit),
   ).rows;
-}
-
-function retainedDecisionFactRowsById(
-  db: DatabaseSync,
-  ids: readonly string[],
-): Map<string, ExecutionDecisionRow> {
-  if (ids.length === 0) {
-    return new Map();
-  }
-  const rows = executeSqliteQuerySync(
-    db,
-    decisionDb(db)
-      .selectFrom("execution_decision_facts")
-      .selectAll()
-      .where("receipt_id", "in", [...ids])
-      .where(executionDecisionPayloadBytes(), "<=", EXECUTION_DECISION_FACT_MAX_BYTES),
-  ).rows;
-  return new Map(rows.map((row) => [row.receipt_id, row]));
 }
 
 function projectDecisionRow(
@@ -419,6 +423,22 @@ function projectDecisionRow(
   } catch {
     return unknownDecisionReceipt(row, "decision_fact_record_corrupt", "decision.fact.valid");
   }
+}
+
+function projectDecisionMetadata(
+  metadata: ExecutionDecisionMetadataRow,
+  context: ExecutionDecisionContext,
+): DecisionReceiptV1 {
+  if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
+    return unknownDecisionReceipt(
+      metadata,
+      "decision_fact_payload_bounded",
+      "decision.fact.payload_bounded",
+    );
+  }
+  return typeof metadata.bounded_receipt_json === "string"
+    ? projectDecisionRow({ ...metadata, receipt_json: metadata.bounded_receipt_json }, context)
+    : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
 }
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
@@ -455,25 +475,9 @@ export function summarizeExecutionDecisionFactsForContext(params: {
           missingEvidence: ["decision.fact.summary_bounded"],
         };
       }
-      const rowsById = retainedDecisionFactRowsById(
-        db,
-        metadataRows
-          .filter((row) => row.payload_bytes <= EXECUTION_DECISION_FACT_MAX_BYTES)
-          .map((row) => row.receipt_id),
+      const receipts = metadataRows.map((metadata) =>
+        projectDecisionMetadata(metadata, params.context),
       );
-      const receipts = metadataRows.map((metadata) => {
-        if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
-          return unknownDecisionReceipt(
-            metadata,
-            "decision_fact_payload_bounded",
-            "decision.fact.payload_bounded",
-          );
-        }
-        const row = rowsById.get(metadata.receipt_id);
-        return row
-          ? projectDecisionRow(row, params.context)
-          : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
-      });
       const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
       return {
         count,
@@ -532,7 +536,7 @@ export function pageExecutionDecisionFactsForContext(params: {
   return (
     withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
       if (!tableExists(db, "execution_decision_facts")) {
-        return { receipts: [] };
+        return { entries: [], receipts: [] };
       }
       const metadataRows = retainedDecisionFactMetadata({
         db,
@@ -543,28 +547,14 @@ export function pageExecutionDecisionFactsForContext(params: {
         limit: params.limit + 1,
       });
       const pageMetadata = metadataRows.slice(0, params.limit);
-      const rowsById = retainedDecisionFactRowsById(
-        db,
-        pageMetadata
-          .filter((row) => row.payload_bytes <= EXECUTION_DECISION_FACT_MAX_BYTES)
-          .map((row) => row.receipt_id),
-      );
-      const receipts = pageMetadata.map((metadata) => {
-        if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
-          return unknownDecisionReceipt(
-            metadata,
-            "decision_fact_payload_bounded",
-            "decision.fact.payload_bounded",
-          );
-        }
-        const row = rowsById.get(metadata.receipt_id);
-        return row
-          ? projectDecisionRow(row, params.context)
-          : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
-      });
+      const entries = pageMetadata.map((metadata) => ({
+        receipt: projectDecisionMetadata(metadata, params.context),
+        selectorId: executionDecisionSelectorId(metadata),
+      }));
       const last = pageMetadata.at(-1);
       return {
-        receipts,
+        entries,
+        receipts: entries.map((entry) => entry.receipt),
         ...(metadataRows.length > params.limit && last
           ? {
               nextCursor: {
@@ -574,7 +564,7 @@ export function pageExecutionDecisionFactsForContext(params: {
             }
           : {}),
       };
-    }, params.database) ?? { receipts: [] }
+    }, params.database) ?? { entries: [], receipts: [] }
   );
 }
 

@@ -14,7 +14,7 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-c
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
-import { isSwarmRunQueued, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { isSwarmRunActive, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
@@ -200,13 +200,14 @@ class SubagentRunManager extends SubagentLaunchManager {
         // it receives the same reconciliation tombstone as a direct kill.
         continue;
       }
-      entrySnapshots.set(entry, structuredClone(entry));
+      // Rollback must retain the exact claim owned by the pending cancellation.
+      entrySnapshots.set(entry, { ...structuredClone(entry), killIntent: entry.killIntent });
       const wasYielded = entry.pauseReason === "sessions_yield";
       const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
       const collectorLaunchInFlight =
         wasQueuedCollector &&
         entry.swarmLaunchPending === true &&
-        !isSwarmRunQueued(entry.schedulerSlotId ?? entry.runId);
+        isSwarmRunActive(entry.schedulerSlotId ?? entry.runId);
       if (wasQueuedCollector) {
         queuedCollectorRunIds.push(entry.runId);
       }
@@ -257,6 +258,10 @@ class SubagentRunManager extends SubagentLaunchManager {
       entry.killReconciliation = {
         killedAt:
           existingKillIntent?.requestedAt ?? existingKillReconciliation?.killedAt ?? taskEndedAt,
+        taskCancellationAccepted:
+          existingKillIntent || existingKillReconciliation?.taskCancellationAccepted === true
+            ? true
+            : undefined,
         suppressTaskDelivery:
           existingKillIntent?.suppressTaskDelivery === true ||
           existingKillReconciliation?.suppressTaskDelivery === true ||
@@ -322,7 +327,7 @@ class SubagentRunManager extends SubagentLaunchManager {
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);
-        }).catch((err: unknown) => {
+        }, "subagents:session-finalize").catch((err: unknown) => {
           log.warn("failed to run killed subagent cleanup tail", {
             err,
             runId: entry.runId,

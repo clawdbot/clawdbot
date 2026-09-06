@@ -2,19 +2,18 @@
 import { isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
 import { isGatewayMachineOutput } from "../gateway-cli/output-mode.js";
-import { isModelsStatusJsonOutput } from "../models-output-mode.js";
+import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "../models-output-mode.js";
 import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
 import { isProxyMachineOutput } from "../proxy-output-mode.js";
 import { isSkillsMachineOutput } from "../skills-output-mode.js";
 import { isSystemMachineOutput } from "../system-output-mode.js";
-import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
 /** Descriptor shape for root-level sub-CLI commands. */
 export type SubCliDescriptor = NamedCommandDescriptor;
 
-const subCliCommandCatalog = defineCommandDescriptorCatalog([
+const subCliCommandDescriptors = [
   { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
     name: "gateway",
@@ -38,12 +37,18 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "models",
     description: "Model discovery, scanning, and configuration",
     hasSubcommands: true,
-    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv),
+    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv) || isModelsPlainMachineOutput(argv),
   },
   {
     name: "promos",
     description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
+  },
+  {
+    name: "telemetry",
+    description: "Inspect and manage anonymous usage telemetry",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "infer",
@@ -249,48 +254,28 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
-] as const satisfies ReadonlyArray<SubCliDescriptor>);
-
-function filterPrivateQaItems<T>(
-  items: ReadonlyArray<T>,
-  getName: (item: T) => string,
-): ReadonlyArray<T> {
-  if (isPrivateQaCliEnabled()) {
-    return items;
-  }
-  return items.filter((item) => getName(item) !== "qa");
-}
+] as const satisfies ReadonlyArray<SubCliDescriptor>;
 
 /** Visible sub-CLI descriptors after private QA gating. */
-export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
-  subCliCommandCatalog.descriptors,
-  (descriptor) => descriptor.name,
-);
+export const SUB_CLI_DESCRIPTORS = getSubCliEntriesCore();
 
 /** Return visible sub-CLI descriptors in help/registration order. */
 export function getSubCliEntriesCore(): ReadonlyArray<SubCliDescriptor> {
-  return filterPrivateQaItems(
-    subCliCommandCatalog.getDescriptors(),
-    (descriptor) => descriptor.name,
-  );
+  return isPrivateQaCliEnabled()
+    ? subCliCommandDescriptors
+    : subCliCommandDescriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
 /** Return visible sub-CLI names that own child subcommands. */
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getCommandsWithSubcommands(),
-      (command) => command,
-    ),
-  ];
+  return getSubCliEntriesCore()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name);
 }
 
 /** Return visible sub-CLI names whose parent command should show help by default. */
 export function getSubCliParentDefaultHelpCommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getParentDefaultHelpCommands(),
-      (command) => command,
-    ),
-  ];
+  return getSubCliEntriesCore()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name);
 }

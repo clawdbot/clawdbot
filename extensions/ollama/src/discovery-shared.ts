@@ -5,6 +5,7 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -65,37 +66,44 @@ export function resolveOllamaRuntimeBaseUrl(params: {
   return params.discoveredBaseUrl;
 }
 
-function resolveOllamaDiscoveryApiKey(params: {
+function resolveOllamaDiscoveryAuth(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
-  explicitApiKey?: string;
-  explicitApiKeyIsResolvedSecret?: boolean;
-  resolvedApiKey?: unknown;
-  resolvedDiscoveryApiKey?: unknown;
-}): string | undefined {
+  explicitApiKey?: ModelProviderConfig["apiKey"];
+  resolvedAuth: ReturnType<OllamaDiscoveryContext["resolveProviderApiKey"]>;
+}): { apiKey?: ModelProviderConfig["apiKey"]; discoveryApiKey?: string } | null {
   const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
-  const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
-  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedDiscoveryApiKey);
-  const explicitApiKey = normalizeOptionalString(params.explicitApiKey);
-  if (
-    explicitApiKey &&
-    (params.explicitApiKeyIsResolvedSecret || !isOllamaApiKeyMarker(explicitApiKey))
-  ) {
-    return explicitApiKey;
+  const resolvedApiKey = normalizeOptionalString(params.resolvedAuth.apiKey);
+  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedAuth.discoveryApiKey);
+  const explicitRef = coerceSecretRef(params.explicitApiKey);
+  const explicitApiKey = explicitRef
+    ? resolvedDiscoveryApiKey
+    : readOllamaStringValue(params.explicitApiKey);
+  // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
+  // config, even when the credential bytes happen to equal a local marker.
+  if (explicitRef && !explicitApiKey) {
+    return null;
+  }
+  if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
+    return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
   }
   if (!isLocalOllamaBaseUrl(params.baseUrl)) {
     if (resolvedDiscoveryApiKey) {
-      return resolvedDiscoveryApiKey;
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
     }
     if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
-      return resolvedApiKey;
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
     }
-    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY ? envValue : undefined;
+    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
+      ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
+      : {};
   }
   if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
-    return resolvedApiKey;
+    return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
   }
-  return OLLAMA_DEFAULT_API_KEY;
+  // Ambient cloud credentials must not reach local servers; synthetic local
+  // auth belongs only in config, never in HTTP discovery headers.
+  return { apiKey: OLLAMA_DEFAULT_API_KEY };
 }
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
@@ -104,7 +112,6 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
-  "127.0.0.1",
   "0.0.0.0",
   "::1",
   "::",
@@ -113,17 +120,6 @@ const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "host.orb.internal",
 ]);
 const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
-
-function isIpv4Loopback(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  return octets[0] === 127;
-}
 
 function isIpv4PrivateRange(host: string): boolean {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
@@ -161,6 +157,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    isLoopbackHost(host) ||
     host.endsWith(".local") ||
     isIpv4PrivateRange(host) ||
     isIpv6LocalRange(host) ||
@@ -198,7 +195,7 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
   }
-  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isIpv4Loopback(host);
+  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
 }
 
 function hasExplicitRemoteOllamaApiProvider(
@@ -225,8 +222,12 @@ function hasExplicitRemoteOllamaApiProvider(
 export function shouldUseSyntheticOllamaAuth(
   providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
+  // Explicit literal credentials and refs belong to configured auth, not the
+  // synthetic local no-auth path.
+  const apiKey = readOllamaStringValue(providerConfig?.apiKey);
   if (
     coerceSecretRef(providerConfig?.apiKey) ||
+    (apiKey && !isOllamaApiKeyMarker(apiKey)) ||
     !hasMeaningfulExplicitOllamaConfig(providerConfig)
   ) {
     return false;
@@ -300,32 +301,24 @@ export async function resolveOllamaDiscoveryResult(params: {
   }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
   const ollamaKey = resolvedOllamaAuth.apiKey;
-  const ollamaDiscoveryKey = resolvedOllamaAuth.discoveryApiKey;
   const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
   const hasRealOllamaKey =
     typeof ollamaKey === "string" &&
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
-  const explicitApiKeyRef = coerceSecretRef(explicit?.apiKey);
-  const explicitApiKey = explicitApiKeyRef
-    ? readOllamaStringValue(ollamaDiscoveryKey)
-    : readOllamaStringValue(explicit?.apiKey);
-  // apiKey can be an env-name or managed marker; only discoveryApiKey proves
-  // an explicit SecretRef resolved. Never replace its owner with local auth.
-  if (explicitApiKeyRef && !explicitApiKey) {
+  const auth = resolveOllamaDiscoveryAuth({
+    env: params.ctx.env,
+    baseUrl: configuredBaseUrl,
+    explicitApiKey: explicit?.apiKey,
+    resolvedAuth: resolvedOllamaAuth,
+  });
+  if (!auth) {
     return null;
   }
+  const { apiKey, discoveryApiKey } = auth;
   if (hasExplicitModels && explicit) {
     const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
     const api = explicit.api ?? "ollama";
-    const apiKey = resolveOllamaDiscoveryApiKey({
-      env: params.ctx.env,
-      baseUrl: discoveredBaseUrl,
-      explicitApiKey,
-      explicitApiKeyIsResolvedSecret: Boolean(explicitApiKeyRef),
-      resolvedApiKey: ollamaKey,
-      resolvedDiscoveryApiKey: ollamaDiscoveryKey,
-    });
     return {
       provider: {
         ...explicit,
@@ -351,18 +344,6 @@ export async function resolveOllamaDiscoveryResult(params: {
   }
 
   const quiet = !hasRealOllamaKey && !hasMeaningfulExplicitConfig;
-  const resolvedDiscoveryApiKey = resolveOllamaDiscoveryApiKey({
-    env: params.ctx.env,
-    baseUrl: configuredBaseUrl,
-    explicitApiKey,
-    explicitApiKeyIsResolvedSecret: Boolean(explicitApiKeyRef),
-    resolvedApiKey: ollamaKey,
-    resolvedDiscoveryApiKey: ollamaDiscoveryKey,
-  });
-  const discoveryApiKey =
-    resolvedDiscoveryApiKey === OLLAMA_DEFAULT_API_KEY && !explicitApiKeyRef
-      ? undefined
-      : resolvedDiscoveryApiKey;
   const provider = await getCachedLiveCatalogValue({
     keyParts: [
       OLLAMA_PROVIDER_ID,
@@ -380,13 +361,6 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
     return null;
   }
-  const apiKey = resolveOllamaDiscoveryApiKey({
-    env: params.ctx.env,
-    baseUrl: provider.baseUrl ?? configuredBaseUrl,
-    explicitApiKey,
-    resolvedApiKey: ollamaKey,
-    resolvedDiscoveryApiKey: ollamaDiscoveryKey,
-  });
   const api = explicit?.api ?? provider.api;
   return {
     provider: {

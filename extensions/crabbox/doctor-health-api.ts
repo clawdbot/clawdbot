@@ -12,6 +12,7 @@ const CRABBOX_PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export { CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID };
 
 export function registerWorkerProviderDoctorChecks(host: {
+  getHealthCheck(id: string): HealthCheck | undefined;
   registerHealthCheck(check: HealthCheck): void;
 }): void {
   registerChecks({

@@ -1,10 +1,7 @@
 // Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import type { RuntimeEnv } from "../runtime.js";
-
-type AcpSessionMetaBatchParams = {
-  entries: Array<{ sessionKey: string; entry: Record<string, unknown> }>;
-};
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
@@ -15,9 +12,6 @@ const resolveStorePathMock = vi.hoisted(() =>
 );
 const listSessionEntriesMock = vi.hoisted(() =>
   vi.fn<() => Array<{ sessionKey: string; entry: Record<string, unknown> }>>(() => []),
-);
-const readAcpSessionMetaBatchMock = vi.hoisted(() =>
-  vi.fn((_params: AcpSessionMetaBatchParams) => new Map()),
 );
 
 vi.mock("../config/config.js", async () => {
@@ -38,26 +32,9 @@ vi.mock("../config/sessions.js", async () => {
   };
 });
 
-vi.mock("../infra/state-migrations.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
-    "../infra/state-migrations.js",
-  )),
-  autoMigrateLegacyState: vi.fn(async () => ({
-    migrated: false,
-    skipped: true,
-    changes: [],
-    warnings: [],
-  })),
-}));
-
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: listSessionEntriesMock,
   listSessionEntriesReadOnly: listSessionEntriesMock,
-}));
-
-vi.mock("../acp/runtime/session-meta.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../acp/runtime/session-meta.js")>()),
-  readAcpSessionMetaBatch: readAcpSessionMetaBatchMock,
 }));
 
 import { sessionsCommand } from "./sessions.js";
@@ -178,6 +155,38 @@ describe("sessionsCommand default store agent selection", () => {
     expect(listSessionEntriesMock).toHaveBeenCalledTimes(2);
   });
 
+  it("applies a global active limit while preserving store order for tied timestamps", async () => {
+    const now = Date.now();
+    listSessionEntriesMock
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:main:tie": { sessionId: "main-tie", updatedAt: now - 60_000 },
+          "agent:main:old": { sessionId: "main-old", updatedAt: now - 180_000 },
+        }),
+      )
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:voice:tie": { sessionId: "voice-tie", updatedAt: now - 60_000 },
+          "agent:voice:newest": { sessionId: "voice-newest", updatedAt: now - 30_000 },
+        }),
+      );
+    const { runtime, logs } = createRuntime();
+
+    await sessionsCommand({ allAgents: true, json: true, active: "2", limit: 2 }, runtime);
+
+    expect(JSON.parse(logs[0])).toMatchObject({
+      count: 2,
+      totalCount: 3,
+      hasMore: true,
+      limitApplied: 2,
+      activeMinutes: 2,
+      sessions: [
+        { key: "agent:voice:newest", agentId: "voice" },
+        { key: "agent:main:tie", agentId: "main" },
+      ],
+    });
+  });
+
   it("uses configured default agent id when resolving implicit session store path", async () => {
     listSessionEntriesMock.mockReset();
     listSessionEntriesMock.mockReturnValue([]);
@@ -187,58 +196,10 @@ describe("sessionsCommand default store agent selection", () => {
 
     expect(listSessionEntriesMock).toHaveBeenCalledWith({
       agentId: "voice",
-      clone: false,
-      projection: "list",
       storePath: "/tmp/sessions-voice.json",
+      projection: "list",
     });
     expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
-  });
-
-  it("selects a finite newest window before ACP enrichment", async () => {
-    listSessionEntriesMock.mockReset();
-    listSessionEntriesMock.mockReturnValue(
-      toSessionEntrySummaries(
-        Object.fromEntries(
-          Array.from({ length: 1_000 }, (_, index) => [
-            `agent:voice:session-${index}`,
-            {
-              sessionId: `session-${index}`,
-              updatedAt: Date.now() - index,
-              model: "test:opus",
-            },
-          ]),
-        ),
-      ),
-    );
-    const { runtime, logs } = createRuntime();
-
-    await sessionsCommand({ json: true, limit: 1 }, runtime);
-
-    const payload = JSON.parse(logs[0] ?? "{}") as {
-      count?: number;
-      totalCount?: number;
-      hasMore?: boolean;
-      sessions?: Array<{ key: string }>;
-    };
-    expect(payload).toMatchObject({
-      count: 1,
-      totalCount: 1_000,
-      hasMore: true,
-      sessions: [{ key: "agent:voice:session-0" }],
-    });
-    const batch = readAcpSessionMetaBatchMock.mock.calls.at(-1)?.[0];
-    expect(batch?.entries).toEqual([
-      {
-        sessionKey: "agent:voice:session-0",
-        entry: expect.objectContaining({ sessionId: "session-0" }),
-      },
-    ]);
-    expect(listSessionEntriesMock).toHaveBeenCalledWith({
-      agentId: "voice",
-      clone: false,
-      projection: "list",
-      storePath: "/tmp/sessions-voice.json",
-    });
   });
 
   it("names both supported escapes when an explicit roster has no session-list owner", async () => {
@@ -251,12 +212,14 @@ describe("sessionsCommand default store agent selection", () => {
     });
     const { runtime } = createRuntime();
 
-    await sessionsCommand({}, runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const result = sessionsCommand({}, runtime);
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({
+      message:
+        "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("uses all configured agent stores with --all-agents", async () => {
@@ -274,15 +237,13 @@ describe("sessionsCommand default store agent selection", () => {
 
     expect(listSessionEntriesMock).toHaveBeenNthCalledWith(1, {
       agentId: "main",
-      clone: false,
-      projection: "list",
       storePath: "/tmp/sessions-main.json",
+      projection: "list",
     });
     expect(listSessionEntriesMock).toHaveBeenNthCalledWith(2, {
       agentId: "voice",
-      clone: false,
-      projection: "list",
       storePath: "/tmp/sessions-voice.json",
+      projection: "list",
     });
     expect(logs[0]).toContain("Session stores: 2 (main, voice)");
     expect(logs[2]).toContain("Agent");

@@ -53,6 +53,7 @@ export function assertArchiveSymbolicLinkTarget(params: {
   archiveRoot: string;
   entryPath: string;
   linkpath?: string;
+  assets: readonly { archivePath: string }[];
 }): void {
   if (!params.linkpath) {
     throw new Error(`Archive symbolic link is missing its target: ${params.entryPath}`);
@@ -69,6 +70,15 @@ export function assertArchiveSymbolicLinkTarget(params: {
   if (!isArchivePathWithin(targetPath, normalizeArchiveRoot(params.archiveRoot))) {
     throw new Error(
       `Archive symbolic link target is outside the declared archive root: ${params.entryPath} -> ${params.linkpath}`,
+    );
+  }
+  const insideDeclaredAsset = (linkPath: string) =>
+    params.assets.some(({ archivePath: assetPath }) =>
+      isArchivePathWithin(linkPath, normalizeArchivePath(assetPath, "Backup manifest asset path")),
+    );
+  if (!insideDeclaredAsset(entryPath) || !insideDeclaredAsset(targetPath)) {
+    throw new Error(
+      `Archive symbolic link is outside the declared backup assets: ${params.entryPath} -> ${params.linkpath}`,
     );
   }
 }

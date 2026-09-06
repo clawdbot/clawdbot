@@ -1,18 +1,17 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import type { Writable } from "node:stream";
 import { toErrorObject } from "../../../infra/errors.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
-import {
-  addSecretInputStdio,
-  type SpawnStdioEntry,
-  writeSecretInputToChild,
-} from "../../spawn-secret-input.js";
+import { pipeProcessOutput } from "../../pipe-output.js";
+import { prepareSecretInputStdio, type SpawnStdioEntry } from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -21,8 +20,14 @@ import {
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
 import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
-import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
+import type {
+  ProcessAdapterConstruction,
+  SpawnProcessAdapter,
+  SpawnSecretInput,
+} from "../types.js";
+import { createManagedChildStdin } from "./child-stdin.js";
 import { toStringEnv } from "./env.js";
+import { createProcessAdapterEvents } from "./process-events.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const FORCED_WINDOWS_CLOSE_SETTLE_MS = 250;
@@ -71,7 +76,8 @@ function resolveChildInvocation(params: {
   };
 }
 
-type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> &
+  Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 type WorkerChildAdapter = ChildAdapter & {
   closeStartGate?: () => void;
   openStartGate?: () => Promise<void>;
@@ -79,12 +85,11 @@ type WorkerChildAdapter = ChildAdapter & {
 
 const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 
-function isServiceManagedRuntime(): boolean {
-  return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
-}
-
-export async function createChildAdapter(params: {
-  argv: string[];
+type ChildAdapterInput = ProcessAdapterConstruction & {
+  /** Retain a local tree owner independently of Gateway service markers. */
+  ownProcessTree?: true;
+  /** Preserve an owner-materialized Windows shell invocation without parsing it again. */
+  windowsShell?: true;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
@@ -92,48 +97,82 @@ export async function createChildAdapter(params: {
   onWorkerMessage?: (message: unknown) => void;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  argv0?: string;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
-}): Promise<WorkerChildAdapter> {
+  stderrDestination?: Writable;
+} & (
+    | { argv: string[]; anchoredShellCommand?: never }
+    | { argv?: never; anchoredShellCommand: string }
+  );
+
+export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
+  if (params.anchoredShellCommand !== undefined) {
+    return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
+      command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
+      args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
+      windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
+      cwd: params.cwd,
+      env: params.env,
+      stdinMode: "pipe-closed",
+      oomScoreWrapperSelected: false,
+      abortSignal: params.abortSignal,
+      onSpawnCleanup: params.onSpawnCleanup,
+      stderrDestination: params.stderrDestination,
+    });
+  }
+
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
-  const invocation = resolveChildInvocation({
-    argv: params.argv,
-    env: baseEnv,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
-  });
+  const windowsShell = process.platform === "win32" && params.windowsShell === true;
+  const invocation = windowsShell
+    ? {
+        command: params.argv[0]!,
+        args: params.argv.slice(1),
+        windowsVerbatimArguments: params.windowsVerbatimArguments,
+      }
+    : resolveChildInvocation({
+        argv: params.argv,
+        env: baseEnv,
+        windowsVerbatimArguments: params.windowsVerbatimArguments,
+      });
+  const argv0 = invocation.command === params.argv[0] ? params.argv0 : undefined;
   const preparedSpawn = params.exactEnv
-    ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
-    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
+    ? { command: invocation.command, args: invocation.args, argv0, env: baseEnv, wrapped: false }
+    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv, argv0 });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
   if (
     process.platform !== "win32" &&
     params.ownedWorker === undefined &&
-    isServiceManagedRuntime()
+    (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
+      argv0: preparedSpawn.argv0,
       cwd: params.cwd,
       env: preparedSpawn.env,
       stdinMode,
       input: params.input,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
+      abortSignal: params.abortSignal,
+      onSpawnCleanup: params.onSpawnCleanup,
+      stderrDestination: params.stderrDestination,
     });
   }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
   // owns a process group that can be killed without touching the node host.
-  const useDetached =
-    process.platform !== "win32" &&
-    (params.ownedWorker !== undefined || !isServiceManagedRuntime());
+  const useDetached = process.platform !== "win32";
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  addSecretInputStdio(stdio, params.secretInput);
+  using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);
   if (params.ownedWorker !== undefined) {
     stdio.push("ipc");
   }
@@ -141,31 +180,29 @@ export async function createChildAdapter(params: {
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
+    argv0: preparedSpawn.argv0,
     stdio,
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    ...(windowsShell ? { shell: true } : {}),
   };
 
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (params.abortSignal?.aborted) {
+      throw new Error("child construction aborted");
+    }
+  };
   const spawned = await spawnWithFallback({
+    assertCurrent,
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
-    fallbacks:
-      useDetached && params.ownedWorker === undefined
-        ? [
-            {
-              label: "no-detach",
-              options: { detached: false },
-            },
-          ]
-        : [],
+    fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
-    spawned.child.kill("SIGKILL");
-    throw new Error("worker lifecycle IPC channel was not created");
-  }
+  const events = createProcessAdapterEvents();
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
       try {
@@ -189,89 +226,34 @@ export async function createChildAdapter(params: {
   };
   // Pipe errors can arrive before output subscribers attach. Close remains
   // responsible for decoder flush and Windows drain completion.
-  const ignoreOutputStreamError = () => {};
-  child.stdout.on("error", ignoreOutputStreamError);
-  child.stderr.on("error", ignoreOutputStreamError);
+  child.stdout.on("error", (error) => events.emitError(error, "stdout"));
+  child.stderr.on("error", (error) => events.emitError(error, "stderr"));
+  child.stdin?.on("error", (error) => events.emitError(error, "stdin"));
   const childStdin = spawned.child.stdin;
-  let stdinDestroyed = childStdin?.destroyed ?? false;
-  let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
-  if (childStdin) {
-    childStdin.once("finish", () => {
-      stdinEnded = true;
-    });
-    childStdin.once("close", () => {
-      stdinEnded = true;
-      stdinDestroyed = true;
-    });
-    childStdin.once("error", () => {
-      stdinDestroyed = true;
-    });
-    if (params.input !== undefined) {
-      childStdin.write(params.input);
-      stdinEnded = true;
-      childStdin.end();
-    } else if (stdinMode === "pipe-closed") {
-      stdinEnded = true;
-      childStdin.end();
-    }
+  const stdin = createManagedChildStdin(childStdin);
+  const outputUnsubscribers: Array<() => void> = [];
+  if (params.stderrDestination) {
+    outputUnsubscribers.push(
+      pipeProcessOutput(child.stderr, params.stderrDestination, (error) =>
+        events.emitError(error, "stderr"),
+      ),
+    );
   }
+  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
+  };
 
-  const stdin: ManagedRunStdin | undefined = childStdin
-    ? {
-        get destroyed() {
-          return stdinDestroyed || childStdin.destroyed;
-        },
-        get writable() {
-          return !stdinDestroyed && !stdinEnded && childStdin.writable;
-        },
-        get writableEnded() {
-          return stdinEnded || childStdin.writableEnded;
-        },
-        get writableFinished() {
-          return childStdin.writableFinished;
-        },
-        write: (data: string, cb?: (err?: Error | null) => void) => {
-          if (stdinDestroyed || stdinEnded || !childStdin.writable) {
-            cb?.(new Error("stdin is not writable"));
-            return;
-          }
-          try {
-            childStdin.write(data, cb);
-          } catch (err) {
-            cb?.(err as Error);
-          }
-        },
-        end: () => {
-          try {
-            stdinEnded = true;
-            childStdin.end();
-          } catch {
-            // ignore close errors
-          }
-        },
-        destroy: () => {
-          try {
-            stdinDestroyed = true;
-            stdinEnded = true;
-            childStdin.destroy();
-          } catch {
-            // ignore destroy errors
-          }
-        },
-      }
-    : undefined;
+  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
+  };
 
-  const onStdout = (listener: (chunk: string) => void) => onDecodedOutput(child.stdout, listener);
-
-  const onStderr = (listener: (chunk: string) => void) => onDecodedOutput(child.stderr, listener);
-
-  let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let waitError: unknown;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  let rejectWait: ((reason?: unknown) => void) | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
+  const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const cleanup = createDeferredCore();
+  // Worker errors can precede wait(), including while secret delivery is still pending.
+  void completion.promise.catch(() => {});
+  void cleanup.promise.catch(() => {});
+  let waitSettled = false;
+  let processClosed = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
   let hardKillRequested = false;
@@ -280,6 +262,8 @@ export async function createChildAdapter(params: {
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
+  let workerIpcDisconnected = false;
+  let openWorkerStdio = 0;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -298,39 +282,36 @@ export async function createChildAdapter(params: {
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
-    if (waitResult || waitError !== undefined) {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
-    waitResult = value;
-    if (resolveWait) {
-      const resolve = resolveWait;
-      resolveWait = null;
-      rejectWait = null;
-      resolve(value);
-    }
+    completion.resolve(value);
   };
 
-  const rejectPendingWait = (error: unknown) => {
-    if (waitResult || waitError !== undefined) {
+  const settleObservedClose = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
+    processClosed = true;
+    cleanup.resolve();
+    settleWait(value);
+  };
+
+  const rejectPendingWait = (error: Error) => {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
-    waitError = error;
-    if (rejectWait) {
-      const reject = rejectWait;
-      resolveWait = null;
-      rejectWait = null;
-      reject(error);
-    }
+    completion.reject(error);
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
     clearForceKillWaitFallback();
     // Some Windows child processes never emit `close` after a hard kill.
     forceKillWaitFallbackTimer = setTimeout(() => {
+      cleanup.reject(new Error("child cleanup could not be confirmed before the kill deadline"));
       settleWait({ code: null, signal });
     }, FORCE_KILL_WAIT_FALLBACK_MS);
     forceKillWaitFallbackTimer.unref?.();
@@ -371,9 +352,9 @@ export async function createChildAdapter(params: {
   const isWindowsHardKillSettlementBlocked = () =>
     process.platform === "win32" && hardKillRequested && !windowsTreeKillCompleted;
 
-  const maybeSettleAfterWindowsExit = () => {
+  const maybeSettleAfterExit = () => {
     if (
-      process.platform !== "win32" ||
+      (process.platform !== "win32" && (!workerIpcDisconnected || openWorkerStdio > 0)) ||
       isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
       !stdoutDrained ||
@@ -381,32 +362,57 @@ export async function createChildAdapter(params: {
     ) {
       return;
     }
-    settleWait(resolveObservedExitState(childExitState));
+    settleObservedClose(resolveObservedExitState(childExitState));
   };
+
+  if (params.ownedWorker) {
+    // Parent-initiated IPC disconnect can suppress Node's child close event.
+    // Preserve its exit-and-closed-pipes boundary, including secret descriptors.
+    child.once("disconnect", () => {
+      workerIpcDisconnected = true;
+      maybeSettleAfterExit();
+    });
+    for (const stream of child.stdio.slice(1)) {
+      if (!stream || stream.closed) {
+        continue;
+      }
+      openWorkerStdio += 1;
+      stream.once("close", () => {
+        openWorkerStdio -= 1;
+        maybeSettleAfterExit();
+      });
+    }
+  }
 
   child.stdout?.once("end", () => {
     stdoutDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stdout?.once("close", () => {
     stdoutDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stderr?.once("end", () => {
     stderrDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.stderr?.once("close", () => {
     stderrDrained = true;
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
-  child.on("error", params.ownedWorker ? rejectPendingWait : () => {});
+  child.on("error", (error) => {
+    events.emitError(error, "process");
+    if (params.ownedWorker) {
+      rejectPendingWait(error);
+    }
+  });
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
+    events.emitExit(code, signal);
     scheduleForcedWindowsCloseSettlement();
-    maybeSettleAfterWindowsExit();
+    maybeSettleAfterExit();
   });
   child.once("close", (code, signal) => {
     childCloseState = { code, signal };
@@ -414,35 +420,10 @@ export async function createChildAdapter(params: {
     if (isWindowsHardKillSettlementBlocked()) {
       return;
     }
-    settleWait(resolveObservedExitState(childCloseState));
+    settleObservedClose(resolveObservedExitState(childCloseState));
   });
 
-  if (params.secretInput) {
-    try {
-      await writeSecretInputToChild(spawned.child, params.secretInput);
-    } catch (error) {
-      spawned.child.kill("SIGKILL");
-      throw error;
-    }
-  }
-
-  const wait = async () => {
-    if (waitResult) {
-      return waitResult;
-    }
-    if (waitError !== undefined) {
-      throw toErrorObject(waitError, "Non-Error thrown");
-    }
-    if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          resolveWait = resolve;
-          rejectWait = reject;
-        },
-      );
-    }
-    return waitPromise;
-  };
+  const wait = async () => await completion.promise;
 
   // The actual detachment of the spawned child can differ from `useDetached`:
   // when the detached spawn fails, `spawnWithFallback` retries with the
@@ -458,6 +439,10 @@ export async function createChildAdapter(params: {
       signalProcessTree(pid, signal, { detached: childIsDetached, onComplete: resolve });
     });
   const kill = (signal?: NodeJS.Signals) => {
+    // A delayed private-input failure must not signal a PID whose child has closed.
+    if (processClosed) {
+      return;
+    }
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
@@ -474,10 +459,10 @@ export async function createChildAdapter(params: {
           }
           windowsTreeKillCompleted = true;
           if (childCloseState) {
-            settleWait(resolveObservedExitState(childCloseState));
+            settleObservedClose(resolveObservedExitState(childCloseState));
             return;
           }
-          maybeSettleAfterWindowsExit();
+          maybeSettleAfterExit();
           scheduleForcedWindowsCloseSettlement();
         });
       } else {
@@ -508,8 +493,42 @@ export async function createChildAdapter(params: {
     if (params.ownedWorker !== undefined) {
       disconnectWorkerIpc();
     }
+    for (const unsubscribe of outputUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
+    // Error handling and Node's child-close bookkeeping must remain attached during destroy.
+    child.stdout.destroy();
+    child.stderr.destroy();
     child.removeAllListeners();
+    events.clear();
   };
+
+  params.onSpawnCleanup?.(cleanup.promise);
+  try {
+    // Construction may outlive admission; publish cleanup before any private input.
+    assertCurrent();
+    if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+      throw new Error("worker lifecycle IPC channel was not created");
+    }
+    if (params.input !== undefined) {
+      childStdin?.write(params.input);
+      stdin?.end();
+    } else if (stdinMode === "pipe-closed") {
+      stdin?.end();
+    }
+    if (params.secretInput) {
+      assertCurrent();
+      await secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal });
+    }
+  } catch (error) {
+    kill("SIGKILL");
+    try {
+      await cleanup.promise;
+    } finally {
+      dispose();
+    }
+    throw error;
+  }
 
   const closeStartGate = params.ownedWorker ? disconnectWorkerIpc : undefined;
 
@@ -544,8 +563,11 @@ export async function createChildAdapter(params: {
     pid: child.pid ?? undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
+    supportsRawOutput: true,
     onStdout,
     onStderr,
+    onExit: events.onExit,
+    onError: events.onError,
     wait,
     kill,
     dispose,

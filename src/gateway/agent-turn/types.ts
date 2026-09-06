@@ -15,6 +15,8 @@ type AgentTurnFinal = AgentTurnFrame;
 
 export type AgentTurnIo = {
   emitAcceptance: (acceptance: AgentTurnAcceptance, meta?: Parameters<RespondFn>[3]) => void;
+  /** Internal lifecycle observer; public transports do not expose this callback. */
+  emitExecutionStarted?: () => void;
   emitFinal: (final: AgentTurnFinal, meta?: Parameters<RespondFn>[3]) => void;
 };
 
@@ -31,9 +33,13 @@ export type AgentTurnPrincipal = Pick<
 export type AgentTurnContext = Pick<
   GatewayRequestContext,
   | "addChatRun"
+  | "agentRunSeq"
+  | "broadcast"
   | "broadcastToConnIds"
+  | "cancelRunBoundApprovals"
   | "chatAbortControllers"
   | "chatQueuedTurns"
+  | "chatRunState"
   | "dedupe"
   | "deps"
   | "getRuntimeConfig"
@@ -41,6 +47,9 @@ export type AgentTurnContext = Pick<
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
   | "logGateway"
+  | "nodeSendToSession"
+  | "removeChatRun"
+  | "requestEntryLifetime"
   | "resolveGatewayContext"
   | "validateAgentRuntimeApprovalAuthority"
 >;

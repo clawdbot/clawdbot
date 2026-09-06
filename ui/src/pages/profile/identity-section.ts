@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
-import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UserProfile,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   renderSettingsRow,
   renderSettingsSection,
@@ -41,6 +44,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
   const nameChanged = props.displayName.trim() !== savedName;
   const emails = props.profile.emails.join(", ");
   const githubIdentity = props.profile.githubIdentity;
+  const isOwnerProfile = props.profile.id === GATEWAY_OWNER_PROFILE_ID;
   return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
     ${renderSettingsSection(
       {
@@ -57,25 +61,39 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 .user=${avatarViewer(props.profile, props.avatarUrl)}
                 variant="profile"
               ></openclaw-viewer-avatar>
-              <label class="btn btn--sm">
-                ${props.busy === "avatar"
-                  ? t("profilePage.identity.processingAvatar")
-                  : t("profilePage.identity.chooseAvatar")}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  hidden
-                  ?disabled=${props.busy !== null}
-                  @change=${(event: Event) => {
-                    const input = event.currentTarget as HTMLInputElement;
-                    const file = input.files?.[0];
-                    input.value = "";
-                    if (file) {
-                      props.onAvatarSelect(file);
-                    }
-                  }}
-                />
-              </label>
+              <button
+                type="button"
+                class="btn btn--sm"
+                ?disabled=${props.busy !== null}
+                @click=${(event: Event) => {
+                  const button = event.currentTarget;
+                  const input =
+                    button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                  if (input instanceof HTMLInputElement) {
+                    input.click();
+                  }
+                }}
+              >
+                ${
+                  props.busy === "avatar"
+                    ? t("profilePage.identity.processingAvatar")
+                    : t("profilePage.identity.chooseAvatar")
+                }
+              </button>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                ?disabled=${props.busy !== null}
+                @change=${(event: Event) => {
+                  const input = event.currentTarget as HTMLInputElement;
+                  const file = input.files?.[0];
+                  input.value = "";
+                  if (file) {
+                    props.onAvatarSelect(file);
+                  }
+                }}
+              />
             </span>
           `,
         })}
@@ -110,16 +128,22 @@ export function renderIdentitySection(props: IdentitySectionProps) {
             </form>
           `,
         })}
-        ${renderSettingsRow({
-          title: t("profilePage.identity.linkedEmails"),
-          description: t("profilePage.identity.linkedEmailsDescription"),
-          control: emails ? renderSettingsValue(emails) : nothing,
-        })}
+        ${
+          isOwnerProfile
+            ? nothing
+            : renderSettingsRow({
+                title: t("profilePage.identity.linkedEmails"),
+                description: t("profilePage.identity.linkedEmailsDescription"),
+                control: emails ? renderSettingsValue(emails) : nothing,
+              })
+        }
         ${renderSettingsRow({
           title: t("profilePage.identity.githubAccount"),
-          description: githubIdentity
-            ? t("profilePage.identity.githubAccountDescription")
-            : t("profilePage.identity.githubUnavailableDescription"),
+          description: isOwnerProfile
+            ? t("profilePage.identity.ownerGithubDescription")
+            : githubIdentity
+              ? t("profilePage.identity.githubAccountDescription")
+              : t("profilePage.identity.githubUnavailableDescription"),
           control: githubIdentity
             ? html`
                 <a
@@ -145,18 +169,22 @@ export function renderIdentitySection(props: IdentitySectionProps) {
         })}
         ${renderSettingsToggleRow({
           title: t("profilePage.identity.gitCoauthor"),
-          description: githubIdentity
-            ? t("profilePage.identity.gitCoauthorDescription")
-            : t("profilePage.identity.gitCoauthorUnavailable"),
+          description: isOwnerProfile
+            ? t("profilePage.identity.ownerGitCoauthorDescription")
+            : githubIdentity
+              ? t("profilePage.identity.gitCoauthorDescription")
+              : t("profilePage.identity.gitCoauthorUnavailable"),
           checked: Boolean(githubIdentity && props.gitCoauthorEnabled),
           disabled: props.busy !== null || !githubIdentity,
           onChange: props.onGitCoauthorChange,
         })}
-        ${props.error
-          ? html`<div class="settings-row identity-error" role="alert">
-              <span class="settings-row__desc">${props.error}</span>
-            </div>`
-          : nothing}
+        ${
+          props.error
+            ? html`<div class="settings-row identity-error" role="alert">
+                <span class="settings-row__desc">${props.error}</span>
+              </div>`
+            : nothing
+        }
       `,
     )}
   </div>`;

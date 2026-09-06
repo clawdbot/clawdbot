@@ -6,6 +6,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -45,7 +46,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
       await pageA.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
-      await captureUiProof(pageA, "new-session-draft-before-navigation.png");
+      await captureUiProof(suite, pageA, "new-session-draft-before-navigation.png");
 
       await existingSession.click();
       await pageA.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -63,6 +64,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
       await expect.poll(() => messageB.inputValue()).toBe(durableText);
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
@@ -80,7 +82,7 @@ suite.define(() => {
       await expect(
         pageA.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
       ).resolves.toBe(0);
-      await captureUiProof(pageA, "new-session-draft-restored.png");
+      await captureUiProof(suite, pageA, "new-session-draft-restored.png");
       await pageA.close();
 
       const freshPage = await context.newPage();

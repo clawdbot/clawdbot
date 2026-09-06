@@ -10,6 +10,7 @@ import {
   parsePermissiveBooleanToken,
   parseStrictBooleanArg,
   readFlagValue,
+  requireOptionArgument,
   stringFlag,
   stringListFlag,
 } from "../../scripts/lib/arg-utils.runtime.mjs";
@@ -57,6 +58,21 @@ describe("scripts/lib/arg-utils strict scalar grammars", () => {
     { input: "1ms", min: 0, max: 10, expected: { kind: "syntax" } },
   ])("classifies bounded unsigned decimal %#", ({ input, min, max, expected }) => {
     expect(classifyBoundedUnsignedDecimal(input, min, max)).toEqual(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils required option arguments", () => {
+  it("returns the original split option value", () => {
+    expect(requireOptionArgument(["--output", "  report.json  "], 0, "--output")).toBe(
+      "  report.json  ",
+    );
+  });
+
+  it.each([undefined, "", "-", "-h", "--next"])("rejects missing value %#", (value) => {
+    const argv = value === undefined ? ["--output"] : ["--output", value];
+    expect(() => requireOptionArgument(argv, 0, "--output")).toThrow(
+      new Error("--output requires a value"),
+    );
   });
 });
 

@@ -15,6 +15,7 @@ import {
   WorkerIdentifierSchema,
   WorkerTranscriptAssistantDiagnosticSchema,
   WorkerTranscriptUsageSchema,
+  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_INFERENCE_PROTOCOL_FEATURE = "worker-inference-v1";
@@ -22,7 +23,7 @@ export const WORKER_INFERENCE_METHODS = [
   "worker.inference.start",
   "worker.inference.cancel",
 ] as const;
-export const WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES = 25 * 1024 * 1024;
+export const WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES = WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES;
 export const WORKER_INFERENCE_MAX_CONTEXT_MESSAGES = 1_024;
 const WORKER_INFERENCE_MAX_TOOLS = 256;
 export const WORKER_INFERENCE_MAX_OUTPUT_TOKENS = 1_000_000;
@@ -41,7 +42,7 @@ const WorkerInferenceTextContentSchema = workerInferenceObject({
   textSignature: OptionalInferenceTextSchema,
 });
 
-const WorkerInferenceImageContentSchema = workerInferenceObject({
+export const WorkerInferenceImageContentSchema = workerInferenceObject({
   type: Type.Literal("image"),
   data: Type.String({
     minLength: 1,

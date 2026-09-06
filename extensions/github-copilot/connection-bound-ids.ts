@@ -31,7 +31,20 @@ function isInputItem(value: unknown): value is InputItem {
 }
 
 function isValidReasoningReplayId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id.length <= 64;
+  return typeof id === "string" && id.length <= 64 && /^rs_[A-Za-z0-9_-]+$/.test(id);
+}
+
+function dropReasoningItem(input: unknown[], index: number): void {
+  input.splice(index, 1);
+  const dependentMessage = input[index];
+  // Assistant replay IDs are signed with preceding reasoning; keeping one after a drop is invalid.
+  if (
+    isInputItem(dependentMessage) &&
+    dependentMessage.type === "message" &&
+    dependentMessage.role === "assistant"
+  ) {
+    delete dependentMessage.id;
+  }
 }
 
 function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
@@ -39,21 +52,33 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
     return false;
   }
   let rewrote = false;
+  // Walk backward because dropping reasoning splices input and must not skip adjacent items.
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (!isInputItem(item)) {
       continue;
     }
     const id = item.id;
-    // Reasoning encrypted_content is tied to the Copilot connection token,
-    // which rotates per request. Drop items with unsafe IDs; strip
-    // encrypted_content from kept items so summary-only replay is sent.
     if (item.type === "reasoning") {
-      if (id !== undefined && !isValidReasoningReplayId(id)) {
-        input.splice(index, 1);
+      // Cold reasoning is removed earlier; normalize null status and never synthesize active IDs.
+      if (item.status === null) {
+        delete item.status;
         rewrote = true;
-      } else if ("encrypted_content" in item) {
-        delete item.encrypted_content;
+      }
+      const isComplete =
+        typeof item.encrypted_content === "string" &&
+        item.encrypted_content.length > 0 &&
+        (item.status === undefined || item.status === "completed");
+      if (!isComplete) {
+        dropReasoningItem(input, index);
+        rewrote = true;
+      } else if (id === undefined || isValidReasoningReplayId(id)) {
+        continue;
+      } else if (typeof id === "string" && looksLikeConnectionBoundId(id)) {
+        delete item.id;
+        rewrote = true;
+      } else {
+        dropReasoningItem(input, index);
         rewrote = true;
       }
       continue;

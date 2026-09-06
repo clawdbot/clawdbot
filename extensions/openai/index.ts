@@ -1,6 +1,5 @@
 // Openai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
@@ -74,9 +73,7 @@ export default definePluginEntry({
       },
     });
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(openAiMemoryEmbeddingProviderAdapter),
-    );
+    api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
     api.registerRealtimeVoiceProvider(

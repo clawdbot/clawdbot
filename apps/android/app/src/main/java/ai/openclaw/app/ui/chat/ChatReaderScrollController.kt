@@ -1,10 +1,13 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -13,8 +16,13 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 internal enum class ChatScrollFollowTarget {
@@ -77,7 +85,11 @@ internal data class ChatReaderScrollController(
   val listState: LazyListState,
   val showJumpToLatest: Boolean,
   val jumpToLatest: () -> Unit,
+  val onManualNavigation: () -> Unit,
+  val nestedScrollConnection: NestedScrollConnection,
 )
+
+internal val LocalChatReaderNavigation = staticCompositionLocalOf<() -> Unit> { {} }
 
 @Composable
 internal fun rememberChatReaderScrollController(
@@ -94,13 +106,37 @@ internal fun rememberChatReaderScrollController(
     rememberSaveable(sessionKey, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
-  var isApplyingScroll by remember(sessionKey) { mutableStateOf(false) }
+  var applyingScrollCount by remember(sessionKey) { mutableIntStateOf(0) }
   var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
+
+  fun pauseFollowing() {
+    readerState = readerState.copy(followTarget = null)
+    // Stop an older automatic animation at its default priority, never interrupt
+    // a newer user drag that has already taken ownership of the scroll state.
+    if (applyingScrollCount > 0) scope.launch(start = CoroutineStart.UNDISPATCHED) { listState.stopScroll() }
+  }
+
+  val nestedScroll =
+    remember(sessionKey) {
+      object : NestedScrollConnection {
+        override fun onPreScroll(
+          available: Offset,
+          source: NestedScrollSource,
+        ): Offset {
+          // A code viewport can consume the whole drag without scrolling the transcript.
+          // Its reader intent must still retire follow, without consuming the gesture.
+          if (source == NestedScrollSource.UserInput && available.y != 0f) pauseFollowing()
+          return Offset.Zero
+        }
+      }
+    }
 
   suspend fun applyTransition(transition: ChatReaderTransition) {
     readerState = transition.state
     val index = transition.scrollIndex ?: return
-    isApplyingScroll = true
+    // A replacement cancels its predecessor before the predecessor's finally runs.
+    // Count active invocations so that cleanup cannot hide the newer animation.
+    applyingScrollCount += 1
     try {
       if (transition.animated) {
         listState.animateScrollToItem(index)
@@ -108,11 +144,13 @@ internal fun rememberChatReaderScrollController(
         listState.scrollToItem(index)
       }
     } finally {
-      isApplyingScroll = false
+      applyingScrollCount -= 1
     }
   }
 
-  LaunchedEffect(sessionKey, timeline, historyLoading) {
+  // Loading only changes empty-timeline transitions. A populated-history refresh
+  // must not cancel a moving scroll after its content version has been recorded.
+  LaunchedEffect(sessionKey, timeline, historyLoading && timeline.items.isEmpty()) {
     val transition =
       if (readerState.initialized) {
         readerState.onTimelineChanged(timeline, historyLoading)
@@ -130,7 +168,7 @@ internal fun rememberChatReaderScrollController(
         listState.firstVisibleItemScrollOffset,
       )
     }.collect { (scrolling, index, offset) ->
-      if (!readerState.initialized || isApplyingScroll) return@collect
+      if (!readerState.initialized || applyingScrollCount > 0) return@collect
       if (scrolling) {
         isUserScrolling = true
         readerState = readerState.copy(followTarget = null)
@@ -141,14 +179,26 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
+  // reverseLayout puts the latest tail at the viewport start. Scrolling within
+  // content padding does not hide text; this geometry must not change follow intent.
+  val latestContentHidden by
+    remember(listState) {
+      derivedStateOf {
+        val layoutInfo = listState.layoutInfo
+        val latestItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentTimeline.latestContentIndex }
+        latestItem?.let { it.offset < layoutInfo.viewportStartOffset } ?: listState.canScrollBackward
+      }
+    }
   return ChatReaderScrollController(
     listState = listState,
-    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty(),
+    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty() && latestContentHidden,
     jumpToLatest = {
       scope.launch {
         applyTransition(readerState.jumpToLatest(currentTimeline))
       }
     },
+    onManualNavigation = ::pauseFollowing,
+    nestedScrollConnection = nestedScroll,
   )
 }
 
@@ -156,16 +206,13 @@ internal fun initialChatReaderTransition(
   timeline: ChatTimeline,
   ownerSessionKey: String? = null,
 ): ChatReaderTransition {
-  val initialIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex
-  val followTarget = timeline.followTargetForIndex(initialIndex)
+  val initialIndex = timeline.latestContentIndex
   return ChatReaderTransition(
     state =
       ChatReaderState(
         ownerSessionKey = ownerSessionKey,
         initialized = initialIndex != null,
-        followTarget = followTarget,
-        hasNewerContent =
-          followTarget == ChatScrollFollowTarget.ReadAnchor && initialIndex != timeline.latestContentIndex,
+        followTarget = initialIndex?.let { ChatScrollFollowTarget.LatestContent },
         latestUserMessageId = timeline.latestUserMessageId,
         latestUserMessageVersion = timeline.latestUserMessageVersion,
         latestContentVersion = timeline.latestContentVersion,
@@ -209,8 +256,8 @@ internal fun ChatReaderState.onTimelineChanged(
     timeline.latestUserMessageVersion != null && timeline.latestUserMessageVersion != latestUserMessageVersion
   if (hasNewUserTurn) {
     // A live turn follows the bottom so the reply streams into view (parity with the
-    // iOS reader, #108692/#108693). ReadAnchor remains the session-restore bookmark only;
-    // re-pinning the prompt here would hide the reply below the fold behind a jump pill.
+    // iOS reader, #108692/#108693). Re-pinning the prompt here would hide the reply
+    // below the fold behind a jump pill.
     return ChatReaderTransition(
       state =
         copy(
@@ -286,15 +333,6 @@ private fun ChatTimeline.containsMessage(id: String): Boolean =
   items
     .filterIsInstance<ChatTimelineItem.Message>()
     .any { item -> item.message.id == id }
-
-private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? {
-  if (index == null) return null
-  return when {
-    latestUserMessageId != null && index == readAnchorIndex -> ChatScrollFollowTarget.ReadAnchor
-    index == latestContentIndex -> ChatScrollFollowTarget.LatestContent
-    else -> null
-  }
-}
 
 private fun isAtTarget(
   index: Int,

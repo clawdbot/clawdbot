@@ -28,13 +28,13 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.embedded-local-chat
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends drives and steers the real local backend with a mocked model endpoint$
+          testNamePattern: ^TUI PTY real backends > drives and steers the real local backend with a mocked model endpoint$
         - coverageId: tui.config-repair-loop
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends repairs isolated config through the approved built CLI and resumes local chat$
+          testNamePattern: ^TUI PTY real backends > repairs isolated config through the approved built CLI and resumes local chat$
         - coverageId: tui.gateway-free-recovery
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends renders safe validation-loop abort diagnostics through the real local backend$
+          testNamePattern: ^TUI PTY real backends > renders safe validation-loop abort diagnostics through the real local backend$
         - coverageId: tui.local-auth-flow
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends authenticates a manifest-discovered provider and resumes the unchanged local model$
+          testNamePattern: ^TUI PTY real backends > authenticates a manifest-discovered provider and resumes the unchanged local model$

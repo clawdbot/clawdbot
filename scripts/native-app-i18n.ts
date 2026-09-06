@@ -25,6 +25,12 @@ export type NativeI18nSite = {
   path: string;
 };
 
+type NativeInterpolation = {
+  start: number;
+  end: number;
+  value: string;
+};
+
 type Candidate = NativeI18nSite & {
   line: number;
   source: string;
@@ -57,12 +63,14 @@ export type NativeI18nQualityFinding = {
 };
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
+  force?: boolean;
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
   command: "baseline" | "check" | "sync" | "verify";
+  force?: boolean;
   locale?: string;
   write: boolean;
 };
@@ -280,7 +288,7 @@ export function isConditionalBranchIdentifier(source: string): boolean {
   return true;
 }
 
-function isTranslatableCandidate(source: string, kind: string): boolean {
+function isTranslatableCandidate(source: string, kind: string, literalSource: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
     BUILD_SETTING_RE.lastIndex = 0;
     return false;
@@ -290,7 +298,13 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   const isDirectUiText = kind.startsWith("ui-") || kind.startsWith("resource-");
-  if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
+  // Interpolation variables are not copy. Require a literal identifier separator
+  // before filtering their surroundings so compact prose such as "\(hours)h" remains.
+  const identifierSource = /[.:/_-]/u.test(literalSource) ? literalSource : source;
+  if (
+    !isDirectUiText &&
+    (/^[a-z0-9_.:/$-]+$/u.test(identifierSource) || /^[A-Z0-9_.:/$-]+$/u.test(identifierSource))
+  ) {
     return false;
   }
   if (kind === "conditional-branch" && isConditionalBranchIdentifier(source)) {
@@ -305,7 +319,7 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
 function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   return (
     extractSwiftInterpolations(source)?.some(
-      (interpolation) =>
+      ({ value: interpolation }) =>
         /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/u.test(interpolation) ||
         /\bif\b[\s\S]*"((?:\\.|[^"\\])*)"[\s\S]*\belse\b[\s\S]*"((?:\\.|[^"\\])*)"/u.test(
           interpolation,
@@ -314,8 +328,8 @@ function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   );
 }
 
-function extractSwiftInterpolations(source: string): string[] | null {
-  const values: string[] = [];
+function extractSwiftInterpolations(source: string): NativeInterpolation[] | null {
+  const values: NativeInterpolation[] = [];
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "\\" || source[index + 1] !== "(") {
       continue;
@@ -337,7 +351,7 @@ function extractSwiftInterpolations(source: string): string[] | null {
       } else if (!quoted && character === ")") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -349,8 +363,12 @@ function extractSwiftInterpolations(source: string): string[] | null {
   return values;
 }
 
-function extractKotlinInterpolations(source: string): string[] | null {
-  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => match[0]);
+function extractKotlinInterpolations(source: string): NativeInterpolation[] | null {
+  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    value: match[0],
+  }));
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "$" || source[index + 1] !== "{") {
       continue;
@@ -363,7 +381,7 @@ function extractKotlinInterpolations(source: string): string[] | null {
       } else if (source[index] === "}") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -711,12 +729,31 @@ function enclosingCallName(source: string, offset: number): string | null {
 }
 
 function structuralTokenSignature(source: string): string {
-  const swift = extractSwiftInterpolations(source)?.toSorted();
-  const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const swift = extractSwiftInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
+  const kotlin = extractKotlinInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
   const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
   const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
   return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
+}
+
+function formatNativeTranslationStructureError(locale: string, id: string): string {
+  return `native translation changed placeholders or line breaks for ${locale}:${id}`;
+}
+
+function validateNativeTranslationStructure(
+  source: string,
+  translated: string,
+  id: string,
+  locale: string,
+): void {
+  if (structuralTokenSignature(source) !== structuralTokenSignature(translated)) {
+    throw new Error(formatNativeTranslationStructureError(locale, id));
+  }
 }
 
 function addCandidate(
@@ -728,17 +765,19 @@ function addCandidate(
   line: number,
 ) {
   const normalized = normalizeSource(decodeLiteral(source, kind));
-  if (!normalized.trim() || !/\p{L}/u.test(normalized)) {
+  if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
-  if (!isTranslatableCandidate(normalized, kind)) {
+  const swift = extractSwiftInterpolations(normalized);
+  const kotlin = extractKotlinInterpolations(normalized);
+  if (swift === null || kotlin === null) {
     return;
   }
-  if (
-    normalized.length > 500 ||
-    extractSwiftInterpolations(normalized) === null ||
-    extractKotlinInterpolations(normalized) === null
-  ) {
+  const literalSource = normalized.split("");
+  for (const { start, end } of surface === "apple" ? swift : kotlin) {
+    literalSource.fill("$", start, end);
+  }
+  if (!isTranslatableCandidate(normalized, kind, literalSource.join(""))) {
     return;
   }
   entries.push({ kind, line, path: repoPath, source: normalized, surface });
@@ -1288,8 +1327,18 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
   return assignNativeI18nIds(entries);
 }
 
-function render(entries: NativeI18nEntry[]): string {
-  return `${JSON.stringify({ version: 2, entries }, null, 2)}\n`;
+export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
+  return [
+    "{",
+    '  "version": 2,',
+    '  "entries": [',
+    ...entries.map(
+      (entry, index) => `    ${JSON.stringify(entry)}${index === entries.length - 1 ? "" : ","}`,
+    ),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
 }
 
 async function syncNativeI18n(options: {
@@ -1299,7 +1348,7 @@ async function syncNativeI18n(options: {
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
-  const expected = render(entries);
+  const expected = serializeNativeI18nInventory(entries);
   const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
@@ -1483,7 +1532,7 @@ export function validateNativeLocaleArtifact(
     } else if (!translated.trim()) {
       errors.push(`translation must be nonempty for ${entry.id}`);
     } else if (structuralTokenSignature(entry.source) !== structuralTokenSignature(translated)) {
-      errors.push(`translation changed structural tokens or line breaks for ${entry.id}`);
+      errors.push(formatNativeTranslationStructureError(locale, entry.id));
     }
   }
   if (errors.length > 0) {
@@ -1586,15 +1635,20 @@ export async function syncNativeLocale(
   }
   const glossaryChanged = previous?.version === 2 && previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
+    .filter((entry) => options.force || glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
     }));
   const translated =
-    pending.length && !migratingV1
-      ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
+    pending.length && (!migratingV1 || options.force)
+      ? await (options.translate ?? translateNativeEntries)(
+          pending,
+          locale,
+          glossary,
+          validateNativeTranslationStructure,
+        )
       : new Map<string, string>();
   const translations = Object.fromEntries(
     entries
@@ -1613,21 +1667,7 @@ export async function syncNativeLocale(
     glossaryHash: currentGlossaryHash,
     translations,
   };
-  try {
-    validateNativeLocaleArtifact(locale, entries, artifact, glossary);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const structural = message.match(
-      /translation changed structural tokens or line breaks for ([^\s]+)/u,
-    );
-    if (structural?.[1]) {
-      throw new Error(
-        `native translation changed placeholders or line breaks for ${locale}:${structural[1]}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  validateNativeLocaleArtifact(locale, entries, artifact, glossary);
   const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
   const changed = previousRaw !== rendered;
   if (changed) {
@@ -1650,13 +1690,18 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
   if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>]|verify",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force]|verify",
     );
   }
   let locale: string | undefined;
+  let force = false;
   let write = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === "--force") {
+      force = true;
+      continue;
+    }
     if (argument === "--write") {
       write = true;
       continue;
@@ -1691,7 +1736,10 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   if (command === "baseline" && !write) {
     throw new Error("native i18n baseline requires `--write`");
   }
-  return { command, locale, write };
+  if (force && (command !== "sync" || !write || !locale)) {
+    throw new Error("native full refresh requires `sync --write --locale <code> --force`");
+  }
+  return { command, locale, write, ...(force ? { force } : {}) };
 }
 
 async function main() {
@@ -1706,7 +1754,7 @@ async function main() {
       parsed.locale === undefined,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, entries);
+    await syncNativeLocale(parsed.locale, entries, { force: parsed.force });
   }
   if (parsed.command === "verify" || parsed.command === "check") {
     const android = await import("./android-app-i18n.ts");

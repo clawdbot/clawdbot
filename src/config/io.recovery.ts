@@ -94,7 +94,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     context.deps.lowerPrecedenceEnv,
   );
   const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
-    env: context.deps.env,
+    ...context.pathResolution,
     sourceRaw: suffixRecovery.parsed,
   });
   if (!validated.ok) {

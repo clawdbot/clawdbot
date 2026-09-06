@@ -16,6 +16,10 @@ const STATE_SCHEMA_MODULES = [
   },
 ] as const;
 
+export const STATE_SCHEMA_GENERATOR_INPUTS = STATE_SCHEMA_MODULES.map(
+  ({ schemaPath }) => schemaPath,
+);
+
 /** Inline canonical schema bytes so bundled consumers need no SQL asset. */
 export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
   const schemasByModulePath = new Map(
@@ -29,9 +33,9 @@ export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
   return {
     name: STATE_SCHEMA_INLINE_PLUGIN_NAME,
     configureVitest(context: {
-      experimental_defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
+      defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
     }) {
-      context.experimental_defineCacheKeyGenerator(cacheKeyForSchema);
+      context.defineCacheKeyGenerator(cacheKeyForSchema);
     },
     load(this: { addWatchFile(id: string): void }, id: string) {
       const schema = schemasByModulePath.get(path.resolve(id));

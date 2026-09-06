@@ -12,8 +12,7 @@ import {
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
-import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
-import { writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { resolveAuthStorePathForDisplay } from "./paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -75,16 +74,6 @@ describe("auth profile path helpers (direct-import coverage attribution)", () =>
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const resolved = resolveAuthStatePath();
       expect(resolved.startsWith(stateDir)).toBe(true);
-    });
-  });
-
-  it("uses one database path for an agent-local auth store and its runtime state", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
-      const expectedPath = path.join(agentDir, "openclaw-agent.sqlite");
-      expect(resolveAuthStorePathForDisplay(agentDir)).toBe(expectedPath);
-      expect(resolveAuthStatePathForDisplay(agentDir)).toBe(expectedPath);
     });
   });
 

@@ -85,7 +85,7 @@ describe("channel ingress drain debounce failures", () => {
     });
   });
 
-  it("keeps watchdog recovery after retry settlement fails", async () => {
+  it("keeps watchdog ownership when retry settlement keeps failing", async () => {
     vi.useFakeTimers();
     await withTempState(async (stateDir) => {
       let clock = 10_000;
@@ -98,6 +98,7 @@ describe("channel ingress drain debounce failures", () => {
       queue.release = async () => {
         throw new Error("persistent release failure");
       };
+      const log = vi.fn();
 
       const sessionError = new Error("Session changed while starting work. Retry.");
       const debouncer = createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
@@ -116,6 +117,7 @@ describe("channel ingress drain debounce failures", () => {
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 200_000,
+        onLog: log,
         dispatchClaimedEvent: async (_event, lifecycle) => {
           await debouncer.enqueue({ lifecycle });
           return { kind: "deferred" };
@@ -134,11 +136,14 @@ describe("channel ingress drain debounce failures", () => {
 
       clock += 73_000;
       await vi.advanceTimersByTimeAsync(73_000);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-        { id: "debounced-settlement-failure", reason: "handler-timeout" },
+      expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+        "debounced-settlement-failure",
       ]);
-      expect(drain.activeLaneKeys().has("shared")).toBe(false);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      expect(drain.activeLaneKeys().has("shared")).toBe(true);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("applying retry policy (handler-timeout)"),
+      );
       drain.dispose();
     });
   });

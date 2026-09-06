@@ -3,6 +3,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -43,7 +44,11 @@ function makeSandbox() {
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
 
-async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-heartbeat" = "now") {
+async function runMainCronCase(
+  mode: WakeNowRunMode,
+  wakeMode: "now" | "next-heartbeat" = "now",
+  options: { heartbeatEvery?: string; deleteAfterRun?: boolean } = {},
+) {
   const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
@@ -57,7 +62,7 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     agents: {
       defaults: {
         workspace: sandbox.dir,
-        heartbeat: { every: "5m", target: "telegram" },
+        heartbeat: { every: options.heartbeatEvery ?? "5m", target: "telegram" },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
@@ -115,6 +120,7 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
       sessionTarget: "main",
       wakeMode,
       payload: { kind: "systemEvent", text: "Reminder: Send the nightly report" },
+      ...(options.deleteAfterRun === undefined ? {} : { deleteAfterRun: options.deleteAfterRun }),
     });
 
     if (mode === "direct") {
@@ -157,11 +163,18 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     expect(getReplySpy).toHaveBeenCalledTimes(1);
 
     const [ctx] = getReplySpy.mock.calls[0] ?? [];
-    const replyCtx = ctx as { Provider?: string; SessionKey?: string; Body?: string };
-    expect(replyCtx.Provider).toBe("cron-event");
+    const replyCtx = ctx as Pick<
+      MsgContext,
+      "InternalTurnSource" | "Provider" | "SessionKey" | "Body"
+    >;
+    expect(replyCtx.InternalTurnSource).toBe("cron");
+    expect(replyCtx.Provider).toBeUndefined();
     expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
+    if (options.deleteAfterRun) {
+      expect(cron.getJob(job.id)).toBeUndefined();
+    }
   } finally {
     cron.stop();
     const drained = await waitForActiveCronJobs(5_000);
@@ -185,5 +198,9 @@ describe("main cron with the real heartbeat runner", () => {
 
   it("delivers a next-heartbeat event through a later scheduled main-session heartbeat", async () => {
     await runMainCronCase("direct", "next-heartbeat");
+  });
+
+  it("delivers and removes an immediate one-shot when heartbeat cadence is disabled", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatEvery: "0m", deleteAfterRun: true });
   });
 });

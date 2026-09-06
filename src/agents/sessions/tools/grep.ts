@@ -3,22 +3,23 @@
  *
  * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
  */
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
-import { Text } from "@earendil-works/pi-tui";
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -50,6 +51,19 @@ const grepSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
 });
 const DEFAULT_LIMIT = 100;
+const GREP_JSON_RECORD_MAX_BYTES = 1024 * 1024;
+const GREP_JSON_CARRIAGE_RETURN = Buffer.from([0x0d]);
+const GREP_JSON_RECORD_OVERSIZED_ERROR =
+  "grep stopped because ripgrep emitted a JSON record larger than 1 MiB; narrow the path or pattern, exclude generated/minified files, or inspect the file with a bounded read";
+
+type RipgrepJsonText = { text?: string; bytes?: string };
+
+function decodeRipgrepJsonText(value: RipgrepJsonText | undefined): string | undefined {
+  return (
+    value?.text ??
+    (value?.bytes === undefined ? undefined : Buffer.from(value.bytes, "base64").toString("utf8"))
+  );
+}
 
 /**
  * Pluggable operations for the grep tool.
@@ -61,11 +75,6 @@ export interface GrepOperations {
   /** Read file contents for context lines */
   readFile: (absolutePath: string) => Promise<string> | string;
 }
-
-const defaultGrepOperations: GrepOperations = {
-  isDirectory: (p) => statSync(p).isDirectory(),
-  readFile: (p) => readFileSync(p, "utf-8"),
-};
 
 export interface GrepToolOptions {
   /** Custom operations for grep. Default: local filesystem plus ripgrep */
@@ -123,6 +132,7 @@ export function createGrepToolDefinition(
   options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "grep",
     label: "grep",
@@ -166,10 +176,8 @@ export function createGrepToolDefinition(
             }
           | undefined;
         let childClosed = false;
-        let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
         const cleanup = () => {
-          rl?.close();
           signal?.removeEventListener("abort", onAbort);
         };
         const settle = (fn: () => void): boolean => {
@@ -211,11 +219,11 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
-            const ops = customOps ?? defaultGrepOperations;
+            const searchPath = resolvePath(searchDir || ".", cwd);
             let isDirectory: boolean;
             try {
-              isDirectory = await ops.isDirectory(searchPath);
+              isDirectory = await (customOps?.isDirectory(searchPath) ??
+                statSync(searchPath).isDirectory());
             } catch {
               settle(() => reject(new Error(`Path not found: ${searchPath}`)));
               return;
@@ -224,34 +232,20 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const contextValue = context && context > 0 ? context : 0;
+            // Fractional line indices would omit the matching row.
+            const contextValue = resolveNonNegativeIntegerOption(context, 0);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const formatPath = (filePath: string): string => {
-              if (isDirectory) {
-                const relative = path.relative(searchPath, filePath);
-                if (relative && !relative.startsWith("..")) {
-                  return relative.replace(/\\/g, "/");
-                }
-              }
-              return path.basename(filePath);
-            };
-
-            const fileCache = new Map<string, string[]>();
-            const getFileLines = async (filePath: string): Promise<string[]> => {
-              let lines = fileCache.get(filePath);
-              if (!lines) {
-                try {
-                  const content = await ops.readFile(filePath);
-                  lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-                } catch {
-                  lines = [];
-                }
-                fileCache.set(filePath, lines);
-              }
-              return lines;
+              const relative = isDirectory ? path.relative(searchPath, filePath) : "";
+              return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`)
+                ? normalizeNativePathSeparators(relative)
+                : path.basename(filePath);
             };
 
             const args: string[] = ["--json", "--line-number", "--color=never", "--hidden"];
+            if (!customOps && contextValue > 0) {
+              args.push("--context", String(contextValue));
+            }
             if (ignoreCase) {
               args.push("--ignore-case");
             }
@@ -273,18 +267,23 @@ export function createGrepToolDefinition(
             });
             releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
-            rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             let matchCount = 0;
             let matchLimitReached = false;
             let linesTruncated = false;
             const outputLines: string[] = [];
+            let recordParts: Buffer[] = [];
+            let recordBytes = 0;
+            let pendingCarriageReturn = false;
 
             // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
             // cannot split multibyte characters into U+FFFD replacement noise.
             spawnedChild.stderr?.setEncoding("utf8");
             spawnedChild.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk);
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
               if (settled) {
@@ -294,52 +293,26 @@ export function createGrepToolDefinition(
                 stopChild();
               }
             };
-            // readline re-emits input failures, then drops its input listener on close.
-            // Keep the direct guard until child exit so later stdout errors stay handled.
-            rl.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
-            const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {
-              const relativePath = formatPath(filePath);
-              const lines = await getFileLines(filePath);
-              if (!lines.length) {
-                return [`${relativePath}:${lineNumber}: (unable to read file)`];
-              }
-              const block: string[] = [];
-              const start = contextValue > 0 ? Math.max(1, lineNumber - contextValue) : lineNumber;
-              const end =
-                contextValue > 0 ? Math.min(lines.length, lineNumber + contextValue) : lineNumber;
-              for (let current = start; current <= end; current++) {
-                const lineText = lines[current - 1] ?? "";
-                const sanitized = lineText.replace(/\r/g, "");
-                const isMatchLine = current === lineNumber;
-                // Truncate long lines so grep output stays compact.
-                const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
-                if (wasTruncated) {
-                  linesTruncated = true;
-                }
-                if (isMatchLine) {
-                  block.push(`${relativePath}:${current}: ${truncatedText}`);
-                } else {
-                  block.push(`${relativePath}-${current}- ${truncatedText}`);
-                }
-              }
-              return block;
-            };
-
-            // Collect matches during streaming, then format them after rg exits.
-            const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
-            rl.on("line", (line) => {
-              if (!line.trim() || matchLimitReached) {
+            const matches: Array<{
+              filePath: string;
+              pathIdentity: string;
+              lineNumber: number;
+              lineText?: string;
+            }> = [];
+            const nativeFiles = new Map<string, Map<number, string>>();
+            const handleJsonRecord = (line: string) => {
+              if (!line.trim() || settled || killedDueToLimit) {
                 return;
               }
               let event: {
                 type?: string;
                 data?: {
-                  path?: { text?: string };
+                  path?: RipgrepJsonText;
                   line_number?: unknown;
-                  lines?: { text?: string };
+                  lines?: RipgrepJsonText;
                 };
               };
               try {
@@ -347,21 +320,115 @@ export function createGrepToolDefinition(
               } catch {
                 return;
               }
+              const filePath = decodeRipgrepJsonText(event.data?.path);
+              // Ripgrep emits exactly one text/bytes tag. Keep that lossless identity:
+              // distinct invalid-byte paths can have the same replacement-character display.
+              const pathIdentity = JSON.stringify(event.data?.path);
+              const lineNumber = event.data?.line_number;
+              const lineText = event.data?.lines?.text;
               if (event.type === "match") {
                 matchCount++;
-                // Observe one extra match before stopping so exactly N matches stay complete.
-                if (matchCount > effectiveLimit) {
-                  matchLimitReached = true;
-                  stopChild(true);
-                  return;
-                }
-                const filePath = event.data?.path?.text;
-                const lineNumber = event.data?.line_number;
-                const lineText = event.data?.lines?.text;
-                if (filePath && typeof lineNumber === "number") {
-                  matches.push({ filePath, lineNumber, lineText });
+                matchLimitReached = matchCount > effectiveLimit;
+                if (
+                  !matchLimitReached &&
+                  filePath &&
+                  pathIdentity &&
+                  typeof lineNumber === "number"
+                ) {
+                  matches.push({ filePath, pathIdentity, lineNumber, lineText });
                 }
               }
+              const lastMatch = matches.at(-1);
+              const windowEnd = (lastMatch?.lineNumber ?? 0) + contextValue;
+              const inLastWindow =
+                pathIdentity === lastMatch?.pathIdentity &&
+                typeof lineNumber === "number" &&
+                lineNumber <= windowEnd;
+              if (
+                pathIdentity &&
+                typeof lineNumber === "number" &&
+                (matchCount < effectiveLimit || inLastWindow)
+              ) {
+                const text =
+                  lineText ?? (!customOps ? decodeRipgrepJsonText(event.data?.lines) : undefined);
+                if (text !== undefined) {
+                  const lines = nativeFiles.get(pathIdentity) ?? new Map<number, string>();
+                  lines.set(lineNumber, text);
+                  nativeFiles.set(pathIdentity, lines);
+                }
+              }
+              // The extra match can be context for the last retained match. Capture its
+              // row, then drain through that window's end (or EOF) before stopping rg.
+              if (matchLimitReached && (customOps || !inLastWindow || lineNumber === windowEnd)) {
+                stopChild(true);
+              }
+            };
+            const appendRecordPart = (part: Buffer): boolean => {
+              if (part.length === 0) {
+                return true;
+              }
+              const nextBytes = recordBytes + part.length;
+              if (nextBytes > GREP_JSON_RECORD_MAX_BYTES) {
+                recordParts = [];
+                recordBytes = 0;
+                if (settle(() => reject(new Error(GREP_JSON_RECORD_OVERSIZED_ERROR)))) {
+                  stopChild();
+                }
+                return false;
+              }
+              recordParts.push(part);
+              recordBytes = nextBytes;
+              return true;
+            };
+            const emitRecord = () => {
+              const line = Buffer.concat(recordParts, recordBytes).toString("utf8");
+              recordParts = [];
+              recordBytes = 0;
+              handleJsonRecord(line);
+            };
+            spawnedChild.stdout?.on("data", (chunk: Buffer) => {
+              if (settled || killedDueToLimit) {
+                return;
+              }
+              let offset = 0;
+              if (pendingCarriageReturn) {
+                pendingCarriageReturn = false;
+                if (chunk[0] === 0x0a) {
+                  emitRecord();
+                  if (settled || killedDueToLimit) {
+                    return;
+                  }
+                  offset = 1;
+                } else if (!appendRecordPart(GREP_JSON_CARRIAGE_RETURN)) {
+                  return;
+                }
+              }
+              for (let index = offset; index < chunk.length; index += 1) {
+                if (chunk[index] !== 0x0a) {
+                  continue;
+                }
+                let recordEnd = index;
+                if (index > offset && chunk[index - 1] === 0x0d) {
+                  recordEnd -= 1;
+                }
+                if (!appendRecordPart(chunk.subarray(offset, recordEnd))) {
+                  return;
+                }
+                emitRecord();
+                if (settled || killedDueToLimit) {
+                  return;
+                }
+                offset = index + 1;
+              }
+              const tail = chunk.subarray(offset);
+              if (tail.at(-1) === 0x0d) {
+                if (!appendRecordPart(tail.subarray(0, -1))) {
+                  return;
+                }
+                pendingCarriageReturn = true;
+                return;
+              }
+              appendRecordPart(tail);
             });
 
             spawnedChild.nodeChildProcess.on("error", (error) => {
@@ -370,12 +437,17 @@ export function createGrepToolDefinition(
             });
             spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
+              pendingCarriageReturn = false;
+              if (recordBytes > 0 && !settled && !killedDueToLimit) {
+                emitRecord();
+              }
               void (async () => {
                 if (settled) {
                   return;
                 }
                 if (!killedDueToLimit && code !== 0 && code !== 1) {
-                  const errorMsg = stderr.trim() || `ripgrep exited with code ${code}`;
+                  const fallback = `ripgrep exited with code ${code}`;
+                  const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                   settle(() => reject(new Error(errorMsg)));
                   return;
                 }
@@ -390,24 +462,49 @@ export function createGrepToolDefinition(
                 }
 
                 // Format matches after streaming finishes so custom readFile() backends can be async.
-                for (const match of matches) {
-                  if (contextValue === 0 && match.lineText !== undefined) {
-                    const relativePath = formatPath(match.filePath);
-                    const sanitized = match.lineText
-                      .replace(/\r\n/g, "\n")
-                      .replace(/\r/g, "")
-                      .replace(/\n$/, "");
-                    const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
-                    if (wasTruncated) {
-                      linesTruncated = true;
+                const fileCache = new Map<string, string[]>();
+                for (const { filePath, pathIdentity, lineNumber, lineText: matchText } of matches) {
+                  const relativePath = formatPath(filePath);
+                  let customLines: string[] | undefined;
+                  if (customOps && (contextValue > 0 || matchText === undefined)) {
+                    customLines = fileCache.get(filePath);
+                    if (!customLines) {
+                      try {
+                        const content = await customOps.readFile(filePath);
+                        customLines = content.replace(/\r\n?/g, "\n").split("\n");
+                      } catch {
+                        customLines = [];
+                      }
+                      fileCache.set(filePath, customLines);
                     }
-                    outputLines.push(`${relativePath}:${match.lineNumber}: ${truncatedText}`);
-                  } else {
-                    const block = await formatBlock(match.filePath, match.lineNumber);
                     if (settled) {
                       return;
                     }
-                    outputLines.push(...block);
+                    if (!customLines.length) {
+                      outputLines.push(`${relativePath}:${lineNumber}: (unable to read file)`);
+                      continue;
+                    }
+                  }
+                  const nativeLines = nativeFiles.get(pathIdentity);
+                  for (
+                    let current = Math.max(1, lineNumber - contextValue);
+                    current <= lineNumber + contextValue;
+                    current++
+                  ) {
+                    const lineText = customLines
+                      ? customLines[current - 1]
+                      : nativeLines?.get(current);
+                    if (lineText === undefined) {
+                      // Native context windows are contiguous; absence is EOF, not
+                      // a synthetic empty row after the file's final terminator.
+                      break;
+                    }
+                    const { text, wasTruncated } = truncateLine(
+                      lineText.replace(/\r/g, "").replace(/\n$/, ""),
+                    );
+                    linesTruncated ||= wasTruncated;
+                    const separator = current === lineNumber ? ":" : "-";
+                    outputLines.push(`${relativePath}${separator}${current}${separator} ${text}`);
                   }
                 }
 
@@ -429,9 +526,7 @@ export function createGrepToolDefinition(
                   details.truncation = truncation;
                 }
                 if (linesTruncated) {
-                  notices.push(
-                    `Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`,
-                  );
+                  notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars`);
                   details.linesTruncated = true;
                 }
                 if (notices.length > 0) {
@@ -456,14 +551,11 @@ export function createGrepToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatGrepCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatGrepResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

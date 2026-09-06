@@ -60,8 +60,9 @@ function parseChannelFilter(raw?: string): ChannelLogFilter {
 }
 
 function matchesChannelContext(value: string | undefined, channel: string) {
-  const path = `gateway/channels/${channel}`;
-  return value === channel || value === path || value?.startsWith(`${path}/`) === true;
+  return [channel, `gateway/channels/${channel}`].some(
+    (root) => value === root || value?.startsWith(`${root}/`) === true,
+  );
 }
 
 function matchesChannel(
@@ -73,8 +74,7 @@ function matchesChannel(
     return true;
   }
   return (
-    matchesChannelContext(line.subsystem, channel) ||
-    matchesChannelContext(line.module, channel) ||
+    [line.subsystem, line.module].some((value) => matchesChannelContext(value, channel)) ||
     (line.plugin !== undefined && filter.pluginIds.has(line.plugin))
   );
 }
@@ -104,16 +104,19 @@ export async function channelsLogsCommand(
     maxBytes: MAX_BYTES,
     filter: (line) => matchesChannel(line, filter),
   });
-  const lines = tail.lines;
+  const { lines, truncated } = tail;
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { file: tail.file, channel, lines });
+    writeRuntimeJson(runtime, { file: tail.file, channel, truncated, lines });
     return;
   }
 
   runtime.log(theme.info(`Log file: ${tail.file}`));
   if (channel !== "all") {
     runtime.log(theme.info(`Channel: ${channel}`));
+  }
+  if (truncated) {
+    runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
   }
   if (lines.length === 0) {
     runtime.log(theme.muted("No matching log lines."));

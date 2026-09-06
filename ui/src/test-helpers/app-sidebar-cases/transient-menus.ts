@@ -4,10 +4,7 @@ import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar transient menus", () => {
-  // Regression: the nav column is a stacking context (z-index 10) painted
-  // below the sidebar resizer (z-index 20), so transient menus must render
-  // through the top-layer surface host instead of plain fixed divs.
-  it("hosts the session sort menu in the top-layer menu surface", async () => {
+  it("lets the session sort dropdown own its popover without another top-layer host", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -23,7 +20,7 @@ describe("AppSidebar transient menus", () => {
 
     const menu = sidebar.querySelector(".sidebar-session-sort-menu");
     expect(menu).not.toBeNull();
-    expect(menu?.closest("openclaw-menu-surface")).not.toBeNull();
+    expect(menu?.closest("openclaw-menu-surface")).toBeNull();
   });
 
   it("ignores a stale sort-menu hide after opening its replacement", async () => {
@@ -74,6 +71,7 @@ describe("AppSidebar transient menus", () => {
       'wa-dropdown-item[value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
+    expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     expect(settingsItem).not.toBeNull();
     firstMenu?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -110,6 +108,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-more-menu");
     expect(firstMenu).not.toBeNull();
+    expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     trigger.click();
     await sidebar.updateComplete;
     trigger.click();
@@ -136,6 +135,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-customize-menu");
     expect(firstMenu).not.toBeNull();
+    expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     firstMenu?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,

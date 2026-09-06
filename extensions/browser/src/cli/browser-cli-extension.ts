@@ -5,11 +5,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { resolveBrowserConfig } from "../browser/config.js";
 import {
   browserExtensionStatus,
   FOUNDATION_CHROME_WEB_STORE_URL,
   installChromeExtensionBootstrap,
   normalizeExtensionInstallWaitMs,
+  removeChromeStoreInstallRequests,
   resolveChromeExtensionLoadPath,
   uninstallChromeExtensionNativeHosts,
 } from "../browser/extension-install.js";
@@ -30,7 +32,6 @@ import {
   defaultRuntime,
   getRuntimeConfig,
   info,
-  resolveBrowserConfig,
   runCommandWithRuntime,
   theme,
 } from "./core-api.js";
@@ -141,7 +142,7 @@ async function buildCdpEndpoint(options: {
 /** Register `openclaw browser extension` lifecycle and compatibility commands. */
 export function registerBrowserExtensionCommands(
   browser: Command,
-  _parentOpts: (cmd: Command) => BrowserParentOpts,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
   pluginRoot?: string,
 ) {
   const extension = browser
@@ -161,32 +162,35 @@ export function registerBrowserExtensionCommands(
 
   extension
     .command("install")
-    .description("Register the native bootstrap host for Store and development installs")
+    .description("Set up the Chrome extension and request Store installation on macOS")
+    .option(
+      "--no-store",
+      "Prepare native bootstrap and development files without requesting Store installation",
+    )
     .option("--json", "Print a machine-readable status report")
     .option(
       "--wait-ms <ms>",
       "How long to wait after pre-registration for Chrome to verify the extension",
       String(30_000),
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
           const bundledDir = resolveChromeExtensionDir(pluginRoot);
-          if (opts.json !== true) {
-            defaultRuntime.log(
-              info("Preparing the OpenClaw Chrome native bootstrap. Keep Chrome running…"),
-            );
+          if (!json) {
+            defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
           }
           const status = await installChromeExtensionBootstrap({
             bundledDir,
             pluginRoot: resolveBrowserPluginRoot(pluginRoot),
             waitMs,
-            onProgress:
-              opts.json === true ? undefined : (message) => defaultRuntime.log(info(message)),
+            requestStoreInstall: opts.store !== false,
+            onProgress: json ? undefined : (message) => defaultRuntime.log(info(message)),
           });
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson(status);
           } else {
             for (const issue of status.issues) {
@@ -197,10 +201,12 @@ export function registerBrowserExtensionCommands(
                 ? theme.warn(
                     status.platformSupport === "manual_required"
                       ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
-                      : `Automatic setup was not verified. Run install before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}. Use Load unpacked only as a development fallback after pre-registration. If this extension already attempted setup before the host existed, restart Chrome once before retrying.`,
+                      : status.storeInstallRequests.some((entry) => entry.state === "requested")
+                        ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
+                        : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
                   )
                 : info(
-                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). The extension connects automatically.`,
+                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
                   ),
             );
           }
@@ -219,19 +225,21 @@ export function registerBrowserExtensionCommands(
     .command("status")
     .description("Inspect extension copies, Chrome IDs, and native-host registrations")
     .option("--json", "Print a machine-readable status report")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
         const status = await browserExtensionStatus({
           bundledDir: resolveChromeExtensionDir(pluginRoot),
         });
-        if (opts.json === true) {
+        if (json) {
           defaultRuntime.writeJson(status);
           return;
         }
         defaultRuntime.log(
           [
             `Extension copy: ${status.installedCopy.owned ? "installed" : "bundled fallback"}`,
-            `Store:          ${status.storeDiscovered.length > 0 ? status.storeDiscovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "not detected"}`,
+            `Store request:  ${status.storeInstallRequests.length > 0 ? status.storeInstallRequests.map((entry) => `${entry.browser}: ${entry.state}`).join(", ") : "use the Chrome Web Store"}`,
+            `Store:          ${status.storeDiscovered.length > 0 ? status.storeDiscovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile}; ${entry.enabled ? "enabled" : entry.awaitingApproval ? "awaiting approval" : "disabled"})`).join(", ") : "not detected"}`,
             `Development:    ${status.discovered.length > 0 ? status.discovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "none detected"}`,
             `Load unpacked:  ${status.installedCopy.owned ? status.installedCopy.path : status.bundledPath}`,
             `Native hosts:   ${status.registrations.filter((entry) => entry.state === "owned").length} owned`,
@@ -242,13 +250,41 @@ export function registerBrowserExtensionCommands(
     });
 
   extension
+    .command("uninstall-store")
+    .description(
+      "Remove OpenClaw-owned Store install requests; Chrome may remove the extension on restart",
+    )
+    .option("--json", "Print a machine-readable removal report")
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await removeChromeStoreInstallRequests();
+        if (opts.json === true || parentOpts(command).json === true) {
+          defaultRuntime.writeJson(result);
+        } else {
+          defaultRuntime.log(
+            info(
+              `Removed ${result.removed.length} owned Store install request(s). Chrome may remove externally installed copies on its next start. Native hosts are unchanged.`,
+            ),
+          );
+          for (const refused of result.refused) {
+            defaultRuntime.error(theme.warn(`Refused foreign Store registration: ${refused}`));
+          }
+        }
+        if (result.refused.length > 0) {
+          defaultRuntime.exit(1);
+        }
+      });
+    });
+
+  extension
     .command("uninstall-host")
     .description("Remove only OpenClaw-owned Chrome native-host registrations")
     .option("--json", "Print a machine-readable removal report")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
         const result = await uninstallChromeExtensionNativeHosts();
-        if (opts.json === true) {
+        if (json) {
           defaultRuntime.writeJson(result);
           return;
         }
@@ -271,12 +307,13 @@ export function registerBrowserExtensionCommands(
       "--gateway-url <url>",
       "Print a remote pairing string for a Chrome on another machine (e.g. wss://gateway.example.com)",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const result = await buildPairingString(opts.gatewayUrl);
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson({
               pairingString: result.pairing,
               relayPort: result.relayPort,
@@ -319,10 +356,11 @@ export function registerBrowserExtensionCommands(
       "--legacy-bearer",
       "Print the legacy Bearer header while browser.extensionRelay.allowLegacyAuth is enabled",
     )
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
+          const json = opts.json === true || parentOpts(command).json === true;
           const legacyBearer = opts.legacyBearer === true;
           const endpoint = await buildCdpEndpoint({ legacyBearer });
           if (legacyBearer) {
@@ -332,7 +370,7 @@ export function registerBrowserExtensionCommands(
               ),
             );
           }
-          if (opts.json === true) {
+          if (json) {
             defaultRuntime.writeJson(endpoint);
             return;
           }

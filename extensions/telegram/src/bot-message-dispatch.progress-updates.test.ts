@@ -44,7 +44,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
@@ -74,7 +76,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
@@ -108,7 +112,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
@@ -142,7 +148,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context,
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expectDeliveredReply(0, { text: fullAnswer });
@@ -356,13 +362,84 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expect(draftStream.flush).toHaveBeenCalled();
+  });
+
+  it("keeps a dynamic tool lifecycle and formatted summary in one row", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolResult?.({
+        text: "🧭 Agents",
+        channelData: { openclawToolProgressId: "dynamic-1" },
+      });
+      await replyOptions?.onToolStart?.({
+        name: "agents_list",
+        phase: "start",
+        itemId: "dynamic-1",
+        toolCallId: "dynamic-1",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview("Working\n\n🧭 Agents", "<b>Working</b>\n<b>🧭 Agents</b>"),
+    );
+  });
+
+  it("keeps raw structured detail when its formatted summary arrives", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        itemId: "command-1",
+        toolCallId: "command-1",
+        args: { command: "echo private" },
+        detailMode: "raw",
+      });
+      await replyOptions?.onToolResult?.({
+        text: "🛠️ Bash",
+        channelData: { openclawToolProgressId: "command-1" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, commandText: "raw", label: "Working" },
+        },
+      },
+    });
+
+    const previewText = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
+    expect(previewText).toContain("echo private");
+    expect(previewText?.match(/🛠️/gu)).toHaveLength(1);
   });
 
   it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
@@ -377,7 +454,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -473,7 +552,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling", commandText: "raw" },
+          progress: { toolProgress: true, label: "Shelling", commandText: "raw" },
         },
       },
     });
@@ -515,7 +594,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling", commandText: "status" },
+          progress: { toolProgress: true, label: "Shelling", commandText: "status" },
         },
       },
     });
@@ -542,7 +621,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createReasoningStreamContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
@@ -571,7 +652,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
@@ -604,7 +687,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createReasoningStreamContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -637,7 +720,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createReasoningStreamContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling", maxLineChars: 300 } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", maxLineChars: 300 },
+        },
       },
     });
 
@@ -673,7 +759,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createReasoningStreamContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -708,7 +794,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling", commentary: true },
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
         },
       },
     });
@@ -718,6 +804,85 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastPreview?.text).toContain("💬");
     expect(lastPreview?.text).toContain("Checking recent context");
+  });
+
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "keeps the draft as commentary owner when verbose visibility becomes %s",
+    async (_label, verboseActive) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
+        replyOptions?.onVerboseProgressVisibility?.(() => verboseActive);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking recent context",
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, label: "Shelling", commentary: true },
+          },
+        },
+      });
+
+      const updates = draftStream.updatePreview.mock.calls
+        .map(([preview]) => preview.text)
+        .join("\n");
+      // The draft owns commentary: exactly one visible copy per preamble.
+      expect(updates.split("Checking recent context")).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    {
+      label: "progress commentary is disabled",
+      streamMode: "progress",
+      commentary: false,
+      commentaryPayloadsEnabled: true,
+    },
+    {
+      label: "partial streaming owns the answer preview",
+      streamMode: "partial",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+    {
+      label: "streaming is disabled",
+      streamMode: "off",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+  ] as const)("omits the durable commentary owner when $label", async (scenario) => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      expect(replyOptions?.commentaryPayloadsEnabled).toBe(scenario.commentaryPayloadsEnabled);
+      expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: scenario.streamMode,
+      telegramCfg: {
+        streaming: {
+          mode: scenario.streamMode,
+          progress: { label: "Shelling", commentary: scenario.commentary },
+        },
+      },
+    });
   });
 
   it("renders the Telegram preamble headline when commentary is disabled", async () => {
@@ -742,7 +907,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: {
         streaming: {
           mode: "progress",
-          progress: { label: "Shelling" },
+          progress: { toolProgress: true, label: "Shelling" },
         },
       },
     });
@@ -781,7 +946,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -814,7 +979,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       streamMode: "progress",
       telegramCfg: {
         richMessages: true,
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -837,7 +1002,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
     });
 
     expect(rendered).toBe(false);
@@ -867,7 +1034,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -894,7 +1061,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       context: createContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 

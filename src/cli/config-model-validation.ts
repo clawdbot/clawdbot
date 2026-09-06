@@ -14,7 +14,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
-import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
   containsEnvVarReference,
   type EnvSubstitutionWarning,
@@ -48,6 +47,16 @@ type ConfigModelRefCheckResult = {
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
+}
+
+function pathMayAffectTextModelRefs(path: readonly string[]): boolean {
+  if (path[0] !== "agents" || path.length === 1) {
+    return path[0] === "agents";
+  }
+  if (path[1] === "defaults") {
+    return path.length === 2 || path[2] === "model";
+  }
+  return path[1] === "entries" || path[1] === "list";
 }
 
 function collectTextModelConfigRefs(params: {
@@ -387,22 +396,18 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     import("../agents/agent-scope.js"),
     import("../agents/model-selection.js"),
   ]);
-  const preparedByAgent = new Map<
-    string,
-    Awaited<ReturnType<typeof loadPreparedModelCatalogOwnerSnapshot>>
-  >();
   let modelModules:
     | Promise<
         [
           typeof import("../agents/embedded-agent-runner/model.js"),
-          typeof import("../agents/prepared-model-catalog.js"),
+          typeof import("../agents/prepared-model-runtime.js"),
         ]
       >
     | undefined;
   const loadModelModules = () =>
     (modelModules ??= Promise.all([
       import("../agents/embedded-agent-runner/model.js"),
-      import("../agents/prepared-model-catalog.js"),
+      import("../agents/prepared-model-runtime.js"),
     ]));
 
   return async ({ config, ref }) => {
@@ -412,8 +417,9 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
+    const { provider, model } = resolvedRef;
     // CLI backends validate their own ids and do not require a roster-owned catalog.
-    if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
+    if (modelSelection.isCliProvider(provider, config)) {
       return undefined;
     }
     const targetAgentId =
@@ -422,38 +428,33 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       agentScope.resolveDefaultAgentId(config);
     const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
     const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
-    const [modelRuntime, preparedCatalog] = await loadModelModules();
+    const [modelRuntime, preparedRuntime] = await loadModelModules();
 
-    let prepared = preparedByAgent.get(targetAgentId);
-    if (!prepared) {
-      prepared = await preparedCatalog.loadPreparedModelCatalogOwnerSnapshot({
-        agentId: targetAgentId,
-        agentDir,
-        config,
-        readOnly: true,
-        workspaceDir,
-      });
-      preparedByAgent.set(targetAgentId, prepared);
-    }
-    const stores = prepared.createStores();
-    const resolution = await modelRuntime.resolveModelAsync(
-      resolvedRef.provider,
-      resolvedRef.model,
+    // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
+    const lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime({
+      agentId: targetAgentId,
       agentDir,
       config,
-      {
+      workspaceDir,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider, modelId: model, agentId: targetAgentId }],
+    });
+    try {
+      const stores = lease.snapshot.createStores();
+      const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+        ...stores,
         agentId: targetAgentId,
         allowBundledStaticCatalogFallback: true,
-        authStorage: stores.authStorage,
         ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-        modelRegistry: stores.modelRegistry,
-        preparedModelRuntime: prepared,
+        preparedModelRuntime: lease.snapshot,
         workspaceDir,
-      },
-    );
-    return resolution.model
-      ? undefined
-      : (resolution.error ?? `Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+      });
+      return resolution.model
+        ? undefined
+        : (resolution.error ?? `Unknown model: ${provider}/${model}`);
+    } finally {
+      lease.release();
+    }
   };
 }
 
@@ -480,6 +481,9 @@ export async function checkTouchedTextModelRefs(params: {
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
+  if (!params.touchedPaths.some(pathMayAffectTextModelRefs)) {
+    return { refsChecked: 0, refsTotal: 0, errors: [] };
+  }
   // Config mutation validation sees authored pre-roster objects, unlike normal
   // runtime callers. Materialize only the absent-roster compatibility shape;
   // explicit empty or malformed rosters must remain visible to schema repair.

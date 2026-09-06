@@ -6,7 +6,7 @@ import {
   cronRunStatusToTaskStatus,
   parseCronRunLogEntryObject,
 } from "../cron/task-run-detail.js";
-import { normalizeSqliteNumber } from "./sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -53,9 +53,13 @@ type CronRunLogTaskImportResult = {
   skipped: boolean;
 };
 
-function tableExists(db: DatabaseSync, name: string): boolean {
+export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
   return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name),
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs' LIMIT 1",
+      )
+      .get(),
   );
 }
 
@@ -100,7 +104,9 @@ function hasMirroredIdentity(
 }
 
 function integerToBoolean(value: number | bigint | null | undefined): boolean | undefined {
-  return value === null || value === undefined ? undefined : Number(value) !== 0;
+  return value === null || value === undefined
+    ? undefined
+    : coerceRequiredSqliteNumber(value) !== 0;
 }
 
 /** Legacy rows trust write-time errorReason and diagnostic redaction without recomputation. */
@@ -143,7 +149,7 @@ function ordinalKey(jobId: string, ts: number): string {
 
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
-  if (!tableExists(db, "cron_run_logs")) {
+  if (!hasLegacyCronRunLogs(db)) {
     return { imported: 0, alreadyMirrored: 0, malformed: 0, skipped: true };
   }
 

@@ -5,6 +5,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
+  type TerminalOpenResult,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import {
@@ -12,8 +13,8 @@ import {
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
+import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
-  forceTerminalRender,
   resolveTerminalPanelOwnerSessionKey,
   shellBasename,
   TERMINAL_FONT_FAMILY,
@@ -217,6 +218,9 @@ export class TerminalPanelSessionController
       this.host.client !== null &&
       this.host.client === this.activeClient &&
       this.host.available &&
+      // A lazy upgrade also mounts the closed shell. Only the visible owner
+      // may consume intent; a viewport-less boot would discard it as failed.
+      this.host.terminalPanelOpen &&
       this.host.isConnected
     );
   }
@@ -320,6 +324,9 @@ export class TerminalPanelSessionController
     try {
       const attached = await this.attachSession(sessionId, operation, agentOwned);
       if (attached) {
+        if (this.activeId) {
+          this.switchTo(this.activeId);
+        }
         return true;
       }
       if (!this.isTerminalOperationCurrent(operation)) {
@@ -363,7 +370,7 @@ export class TerminalPanelSessionController
     const { createTerminalDefaultColorQueryResponder } =
       await import("@openclaw/libterminal/browser");
     const defaultColorQueries = createTerminalDefaultColorQueryResponder({
-      getColors: () => terminalDynamicColors(this.host.themeMode),
+      getColors: terminalDynamicColors,
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
     const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
@@ -462,7 +469,7 @@ export class TerminalPanelSessionController
   /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalPanelSessionTab,
-    result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
+    result: TerminalOpenResult,
     agentOwned = false,
   ): void {
     tab.gatewaySessionId = result.sessionId;
@@ -470,7 +477,7 @@ export class TerminalPanelSessionController
     tab.shell = result.shell;
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
-    tab.agentOwned = agentOwned;
+    tab.agentOwned = result.owner !== undefined ? result.owner.startsWith("agent:") : agentOwned;
     // Libterminal observes layout before the Gateway session exists. Resync the
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
@@ -708,15 +715,7 @@ export class TerminalPanelSessionController
   switchTo(tabId: string): void {
     this.updateControllerState("activeId", tabId);
     const tab = this.tabs.find((entry) => entry.id === tabId);
-    // Refit and repaint after the container becomes visible. A same-size tab
-    // switch otherwise leaves the newly shown canvas without dirty rows.
-    void this.host.updateComplete.then(() => {
-      if (tab) {
-        tab.controller.fit();
-        forceTerminalRender(tab.controller);
-        tab.controller.terminal.focus();
-      }
-    });
+    void focusTerminalSession(tab, this.host.updateComplete);
   }
 
   private captureTerminalOperation(): TerminalOperation | null {

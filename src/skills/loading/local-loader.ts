@@ -14,9 +14,10 @@ import {
   type Skill,
 } from "./skill-contract.js";
 
-type LoadedLocalSkill = {
+export type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
+  content: string;
 };
 
 export type LocalSkillLoadDiagnostic = {
@@ -29,6 +30,7 @@ function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): string | null {
   const opened = openRootFileSync({
@@ -39,6 +41,7 @@ function readSkillFileSync(params: {
     // Operator skill roots are commonly symlinked; fs-safe still rejects hops
     // whose canonical target escapes the skill root.
     rejectSymlinks: false,
+    rejectHardlinks: params.rejectHardlinks !== false,
   });
   if (!opened.ok) {
     if (!isRootFileMissingFailure(opened)) {
@@ -63,11 +66,12 @@ function readSkillFileSync(params: {
   }
 }
 
-function loadSingleSkillDirectory(params: {
+export function loadSingleSkillDirectory(params: {
   skillDir: string;
   source: string;
   rootRealPath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
@@ -75,6 +79,7 @@ function loadSingleSkillDirectory(params: {
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: params.onDiagnostic,
   });
   if (raw === null) {
@@ -121,75 +126,7 @@ function loadSingleSkillDirectory(params: {
       disableModelInvocation: invocation.disableModelInvocation,
     },
     frontmatter,
-  };
-}
-
-function listCandidateSkillDirs(dir: string): string[] {
-  try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
-      )
-      .map((entry) => path.join(dir, entry.name))
-      .toSorted((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
-/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: {
-  dir: string;
-  source: string;
-  maxBytes?: number;
-  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): {
-  skills: Skill[];
-  frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
-} {
-  const rootDir = path.resolve(params.dir);
-  let rootRealPath: string;
-  try {
-    rootRealPath = fs.realpathSync(rootDir);
-  } catch {
-    return { skills: [], frontmatterByFilePath: new Map() };
-  }
-
-  const rootSkill = loadSingleSkillDirectory({
-    skillDir: rootDir,
-    source: params.source,
-    rootRealPath,
-    maxBytes: params.maxBytes,
-    onDiagnostic: params.onDiagnostic,
-  });
-  if (rootSkill) {
-    return {
-      skills: [rootSkill.skill],
-      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
-    };
-  }
-
-  const loadedSkills = listCandidateSkillDirs(rootDir)
-    .map((skillDir) =>
-      loadSingleSkillDirectory({
-        skillDir,
-        source: params.source,
-        rootRealPath,
-        maxBytes: params.maxBytes,
-        onDiagnostic: params.onDiagnostic,
-      }),
-    )
-    .filter((skill): skill is LoadedLocalSkill => skill !== null);
-  const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
-  for (const loaded of loadedSkills) {
-    frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
-  }
-
-  return {
-    skills: loadedSkills.map((loaded) => loaded.skill),
-    frontmatterByFilePath,
+    content: raw,
   };
 }
 
@@ -197,6 +134,7 @@ export function readSkillFrontmatterSafe(params: {
   rootDir: string;
   filePath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
 }): Record<string, string> | null {
   let rootRealPath: string;
   try {
@@ -208,6 +146,7 @@ export function readSkillFrontmatterSafe(params: {
     rootRealPath,
     filePath: path.resolve(params.filePath),
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (raw === null) {
     return null;

@@ -2,6 +2,7 @@
 export type SlackMediaResult = {
   path: string;
   contentType?: string;
+  fileName?: string;
   placeholder: string;
 };
 

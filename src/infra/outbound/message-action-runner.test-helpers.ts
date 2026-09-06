@@ -4,7 +4,6 @@ import { vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
-  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
@@ -34,9 +33,7 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
-  isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
-  isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
 }));
@@ -68,9 +65,7 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: messageActionRunnerMocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: messageActionRunnerMocks.cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName: messageActionRunnerMocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: messageActionRunnerMocks.isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction: messageActionRunnerMocks.isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery:
     messageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
 }));
@@ -110,7 +105,8 @@ vi.mock("./message-action-threading.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../media/web-media.js", () => ({
+vi.mock("../../media/web-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media/web-media.js")>()),
   loadWebMedia: messageActionRunnerMocks.loadWebMedia,
 }));
 
@@ -266,20 +262,7 @@ export function createPollForwardingPlugin(params: {
 
 async function executePluginAction(params: {
   action: "send" | "poll";
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "channel"
-    | "cfg"
-    | "params"
-    | "mediaAccess"
-    | "accountId"
-    | "gateway"
-    | "toolContext"
-    | "inboundEventKind"
-  > & {
-    dryRun: boolean;
-    agentId?: string;
-  };
+  ctx: Parameters<typeof import("./outbound-send-service.js").executeSendAction>[0]["ctx"];
 }) {
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
@@ -294,8 +277,8 @@ async function executePluginAction(params: {
         : undefined,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    inboundEventKind: params.ctx.inboundEventKind,
+    toolContext: params.ctx.input.toolContext,
+    inboundEventKind: params.ctx.input.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });

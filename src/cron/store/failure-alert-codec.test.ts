@@ -1,16 +1,14 @@
-// Unit tests for failure-alert SQLite column codec roundtrip.
+// Failure-alert settings retain their public shape through canonical cron job JSON.
 import { describe, expect, it } from "vitest";
-import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
-import type { CronJobRow } from "./schema.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
+import type { CronFailureAlert } from "../types.js";
+import { projectCronJobThroughStorageCodec } from "./row-codec.js";
 
-function roundtrip(
-  input: Parameters<typeof bindFailureAlertColumns>[0],
-): ReturnType<typeof failureAlertFromRow> {
-  const columns = bindFailureAlertColumns(input);
-  return failureAlertFromRow(columns as CronJobRow);
+function roundtrip(input: CronFailureAlert | false | undefined) {
+  return projectCronJobThroughStorageCodec(makeCronJob({ failureAlert: input })).failureAlert;
 }
 
-describe("failureAlertFromRow", () => {
+describe("failure-alert cron JSON round-trip", () => {
   it("round-trips disabled config (false)", () => {
     expect(roundtrip(false)).toBe(false);
   });
@@ -39,14 +37,5 @@ describe("failureAlertFromRow", () => {
 
   it("round-trips partial config (only after)", () => {
     expect(roundtrip({ after: 5 })).toEqual({ after: 5 });
-  });
-
-  it("enabled-with-defaults does not collapse to undefined on read", () => {
-    const columns = bindFailureAlertColumns({});
-    const row = columns as CronJobRow;
-    expect(row.failure_alert_disabled).toBe(0);
-    expect(row.failure_alert_after).toBeNull();
-    const decoded = failureAlertFromRow(row);
-    expect(decoded).toEqual({});
   });
 });

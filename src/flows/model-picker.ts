@@ -277,7 +277,6 @@ async function resolvePickerLogicalCatalog(params: {
         })),
       });
       return resolveLogicalModelCatalogEntryState({
-        entry,
         evaluation,
         routePolicy: openAIModelCatalogRoutePolicy,
       });

@@ -43,16 +43,37 @@ export type ChatThinkingSelectState = {
 function resolveThinkingLevelOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
+  catalog: readonly ModelCatalogEntry[] = [],
+  fallbackLabels?: readonly string[],
 ): GatewayThinkingLevelOption[] {
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
-  return resolveThinkingLevelOptions({ catalog: [], defaults, model, provider, session });
+  return resolveThinkingLevelOptions({
+    catalogEntry: resolveThinkingCatalogEntry(catalog, provider, model, session?.agentRuntime?.id),
+    defaults,
+    fallbackLabels,
+    session,
+  });
+}
+
+export function resolveThinkingCommandArgOptionsForSession(
+  session: ChatThinkingTarget | undefined,
+  defaults?: SessionsListResult["defaults"],
+  catalog: readonly ModelCatalogEntry[] = [],
+): string[] {
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog, []).map(
+    (level) => normalizeThinkingOptionValue(level.id),
+  );
+  return options.length > 0
+    ? ["default", ...new Set(options.filter((option) => option && option !== "default"))]
+    : [];
 }
 
 export function formatThinkingCommandOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults?: SessionsListResult["defaults"],
+  catalog: readonly ModelCatalogEntry[] = [],
 ): string {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults)
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog)
     .map((level) => level.label)
     .join(", ");
   return options.split(", ").includes("default") ? options : `default, ${options}`;
@@ -62,13 +83,14 @@ export function resolveThinkingLevelInput(
   rawLevel: string,
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
+  catalog: readonly ModelCatalogEntry[] = [],
 ): string | undefined {
   const normalized = normalizeThinkLevel(rawLevel);
   if (normalized) {
     return normalized;
   }
   const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
-  return resolveThinkingLevelOptionsForSession(session, defaults)
+  return resolveThinkingLevelOptionsForSession(session, defaults, catalog)
     .map((option) => ({
       id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
       label: normalizeLowercaseStringOrEmpty(option.label),
@@ -80,8 +102,9 @@ export function isThinkingLevelOptionForSession(
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
   level: string,
+  catalog: readonly ModelCatalogEntry[] = [],
 ): boolean {
-  return resolveThinkingLevelOptionsForSession(session, defaults).some((option) => {
+  return resolveThinkingLevelOptionsForSession(session, defaults, catalog).some((option) => {
     const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
     return id === level || normalizeThinkLevel(option.label) === level;
   });
@@ -158,22 +181,29 @@ function resolveThinkingCatalogEntry(
   catalog: readonly ModelCatalogEntry[],
   provider: string | null,
   model: string | null,
+  runtimeId?: string,
 ): ModelCatalogEntry | undefined {
-  return provider && model
-    ? catalog.find((entry) => entry.provider === provider && entry.id === model)
-    : undefined;
+  const runtime = runtimeId?.trim();
+  return catalog.find((entry) => {
+    const entryRuntime = entry.agentRuntime?.id?.trim();
+    // Agent-scoped catalogs must not supply another runtime's session thinking profile.
+    return (
+      entry.provider === provider &&
+      entry.id === model &&
+      (!runtime || !entryRuntime || runtime === entryRuntime)
+    );
+  });
 }
 
 function resolveThinkingLevelOptions(params: {
-  catalog: readonly ModelCatalogEntry[];
+  catalogEntry: ModelCatalogEntry | undefined;
   defaults: ThinkingSessionDefaults;
+  fallbackLabels?: readonly string[];
   hideUnsupportedOffOnly?: boolean;
-  model: string | null;
-  provider: string | null;
   session: ChatThinkingTarget | undefined;
 }): GatewayThinkingLevelOption[] {
+  const { catalogEntry } = params;
   const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, params.provider, params.model);
   const explicitLevels =
     (params.session?.thinkingLevels?.length ? params.session.thinkingLevels : null) ??
     (params.session?.model && catalogEntry?.thinkingLevels?.length
@@ -202,7 +232,7 @@ function resolveThinkingLevelOptions(params: {
       return [];
     }
   }
-  const labels = explicitLabels ?? BASE_THINKING_LEVELS;
+  const labels = explicitLabels ?? params.fallbackLabels ?? BASE_THINKING_LEVELS;
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,
@@ -228,13 +258,16 @@ export function resolveChatThinkingSelectState(params: {
       : "";
   const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, provider, model);
+  const catalogEntry = resolveThinkingCatalogEntry(
+    params.catalog,
+    provider,
+    model,
+    session?.agentRuntime?.id,
+  );
   const levels = resolveThinkingLevelOptions({
-    catalog: params.catalog,
+    catalogEntry,
     defaults,
     hideUnsupportedOffOnly: true,
-    model,
-    provider,
     session,
   });
   const defaultFromSessionDefaults =

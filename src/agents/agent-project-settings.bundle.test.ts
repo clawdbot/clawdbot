@@ -79,15 +79,6 @@ const bundleTestDeps = await vi.hoisted(async () => {
   return { fsSync, loadBundleRegistry, loadEmbeddedAgentMcpConfig };
 });
 
-vi.mock("../infra/boundary-file-read.js", () => {
-  return {
-    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
-      ok: true,
-      fd: bundleTestDeps.fsSync.openSync(absolutePath, "r"),
-    }),
-  };
-});
-
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: bundleTestDeps.loadBundleRegistry,
 }));
@@ -97,7 +88,8 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: () => ({ plugins: [] }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot,
 }));
 

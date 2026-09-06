@@ -96,6 +96,28 @@ describe("scanStatusJsonFast", () => {
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });
 
+  it("carries invalid config diagnostics through the lean JSON scan", async () => {
+    const config = createStatusMemorySearchConfig();
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [
+        {
+          path: "gateway.port",
+          message: "Invalid input: expected number, received string",
+        },
+      ],
+    };
+    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+      config,
+      sourceConfig: config,
+      configDiagnostics,
+    });
+
+    const result = await scanStatusJsonFast({}, {} as never);
+
+    expect(result.configDiagnostics).toEqual(configDiagnostics);
+  });
+
   it("keeps resolved and source channel configs available without loading runtime plugins", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
     applyStatusScanDefaults(mocks, {

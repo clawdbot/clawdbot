@@ -1,13 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { ServiceChildRelayMessage, ServiceChildStart } from "./service-child-protocol.js";
-
-function runtimeArgv(url: URL): string[] {
-  return url.pathname.endsWith(".ts")
-    ? ["--import", "tsx", fileURLToPath(url)]
-    : [fileURLToPath(url)];
-}
 
 type StdioEntry = "ignore" | "inherit" | "ipc" | number;
 
@@ -58,11 +55,12 @@ export function runServiceChildRelay(): void {
       return;
     }
     generation = start.generation;
-    const anchorUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "service-child-group-anchor",
-      distWorkerPath: "process/supervisor/service-child-group-anchor.js",
-    });
+    if (start.controlFd === undefined) {
+      report({ type: "relay-error", generation, error: "service child control fd is missing" });
+      process.exitCode = 1;
+      return;
+    }
+    const anchorUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
     const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
     while (stdio.length <= start.controlFd) {
       stdio.push("ignore");
@@ -76,7 +74,7 @@ export function runServiceChildRelay(): void {
     }
     reserveIpcFd(stdio);
     try {
-      anchor = spawn(process.execPath, runtimeArgv(anchorUrl), {
+      anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
         stdio,
         detached: true,
         windowsHide: true,

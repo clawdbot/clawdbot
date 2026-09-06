@@ -1,11 +1,45 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { recordSkillCollectionReviewSuccess } from "../../skills/workshop/collection-review-state.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
+
+function recordSkillCollectionReviewHistory(
+  agentId: string,
+  time: number,
+  result: {
+    backupId: string;
+    kept: string[];
+    written: string[];
+    dropped: Array<{ name: string; reason: string }>;
+  },
+  options: { env: NodeJS.ProcessEnv },
+) {
+  openOpenClawStateDatabase(options)
+    .db.prepare(`INSERT INTO skill_workshop_collection_reviews
+    (review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      result.backupId,
+      agentId,
+      result.backupId,
+      time,
+      JSON.stringify(result.kept),
+      JSON.stringify(result.written),
+      JSON.stringify(result.dropped),
+    );
+}
+
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
@@ -20,7 +54,12 @@ describe("skill_workshop collection history", () => {
     });
     cleanups.push(async () => await testState.cleanup());
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-history-");
-    const tool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+    });
 
     await expect(tool.execute("empty-history", { action: "history" })).resolves.toMatchObject({
       content: [{ type: "text", text: "No recorded collection reviews." }],
@@ -28,8 +67,8 @@ describe("skill_workshop collection history", () => {
     });
 
     const createTime = Date.UTC(2026, 7, 18, 12, 34, 56);
-    recordSkillCollectionReviewSuccess(
-      workspaceDir,
+    recordSkillCollectionReviewHistory(
+      "main",
       createTime,
       {
         backupId: "backup-42",
@@ -71,8 +110,8 @@ describe("skill_workshop collection history", () => {
         (_, index) => `${kind}-${review}-${index}-long-enough-to-fill-the-history-budget`,
       );
     for (let review = 0; review < 20; review += 1) {
-      recordSkillCollectionReviewSuccess(
-        workspaceDir,
+      recordSkillCollectionReviewHistory(
+        "main",
         review,
         {
           backupId: `backup-${review}`,
@@ -120,21 +159,5 @@ describe("skill_workshop collection history", () => {
       smallContextResult.content[0]?.type === "text" ? smallContextResult.content[0].text : "";
     expect(smallContextText.length).toBeLessThanOrEqual(2_867);
     expect(smallContextText).toMatch(/\(history truncated\)$/u);
-  });
-
-  it("keeps isolated collection reviews limited to read and reconcile", () => {
-    const standardSchema = JSON.stringify(
-      createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" }).parameters,
-    );
-    const restrictedSchema = JSON.stringify(
-      createSkillWorkshopTool({
-        workspaceDir: "/tmp/openclaw",
-        collectionReconcile: { approvedSkillNames: new Set() },
-      }).parameters,
-    );
-
-    expect(standardSchema).toContain('"history"');
-    expect(restrictedSchema).toContain('"enum":["read","reconcile"]');
-    expect(restrictedSchema).not.toContain('"history"');
   });
 });

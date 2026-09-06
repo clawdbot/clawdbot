@@ -62,6 +62,78 @@ describe("CronService startup catch-up repair scoping", () => {
     };
   }
 
+  it.each([false, true])(
+    "persists skipped recurring slots before the first tick (one-shot catch-up: %s)",
+    async (includeOneShot) => {
+      const store = await makeStorePath();
+      const now = Date.now();
+      const dueAt = now - 60_000;
+      const tomorrow = Date.parse("2025-12-14T09:00:00.000Z");
+      const daily = createDailyCronJob("missed-daily", dueAt);
+      daily.state.lastRunAtMs = Date.parse("2025-12-12T09:00:00.000Z");
+      const every: CronJob = {
+        ...createHourlyCronJob("missed-every", dueAt),
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "interval reminder" },
+      };
+      const jobs = [
+        daily,
+        every,
+        { ...daily, id: "history-only-miss", state: { ...daily.state, nextRunAtMs: tomorrow } },
+        createDailyCronJob("future-daily", tomorrow),
+        { ...every, id: "future-every", state: { nextRunAtMs: now + 30_000 } },
+      ];
+      if (includeOneShot) {
+        jobs.push({
+          ...createHourlyCronJob("one-shot", dueAt),
+          schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+        });
+      }
+      await saveCronStore(store.storePath, { version: 1, jobs });
+      const before = await loadCronStore(store.storePath);
+      const enqueueSystemEvent = vi.fn();
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        cronConfig: { skipMissedJobs: true },
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent,
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      await runMissedJobs(state, { deferAgentTurnJobs: true });
+
+      const persisted = await loadCronStore(store.storePath);
+      for (const job of persisted.jobs.filter((candidate) => candidate.id !== "one-shot")) {
+        expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+        expect(job.state.lastRunAtMs).toBe(
+          before.jobs.find((original) => original.id === job.id)?.state.lastRunAtMs,
+        );
+        if (job.id.startsWith("future-")) {
+          expect(job).toEqual(before.jobs.find((original) => original.id === job.id));
+        }
+      }
+      expect(persisted.jobs.find((job) => job.id === daily.id)?.state.nextRunAtMs).toBe(tomorrow);
+      expect(persisted.jobs.find((job) => job.id === every.id)?.state.nextRunAtMs).toBe(
+        now + 60_000,
+      );
+      if (includeOneShot) {
+        expect(enqueueSystemEvent).toHaveBeenCalledWith("tick-one-shot", expect.anything());
+      }
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(includeOneShot ? 1 : 0);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      // An empty startup plan must still commit, since ticks reload durable schedules.
+      await onTimer(state);
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(includeOneShot ? 1 : 0);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the overflow daily-cron catch-up deferral across a second restart", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
@@ -201,11 +273,18 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn((request: { reason?: string }) => {
-      if (request.reason && deferredAutoDisableReasons.has(request.reason)) {
-        order.push("heartbeat");
-      }
-    });
+    const requestHeartbeat = vi.fn(
+      (request: { source?: string; intent?: string; reason?: string }) => {
+        if (
+          order.at(-1) === "notify" &&
+          request.source === "notifications-event" &&
+          request.intent === "immediate" &&
+          request.reason === "wake"
+        ) {
+          order.push("heartbeat");
+        }
+      },
+    );
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,

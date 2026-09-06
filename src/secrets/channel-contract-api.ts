@@ -7,13 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../plugins/plugin-module-loader-cache.js";
+import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
+import { getPluginCacheRoot } from "../plugins/plugin-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../plugins/public-surface-loader.js";
 import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -32,27 +30,6 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-
-function loadBundledChannelPublicArtifact(
-  channelId: string,
-  artifactBasename: string,
-): BundledChannelContractApi | undefined {
-  try {
-    return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-      dirName: channelId,
-      artifactBasename,
-    });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to resolve bundled plugin public surface ")
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 type BundledChannelSecretContractApi = Pick<
   BundledChannelContractApi,
@@ -63,7 +40,12 @@ type BundledChannelSecretContractApi = Pick<
 function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, "secret-contract-api.js");
+  return (
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledChannelSecretContractApi>({
+      dirName: channelId,
+      artifactCandidates: ["secret-contract-api.js"],
+    }) ?? undefined
+  );
 }
 
 function orderedContractApiExtensions(): readonly string[] {
@@ -73,6 +55,12 @@ function orderedContractApiExtensions(): readonly string[] {
 }
 
 function resolvePluginContractApiPath(rootDir: string): string | null {
+  const artifacts = getPluginCacheRoot(rootDir).artifacts;
+  const key = "channel-secret-contract";
+  const cached = artifacts.get(key);
+  if (cached !== undefined) {
+    return cached?.modulePath ?? null;
+  }
   // Compiled npm-published plugins place their public artifacts under <rootDir>/dist/
   // (per package.json `openclaw.runtimeExtensions`), while flat-layout plugins keep
   // them at <rootDir>/. Search both, preferring dist/ when running from built openclaw
@@ -84,19 +72,21 @@ function resolvePluginContractApiPath(rootDir: string): string | null {
     for (const dir of searchDirs) {
       for (const extension of orderedContractApiExtensions()) {
         const candidate = path.join(dir, `${basename}${extension}`);
-        if (fs.existsSync(candidate)) {
+        if (pluginCacheExistsSync(candidate)) {
+          artifacts.set(key, { modulePath: candidate, boundaryRoot: rootDir });
           return candidate;
         }
       }
     }
   }
+  artifacts.set(key, null);
   return null;
 }
 
-function loadPluginContractModule(modulePath: string): BundledChannelContractApi {
+function loadPluginContractModule(modulePath: string, rootDir: string): BundledChannelContractApi {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
     modulePath,
+    rootDir,
     importerUrl: import.meta.url,
   })(modulePath) as BundledChannelContractApi;
 }
@@ -104,37 +94,55 @@ function loadPluginContractModule(modulePath: string): BundledChannelContractApi
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
   env: NodeJS.ProcessEnv = process.env,
+  throwOnLoadError = false,
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
     return undefined;
   }
-  const opened = openRootFileSync({
-    absolutePath: contractPath,
-    rootPath: record.rootDir,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
-      origin: record.origin,
-      rootDir: record.rootDir,
-      env,
-    }),
-    skipLexicalRootCheck: true,
+  const artifacts = getPluginCacheRoot(record.rootDir).artifacts;
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: record.origin,
+    rootDir: record.rootDir,
+    env,
   });
-  if (!opened.ok) {
+  const boundary = `channel-secret-contract:validated:${rejectHardlinks}`;
+  let validated = artifacts.get(boundary);
+  if (validated === undefined) {
+    const opened = openRootFileSync({
+      absolutePath: contractPath,
+      rootPath: record.rootDir,
+      boundaryLabel: "plugin root",
+      rejectHardlinks,
+      skipLexicalRootCheck: true,
+    });
+    if (opened.ok) {
+      fs.closeSync(opened.fd);
+      validated = { modulePath: opened.path, boundaryRoot: record.rootDir };
+    } else {
+      validated = null;
+    }
+    artifacts.set(boundary, validated);
+  }
+  if (!validated) {
+    if (throwOnLoadError) {
+      throw new Error(`Unable to open channel secret contract for ${record.id}`);
+    }
     return undefined;
   }
-  const safePath = opened.path;
-  fs.closeSync(opened.fd);
   try {
-    const mod = loadPluginContractModule(safePath);
+    const mod = loadPluginContractModule(validated.modulePath, record.rootDir);
     if (mod.collectRuntimeConfigAssignments || mod.secretTargetRegistryEntries) {
       return mod;
     }
   } catch (error) {
+    if (throwOnLoadError) {
+      throw error;
+    }
     if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
       const detail = error instanceof Error ? error.message : String(error);
       console.warn(
-        `[channel-contract-api] failed to load ${record.id} contract ${safePath}: ${detail}`,
+        `[channel-contract-api] failed to load ${record.id} contract ${validated.modulePath}: ${detail}`,
       );
     }
   }
@@ -221,9 +229,14 @@ export function loadChannelSecretContractApi(params: {
 /** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
+  options?: { throwOnLoadError?: boolean },
 ): BundledChannelSecretContractApi | undefined {
   if (record.origin === "bundled") {
     return loadBundledChannelSecretContractApi(record.id);
   }
-  return loadExternalChannelSecretContractFromRecord(record);
+  return loadExternalChannelSecretContractFromRecord(
+    record,
+    process.env,
+    options?.throwOnLoadError,
+  );
 }

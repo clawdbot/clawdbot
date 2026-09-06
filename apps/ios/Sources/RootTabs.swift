@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -130,10 +131,13 @@ struct RootTabs: View {
 
     private enum PresentedSheet: Identifiable {
         case quickSetup
+        case sessionDashboard(sessionKey: String, agentId: String?)
 
-        var id: Int {
+        var id: String {
             switch self {
-            case .quickSetup: 0
+            case .quickSetup: "quick-setup"
+            case let .sessionDashboard(sessionKey, agentId):
+                "session-dashboard:\(agentId ?? ""):\(sessionKey)"
             }
         }
     }
@@ -295,6 +299,7 @@ struct RootTabs: View {
             isDrawerLayout: self.isSidebarDrawerLayout,
             isDismissButtonEnabled: self.isSidebarVisible,
             selectDestination: self.selectSidebarDestination,
+            selectSession: self.selectSidebarSession,
             hideSidebar: self.hideSidebar)
             .padding(.top, drawerSafeAreaInsets.map { $0.top + 8 } ?? 0)
             .padding(.bottom, drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
@@ -318,15 +323,12 @@ struct RootTabs: View {
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
-                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerSidebarAction: self.sidebarHeaderAction,
                 dashboardModel: self.sidebarModel,
-                showsHeaderMark: false,
                 openChat: { self.selectSidebarDestination(.chat) },
                 openSettings: { self.selectSidebarDestination(.gateway) },
                 openSessions: { self.selectSidebarDestination(.sessions) },
@@ -410,7 +412,6 @@ struct RootTabs: View {
                 SettingsProTab(
                     directRoute: selectedSettingsRoute,
                     headerSidebarAction: self.sidebarHeaderAction,
-                    ownsNavigationStack: false,
                     navigateToRoute: pushSidebarSettingsRoute,
                     onRouteChange: handleSettingsRouteChange,
                     onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
@@ -419,7 +420,6 @@ struct RootTabs: View {
             } else {
                 SettingsProTab(
                     headerSidebarAction: self.sidebarHeaderAction,
-                    ownsNavigationStack: false,
                     navigateToRoute: pushSidebarSettingsRoute,
                     onRouteChange: handleSettingsRouteChange,
                     onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
@@ -431,7 +431,6 @@ struct RootTabs: View {
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 acceptsGatewaySetupRequests: !self.showOnboarding,
                 headerSidebarAction: self.sidebarHeaderAction,
-                ownsNavigationStack: false,
                 navigateToRoute: pushSidebarSettingsRoute,
                 onRouteChange: handleSettingsRouteChange,
                 onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
@@ -756,6 +755,10 @@ struct RootTabs: View {
                     .environment(self.appModel)
                     .environment(self.gatewayController)
                     .openClawSheetChrome()
+                case let .sessionDashboard(sessionKey, agentId):
+                    NavigationStack {
+                        SessionDashboardScreen(sessionKey: sessionKey, agentId: agentId)
+                    }
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -792,6 +795,23 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
+    private func selectSidebarSession(_ session: OpenClawChatSessionEntry) {
+        switch Self.sidebarPresentation(for: session) {
+        case .chat:
+            self.appModel.openChat(sessionKey: session.key)
+            self.selectSidebarDestination(.chat)
+        case .dashboard:
+            let target = Self.sidebarDashboardTarget(for: session)
+            self.presentedSheet = .sessionDashboard(
+                sessionKey: target.sessionKey,
+                agentId: target.agentId)
+            guard self.shouldCollapseSidebarAfterSelection else { return }
+            withAnimation(self.sidebarAnimation) {
+                self.setSidebarVisible(false)
+            }
+        }
+    }
+
     private func selectSidebarDestination(_ destination: SidebarDestination) {
         self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {

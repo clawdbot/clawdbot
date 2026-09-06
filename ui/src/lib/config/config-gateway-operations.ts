@@ -1,16 +1,16 @@
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
   clearConfigDraftTracking,
   formatConfigMutationError,
-  reconcileHashlessWriteReload,
   serializeFormForSubmit,
 } from "./config-draft-model.ts";
 import {
@@ -60,11 +60,6 @@ export async function refreshDraft(
   reconcileAppliedRefresh();
 }
 
-function readAckHash(ack: unknown): string | null {
-  const hash = (ack as { hash?: unknown } | null | undefined)?.hash;
-  return typeof hash === "string" && hash.length > 0 ? hash : null;
-}
-
 /**
  * Gateway contract: requireConfigBaseHash in
  * src/gateway/server-methods/config.ts rejects writes whose baseHash no
@@ -97,11 +92,11 @@ export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: 
 export type ConfigPatchBuilder = (
   config: Readonly<Record<string, unknown>>,
 ) => ConfigPatchBuildResult;
-type ConfigPatchAck = {
-  config?: unknown;
-  hash?: unknown;
-  noop?: boolean;
-};
+// Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
+type ConfigPatchAck = { config: Record<string, unknown> } & (
+  | { noop: true }
+  | { noop?: false; hash: string }
+);
 
 export type RuntimeConfigExternalMutationResult<T> =
   | {
@@ -115,10 +110,12 @@ export type RuntimeConfigExternalMutationResult<T> =
       error: string;
     };
 
-export type RuntimeConfigExternalMutationOptions = {
+export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   waitForWritesResumed?: boolean;
   canDispatch?: () => boolean;
   dispatchError?: string;
+  /** Refresh only responses that changed configuration, such as completed device authorization. */
+  shouldRefresh?: (value: T) => boolean;
 };
 
 export type RuntimeConfigDispatchOptions = {
@@ -142,13 +139,14 @@ export type ConfigWriteCoordinator = {
   setWritesSuspended: (suspended: boolean) => void;
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   dispose: () => void;
 };
@@ -158,7 +156,7 @@ export async function executeConfigExternalMutation<T>(
   client: GatewayBrowserClient,
   connectionEpoch: number,
   task: (client: GatewayBrowserClient) => Promise<T>,
-  options: RuntimeConfigExternalMutationOptions,
+  options: RuntimeConfigExternalMutationOptions<T>,
   refresh: () => Promise<boolean>,
 ): Promise<RuntimeConfigExternalMutationResult<T>> {
   if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
@@ -205,6 +203,9 @@ export async function executeConfigExternalMutation<T>(
     return refreshFailure("Connection changed before the configuration update was refreshed.");
   }
   try {
+    if (options.shouldRefresh && !options.shouldRefresh(value)) {
+      return { ok: true, value, refresh: { ok: true } };
+    }
     const refreshed = await refresh();
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return refreshFailure("Connection changed before the configuration update was refreshed.");
@@ -223,7 +224,7 @@ export async function executeConfigExternalMutation<T>(
 
 export async function loadConfig(
   state: RuntimeConfigState,
-  options: LoadConfigOptions = {},
+  options: LoadConfigOptions & { background?: boolean; beforeApplySnapshot?: () => void } = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
@@ -232,15 +233,29 @@ export async function loadConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
-  state.configLoading = true;
-  state.lastError = null;
-  state.chatError = null;
+  if (!options.background) {
+    state.configLoading = true;
+  }
+  if (state.configAutoSaveStatus !== "error" && state.configAutoSaveStatus !== "conflict") {
+    state.lastError = null;
+    state.chatError = null;
+  }
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
     if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
+    // Recovery captures the latest intent before a clean draft is replaced.
+    options.beforeApplySnapshot?.();
     applyConfigSnapshot(state, res, options);
+    // An explicit reload reconciles a clean patch failure. Background applied-revision
+    // polling must leave the rejected intent and its explanation visible.
+    if (!options.background && !state.configFormDirty) {
+      if (state.configAutoSaveStatus === "error" || state.configAutoSaveStatus === "conflict") {
+        state.configAutoSaveStatus = "idle";
+      }
+      state.lastError = null;
+    }
     return true;
   } catch (err) {
     if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
@@ -248,7 +263,10 @@ export async function loadConfig(
     }
     return false;
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (
+      !options.background &&
+      isCurrentRequest(state, "config", version, client, connectionEpoch)
+    ) {
       state.configLoading = false;
     }
   }
@@ -288,94 +306,87 @@ function applyConfigSchema(state: RuntimeConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-type ConfigSubmitMethod = "config.set" | "config.apply";
-type ConfigSubmitBusyKey = "configSaving" | "configApplying";
+export type ConfigSubmission = { raw: string; ackHash: string | null };
+export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
-async function submitConfigChange(
+export async function submitConfigDraft(
   state: RuntimeConfigState,
-  method: ConfigSubmitMethod,
-  busyKey: ConfigSubmitBusyKey,
-  extraParams: Record<string, unknown> = {},
-  onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  mode: "auto" | "save" | "apply",
+  onSubmitted?: ConfigSubmissionObserver,
   canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
-  if (!client || !state.connected) {
+  const canSubmitDraft = () =>
+    mode !== "auto" || (state.configFormDirty && state.configFormMode === "form");
+  if (!client || !state.connected || !canSubmitDraft()) {
     return false;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
-  // Claim busy before any await so a second click cannot slip past the busy
-  // state while a JSON5 original parse settles; finally releases it.
-  state[busyKey] = true;
-  state.lastError = null;
-  state.chatError = null;
+  const busyKey = mode === "auto" ? null : mode === "apply" ? "configApplying" : "configSaving";
+  // Manual writes claim busy before parsing; autosave leaves editors interactive.
+  if (busyKey) {
+    state[busyKey] = true;
+    state.lastError = null;
+    state.chatError = null;
+  }
   let submittedFormRaw: string | null = null;
   try {
     if (state.configRawOriginalParsePending) {
-      // JSON5 originals parse asynchronously on first load; sanitize needs them.
+      // JSON5 originals load lazily; capture the submitted bytes only afterward.
       await state.configRawOriginalParsePending;
-      if (!isCurrent()) {
-        return false;
-      }
+    }
+    if (!isCurrent() || !canSubmitDraft()) {
+      return false;
     }
     const raw = serializeFormForSubmit(state);
-    // The serialized candidate includes schema coercion; a live draft can
-    // change while the request is pending, so never infer from it afterward.
     submittedFormRaw = state.configFormMode === "form" ? raw : null;
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
+      if (mode === "auto") {
+        state.configAutoSaveStatus = "error";
+      }
       return false;
     }
-    if (!isCurrent() || !canDispatch()) {
+    if (!canDispatch()) {
       return false;
     }
-    // Dispatch-phase report (ackHash null): if the connection dies before the
-    // ack arrives, reconnect reconciliation still needs the submitted bytes
-    // to recognize its own committed write. The post-ack report below
-    // overwrites this with the real hash.
+    if (mode === "auto") {
+      state.configAutoSaveStatus = "saving";
+      state.lastError = null;
+      state.chatError = null;
+    }
+    // Dispatch bytes let reconnect recognize a committed write whose ack was lost.
     onSubmitted?.({ raw, ackHash: null });
-    const ack = await client.request(method, { raw, baseHash, ...extraParams });
-    // The gateway acks writes with the persisted snapshot hash. Adopt it as
-    // the new draft base; config.get remains the source of applied revision truth.
-    const ackHash = readAckHash(ack);
-    // Reported before the epoch check: dispose-chained teardown flushes need
-    // this flight's own submission even though state mutation may be blocked.
-    onSubmitted?.({ raw, ackHash });
+    const ack = await client.request<{ hash: string }>(
+      mode === "apply" ? "config.apply" : "config.set",
+      { raw, baseHash, ...(mode === "apply" ? { sessionKey: state.applySessionKey } : {}) },
+    );
+    // Report before the epoch fence: teardown can flush against this flight's ack.
+    onSubmitted?.({ raw, ackHash: ack.hash });
     if (!isCurrent()) {
       return false;
     }
-    // Same bytes-vs-submission rule as autosave: an edit made while this
-    // manual write was in flight must stay dirty (its autosave deferred into
-    // a trailing run), or adoption would snap the draft back to the older
-    // submitted bytes and silently discard the newer edit.
-    if (serializeFormForSubmit(state) === raw) {
-      state.configFormDirty = false;
+    // Compare before adoption: edits and reverts made in flight retain their intent.
+    state.configFormDirty = serializeFormForSubmit(state) !== raw;
+    if (!state.configFormDirty) {
       clearConfigDraftTracking(state);
-    } else {
-      state.configFormDirty = true;
     }
-    adoptConfigSetAck(state, raw, ackHash);
-    if (method === "config.apply") {
-      // Older gateways omit appliedConfigHash, so keep the former process-local
-      // behavior. New gateways replace this optimistic value on config.get.
-      state.configNeedsApply = false;
+    adoptConfigSetAck(state, raw, ack.hash);
+    state.configNeedsApply = mode !== "apply";
+    if (mode === "apply") {
       state.configAutoSaveStatus = "idle";
-    } else {
-      state.configNeedsApply = true;
     }
-    // Best-effort UI refresh; correctness no longer depends on it.
-    await loadConfig(state);
-    if (!isCurrent()) {
-      return false;
+    // Manual writes refresh resolved values and applied revision truth. Autosave
+    // already has its authoritative hash and must not lock editors with a reload.
+    if (mode !== "auto") {
+      await loadConfig(state);
+      if (!isCurrent()) {
+        return false;
+      }
     }
-    if (!ackHash) {
-      reconcileHashlessWriteReload(state, raw);
-    }
-    if (method === "config.set") {
-      // "Saved" would lie next to a draft the user re-dirtied during the
-      // reload; the rescheduled save reports its own completion.
+    if (mode !== "apply") {
       state.configAutoSaveStatus = state.configFormDirty ? "idle" : "saved";
     }
     return true;
@@ -383,15 +394,14 @@ async function submitConfigChange(
     if (isCurrent()) {
       state.lastError = formatConfigMutationError(err, submittedFormRaw);
       if (isConfigBaseHashConflictError(err)) {
-        // Applies conflict the same way saves do so the UI offers Reload.
         state.configAutoSaveStatus = "conflict";
-      } else if (method === "config.set") {
+      } else if (mode !== "apply") {
         state.configAutoSaveStatus = "error";
       }
     }
     return false;
   } finally {
-    if (isCurrent()) {
+    if (busyKey && isCurrent()) {
       state[busyKey] = false;
     }
   }
@@ -420,122 +430,10 @@ export function teardownFlushConfigDraft(
   void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
 
-/**
- * Auto-save submission for debounced form edits. Unlike the manual
- * `submitConfigChange` path it never raises `configSaving` (editors must stay
- * interactive while typing) and it only clears the dirty flag when the draft
- * still matches the submitted bytes — edits made while the request was in
- * flight stay dirty so the trailing save picks them up.
- */
-export async function autoSaveConfig(
-  state: RuntimeConfigState,
-  onAck?: (ackHash: string | null) => void,
-  canDispatch: () => boolean = () => true,
-): Promise<boolean> {
-  const client = state.client;
-  if (!client || !state.connected || !state.configFormDirty || state.configFormMode !== "form") {
-    return false;
-  }
-  const connectionEpoch = currentConfigConnectionEpoch(state);
-  const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
-  if (state.configRawOriginalParsePending) {
-    // JSON5 originals parse asynchronously on first load; sanitize needs them.
-    // Await only when pending: teardown flushes rely on a synchronous prefix.
-    // Entry stays serialized across this await: runAutoSave's synchronous
-    // in-flight check folds concurrent triggers into one trailing save.
-    await state.configRawOriginalParsePending;
-    if (!isCurrent() || !state.configFormDirty || state.configFormMode !== "form") {
-      return false;
-    }
-  }
-  const submittedRaw = serializeFormForSubmit(state);
-  const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
-  if (!baseHash) {
-    state.configAutoSaveStatus = "error";
-    state.lastError = "Config hash missing; reload and retry.";
-    return false;
-  }
-  if (!isCurrent() || !canDispatch()) {
-    return false;
-  }
-  state.configAutoSaveStatus = "saving";
-  state.lastError = null;
-  state.chatError = null;
-  try {
-    const ack = await client.request("config.set", { raw: submittedRaw, baseHash });
-    // The gateway acks with the persisted snapshot hash. Applied revision
-    // truth arrives on config.get.
-    const ackHash = readAckHash(ack);
-    // Reported before the epoch check: dispose-chained teardown flushes need
-    // this flight's own ack even though state mutation below is blocked.
-    onAck?.(ackHash);
-    if (!isCurrent()) {
-      return false;
-    }
-    state.configNeedsApply = true;
-    // The submitted bytes are now the authoritative original: a draft that no
-    // longer matches them (mid-flight edits, or a revert back to the pre-save
-    // value) stays dirty so the trailing save runs. Computed before adoption
-    // so the comparison sees the pre-save snapshot for reverted-clean drafts.
-    const drained = serializeFormForSubmit(state) === submittedRaw;
-    if (drained) {
-      state.configFormDirty = false;
-      clearConfigDraftTracking(state);
-    } else {
-      state.configFormDirty = true;
-    }
-    adoptConfigSetAck(state, submittedRaw, ackHash);
-    if (!ackHash) {
-      // Only a hashless ack needs a reload to re-derive the snapshot. With a
-      // hash the adopted snapshot IS authoritative, and reloading here would
-      // flash configLoading and lock the editors between keystrokes.
-      await loadConfig(state);
-      if (!isCurrent()) {
-        return false;
-      }
-      reconcileHashlessWriteReload(state, submittedRaw);
-    }
-    // "Saved" would lie next to a still-dirty draft (edits during the
-    // request or reload); the trailing save reports its own completion.
-    state.configAutoSaveStatus = state.configFormDirty ? "idle" : "saved";
-    return true;
-  } catch (err) {
-    if (isCurrent()) {
-      state.lastError = formatConfigMutationError(err, submittedRaw);
-      state.configAutoSaveStatus = isConfigBaseHashConflictError(err) ? "conflict" : "error";
-    }
-    return false;
-  }
-}
-
-export async function saveConfig(
-  state: RuntimeConfigState,
-  onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
-  canDispatch?: () => boolean,
-): Promise<boolean> {
-  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted, canDispatch);
-}
-
-export async function applyConfig(
-  state: RuntimeConfigState,
-  canDispatch?: () => boolean,
-): Promise<boolean> {
-  return submitConfigChange(
-    state,
-    "config.apply",
-    "configApplying",
-    {
-      sessionKey: state.applySessionKey,
-    },
-    undefined,
-    canDispatch,
-  );
-}
-
 export async function patchConfig(
   state: RuntimeConfigState,
   options: ConfigPatchOptions,
-  onAck?: (ack: ConfigPatchAck, snapshotAtDispatch: ConfigSnapshot) => Promise<void> | void,
+  onAck?: (ack: ConfigPatchAck, snapshotAtDispatch: ConfigSnapshot) => void,
 ): Promise<boolean> {
   const client = state.client;
   const currentSnapshot = state.configSnapshot;
@@ -546,11 +444,15 @@ export async function patchConfig(
   const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
+    state.configAutoSaveStatus = "conflict";
     return false;
   }
   if (options.canDispatch && !options.canDispatch()) {
     return false;
   }
+  const draftStatus = state.configFormDirty ? state.configAutoSaveStatus : "idle";
+  const draftError = state.lastError;
+  state.configAutoSaveStatus = "saving";
   state.lastError = null;
   state.chatError = null;
   try {
@@ -564,23 +466,26 @@ export async function patchConfig(
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return false;
     }
-    const committed = ack.noop !== true;
-    if (committed) {
-      // The patch is committed once the gateway acknowledges it. Preserve
-      // that fact even if a legacy hash-only ack requires a fallible refresh.
+    onAck?.(ack, currentSnapshot);
+    if (ack.noop !== true) {
+      // The commit is authoritative; polling config.get reconciles applied truth.
       state.configNeedsApply = true;
     }
-    await onAck?.(ack, currentSnapshot);
-    if (committed) {
-      // A successful acknowledgement refresh may publish the previous
-      // applied revision. Keep the existing immediate apply-needed signal;
-      // reconcileAppliedRefresh replaces it with authoritative process truth.
-      state.configNeedsApply = true;
-    }
+    // A patch acknowledges only its own intent; it cannot reconcile a separate
+    // stale or connection-paused draft that survived snapshot adoption.
+    const preserveDraftStatus =
+      state.configFormDirty && (draftStatus === "conflict" || draftStatus === "paused");
+    state.configAutoSaveStatus = preserveDraftStatus
+      ? draftStatus
+      : state.configFormDirty
+        ? "idle"
+        : "saved";
+    state.lastError = preserveDraftStatus ? draftError : null;
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
+      state.configAutoSaveStatus = isConfigBaseHashConflictError(err) ? "conflict" : "error";
     }
     return false;
   }
@@ -591,19 +496,14 @@ export function adoptConfigPatchAck(
   ack: ConfigPatchAck,
   snapshotAtDispatch: ConfigSnapshot,
 ) {
-  const ackConfig = asConfigRecord(ack.config);
-  const ackHash = readAckHash(ack);
-  if (!ackConfig) {
-    return;
-  }
   const currentSnapshot = state.configSnapshot ?? snapshotAtDispatch;
   const raw =
-    ack.noop === true ? (currentSnapshot.raw ?? state.configRaw) : serializeConfigForm(ackConfig);
+    ack.noop === true ? (currentSnapshot.raw ?? state.configRaw) : serializeConfigForm(ack.config);
   applyConfigSnapshot(state, {
     ...currentSnapshot,
-    config: ackConfig,
-    sourceConfig: ackConfig,
-    hash: ackHash ?? currentSnapshot.hash ?? null,
+    config: ack.config,
+    sourceConfig: ack.config,
+    hash: ack.noop === true ? currentSnapshot.hash : ack.hash,
     raw,
     valid: true,
     issues: [],
@@ -639,6 +539,21 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
   state.lastError = null;
   state.chatError = null;
+  const publishFailure = async (error: string, path?: string | null) => {
+    if (!isCurrent()) {
+      return;
+    }
+    let message = error;
+    if (path) {
+      message += (await copyToClipboard(path))
+        ? `\n\nFile path copied to clipboard: ${path}`
+        : `\n\nFile path: ${path}`;
+    }
+    if (isCurrent()) {
+      state.lastError = formatUiExternalText(message);
+      showToast({ message: state.lastError });
+    }
+  };
   try {
     const res = await client.request<{ ok: boolean; path?: string; error?: string }>(
       "config.openFile",
@@ -648,30 +563,14 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       return;
     }
     if (!res.ok) {
-      let errorMessage = formatUiExternalText(res.error, "Failed to open config file");
-      const path = res.path || state.configSnapshot?.path;
-      if (path) {
-        if (await copyToClipboard(path)) {
-          errorMessage += `\n\nFile path copied to clipboard: ${path}`;
-        } else {
-          errorMessage += `\n\nFile path: ${path}`;
-        }
-      }
-      if (isCurrent()) {
-        state.lastError = formatUiExternalText(errorMessage);
-      }
-    }
-  } catch (err) {
-    if (!isCurrent()) {
+      await publishFailure(
+        formatUiExternalText(res.error, "Failed to open config file"),
+        res.path || state.configSnapshot?.path,
+      );
       return;
     }
-    const errorMessage = formatUiError(err);
-    const path = state.configSnapshot?.path;
-    if (path) {
-      await copyToClipboard(path);
-    }
-    if (isCurrent()) {
-      state.lastError = errorMessage;
-    }
+    showToast({ message: t("configView.fileOpenedOnGateway") });
+  } catch (err) {
+    await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }
 }

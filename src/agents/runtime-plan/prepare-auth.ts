@@ -5,10 +5,10 @@
  */
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  prependAuthProfilePin,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
@@ -16,6 +16,7 @@ import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/re
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
+import { resolveProviderConfigSecretInput } from "../model-auth-provider-config.js";
 import {
   hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
@@ -25,6 +26,7 @@ import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-
 import {
   buildProviderModelAuthDirectSource,
   buildProviderModelAuthSourcePlan,
+  classifyProviderModelAuthSource,
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
 } from "../provider-model-auth-source-plan.js";
@@ -42,10 +44,10 @@ type PrepareAgentRuntimeAuthPlanParams = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  metadataSnapshot?: PluginMetadataSnapshot;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
@@ -169,17 +171,13 @@ function resolveProfile(
   };
 }
 
-type ProviderEntryProfileParams = Pick<
-  PrepareAgentRuntimeAuthPlanParams,
-  "config" | "modelId" | "provider"
-> & {
-  store: AuthProfileStore;
-};
-
 /** Applies terminal provider-entry credential policy before route selection. */
-function resolvePreparedProviderEntryApiKeyProfileReference(params: ProviderEntryProfileParams) {
+function resolvePreparedProviderEntryApiKeyProfileReference(
+  params: PrepareAgentRuntimeAuthPlanParams & { store: AuthProfileStore },
+) {
   const reference = resolveProviderEntryApiKeyProfileReference({
     cfg: params.config,
+    authAliasLookupParams: params,
     provider: params.provider,
     store: params.store,
   });
@@ -188,6 +186,7 @@ function resolvePreparedProviderEntryApiKeyProfileReference(params: ProviderEntr
   }
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.config,
+    authAliasLookupParams: params,
     store: params.store,
     provider: params.provider,
     profileId: reference.profileId,
@@ -211,7 +210,9 @@ export function prepareAgentRuntimeAuth(
 ): PreparedAgentRuntimeAuth {
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
-    params.sessionAuthProfileSource === "user" ? requestedProfileId : undefined;
+    params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
+      ? requestedProfileId
+      : undefined;
   const harnessOwnsOpenAIAuth =
     params.harnessId?.trim().toLowerCase() === "codex" ||
     params.harnessRuntime?.trim().toLowerCase() === "codex";
@@ -232,6 +233,7 @@ export function prepareAgentRuntimeAuth(
     const eligibility = store
       ? resolveAuthProfileEligibility({
           cfg: params.config,
+          authAliasLookupParams: params,
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
@@ -250,15 +252,14 @@ export function prepareAgentRuntimeAuth(
       ? undefined
       : configuredProvider?.auth;
   const configuredAwsSdkAuth = configuredAuthMode === "aws-sdk";
-  const providerHasApiKeySecretRef =
-    harnessAllowsAuthProfileForwarding &&
-    Boolean(coerceSecretRef(configuredProvider?.apiKey, params.config?.secrets?.defaults));
+  const providerApiKeySecretRef = harnessAllowsAuthProfileForwarding
+    ? resolveProviderConfigSecretInput(params.config, params.provider).ref
+    : undefined;
+  const providerHasApiKeySecretRef = Boolean(providerApiKeySecretRef);
   const providerBinding =
     harnessAllowsAuthProfileForwarding && !userPinnedProfileId && store && !configuredAwsSdkAuth
       ? resolvePreparedProviderEntryApiKeyProfileReference({
-          config: params.config,
-          modelId: params.modelId,
-          provider: params.provider,
+          ...params,
           store,
         })
       : { kind: "none" as const };
@@ -281,7 +282,7 @@ export function prepareAgentRuntimeAuth(
   const providerBindingSuppressesProfiles =
     (providerBinding.kind === "literal" && explicitConfigApiKeyAuth) ||
     providerHasUsableMarker ||
-    (providerHasApiKeySecretRef && explicitConfigApiKeyAuth);
+    providerHasApiKeySecretRef;
   const providerBindingNeedsNonProfileFallback =
     providerHasDirectMaterial && !providerBindingSuppressesProfiles;
   // Explicit auth owns the physical route; apiKey is only its bearer material.
@@ -300,23 +301,17 @@ export function prepareAgentRuntimeAuth(
         }
       : resolveAuthProfileOrderWithMetadata({
           cfg: params.config,
+          authAliasLookupParams: params,
           store,
           provider: authProfileSelectionProvider,
           preferredProfile: requestedProfileId,
           forModel: params.modelId,
           readinessMode: "read-only",
         });
-  const automaticOrderResolution = userPinnedProfileId
-    ? {
-        ...resolvedAutomaticOrder,
-        profileIds: [
-          userPinnedProfileId,
-          ...resolvedAutomaticOrder.profileIds.filter(
-            (profileId) => profileId !== userPinnedProfileId,
-          ),
-        ],
-      }
-    : resolvedAutomaticOrder;
+  const automaticOrderResolution = prependAuthProfilePin(
+    resolvedAutomaticOrder,
+    userPinnedProfileId,
+  );
   const providerPreferredProfileId =
     harnessAllowsAuthProfileForwarding &&
     !selectedProfileId &&
@@ -348,9 +343,12 @@ export function prepareAgentRuntimeAuth(
       : automaticOrderResolution.profileIds;
   const directSource = (
     mode: string | undefined,
-    evidence: ProviderModelAuthDirectSource["evidence"] = providerHasUsableMarker
-      ? "runtime"
-      : "provider-config",
+    evidence: ProviderModelAuthDirectSource["evidence"] = providerBinding.kind === "marker" &&
+    providerHasUsableMarker
+      ? providerBinding.evidence
+      : providerApiKeySecretRef?.source === "env"
+        ? "environment"
+        : "provider-config",
     availability?: boolean,
     authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
   ) => buildProviderModelAuthDirectSource({ mode, evidence, availability, authorization });
@@ -361,6 +359,7 @@ export function prepareAgentRuntimeAuth(
         {
           config: params.config,
           workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.metadataSnapshot,
         },
       )
     : null;
@@ -403,7 +402,7 @@ export function prepareAgentRuntimeAuth(
     : configuredAwsSdkAuth
       ? {
           reason: "configured-auth" as const,
-          source: directSource("aws-sdk"),
+          source: directSource("aws-sdk", "aws-sdk"),
         }
       : providerBindingSuppressesProfiles
         ? {
@@ -465,7 +464,11 @@ export function prepareAgentRuntimeAuth(
             : "auto"
           : undefined,
         sessionAuthProfileCandidateIds: candidateIds.length > 0 ? candidateIds : undefined,
+        credentialSource: attempt
+          ? classifyProviderModelAuthSource(attempt.source)
+          : { kind: "none" },
         config: params.config,
+        env: params.env,
         workspaceDir: params.workspaceDir,
         metadataSnapshot: params.metadataSnapshot,
         harnessId: params.harnessId,
@@ -520,12 +523,16 @@ export function prepareAgentRuntimeAuth(
     sourcePlan,
     configuredAuthMode: automaticRouteAuthMode,
     ...(runtimeAuthOwner ? { runtimeAuthOwner } : {}),
+    ...(runtimeAuthOwner && configuredProvider === undefined
+      ? { allowNativeAuthOnSingleRoute: true }
+      : {}),
   });
   if (routeAuthDecision.kind === "deferred") {
     const plan = buildAgentRuntimeAuthPlan({
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,
@@ -565,8 +572,12 @@ export function prepareAgentRuntimeAuth(
         : undefined,
       sessionAuthProfileCandidateIds:
         attempt?.kind === "profile" ? [...attempt.sameRouteProfileIds] : undefined,
+      credentialSource: attempt
+        ? classifyProviderModelAuthSource(attempt.source)
+        : { kind: "none" },
       modelRoute: toPreparedRoute(route),
       config: params.config,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,

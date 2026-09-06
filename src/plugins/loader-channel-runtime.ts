@@ -38,7 +38,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
   cfg: OpenClawConfig;
   entry: NormalizedPluginsConfig["entries"][string] | undefined;
   seenIds: Map<string, PluginRecord["origin"]>;
-  candidateOrigin: PluginRecord["origin"];
   logger: PluginLogger;
   pushPluginLoadError: (message: string) => void;
 }): boolean {
@@ -47,21 +46,23 @@ export function loadSetupRuntimeChannelCandidate(params: {
   if (!registrationPlan.loadSetupEntry || !manifestRecord.setupSource) {
     return false;
   }
-  const setupRegistration = resolveSetupChannelRegistration(params.mod);
-  if (setupRegistration.loadError) {
+  // Registration rollback can restore record fields, so read them only when reporting.
+  const recordSetupFailure = (error: unknown, phase: "load" | "register", message: string) => {
     recordPluginError({
       logger: params.logger,
       registry: registryBuilder.registry,
       record,
       seenIds: params.seenIds,
-      pluginId: record.id,
-      origin: params.candidateOrigin,
-      phase: "load",
-      error: setupRegistration.loadError,
-      logPrefix: `[plugins] ${record.id} failed to load setup entry from ${record.source}: `,
-      diagnosticMessagePrefix: "failed to load setup entry: ",
+      phase,
+      error,
+      logPrefix: `[plugins] ${record.id} ${message} from ${record.source}: `,
+      diagnosticMessagePrefix: `${message}: `,
       diagnosticCode: "channel-setup-failure",
     });
+  };
+  const setupRegistration = resolveSetupChannelRegistration(params.mod);
+  if (setupRegistration.loadError) {
+    recordSetupFailure(setupRegistration.loadError, "load", "failed to load setup entry");
     return true;
   }
   if (!setupRegistration.plugin) {
@@ -122,19 +123,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
         () => params.loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
       );
     } catch (error) {
-      recordPluginError({
-        logger: params.logger,
-        registry: registryBuilder.registry,
-        record,
-        seenIds: params.seenIds,
-        pluginId: record.id,
-        origin: params.candidateOrigin,
-        phase: "load",
-        error,
-        logPrefix: `[plugins] ${record.id} failed to load setup-runtime entry from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to load setup-runtime entry: ",
-        diagnosticCode: "channel-setup-failure",
-      });
+      recordSetupFailure(error, "load", "failed to load setup-runtime entry");
       return true;
     }
     const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
@@ -149,19 +138,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
         runtimeRegistration.setChannelRuntime(api.runtime);
         runtimeSetterApplied = true;
       } catch (error) {
-        recordPluginError({
-          logger: params.logger,
-          registry: registryBuilder.registry,
-          record,
-          seenIds: params.seenIds,
-          pluginId: record.id,
-          origin: params.candidateOrigin,
-          phase: "load",
-          error,
-          logPrefix: `[plugins] ${record.id} failed to apply setup-runtime channel runtime from ${record.source}: `,
-          diagnosticMessagePrefix: "failed to apply setup-runtime channel runtime: ",
-          diagnosticCode: "channel-setup-failure",
-        });
+        recordSetupFailure(error, "load", "failed to apply setup-runtime channel runtime");
         return true;
       }
     }
@@ -169,19 +146,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
       registration: runtimeRegistration,
     });
     if (runtimePluginRegistration.loadError) {
-      recordPluginError({
-        logger: params.logger,
-        registry: registryBuilder.registry,
-        record,
-        seenIds: params.seenIds,
-        pluginId: record.id,
-        origin: params.candidateOrigin,
-        phase: "load",
-        error: runtimePluginRegistration.loadError,
-        logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
-        diagnosticCode: "channel-setup-failure",
-      });
+      recordSetupFailure(
+        runtimePluginRegistration.loadError,
+        "load",
+        "failed to load setup-runtime channel entry",
+      );
       return true;
     }
     if (runtimePluginRegistration.plugin) {
@@ -225,19 +194,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     try {
       mergedSetupRegistration.setChannelRuntime?.(api.runtime);
     } catch (error) {
-      recordPluginError({
-        logger: params.logger,
-        registry: registryBuilder.registry,
-        record,
-        seenIds: params.seenIds,
-        pluginId: record.id,
-        origin: params.candidateOrigin,
-        phase: "load",
-        error,
-        logPrefix: `[plugins] ${record.id} failed to apply setup channel runtime from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
-        diagnosticCode: "channel-setup-failure",
-      });
+      recordSetupFailure(error, "load", "failed to apply setup channel runtime");
       return true;
     }
   }
@@ -251,41 +208,24 @@ export function loadSetupRuntimeChannelCandidate(params: {
       );
     } catch (error) {
       registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
-      recordPluginError({
-        logger: params.logger,
-        registry: registryBuilder.registry,
-        record,
-        seenIds: params.seenIds,
-        pluginId: record.id,
-        origin: params.candidateOrigin,
-        phase: "register",
+      recordSetupFailure(
         error,
-        logPrefix: `[plugins] ${record.id} failed to register setup-runtime channel side effects from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to register setup-runtime channel side effects: ",
-        diagnosticCode: "channel-setup-failure",
-      });
+        "register",
+        "failed to register setup-runtime channel side effects",
+      );
       return true;
     }
   }
   try {
     api.registerChannel(mergedSetupPlugin);
   } catch (error) {
-    recordPluginError({
-      logger: params.logger,
-      registry: registryBuilder.registry,
-      record,
-      seenIds: params.seenIds,
-      pluginId: record.id,
-      origin: params.candidateOrigin,
-      phase: "load",
-      error,
-      logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
-      diagnosticMessagePrefix: "failed to register setup channel: ",
-      diagnosticCode: "channel-setup-failure",
-    });
+    // Setup-runtime registration may already have added contributions.
+    // Roll them back before recording the channel registration failure.
+    registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
+    recordSetupFailure(error, "load", "failed to register setup channel");
     return true;
   }
   registryBuilder.registry.plugins.push(record);
-  params.seenIds.set(record.id, params.candidateOrigin);
+  params.seenIds.set(record.id, record.origin);
   return true;
 }

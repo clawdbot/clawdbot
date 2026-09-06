@@ -1,34 +1,73 @@
 // Classification coverage for compaction failure and skip reason telemetry.
 import { describe, expect, it } from "vitest";
+import { describeFailoverError, resolveFailoverReasonFromError } from "../failover-error.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
-  resolveCompactionFailureReason,
+  resolveCompactionFailure,
 } from "./compact-reasons.js";
 
-describe("resolveCompactionFailureReason", () => {
-  it("replaces generic compaction cancellation with the safeguard reason", () => {
-    // Safeguard cancellation is the actionable root cause; preserving only the
-    // generic cancellation text would hide the provider/auth failure.
-    expect(
-      resolveCompactionFailureReason({
-        reason: "Compaction cancelled",
-        safeguardCancelReason:
-          "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
-      }),
-    ).toBe("Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.");
+describe("resolveCompactionFailure", () => {
+  const providerError = Object.assign(new Error("provider rejected the request"), {
+    status: 429,
+    code: "rate_limit_exceeded",
+  });
+  const safeguardCancellation = { reason: "Summarization could not finish.", error: providerError };
+
+  it.each(["Compaction cancelled", "Error: Compaction cancelled"])(
+    "recovers provider classification through the generic wrapper %s",
+    (message) => {
+      const failure = resolveCompactionFailure({
+        error: new Error(message),
+        safeguardCancellation,
+      });
+
+      expect(failure.reason).toBe(safeguardCancellation.reason);
+      expect(describeFailoverError(failure.error)).toMatchObject({
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+      });
+    },
+  );
+
+  it("does not classify an intentional decline from keywords in its display reason", () => {
+    const failure = resolveCompactionFailure({
+      error: new Error("Compaction cancelled"),
+      safeguardCancellation: {
+        reason: "Quality audit rejected a summary about a request timeout.",
+      },
+    });
+
+    expect(failure.reason).toContain("Quality audit rejected");
+    expect(resolveFailoverReasonFromError(failure.error)).toBeNull();
   });
 
-  it("preserves non-generic compaction failures", () => {
-    expect(
-      resolveCompactionFailureReason({
-        reason: "Compaction timed out",
-        safeguardCancelReason:
-          "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
-      }),
-    ).toBe("Compaction timed out");
+  it.each([
+    new Error("Compaction timed out"),
+    Object.assign(new Error("Compaction cancelled"), { name: "AbortError" }),
+    Object.assign(new Error("Compaction cancelled"), { name: "TimeoutError" }),
+    new Error("session setup failed"),
+    new Error("cleanup failed"),
+  ])("preserves genuine $name/$message despite a stale cancellation record", (error) => {
+    const failure = resolveCompactionFailure({ error, safeguardCancellation });
+
+    expect(failure.reason).toBe(error.message);
+    expect(failure.error).toBe(error);
+  });
+
+  it("preserves caller cancellation even when its reason matches the generic wrapper", () => {
+    const error = new Error("Compaction cancelled");
+    const failure = resolveCompactionFailure({
+      error,
+      safeguardCancellation,
+      abortSignal: AbortSignal.abort(error),
+    });
+
+    expect(failure).toEqual({ reason: error.message, error });
+    expect(resolveFailoverReasonFromError(failure.error)).toBeNull();
   });
 });
 

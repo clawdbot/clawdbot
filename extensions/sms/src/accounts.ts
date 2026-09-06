@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 // Sms plugin module implements accounts behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
@@ -10,7 +13,9 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
+  resolveSecretInputString,
+  type SecretInputStringResolution,
+  type SecretInputStringResolutionMode,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSmsAllowFrom, normalizeSmsPhoneNumber } from "./phone.js";
@@ -85,6 +90,14 @@ export function resolveSmsAccount(
   cfg: OpenClawConfig,
   accountId?: string | null,
 ): ResolvedSmsAccount {
+  return readSmsAccount(cfg, accountId, "strict").account;
+}
+
+function readSmsAccount(
+  cfg: OpenClawConfig,
+  accountId: string | null | undefined,
+  mode: SecretInputStringResolutionMode,
+): { account: ResolvedSmsAccount; tokenStatus: SecretInputStringResolution["status"] } {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = normalizeOptionalAccountId(accountId) ?? resolveDefaultSmsAccountId(cfg);
   const accountConfig = resolveAccountEntry(channelCfg.accounts, id);
@@ -109,19 +122,19 @@ export function resolveSmsAccount(
 
   const webhookPath = (merged.webhookPath ?? envWebhookPath ?? DEFAULT_WEBHOOK_PATH).trim();
   const publicWebhookUrl = (merged.publicWebhookUrl ?? envPublicWebhookUrl ?? "").trim();
-  const authToken =
-    normalizeResolvedSecretInputString({
-      value: merged.authToken ?? envAuthToken,
-      path:
-        id === DEFAULT_ACCOUNT_ID
-          ? "channels.sms.authToken"
-          : `channels.sms.accounts.${id}.authToken`,
-    }) ?? "";
-  return {
+  const authToken = resolveSecretInputString({
+    value: merged.authToken ?? envAuthToken,
+    path:
+      id === DEFAULT_ACCOUNT_ID
+        ? "channels.sms.authToken"
+        : `channels.sms.accounts.${id}.authToken`,
+    mode,
+  });
+  const account: ResolvedSmsAccount = {
     accountId: id,
     enabled: channelCfg.enabled !== false && accountConfig?.enabled !== false,
     accountSid: (merged.accountSid ?? envAccountSid ?? "").trim(),
-    authToken,
+    authToken: authToken.value ?? "",
     fromNumber: normalizeSmsPhoneNumber(merged.fromNumber ?? envFromNumber ?? ""),
     messagingServiceSid: (merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
     defaultTo: normalizeSmsPhoneNumber(merged.defaultTo ?? ""),
@@ -133,16 +146,28 @@ export function resolveSmsAccount(
     dmPolicy: merged.dmPolicy ?? "pairing",
     allowFrom: parseList(merged.allowFrom ?? envAllowFrom),
     textChunkLimit: parseTextChunkLimit(merged.textChunkLimit ?? envTextChunkLimit),
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: id,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
   };
+  return { account, tokenStatus: authToken.status };
 }
 
 export function inspectSmsAccount(cfg: OpenClawConfig, accountId?: string | null) {
-  const account = resolveSmsAccount(cfg, accountId);
-  const configured = isSmsAccountConfigured(account);
+  const { account, tokenStatus } = readSmsAccount(cfg, accountId, "inspect");
+  const configured = Boolean(
+    account.accountSid &&
+    tokenStatus !== "missing" &&
+    (account.fromNumber || account.messagingServiceSid),
+  );
   return {
+    accountId: account.accountId,
+    name: account.fromNumber || account.messagingServiceSid || "SMS",
     enabled: account.enabled,
     configured,
-    tokenStatus: account.authToken ? "available" : "missing",
+    tokenStatus,
     webhookPath: account.webhookPath,
     signatureValidation: account.dangerouslyDisableSignatureValidation
       ? "configured"

@@ -100,6 +100,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "openclaw" },
       source: "model",
+      forcedByEnvironment: true,
     });
   });
 
@@ -570,6 +571,32 @@ describe("resolveModelRuntimePolicy", () => {
       }),
     ).toThrow(/belongs to "research"/);
   });
+
+  it.each(["openai/gpt-5.5", "openai/*"])(
+    "uses a prepared stored-row owner for %s without re-admitting global",
+    (modelKey) => {
+      const config: OpenClawConfig = {
+        session: { store: "/synthetic/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: {
+            main: { models: { [modelKey]: { agentRuntime: { id: "openclaw" } } } },
+            ops: { models: { [modelKey]: { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      };
+      expect(
+        resolveModelRuntimePolicy({
+          config,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          sessionKey: "global",
+          agentScope: { kind: "prepared", agentId: "main" },
+        }),
+      ).toEqual({ policy: { id: "openclaw" }, source: "model", matchedProvider: "openai" });
+    },
+  );
 
   it("fails closed for duplicate provider-prefixed bare-model policies", () => {
     const config = {

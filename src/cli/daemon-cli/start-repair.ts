@@ -1,7 +1,7 @@
 // Start-time service repair: rebuilds stale service definitions before starting Gateway.
 import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
+import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import {
@@ -10,7 +10,14 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
-import type { GatewayServiceEnv } from "../../daemon/service-types.js";
+import { resolveBunRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  assertServiceDefinitionWritable,
+  hasGatewayServiceEnvironmentDifference,
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceEnv,
+} from "../../daemon/service-types.js";
 import type {
   GatewayService,
   GatewayServiceStartRepairIssue,
@@ -23,7 +30,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 type GatewayServiceRepairParams = {
-  service: GatewayService;
+  service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
@@ -143,12 +150,29 @@ export async function repairLoadedGatewayServiceForStart(
   loaded: boolean;
 }> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
+  // Repair can persist a generated token; check definition authority before planning it.
+  const capability = await params.service
+    .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
+  }
+  if (
+    hasGatewayServiceLauncherOverride(params.state.command) ||
+    hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
+  ) {
+    const unitName = path.basename(params.state.command?.sourcePath ?? "<unit>");
+    throw new Error(
+      `Refusing to repair the managed Gateway service because a systemd drop-in overrides its command, working directory, or Gateway target environment. Inspect the unit with \`systemctl --user cat ${unitName}\`, then update or remove the operator-owned drop-in before retrying.`,
+    );
+  }
+  const managedCommand = resolveManagedGatewayServiceCommand(params.state.command);
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-  const existingEnvironment = params.state.command?.environment;
-  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
-  const installedPort = parseTcpPortFromArgs(params.state.command?.programArguments);
+  const existingEnvironment = managedCommand?.environment;
+  const existingEnvironmentValueSources = managedCommand?.environmentValueSources;
+  const installedPort = parseTcpPortFromArgs(managedCommand?.programArguments);
   const port = assertGatewayRepairTargetMatches({
     action: params.action ?? "start",
     config: cfg,
@@ -160,6 +184,16 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
+  const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
+  const installedRuntimePath =
+    installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
+  const runtimeInfo = installedRuntimePath
+    ? await resolveBunRuntimeInfo(installedRuntimePath)
+    : undefined;
+  if (runtimeInfo?.status === "probe-failed") {
+    throw runtimeInfo.error;
+  }
+  const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -188,8 +222,10 @@ export async function repairLoadedGatewayServiceForStart(
     await buildGatewayInstallPlan({
       env: installEnv,
       port,
-      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      runtime,
+      runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
       wrapperPath,
+      existingCommand: params.state.command,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: cfg,

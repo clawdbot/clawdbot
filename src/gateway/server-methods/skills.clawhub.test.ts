@@ -520,7 +520,6 @@ describe("skills gateway handlers (clawhub)", () => {
       source: "clawhub",
       slug: "calendar",
       version: "1.2.3",
-      acknowledgeClawHubRisk: true,
     });
 
     expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
@@ -528,7 +527,6 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
-      acknowledgeClawHubRisk: true,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
@@ -586,6 +584,7 @@ describe("skills gateway handlers (clawhub)", () => {
 
     expect(installSkillMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
+      agentId: "main",
       skillName: "calendar",
       installId: "deps",
       timeoutMs: 120_000,
@@ -661,13 +660,40 @@ describe("skills gateway handlers (clawhub)", () => {
     const { ok, error } = await callSkillsHandler("skills.update", {
       source: "clawhub",
       slug: "calendar",
-      acknowledgeClawHubRisk: true,
     });
 
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
-      acknowledgeClawHubRisk: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+  });
+
+  it("forwards ClawHub skill update force overrides", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.update", {
+      source: "clawhub",
+      slug: "calendar",
+      force: true,
+    });
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      force: true,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });

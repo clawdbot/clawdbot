@@ -10,4 +10,26 @@ describe("ClickClack channel capabilities", () => {
       blockStreaming: true,
     });
   });
+
+  it("projects credential source and status without exposing tokens or diagnostics", async () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          tokenFile: "/private/clickclack-unavailable-token",
+        },
+      },
+    };
+    const account = clickClackPlugin.config.resolveAccount(cfg, "default");
+    const snapshot = await clickClackPlugin.status?.buildAccountSnapshot?.({ account, cfg });
+
+    expect(snapshot).toMatchObject({
+      configured: true,
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    });
+    expect(snapshot).not.toHaveProperty("token");
+    expect(snapshot).not.toHaveProperty("credentialDiagnostics");
+  });
 });

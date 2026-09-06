@@ -5,10 +5,9 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import { ensureTaskFlowRegistryReady, getTaskFlowById } from "./task-flow-runtime-internal.js";
 import type {
-  TaskDeliveryState,
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
@@ -19,12 +18,6 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
-
-export type TaskDeliveryOwner = {
-  sessionKey?: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  flowId?: string;
-};
 
 type ParentFlowLinkErrorCode =
   | "scope_kind_not_session"
@@ -53,12 +46,6 @@ export function isParentFlowLinkError(error: unknown): error is ParentFlowLinkEr
 
 export function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
-}
-
-export function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
-  );
 }
 
 export function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
@@ -104,7 +91,7 @@ export function assertParentFlowLinkAllowed(params: {
       { flowId, status: flow.status },
     );
   }
-  if (isTerminalFlowStatus(flow.status)) {
+  if (isTerminalTaskFlow(flow)) {
     throw new ParentFlowLinkError("terminal", `Parent flow is already ${flow.status}.`, {
       flowId,
       status: flow.status,

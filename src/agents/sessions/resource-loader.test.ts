@@ -3,9 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { clearExtensionCache } from "./extensions/loader.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
+import { SettingsManager } from "./settings-manager.js";
+import type { SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -35,12 +38,37 @@ export default function extension(api) {
 `;
 }
 
+function sourceMetadata(path: string, source: string, scope: SourceScope) {
+  return { path, source, scope, origin: "package" as const, baseDir: path };
+}
+
 afterEach(() => {
   clearExtensionCache();
   Reflect.deleteProperty(globalThis, "openclawExtensionCacheTestState");
 });
 
 describe("DefaultResourceLoader", () => {
+  it("does not load a direct local extension disabled by its package filter", async () => {
+    const root = tempDirs.make("openclaw-resource-loader-filter-");
+    const extensionPath = join(root, "extension.ts");
+    await writeFile(extensionPath, "export default function extension() {}\n");
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({
+        packages: [{ source: extensionPath, extensions: [] }],
+      }),
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions).toEqual([]);
+  });
+
   it("skips ambient package resolution while preserving explicit resource paths", async () => {
     const root = tempDirs.make("openclaw-resource-loader-explicit-");
     const promptDir = join(root, "explicit-prompts");
@@ -127,5 +155,38 @@ describe("DefaultResourceLoader", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("inherits Windows source metadata across case-variant resource roots", async () => {
+    const root = tempDirs.make("openclaw-resource-loader-scope-");
+    const variantAgentDir = join(root, "AGENT");
+    const variantPackageDir = join(root, "PACKAGE-SOURCE");
+    const defaultSkillDir = join(root, "agent", "skills", "default");
+    await mkdir(defaultSkillDir, { recursive: true });
+
+    withMockedWindowsPlatform(() => {
+      const loader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: variantAgentDir,
+      });
+      const cases = [
+        loader["getDefaultSourceInfoForPath"](defaultSkillDir),
+        loader["findSourceInfoForPath"](
+          join(root, "package-source", "extra", "SKILL.md"),
+          new Map([[variantPackageDir, sourceMetadata(variantPackageDir, "extension", "project")]]),
+        ),
+        loader["findSourceInfoForPath"](
+          join(root, "package-source", "package", "SKILL.md"),
+          undefined,
+          new Map([[variantPackageDir, sourceMetadata(variantPackageDir, "package", "user")]]),
+        ),
+      ];
+
+      expect(cases).toMatchObject([
+        { source: "local", scope: "user", baseDir: join(variantAgentDir, "skills") },
+        { source: "extension", scope: "project", baseDir: variantPackageDir },
+        { source: "package", scope: "user", baseDir: variantPackageDir },
+      ]);
+    });
   });
 });

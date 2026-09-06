@@ -1,5 +1,7 @@
+import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
+  ConversationDeliveryMissingError,
   markConversationDeliveryQueued,
   markConversationDeliveryRejected,
   markConversationDeliverySent,
@@ -7,7 +9,7 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
@@ -18,6 +20,8 @@ export type DurableDeliveryCompletion =
       agentId: string;
       operationId: string;
       storePath?: string;
+      /** Present on Gateway-owned conversation intents created with route authorization. */
+      routeFingerprint?: string;
     }
   | {
       kind: "pending-final";
@@ -26,6 +30,7 @@ export type DurableDeliveryCompletion =
       sessionId: string;
       sessionKey: string;
       storePath: string;
+      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
     };
 
 type DurableDeliveryCompletionResult = {
@@ -43,7 +48,19 @@ function scopeForCompletion(
   };
 }
 
-function conversationResult(record: ConversationDeliveryRecord): DurableDeliveryCompletionResult {
+function conversationResult(
+  update: () => ConversationDeliveryRecord,
+): DurableDeliveryCompletionResult {
+  let record: ConversationDeliveryRecord;
+  try {
+    record = update();
+  } catch (error) {
+    // Full session deletion can retire the owner before its shared queue settles.
+    if (error instanceof ConversationDeliveryMissingError) {
+      return { state: "stale" };
+    }
+    throw error;
+  }
   const delivered = record.status === "sent" || record.status === "replied";
   return {
     state: delivered
@@ -66,11 +83,11 @@ export async function settlePendingFinalDelivery(
   completion: Extract<DurableDeliveryCompletion, { kind: "pending-final" }>,
   state: Exclude<DurableDeliveryCompletionResult["state"], "rejected" | "stale">,
   expectedStates?: readonly ("prepared" | "queued" | "unknown")[],
-  stateDir?: string,
+  options: { stateDir?: string; preserveActivity?: boolean } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  await updateSessionEntry(
+  await patchSessionEntryCore(
     { sessionKey: completion.sessionKey, storePath: completion.storePath },
     (entry) => {
       const internalEntry: InternalSessionEntry = entry;
@@ -101,7 +118,7 @@ export async function settlePendingFinalDelivery(
         (current === "queued" || current === "unknown") &&
         pending.context &&
         pending.intentId &&
-        !(existingNotice?.intentId === pending.intentId && existingNotice.state === "owed") &&
+        existingNotice?.intentId !== pending.intentId &&
         (!existingNotice || existingNotice.createdAt <= pending.createdAt)
           ? {
               pendingDeliveryNotice: {
@@ -112,12 +129,18 @@ export async function settlePendingFinalDelivery(
               },
             }
           : undefined;
+      const updatedDeliveries = deliveries.with(index, {
+        id: completion.deliveryId,
+        state: settled,
+      });
       const clearsNotice =
+        existingNotice?.state !== "acknowledged" &&
+        !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
         settled !== "queued" &&
         settled !== "unknown" &&
         existingNotice?.intentId === pending.intentId;
-      // The pre-I/O claim preserves crash-window ambiguity. Any authoritative
-      // fate for that intent must clear debt before a later turn can surface it.
+      // One resolved sibling cannot erase another's ambiguity. Acknowledgment
+      // remains an intent-level fact so delayed settlement cannot owe it again.
       if (settled === current && !owedNotice && !clearsNotice) {
         return null;
       }
@@ -136,13 +159,12 @@ export async function settlePendingFinalDelivery(
           : {}),
         pendingFinalDelivery: {
           ...internalEntry.pendingFinalDelivery,
-          deliveries: deliveries.with(index, { id: completion.deliveryId, state: settled }),
+          deliveries: updatedDeliveries,
         },
         ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-        updatedAt: Date.now(),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true },
+    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
@@ -150,7 +172,7 @@ export async function settlePendingFinalDelivery(
     scheduleMainSessionRecoveryPendingTarget({
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
-      ...(stateDir !== undefined ? { stateDir } : {}),
+      ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       storePath: completion.storePath,
     });
   }
@@ -176,7 +198,7 @@ export async function markDurableDeliveryQueued(
         "queued",
         expectedPendingFinalState ? ["prepared", "queued"] : undefined,
       )
-    : conversationResult(
+    : conversationResult(() =>
         markConversationDeliveryQueued(
           scopeForCompletion(completion),
           completion.operationId,
@@ -192,8 +214,8 @@ export async function completeDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "delivered", undefined, stateDir)
-    : conversationResult(
+    ? await settlePendingFinalDelivery(completion, "delivered", undefined, { stateDir })
+    : conversationResult(() =>
         markConversationDeliverySent(
           scopeForCompletion(completion),
           completion.operationId,
@@ -208,8 +230,8 @@ async function suppressDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
-    : conversationResult(
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, { stateDir })
+    : conversationResult(() =>
         markConversationDeliverySuppressed(scopeForCompletion(completion), completion.operationId),
       );
 }
@@ -223,8 +245,8 @@ export async function rejectDurableDelivery(
   // Proven no-send: terminal suppression, not the unknown state that owes an
   // uncertainty notice for a send the provider asserts never began.
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
-    : conversationResult(
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, { stateDir })
+    : conversationResult(() =>
         markConversationDeliveryRejected(
           scopeForCompletion(completion),
           completion.operationId,
@@ -239,8 +261,8 @@ export async function failDurableDelivery(
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, stateDir)
-    : conversationResult(
+    ? await settlePendingFinalDelivery(completion, "unknown", undefined, { stateDir })
+    : conversationResult(() =>
         markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId),
       );
 }

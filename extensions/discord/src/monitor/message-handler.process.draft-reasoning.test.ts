@@ -47,7 +47,9 @@ async function runReasoningProgressDraft(
   });
 
   const ctx = await createAutomaticDraftContext({
-    discordConfig: { streaming: { mode: "progress", progress } },
+    discordConfig: {
+      streaming: { mode: "progress", progress: { toolProgress: true, ...progress } },
+    },
   });
   await runProcessDiscordMessage(ctx);
   return draftStream;
@@ -73,6 +75,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -109,6 +112,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -145,6 +149,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -296,6 +301,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
           },
         },

@@ -77,7 +77,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
     };
     const prepared = await prepareNodeHostRuntime({
       config: {
-        nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } },
+        nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 2 } },
       },
       env: { ...fixture.env, PATH: process.env.PATH },
       enableWorkerRuns: true,

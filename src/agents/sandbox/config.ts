@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveSandboxDockerEnv, resolveSandboxScope } from "./config-contract.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
@@ -77,18 +78,7 @@ export function resolveSandboxBrowserDockerCreateConfig(params: {
   return params.browser.binds !== undefined ? { ...base, binds: params.browser.binds } : base;
 }
 
-export function resolveSandboxScope(params: {
-  scope?: SandboxScope;
-  perSession?: boolean;
-}): SandboxScope {
-  if (params.scope) {
-    return params.scope;
-  }
-  if (typeof params.perSession === "boolean") {
-    return params.perSession ? "session" : "shared";
-  }
-  return "agent";
-}
+export { resolveSandboxScope } from "./config-contract.js";
 
 export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
@@ -98,9 +88,11 @@ export function resolveSandboxDockerConfig(params: {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const env = resolveSandboxDockerEnv({
+    scope: params.scope,
+    globalEnv: globalDocker?.env,
+    agentEnv: agentDocker?.env,
+  });
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }

@@ -10,7 +10,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
-import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +22,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 describe("ManagedWorktreeService canonical paths", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -45,7 +46,7 @@ describe("ManagedWorktreeService canonical paths", () => {
     root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-canonical-paths-"),
     );
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     await fs.mkdir(stateDir, { recursive: true });
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

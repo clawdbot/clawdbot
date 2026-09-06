@@ -28,6 +28,11 @@ import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entri
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
+  comparePackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "./lib/package-dist-inventory-contract.mts";
+import { collectPackageRootImports } from "./lib/package-root-imports.ts";
+import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
@@ -662,77 +667,14 @@ type ParsedImportSpecifiersResult =
   | { ok: true; specifiers: Set<string> }
   | { ok: false; error: string };
 
-function extractLiteralSpecifier(node: unknown): string | null {
-  if (!node || typeof node !== "object") {
-    return null;
-  }
-  const candidate = node as { type?: string; value?: unknown };
-  if (candidate.type === "Literal" && typeof candidate.value === "string") {
-    return candidate.value;
-  }
-  return null;
-}
-
 function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
-  const specifiers = new Set<string>();
-  let program: unknown;
   try {
-    program = acorn.parse(source, {
-      allowHashBang: true,
-      ecmaVersion: "latest",
-      sourceType: "module",
-    });
+    // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
+    acorn.parse(source, { allowHashBang: true, ecmaVersion: "latest", sourceType: "module" });
+    return { ok: true, specifiers: collectPackageRootImports(source) };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
-
-  const visited = new Set<unknown>();
-  const pending: unknown[] = [program];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || typeof current !== "object" || visited.has(current)) {
-      continue;
-    }
-    visited.add(current);
-    const node = current as Record<string, unknown>;
-    const nodeType = typeof node.type === "string" ? node.type : null;
-
-    if (nodeType === "ImportDeclaration") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "ExportAllDeclaration" || nodeType === "ExportNamedDeclaration") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "ImportExpression") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "CallExpression") {
-      const callee = node.callee as { type?: string; name?: string } | undefined;
-      const args = Array.isArray(node.arguments) ? node.arguments : [];
-      if (callee?.type === "Identifier" && callee.name === "require" && args.length === 1) {
-        const specifier = extractLiteralSpecifier(args[0]);
-        if (specifier) {
-          specifiers.add(specifier);
-        }
-      }
-    }
-
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        pending.push(...value);
-      } else if (value && typeof value === "object") {
-        pending.push(value);
-      }
-    }
-  }
-
-  return { ok: true, specifiers };
 }
 
 export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
@@ -864,17 +806,6 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const relativePath of PACKAGED_BUNDLED_PLUGIN_ARTIFACTS) {
-    const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-    if (match) {
-      ids.add(expectDefined(match[1], "bundled package extension id"));
-    }
-  }
-  return ids;
-}
-
 function readBundledExtensionPackageJsons(packageRoot: string): {
   manifests: InstalledBundledExtensionManifestRecord[];
   errors: string[];
@@ -882,15 +813,41 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
-  const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+  const inventoryPath = join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
 
-  // Scan the package contract first: absent bundled directories are invisible
-  // when verification only walks the installed extension root.
-  for (const expectedPackageId of expectedPackageIds) {
-    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+  try {
+    const inventory: unknown = JSON.parse(readFileSync(inventoryPath, "utf8"));
+    if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
+      throw new Error("inventory must be an array of file paths");
     }
+    const inventoryParity = comparePackageDistInventory({
+      files: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+      inventory: inventory as string[],
+    });
+    errors.push(
+      ...inventoryParity.packagedFilesMissingFromInventory.map(
+        (relativePath) =>
+          `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      ),
+    );
+  } catch (error) {
+    errors.push(
+      `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    );
+  }
+
+  const installedArtifactParity = comparePackageDistInventory({
+    files: [...PACKAGED_BUNDLED_PLUGIN_ARTIFACTS].filter((relativePath) =>
+      existsSync(join(packageRoot, relativePath)),
+    ),
+    inventory: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+  });
+  for (const relativePath of installedArtifactParity.inventoryEntriesMissingFromPackage) {
+    errors.push(
+      relativePath.endsWith("/package.json")
+        ? `installed bundled extension manifest missing: ${join(packageRoot, relativePath)}.`
+        : `installed bundled plugin artifact missing: ${relativePath}.`,
+    );
   }
 
   if (!existsSync(extensionsDir)) {

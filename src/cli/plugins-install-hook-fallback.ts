@@ -9,10 +9,17 @@ import {
 } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
-import { installManagedPluginSource } from "../plugins/management-service.js";
+import {
+  installManagedPluginSource,
+  type ManagedPluginSourceInstallRequest,
+} from "../plugins/management-install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
@@ -63,6 +70,7 @@ export function isTerminalPluginInstallFailure(code?: string): boolean {
   return (
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED ||
+    code === PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE ||
     code === PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN
   );
 }
@@ -75,6 +83,8 @@ export async function tryInstallHookPackFromLocalPath(params: {
   link?: boolean;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
@@ -125,17 +135,24 @@ export async function tryInstallHookPackFromLocalPath(params: {
       },
       successMessage: `Linked hook pack path: ${shortenHomePath(params.resolvedPath)}`,
       runtime: params.runtime,
+      beforePersistentApply: params.beforePersistentApply,
     });
     return { ok: true };
   }
 
-  const result = await installHooksFromPath({
-    ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-    path: params.resolvedPath,
-    mode: params.installMode,
-    ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-    logger: createHookPackInstallLogger(params.runtime),
-  });
+  const result = await installHooksFromPath(
+    requestDeferredPackageDirInstall(
+      {
+        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+        path: params.resolvedPath,
+        mode: params.installMode,
+        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
+        logger: createHookPackInstallLogger(params.runtime),
+        beforePersistentApply: params.beforePersistentApply,
+      },
+      params.assertOwned,
+    ),
+  );
   if (!result.ok) {
     return result;
   }
@@ -152,6 +169,8 @@ export async function tryInstallHookPackFromLocalPath(params: {
       version: result.version,
     },
     runtime: params.runtime,
+    beforePersistentApply: params.beforePersistentApply,
+    payloadTransaction: resolvePackageDirInstallTransaction(result),
   });
   return { ok: true };
 }
@@ -165,30 +184,39 @@ async function tryInstallHookPackFromNpmSpec(params: {
   expectedIntegrity?: string;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
-  const result = await installHooksFromNpmSpec({
-    ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-    config: params.snapshot.config,
-    spec: params.spec,
-    mode: params.installMode,
-    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-    ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-    logger: createHookPackInstallLogger(params.runtime),
-  });
+  const result = await installHooksFromNpmSpec(
+    requestDeferredPackageDirInstall(
+      {
+        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+        config: params.snapshot.config,
+        spec: params.spec,
+        mode: params.installMode,
+        ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
+        logger: createHookPackInstallLogger(params.runtime),
+        beforePersistentApply: params.beforePersistentApply,
+      },
+      params.assertOwned,
+    ),
+  );
   if (!result.ok) {
     return result;
   }
 
+  const pinMessages: string[] = [];
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     params.spec,
     Boolean(params.pin),
     result.targetDir,
     result.version,
     result.npmResolution,
-    params.runtime?.log ?? defaultRuntime.log,
+    (message) => pinMessages.push(message),
     theme.warn,
   );
   await persistHookPackInstall({
@@ -197,7 +225,13 @@ async function tryInstallHookPackFromNpmSpec(params: {
     hooks: result.hooks,
     install: installRecord,
     runtime: params.runtime,
+    beforePersistentApply: params.beforePersistentApply,
+    payloadTransaction: resolvePackageDirInstallTransaction(result),
   });
+  // Pinning notices follow the commit so output failures cannot strand an owned payload.
+  for (const message of pinMessages) {
+    (params.runtime ?? defaultRuntime).log(message);
+  }
   return { ok: true };
 }
 
@@ -208,15 +242,25 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   spec: string;
   pin?: boolean;
   safetyOverrides: InstallSafetyOverrides;
+  capabilityConsent?: import("./plugin-capability-consent.js").PluginCapabilityConsentCliOptions;
   allowBundledFallback: boolean;
   expectedPluginId?: string;
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
-  official?: boolean;
+  officialRequest?: Extract<ManagedPluginSourceInstallRequest, { source: "official" }>;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | { ok: false }> {
   const runtime = params.runtime ?? defaultRuntime;
+  const installContext = {
+    snapshot: params.snapshot,
+    runtime,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
+    beforePersistentApply: params.beforePersistentApply,
+    assertOwned: params.assertOwned,
+  };
   const fullyBlockedReason = resolveFullyBlockedConfigMutationReason(params.snapshot);
   if (fullyBlockedReason) {
     runtime.error(fullyBlockedReason);
@@ -241,14 +285,13 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
         return { ok: false };
       }
       const hookFallback = await tryInstallHookPackFromNpmSpec({
-        snapshot: params.snapshot,
+        ...installContext,
         installMode: params.installMode,
         spec: params.spec,
         safetyOverrides: params.safetyOverrides,
         pin: params.pin,
         expectedIntegrity: hookProbe.npmResolution?.integrity ?? params.expectedIntegrity,
         expectedPackageKind: "hook-only",
-        runtime: params.runtime,
       });
       if (hookFallback.ok) {
         return { ok: true };
@@ -263,34 +306,31 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   }
 
   const result = await installManagedPluginSource({
-    request: params.official
-      ? {
-          source: "official",
-          spec: params.spec,
-          pluginId: params.expectedPluginId ?? params.spec,
-          mode: params.installMode,
-          pin: params.pin,
-          ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-        }
-      : {
-          source: "npm",
-          spec: params.spec,
-          mode: params.installMode,
-          pin: params.pin,
-          ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
-          ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-          ...(params.trustedSourceLinkedOfficialInstall
-            ? { trustedSourceLinkedOfficialInstall: true }
-            : {}),
-        },
-    snapshot: params.snapshot,
+    request: params.officialRequest ?? {
+      source: "npm",
+      spec: params.spec,
+      mode: params.installMode,
+      pin: params.pin,
+      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
+      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+      ...(params.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
+    },
+    ...installContext,
+    ...params.capabilityConsent,
     safetyOverrides: params.safetyOverrides,
     logger: createPluginInstallLogger(params.runtime),
-    invalidateRuntimeCache: params.invalidateRuntimeCache,
-    runtime: params.runtime,
   });
   if (!result.ok) {
-    if (isTerminalPluginInstallFailure(result.code)) {
+    // A declared secondary may have been selected by the install owner. Hook-pack
+    // probing belongs only to the npm artifact, never a failed ClawHub attempt.
+    if (
+      result.installSource?.source === "clawhub" ||
+      (params.officialRequest &&
+        result.code !== PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS) ||
+      isTerminalPluginInstallFailure(result.code)
+    ) {
       runtime.error(result.error);
       return { ok: false };
     }
@@ -308,9 +348,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
             bundledSource: bundledFallbackPlan.bundledSource,
             warning: bundledFallbackPlan.warning,
           },
-          snapshot: params.snapshot,
-          invalidateRuntimeCache: params.invalidateRuntimeCache,
-          runtime: params.runtime,
+          ...installContext,
         });
         if (!bundledResult.ok) {
           runtime.error(bundledResult.error);
@@ -320,13 +358,12 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       }
     }
     const hookFallback = await tryInstallHookPackFromNpmSpec({
-      snapshot: params.snapshot,
+      ...installContext,
       installMode: params.installMode,
       spec: params.spec,
       safetyOverrides: params.safetyOverrides,
       pin: params.pin,
       expectedIntegrity: params.expectedIntegrity,
-      runtime: params.runtime,
     });
     if (hookFallback.ok) {
       return { ok: true };

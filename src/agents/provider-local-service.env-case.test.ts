@@ -52,8 +52,8 @@ async function readSpawnedLocalServiceEnv(
 }
 
 describe("provider local service environment", () => {
-  afterEach(() => {
-    stopManagedProviderLocalServices();
+  afterEach(async () => {
+    await stopManagedProviderLocalServices();
   });
 
   it.runIf(process.platform === "win32")(

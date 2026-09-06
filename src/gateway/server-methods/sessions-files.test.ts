@@ -423,6 +423,36 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
+  it("round-trips listed folders beginning with two dots", async () => {
+    writeWorkspaceFile(workspaceRoot, "..notes/readme.md", "# Notes\n");
+    const root = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const selected = root.browser.entries.find(
+      (entry: Record<string, unknown>) => entry.name === "..notes",
+    );
+    const folder = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+        path: selected.path,
+      }),
+    );
+    expect(folder.browser).toMatchObject({
+      path: "..notes",
+      parentPath: "",
+      entries: [{ path: "..notes/readme.md", kind: "file" }],
+    });
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: folder.browser.entries[0].path,
+      }),
+    );
+    expect(preview.file.content).toBe("# Notes\n");
+  });
+
   it("browses, searches, and previews files not referenced by the session", async () => {
     const folderPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {

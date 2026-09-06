@@ -1,0 +1,56 @@
+name: FRV Proof Broker
+run-name: FRV Proof Broker PR #${{ inputs.pr_number }} run ${{ github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Merged OpenClaw pull request containing the FRV recovery controller
+        required: true
+        type: string
+      landed_sha:
+        description: Exact lowercase 40-character commit landed on main
+        required: true
+        type: string
+permissions: {}
+
+concurrency:
+  group: frv-proof-broker
+  cancel-in-progress: false
+
+jobs:
+  prove:
+    name: Prove failed-job rerun boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted main broker
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Run trusted FRV proof broker
+        id: proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FRV_PROOF_RECEIPT: ${{ runner.temp }}/frv-proof-receipt.json
+        run: node scripts/frv-proof-broker.mjs
+
+      - name: Upload proof receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frv-proof-${{ github.run_id }}
+          path: ${{ steps.proof.outputs.receipt_path }}
+          if-no-files-found: error
+          retention-days: 30

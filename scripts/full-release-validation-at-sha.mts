@@ -5,13 +5,22 @@ import {
   spawnSync,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  classifyReleaseGhTransportError,
+  formatReleaseStateOutcome,
+  isReleaseGhArtifactMissingError,
+  MAX_RELEASE_ARTIFACT_BYTES,
+  validateReleaseStateArtifact,
+} from "./full-release-validation-policy.mjs";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execGhRead } from "./lib/plain-gh.mjs";
+import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
@@ -23,20 +32,16 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
-const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
+export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
+const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
+const RELEASE_DECISION_FILE = "full-release-decision.json";
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
   stdio: ["ignore", "pipe", "inherit"],
   timeout: GH_READ_TIMEOUT_MS,
 } satisfies ExecFileSyncOptionsWithStringEncoding;
-const RELEASE_BRANCH_PATTERN = /^release\/([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)$/u;
-const EXTENDED_STABLE_BRANCH_PATTERN = /^extended-stable\/([0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
-const RELEASE_CONTEXT_BRANCH_PATTERN =
-  /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
-const RELEASE_TAG_PATTERN =
-  /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
 const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
@@ -65,7 +70,15 @@ type ReleaseInputs = Record<string, string> &
   Partial<Record<"release_profile" | "allow_unreleased_changelog", string>>;
 type CommandOptions = {
   dryRun?: boolean;
-  stdio?: "inherit" | ["ignore", "pipe" | "ignore", "inherit" | "ignore"];
+  stdio?: "inherit" | ["ignore", "pipe" | "ignore", "pipe" | "inherit" | "ignore"];
+  timeoutMs?: number;
+};
+type CommandStatus = {
+  error?: Error;
+  signal?: unknown;
+  status: number | null;
+  stderr: unknown;
+  stdout: unknown;
 };
 type TemporaryRefParams = {
   keepBranch: boolean;
@@ -89,6 +102,14 @@ function displayValue(value: unknown): string {
   return value === null ? "null" : (JSON.stringify(value) ?? "<undefined>");
 }
 
+function requiredPositiveInteger(value: unknown, label: string): number {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return normalized;
+}
+
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-tooling-sha>] [--trusted-workflow-ref <main-or-release-publish-tag>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
@@ -100,8 +121,11 @@ workflow lineage through the release evidence manifest, then deletes both
 temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
--f fail_fast=true to cancel each child after its first failed job. The release
-branch accepts only its final package version or a matching beta prerelease.
+-f fail_fast=true to cancel only an exact still-active child after Release
+Decision identifies a blocking failure for that child. The release
+branch accepts its final package version or a matching beta prerelease.
+A numeric correction branch also accepts the base package only when its
+published base tag resolves to the exact Validation SHA.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
@@ -124,20 +148,14 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
 function runStatus(command: string, args: string[], options: CommandOptions = {}) {
   if (options.dryRun) {
     console.log(["+", command, ...args].join(" "));
-    return { status: 0, stdout: "" };
+    return { status: 0, stderr: "", stdout: "" };
   }
   return spawnSync(command, args, {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
+    timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
   });
-}
-
-function readOptionValue(argv: string[], index: number, optionName: string): string {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
 }
 
 export function parseArgs(argv: string[]) {
@@ -159,22 +177,22 @@ export function parseArgs(argv: string[]) {
       process.exit(0);
     }
     if (arg === "--sha") {
-      args.sha = readOptionValue(argv, i, arg);
+      args.sha = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--workflow-sha") {
-      args.workflowSha = readOptionValue(argv, i, arg);
+      args.workflowSha = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = readOptionValue(argv, i, arg);
+      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
     if (arg === "--target-ref") {
-      args.targetRef = readOptionValue(argv, i, arg);
+      args.targetRef = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -192,7 +210,7 @@ export function parseArgs(argv: string[]) {
         const extra = extras[extraIndex]!;
         let assignment;
         if (extra === "-f") {
-          assignment = readOptionValue(extras, extraIndex, extra);
+          assignment = requireOptionArgument(extras, extraIndex, extra);
           extraIndex += 1;
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
@@ -206,7 +224,7 @@ export function parseArgs(argv: string[]) {
       break;
     }
     if (arg === "-f") {
-      const assignment = readOptionValue(argv, i, arg);
+      const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
       const [key, ...valueParts] = assignment.split("=");
       if (!key || valueParts.length === 0) {
@@ -257,13 +275,11 @@ export function parseArgs(argv: string[]) {
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
     throw new Error("SHA-pinned release validation reserves trusted_workflow_json");
   }
-  if (
-    args.targetRef &&
-    !RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
-    !RELEASE_TAG_PATTERN.test(args.targetRef)
-  ) {
+  const targetContext = parseReleaseContextRef(args.targetRef);
+  if (args.targetRef && !targetContext) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
+  args.targetRef = targetContext?.ref ?? args.targetRef;
   if (
     args.trustedWorkflowRef !== "main" &&
     !TRUSTED_WORKFLOW_TAG_PATTERN.test(args.trustedWorkflowRef)
@@ -278,7 +294,8 @@ export function parseArgs(argv: string[]) {
     );
   }
   if (
-    RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
+    targetContext &&
+    targetContext.kind !== "release tag" &&
     !SHA_PATTERN.test(args.workflowSha.toLowerCase())
   ) {
     throw new Error(
@@ -292,14 +309,19 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit: (args: string[]) => string = (args) => run("git", args),
 ) {
-  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
+  const context = parseReleaseContextRef(targetRef);
+  if (!context) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
+  }
+  if (context.kind !== "release tag") {
     return (
-      executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(/\s+/u)[0] ??
-      ""
+      executeGit(["ls-remote", "--heads", "origin", `refs/heads/${context.ref}`]).split(
+        /\s+/u,
+      )[0] ?? ""
     );
   }
 
-  const tagRef = `refs/tags/${targetRef}`;
+  const tagRef = `refs/tags/${context.ref}`;
   const peeledSha = executeGit(["ls-remote", "--tags", "origin", `${tagRef}^{}`]).split(/\s+/u)[0];
   if (peeledSha) {
     return peeledSha;
@@ -320,44 +342,30 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
-  const releaseMatch = targetRef.match(RELEASE_BRANCH_PATTERN);
-  const extendedStableMatch = targetRef.match(EXTENDED_STABLE_BRANCH_PATTERN);
-  const tagMatch = targetRef.match(RELEASE_TAG_PATTERN);
-  if (releaseMatch) {
-    const releaseVersion = releaseMatch[1]!;
-    const prereleaseMatch = targetVersion.match(
-      /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
-    );
-    if (targetVersion !== releaseVersion && prereleaseMatch?.[1] !== releaseVersion) {
-      throw new Error(
-        `Target package version ${targetVersion} does not belong to release branch ${targetRef}; expected ${releaseVersion} or a beta prerelease of it`,
-      );
-    }
-  } else if (extendedStableMatch) {
-    if (targetVersion !== extendedStableMatch[1]) {
-      throw new Error(
-        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
-      );
-    }
-  } else if (tagMatch && targetVersion !== tagMatch[1]) {
-    throw new Error(
-      `Target package version ${targetVersion} does not match release tag ${targetRef}`,
-    );
+  const identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  if (!identity) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
   }
   const remoteSha = resolveRemoteSha(targetRef);
   if (!remoteSha) {
     throw new Error(`Target ref ${targetRef} does not resolve to a commit`);
   }
-  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
+  if (identity.kind !== "release tag") {
     if (!isAncestor(targetSha, remoteSha)) {
       throw new Error(
         `Target SHA ${targetSha} is not reachable from release branch ${targetRef} at ${remoteSha}`,
       );
     }
-    return targetRef;
-  }
-  if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
+  } else if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
     throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
+  }
+  if (identity.baseTag) {
+    const baseSha = resolveRemoteSha(identity.baseTag);
+    if (baseSha.toLowerCase() !== targetSha.toLowerCase()) {
+      throw new Error(
+        `Fallback correction ${identity.releaseTag} must use the same source commit as ${identity.baseTag}; expected ${targetSha}, found ${baseSha || "missing"}.`,
+      );
+    }
   }
   return targetRef;
 }
@@ -371,9 +379,11 @@ function fetchTargetRef(targetRef: string) {
   if (!targetRef) {
     return;
   }
-  const sourceRef = RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)
-    ? `refs/heads/${targetRef}`
-    : `refs/tags/${targetRef}`;
+  const context = parseReleaseContextRef(targetRef);
+  if (!context) {
+    throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
+  }
+  const sourceRef = `refs/${context.kind === "release tag" ? "tags" : "heads"}/${context.ref}`;
   run("git", ["fetch", "--no-tags", "origin", sourceRef], {
     stdio: "inherit",
   });
@@ -542,12 +552,148 @@ function readActiveParentJobs(parentRunId: string) {
     }));
 }
 
+export function validateReleaseDecisionPayload(
+  payload: unknown,
+  expected: {
+    parentRunAttempt: number;
+    parentRunId: string;
+    workflowSha: string;
+  },
+) {
+  return validateReleaseStateArtifact(
+    payload,
+    {
+      parentRunAttempt: expected.parentRunAttempt,
+      parentRunId: expected.parentRunId,
+      workflowSha: expected.workflowSha,
+    },
+    "decision",
+  );
+}
+
+export function releaseDecisionStopsForeground(state: unknown) {
+  return [
+    "blocked_diagnostics_running",
+    "blocked_complete",
+    "orchestration_error",
+    "cancelled_with_children",
+  ].includes(stringValue(state));
+}
+
+export function tryReadReleaseDecision(
+  parentRunId: string,
+  parentRunAttempt: number,
+  workflowSha: string,
+  runStatusImpl: (
+    command: string,
+    args: string[],
+    options?: CommandOptions,
+  ) => CommandStatus = runStatus,
+) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-"));
+  try {
+    const result = runStatusImpl(
+      "gh",
+      [
+        "run",
+        "download",
+        parentRunId,
+        "--repo",
+        "openclaw/openclaw",
+        "--name",
+        artifactName,
+        "--dir",
+        downloadDir,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"], timeoutMs: GH_READ_TIMEOUT_MS },
+    );
+    if (result.status !== 0) {
+      const stderr = stringValue(result.stderr);
+      if (isReleaseGhArtifactMissingError({ cause: result.error, stderr })) {
+        return undefined;
+      }
+      const downloadError = Object.assign(
+        result.error instanceof Error
+          ? result.error
+          : new Error(
+              `Release Decision artifact download failed${
+                stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
+              }`,
+            ),
+        {
+          signal: result.signal,
+          status: result.status,
+          stderr,
+        },
+      );
+      if (classifyReleaseGhTransportError(downloadError) === "transient") {
+        console.warn(
+          `Release Decision artifact unavailable this poll; retrying: ${downloadError.message}`,
+        );
+        return undefined;
+      }
+      throw new Error(
+        `Release Decision artifact download failed${
+          stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
+        }`,
+        { cause: downloadError },
+      );
+    }
+    const decisionPath = join(downloadDir, RELEASE_DECISION_FILE);
+    if (!existsSync(decisionPath)) {
+      throw new Error(
+        `Release Decision artifact ${artifactName} omitted ${RELEASE_DECISION_FILE}.`,
+      );
+    }
+    if (statSync(decisionPath).size > MAX_RELEASE_ARTIFACT_BYTES) {
+      throw new Error(`Release Decision artifact ${artifactName} exceeds the size limit.`);
+    }
+    return validateReleaseDecisionPayload(JSON.parse(readFileSync(decisionPath, "utf8")), {
+      parentRunAttempt,
+      parentRunId,
+      workflowSha,
+    });
+  } finally {
+    rmSync(downloadDir, { force: true, recursive: true });
+  }
+}
+
+function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  try {
+    const response: unknown = JSON.parse(
+      execGhRead(
+        [
+          "api",
+          `repos/openclaw/openclaw/actions/runs/${parentRunId}/artifacts?per_page=100&name=${artifactName}`,
+        ],
+        { ...GH_READ_OPTIONS, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+    if (!isJsonRecord(response) || !Array.isArray(response.artifacts)) {
+      throw new Error(`Full Release Validation run ${parentRunId} returned invalid artifacts`);
+    }
+    return response.artifacts.some(
+      (artifact) =>
+        isJsonRecord(artifact) && artifact.name === artifactName && artifact.expired === false,
+    );
+  } catch (error) {
+    if (classifyReleaseGhTransportError(error) !== "transient") {
+      throw error;
+    }
+    console.warn(`Release Decision metadata unavailable this poll; retrying: ${String(error)}`);
+    return false;
+  }
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
   const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
   let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
+  let decision: { attempt: number; state: "unavailable" | "ready" | "passed" } | undefined;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -569,7 +715,34 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       console.log(`Parent run status: ${summary}`);
       lastSummary = summary;
     }
-    if (suite?.status === "completed") {
+    if (suite) {
+      const attempt = requiredPositiveInteger(suite.run_attempt, "parent run attempt");
+      if (decision?.attempt !== attempt) {
+        decision = { attempt, state: "unavailable" };
+      }
+      // Metadata is only a readiness hint. Once advertised, keep trying the
+      // authoritative download across status regressions until this attempt validates.
+      if (
+        decision.state === "unavailable" &&
+        (suite.status === "completed" || releaseDecisionAvailable(parentRunId, attempt))
+      ) {
+        decision.state = "ready";
+      }
+      if (decision.state === "ready") {
+        const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
+          throw new Error(
+            `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        // The workflow uploads one immutable decision per attempt; final success
+        // still requires the parent's terminal conclusion and strict evidence verifier.
+        if (releaseDecision?.state === "passed") {
+          decision.state = "passed";
+        }
+      }
+    }
+    if (suite?.status === "completed" && stringValue(suite.conclusion)) {
       if (suite.conclusion === "success") {
         return suite;
       }
@@ -593,7 +766,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
           `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      nextProgressAt += FULL_RELEASE_PROGRESS_INTERVAL_MS;
+      nextProgressAt = now + FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -603,7 +776,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       new Int32Array(new SharedArrayBuffer(4)),
       0,
       0,
-      Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs),
+      Math.min(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS, remainingMs),
     );
   }
   throw new Error(
@@ -832,12 +1005,19 @@ function main() {
     }
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
+      for (let attempt = 0; attempt <= FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length; attempt += 1) {
         parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+        if (attempt < FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS.length) {
+          Atomics.wait(
+            new Int32Array(new SharedArrayBuffer(4)),
+            0,
+            0,
+            FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS[attempt],
+          );
+        }
       }
     }
     if (!parentRunId) {

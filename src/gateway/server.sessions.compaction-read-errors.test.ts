@@ -20,17 +20,20 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-type LoadTranscriptEvents =
-  (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["loadTranscriptEvents"];
+type ReadTranscriptStatsSync =
+  (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["readTranscriptStatsSync"];
 
 const transcriptReads = vi.hoisted(() => ({
-  load: vi.fn<LoadTranscriptEvents>(),
+  stats: vi.fn<ReadTranscriptStatsSync>(),
 }));
 
 vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
-  return { ...actual, loadTranscriptEvents: transcriptReads.load };
+  return {
+    ...actual,
+    readTranscriptStatsSync: transcriptReads.stats,
+  };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -39,16 +42,19 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 // factory: Vitest runs that factory on first import of the mocked module, and this
 // project is `isolate: false`, so on a warm module graph the factory can still be
 // unrun when the first `beforeEach` fires.
-async function actualTranscriptReader(): Promise<LoadTranscriptEvents> {
+async function actualTranscriptStatsReader(): Promise<ReadTranscriptStatsSync> {
   const actual = await vi.importActual<
     typeof import("../config/sessions/session-accessor.sqlite-read.js")
   >("../config/sessions/session-accessor.sqlite-read.js");
-  return actual.loadTranscriptEvents;
+  return actual.readTranscriptStatsSync;
 }
 
+let realTranscriptStatsReader: ReadTranscriptStatsSync;
+
 beforeEach(async () => {
-  transcriptReads.load.mockReset();
-  transcriptReads.load.mockImplementation(await actualTranscriptReader());
+  transcriptReads.stats.mockReset();
+  realTranscriptStatsReader = await actualTranscriptStatsReader();
+  transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
 });
 
 async function seedCompactionSession(params: {
@@ -103,16 +109,14 @@ const transcriptReadError = () =>
  * `*Once` mock before the compaction RPC issues its own and the failure silently
  * disappears. Keying on sessionId makes the injection independent of call order.
  */
-function failTranscriptReadsForSession(
+function failTranscriptStatsForSession(
   sessionId: string,
-  options?: { succeedFirstWith: Awaited<ReturnType<LoadTranscriptEvents>> },
+  options?: { succeedFirstWith: ReturnType<ReadTranscriptStatsSync> },
 ): void {
   let sessionReads = 0;
-  transcriptReads.load.mockImplementation(async (scope, ...rest) => {
+  transcriptReads.stats.mockImplementation((scope) => {
     if (scope.sessionId !== sessionId) {
-      return await (
-        await actualTranscriptReader()
-      )(scope, ...rest);
+      return realTranscriptStatsReader(scope);
     }
     sessionReads += 1;
     if (options && sessionReads === 1) {
@@ -125,7 +129,7 @@ function failTranscriptReadsForSession(
 test("sessions.compact reports initial transcript read failures as unavailable", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedCompactionSession({ sessionId: "sess-read-failure", storePath });
-  failTranscriptReadsForSession("sess-read-failure");
+  failTranscriptStatsForSession("sess-read-failure");
 
   const { ws } = await openClient();
   try {
@@ -148,8 +152,9 @@ test("sessions.compact reports model compaction transcript re-read failures as u
     storePath,
     nativeHarness: true,
   });
-  const events = await (await actualTranscriptReader())(scope);
-  failTranscriptReadsForSession("sess-model-read-failure", { succeedFirstWith: events });
+  failTranscriptStatsForSession("sess-model-read-failure", {
+    succeedFirstWith: realTranscriptStatsReader(scope),
+  });
 
   const { ws } = await openClient();
   try {
@@ -168,7 +173,7 @@ test("sessions.compact reports model compaction transcript re-read failures as u
 test("sessions.compact maxLines reports transcript preflight read failures as unavailable", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedCompactionSession({ sessionId: "sess-max-lines-read-failure", storePath });
-  failTranscriptReadsForSession("sess-max-lines-read-failure");
+  failTranscriptStatsForSession("sess-max-lines-read-failure");
 
   const { ws } = await openClient();
   try {

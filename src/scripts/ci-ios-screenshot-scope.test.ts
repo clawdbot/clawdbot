@@ -11,6 +11,8 @@ describe("shouldRunIosScreenshots", () => {
       "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "apps/swabble/Sources/SwabbleKit/WakeWordGate.swift",
       "scripts/ios-screenshots.sh",
+      "scripts/ios-screenshot-evidence.mjs",
+      "scripts/ios-screenshot-evidence.d.mts",
       "scripts/lib/ios-fastlane.sh",
       "scripts/ios-write-swift-filelist.mjs",
       "config/swiftformat",
@@ -31,7 +33,12 @@ describe("shouldRunIosScreenshots", () => {
   });
 
   it("keeps screenshot capture wrappers inside the iOS build lane", () => {
-    for (const changedPath of ["scripts/ios-screenshots.sh", "scripts/lib/ios-fastlane.sh"]) {
+    for (const changedPath of [
+      "scripts/ios-screenshots.sh",
+      "scripts/ios-screenshot-evidence.mjs",
+      "scripts/ios-screenshot-evidence.d.mts",
+      "scripts/lib/ios-fastlane.sh",
+    ]) {
       expect(detectChangedScope([changedPath]).runIosBuild, changedPath).toBe(true);
     }
   });

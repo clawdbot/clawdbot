@@ -1,11 +1,13 @@
 import { html, type TemplateResult } from "lit";
 import type { ChatPageHost } from "../chat-state-host.ts";
+import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
 import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
@@ -13,7 +15,7 @@ import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 // Region close collapses the detail slot but leaves sidebarContent set, so
 // "task content exists" is not "panel visible"; consumers (panel render, rail
 // open-row highlight) must gate on the layout, not the content.
-export function detailSlotOpen(layout: SidebarLayout): boolean {
+function detailSlotOpen(layout: SidebarLayout): boolean {
   return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
 }
 
@@ -28,7 +30,6 @@ export function renderChatDetailSlot(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
   content: SidebarContent;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   host: ChatPageHost;
   layout: SidebarLayout;
   transcript: ChatTranscriptController;
@@ -56,8 +57,20 @@ export function renderChatDetailSlot(params: {
     html`<openclaw-chat-detail-panel
       class="chat-sidebar"
       .content=${content}
+      .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
+      .attachmentRuntime=${{
+        sessionKey: params.chat.sessionKey,
+        agentId: params.chat.fullMessageAgentId,
+        policyKey: assistantMediaPolicyKey(
+          params.chat.selectedSession,
+          params.chat.mediaPolicyEpoch,
+        ),
+        authToken: params.chat.assistantAttachmentAuthToken,
+        connectionEpoch: params.chat.connectionEpoch,
+        resourceBasePath: params.chat.resourceBasePath,
+        resolveArtifactDownload: params.chat.resolveArtifactDownload,
+      }}
       .basePath=${params.chat.basePath ?? ""}
-      .loadFullMessage=${params.fullMessageLoader}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
       .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
@@ -71,7 +84,8 @@ export function renderChatDetailSlot(params: {
       .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
         host.handleOpenImage(item, host.beginImageOpen())}
       .embedded=${true}
-      @chat-detail-panel-close=${() => host.handleCloseSidebar()}
+      @chat-detail-panel-close=${() =>
+        host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
     ></openclaw-chat-detail-panel>`
   );
 }

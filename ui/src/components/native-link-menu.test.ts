@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
+import { de } from "../i18n/locales/de.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
+import "./tooltip.ts";
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
@@ -76,19 +79,26 @@ describe("native link menu", () => {
     const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");
     expect(dropdown).not.toBeNull();
     await dropdown?.updateComplete;
+    const englishLabel = dropdown?.getAttribute("aria-label");
 
     await i18n.setLocale("de");
     await menu.updateComplete;
 
-    expect(menu.querySelector("wa-dropdown")?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    const german = flattenTranslations(de);
+    expect(dropdown?.getAttribute("aria-label")).not.toBe(englishLabel);
+    expect(dropdown?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label"));
     await vi.waitFor(() =>
       expect(dropdown?.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-        "Link-Aktionen",
+        german.get("nativeLinkMenu.label"),
       ),
     );
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);
+    ).toEqual([
+      german.get("nativeLinkMenu.openInline"),
+      german.get("nativeLinkMenu.openExternal"),
+      german.get("nativeLinkMenu.copy"),
+    ]);
   });
 
   it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
@@ -114,7 +124,7 @@ describe("native link menu", () => {
     expect(calls).toEqual(["close", "copy"]);
   });
 
-  it("closes on Escape without leaking the key to an underlying dialog", async () => {
+  it("dismisses a tooltip before its menu without leaking either Escape", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
@@ -123,6 +133,28 @@ describe("native link menu", () => {
     const menu = await mountMenu({ trigger, onClose });
     const escaped = vi.fn();
     menu.addEventListener("keydown", escaped);
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = "Link action details";
+    tooltip.anchor = menuItems(menu)[0]!;
+    menu.append(tooltip);
+    await tooltip.updateComplete;
+    tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await popup.updateComplete;
+    expect(popup.open).toBe(true);
+
+    const firstEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    menu.dispatchEvent(firstEscape);
+
+    expect(popup.open).toBe(false);
+    expect(firstEscape.defaultPrevented).toBe(true);
+    expect(escaped).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(trigger);
 
     const keydown = new KeyboardEvent("keydown", {
       key: "Escape",
