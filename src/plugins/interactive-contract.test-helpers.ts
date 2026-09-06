@@ -17,6 +17,8 @@ type BaseInteractiveContext<TChannel extends string> = ConversationBindingHelper
 
 export type TelegramInteractiveHandlerContext = BaseInteractiveContext<"telegram"> & {
   callbackId: string;
+  updateId: number | null;
+  messageDate: number;
   senderUsername?: string;
   threadId?: number;
   isGroup?: boolean;

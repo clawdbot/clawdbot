@@ -442,6 +442,8 @@ export async function handleTelegramInteractiveCallback(params: {
   callbackThreadId?: number;
   senderId: string;
   senderUsername: string;
+  updateId: number | null;
+  messageDate: number;
   isGroup: boolean;
   isForum: boolean;
   storeAllowFrom: string[];
@@ -460,6 +462,8 @@ export async function handleTelegramInteractiveCallback(params: {
     callbackThreadId,
     senderId,
     senderUsername,
+    updateId,
+    messageDate,
     isGroup,
     isForum,
     storeAllowFrom,
@@ -563,6 +567,8 @@ export async function handleTelegramInteractiveCallback(params: {
     ctx: {
       accountId,
       callbackId: callback.id,
+      updateId,
+      messageDate,
       conversationId: callbackConversationId,
       parentConversationId: callbackThreadId != null ? String(callbackMessage.chat.id) : undefined,
       senderId: senderId || undefined,
