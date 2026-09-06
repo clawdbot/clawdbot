@@ -447,4 +447,165 @@ describe("runIMessageCatchup", () => {
     expect(summary.replayed).toBe(1);
     expect(dispatched).toEqual(["g-600"]);
   });
+
+  it("recovers the oldest rows when one chat's backlog exceeds perRunLimit", async () => {
+    // Regression: `messages.history` is served `ORDER BY date DESC LIMIT ?`,
+    // so the per-chat fetch limit must reach past the newest perRunLimit rows
+    // to include the oldest ones. Clamping the fetch limit to perRunLimit made
+    // the server trim the OLDEST rows before OpenClaw saw them, then the
+    // cursor advanced past them — permanent silent loss for that downtime
+    // window.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-06-10T11:00:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-06-10T11:01:00Z");
+    const rowMs = (rowid: number) => backlogStartMs + rowid * 1_000;
+    const backlog = Array.from({ length: 100 }, (_, index) =>
+      makeRow({
+        id: index + 1,
+        guid: `g-${index + 1}`,
+        chat_id: 1,
+        created_at: new Date(rowMs(index + 1)).toISOString(),
+      }),
+    );
+    const { client, calls } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: new Date(rowMs(100)).toISOString() }] };
+      }
+      if (method === "messages.history") {
+        const p = params as { limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        // Faithful to the real bridge: newest-first page of the requested size.
+        return {
+          messages: backlog
+            .filter((row) => Date.parse(String(row.created_at)) >= startMs)
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const runCatchup = async () =>
+      await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+      });
+
+    const first = await runCatchup();
+    // The first pass must hand out the OLDEST 50 rows and leave the cursor at
+    // the last dispatched rowid so the next startup resumes from there.
+    expect(dispatched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(first.cursorAfter.lastSeenRowid).toBe(50);
+    expect(first.fullyCaughtUp).toBe(false);
+
+    const second = await runCatchup();
+    expect(second.fullyCaughtUp).toBe(true);
+    expect(second.cursorAfter.lastSeenRowid).toBe(100);
+    expect(dispatched).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+
+    // The per-chat fetch must have requested the full history budget, not the
+    // global perRunLimit.
+    const historyCalls = calls.filter((call) => call.method === "messages.history");
+    expect(historyCalls.length).toBeGreaterThan(0);
+    for (const call of historyCalls) {
+      expect((call.params as { limit: number }).limit).toBe(500);
+    }
+  });
+
+  it("still caps each pass at perRunLimit when one chat's backlog dominates", async () => {
+    // Fairness regression guard: raising the per-chat fetch budget must not
+    // let one noisy chat monopolize a pass. The cross-chat sort plus the
+    // global perRunLimit slice still bound every pass to the oldest N rows
+    // across all chats.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    seedCatchupCursor("default", {
+      lastSeenMs: Date.parse("2026-06-10T11:00:00Z"),
+      lastSeenRowid: 0,
+    });
+    const backlogStartMs = Date.parse("2026-06-10T11:01:00Z");
+    const rowMs = (rowid: number) => backlogStartMs + rowid * 1_000;
+    const db = [
+      ...Array.from({ length: 100 }, (_, index) => index + 1).map((rowid) =>
+        makeRow({
+          id: rowid,
+          guid: `quiet-${rowid}`,
+          chat_id: 2,
+          created_at: new Date(rowMs(rowid)).toISOString(),
+        }),
+      ),
+      ...Array.from({ length: 500 }, (_, index) => index + 101).map((rowid) =>
+        makeRow({
+          id: rowid,
+          guid: `noisy-${rowid}`,
+          chat_id: 1,
+          created_at: new Date(rowMs(rowid)).toISOString(),
+        }),
+      ),
+    ];
+    const { client } = makeFakeClient(({ method, params }) => {
+      if (method === "chats.list") {
+        return {
+          chats: [
+            { id: 1, last_message_at: new Date(rowMs(600)).toISOString() },
+            { id: 2, last_message_at: new Date(rowMs(100)).toISOString() },
+          ],
+        };
+      }
+      if (method === "messages.history") {
+        const p = params as { chat_id: number; limit: number; start?: string };
+        const startMs = p.start ? Date.parse(p.start) : Number.NEGATIVE_INFINITY;
+        return {
+          messages: db
+            .filter(
+              (row) => row.chat_id === p.chat_id && Date.parse(String(row.created_at)) >= startMs,
+            )
+            .toSorted((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)))
+            .slice(0, p.limit),
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const dispatched: number[] = [];
+    const config = resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 });
+    const runCatchup = async () =>
+      await runIMessageCatchup({
+        client: client as never,
+        accountId: "default",
+        config,
+        includeAttachments: false,
+        dispatchPayload: async (msg) => {
+          if (typeof msg.id === "number") {
+            dispatched.push(msg.id);
+          }
+        },
+      });
+
+    const first = await runCatchup();
+    // Oldest 50 rowids across BOTH chats, not 50 rows owned by the noisy chat.
+    expect(dispatched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(first.fullyCaughtUp).toBe(false);
+    expect(first.cursorAfter.lastSeenRowid).toBe(50);
+
+    let last = first;
+    for (let pass = 0; pass < 20 && !last.fullyCaughtUp; pass++) {
+      last = await runCatchup();
+    }
+    expect(last.fullyCaughtUp).toBe(true);
+    expect(last.cursorAfter.lastSeenRowid).toBe(600);
+    expect(dispatched).toEqual(Array.from({ length: 600 }, (_, index) => index + 1));
+  });
 });
