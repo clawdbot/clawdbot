@@ -578,7 +578,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery(directAnnounceResult ?? undefined, textCompletionDirectDeliveryKind);
+      const textDelivery = await tryTextCompletionDirectDelivery(
+        directAnnounceResult ?? undefined,
+        textCompletionDirectDeliveryKind,
+      );
       if (textDelivery) {
         return textDelivery;
       }
