@@ -6,10 +6,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
@@ -34,8 +34,8 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,
@@ -282,13 +282,23 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  const token =
-    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  const placeholderToken =
-    auth.mode === "token" &&
-    isInvalidGatewayToken(
-      auth.token ?? options.gatewayAuthOverride?.token ?? cfg.gateway?.auth?.token,
-    );
+  const configToken = cfg.gateway?.auth?.token;
+  const tokenOverride = options.gatewayAuthOverride?.token;
+  let tokenInput = auth.token ?? tokenOverride ?? configToken;
+  if (tokenOverride === undefined && plan.localToken.refPath) {
+    // An unavailable reference cannot lend its ambient fallback to strength checks.
+    const pendingRef =
+      hasUnresolvedConfigPath(cfg, plan.localToken.refPath) ||
+      resolveConfigSecretRef({
+        config: cfg,
+        path: plan.localToken.refPath,
+        value: configToken,
+        defaults: cfg.secrets?.defaults,
+      });
+    tokenInput = pendingRef ? undefined : configToken;
+  }
+  const token = typeof tokenInput === "string" ? tokenInput.trim() : null;
+  const placeholderToken = auth.mode === "token" && isInvalidGatewayToken(tokenInput);
   if (placeholderToken) {
     findings.push({
       checkId: "gateway.token_placeholder_value",

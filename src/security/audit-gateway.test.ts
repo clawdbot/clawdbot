@@ -54,6 +54,69 @@ describe("security audit gateway config findings", () => {
     },
   );
 
+  describe("SecretRef token inspection", () => {
+    const ref = { source: "exec", provider: "fixture", id: "gateway" } as const;
+    const sourceConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: ref } },
+      secrets: { providers: { fixture: { source: "exec", command: "/usr/bin/printf" } } },
+    };
+
+    it.each([
+      { name: "scrubbed", token: undefined, unresolved: false },
+      { name: "structured", token: ref, unresolved: false },
+      { name: "pending inline", token: "${GATEWAY_REF}", unresolved: false },
+      { name: "unresolved provenance", token: "undefined", unresolved: true },
+    ])("does not audit an ambient credential over a $name reference", ({ token, unresolved }) => {
+      const cfg: OpenClawConfig = { ...sourceConfig, gateway: { auth: { mode: "token", token } } };
+      if (unresolved) {
+        setConfigResolutionFacts(cfg, new Set(["gateway.auth.token"]));
+      }
+      for (const ambient of ["undefined", "short"]) {
+        const findings = collectGatewayConfigFindings(cfg, sourceConfig, {
+          OPENCLAW_GATEWAY_TOKEN: ambient,
+        });
+        expect(hasFinding("gateway.token_placeholder_value", findings)).toBe(false);
+        expect(hasFinding("gateway.token_too_short", findings)).toBe(false);
+      }
+    });
+
+    it.each([
+      { token: "undefined", critical: true, short: false },
+      { token: "short", critical: false, short: true },
+      { token: "${LITERAL}", critical: false, short: true },
+    ])("audits materialized reference value $token", ({ token, critical, short }) => {
+      const cfg: OpenClawConfig = { ...sourceConfig, gateway: { auth: { mode: "token", token } } };
+      setConfigResolutionFacts(cfg, new Set());
+      const findings = collectGatewayConfigFindings(cfg, sourceConfig, {
+        OPENCLAW_GATEWAY_TOKEN: "undefined",
+      });
+      expect(hasFindingWithSeverity("gateway.token_placeholder_value", "critical", findings)).toBe(
+        critical,
+      );
+      expect(hasFinding("gateway.token_too_short", findings)).toBe(short);
+    });
+
+    it.each(["undefined", "short"])(
+      "audits explicit override %s over an unresolved reference",
+      (token) => {
+        const cfg: OpenClawConfig = { ...sourceConfig, gateway: { auth: { mode: "token" } } };
+        setConfigResolutionFacts(cfg, new Set(["gateway.auth.token"]));
+        const findings = collectGatewayConfigFindings(
+          cfg,
+          sourceConfig,
+          { OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
+          {
+            gatewayAuthOverride: { mode: "token", token },
+          },
+        );
+        expect(
+          hasFindingWithSeverity("gateway.token_placeholder_value", "critical", findings),
+        ).toBe(token === "undefined");
+        expect(hasFinding("gateway.token_too_short", findings)).toBe(token === "short");
+      },
+    );
+  });
+
   it("keeps a valid environment fallback authoritative over a blank inline token", () => {
     const cfg: OpenClawConfig = { gateway: { auth: { mode: "token", token: " " } } };
     expect(
