@@ -242,7 +242,9 @@ final class QuickChatController: NSObject {
         self.hostingView = nil
         self.textView = nil
     }
+}
 
+extension QuickChatController {
     func toggle() {
         guard self.isEnabled else { return }
         if self.isVisible {
