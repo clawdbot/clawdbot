@@ -40,12 +40,13 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     { api: true, baseUrl: false, levels: ["Off"] },
     { api: false, baseUrl: false, levels: ["Off"] },
   ])("uses catalog-only runtime route facts (api=$api, baseUrl=$baseUrl)", (scenario) => {
+    const api = "openai-responses" as const;
     const baseUrl = "https://catalog-route.example.test/v1";
     registerAgentHarness({
       id: "catalog-route",
       label: "Catalog route",
       supports: ({ modelProvider }) =>
-        modelProvider?.api === "openai-responses" && modelProvider.baseUrl === baseUrl
+        modelProvider?.api === api && modelProvider.baseUrl === baseUrl
           ? { supported: true }
           : { supported: false, fallbackRuntime: "openclaw" },
       runAttempt: async () => {
@@ -81,7 +82,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
           id: "route-model",
           name: "Route model",
           reasoning: true,
-          ...(scenario.api ? { api: "openai-responses" } : {}),
+          ...(scenario.api ? { api } : {}),
           ...(scenario.baseUrl ? { baseUrl } : {}),
         },
       ],
