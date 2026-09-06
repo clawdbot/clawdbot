@@ -24,6 +24,7 @@ import { loadPluginInstallRuntime, resolveEffectiveInstallMode } from "./install
 import type { PluginInstallLogger } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { listNpmPackageDirs } from "./npm-package-dirs.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 
 const rollbackSnapshotCopyMode = fsConstants.COPYFILE_FICLONE;
@@ -474,47 +475,18 @@ export async function quarantineManagedNpmProjectRebuildArtifacts(params: {
 }
 
 export async function listManagedNpmRootPackageNames(npmRoot: string): Promise<Set<string>> {
-  const nodeModulesDir = path.join(npmRoot, "node_modules");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Set();
-    }
-    throw error;
-  }
-
-  const packageNames = new Set<string>();
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name === ".bin" || entry.name === "openclaw") {
-      continue;
-    }
-    if (entry.name.startsWith("@")) {
-      const scopeDir = path.join(nodeModulesDir, entry.name);
-      let scopedEntries: Dirent[];
-      try {
-        scopedEntries = await fs.readdir(scopeDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const scopedEntry of scopedEntries.toSorted((left, right) =>
-        left.name.localeCompare(right.name),
-      )) {
-        if (scopedEntry.isDirectory() || scopedEntry.isSymbolicLink()) {
-          packageNames.add(`${entry.name}/${scopedEntry.name}`);
-        }
-      }
-      continue;
-    }
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      packageNames.add(entry.name);
-    }
-  }
-  return packageNames;
+  const packageDirs = await listNpmPackageDirs(npmRoot, {
+    sortEntries: true,
+    includeEntry: (entry, scoped) =>
+      (scoped || (entry.name !== ".bin" && entry.name !== "openclaw")) &&
+      // Scope reads must still report malformed directories, including regular files.
+      ((!scoped && entry.name.startsWith("@")) || entry.isDirectory() || entry.isSymbolicLink()),
+  });
+  return new Set(
+    packageDirs.map((dir) =>
+      path.relative(path.join(npmRoot, "node_modules"), dir).split(path.sep).join("/"),
+    ),
+  );
 }
 
 function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
