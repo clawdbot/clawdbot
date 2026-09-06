@@ -58,7 +58,7 @@ describe("resolveRuntimeWorkerArgv", () => {
     for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
-      const loader = typescriptLoader && extension.endsWith("ts") ? [`--import=${tsxUrl}`] : [];
+      const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
     }
   });
@@ -66,11 +66,11 @@ describe("resolveRuntimeWorkerArgv", () => {
   it("pins the tsx loader to an absolute file:// URL, not a bare specifier (#140416)", () => {
     const url = pathToFileURL(path.resolve("worker fixture.ts"));
     const argv = resolveRuntimeWorkerArgv(url, "/usr/bin/node");
-    expect(argv).toHaveLength(2);
-    expect(argv[0]).toMatch(/^--import=file:\/\//);
-    expect(argv[0]).not.toBe("--import=tsx");
-    expect(argv[0]).not.toBe("--import");
-    expect(argv[1]).toBe(fileURLToPath(url));
+    expect(argv).toHaveLength(3);
+    expect(argv[0]).toBe("--import");
+    expect(argv[1]).toMatch(/^file:\/\//);
+    expect(argv[1]).not.toBe("tsx");
+    expect(argv[2]).toBe(fileURLToPath(url));
   });
 });
 

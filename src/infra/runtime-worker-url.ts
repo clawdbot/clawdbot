@@ -35,7 +35,7 @@ export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath):
     // "tsx" specifier fails with ERR_MODULE_NOT_FOUND when the worker's cwd
     // is outside a package root containing tsx. (#140416)
     const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
-    return [`--import=${tsxUrl}`, entry];
+    return ["--import", tsxUrl, entry];
   }
   return [entry];
 }
