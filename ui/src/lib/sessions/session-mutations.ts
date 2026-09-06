@@ -15,6 +15,7 @@ import {
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import type {
+  SessionCapability,
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionCreateReconciliation,
@@ -35,7 +36,7 @@ type SessionMutationsHost = {
   connection: SessionConnectionOwner;
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   refreshReplacementResult: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;

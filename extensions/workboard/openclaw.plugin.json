@@ -8,12 +8,18 @@
     }
   ],
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
   },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": ["workboard"]
+    "onCommands": [
+      "workboard"
+    ]
   },
   "dashboard": {
     "dataBindings": [
@@ -42,7 +48,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "boardId": { "type": "string", "minLength": 1 }
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
@@ -50,7 +59,10 @@
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
-  "catalog": { "featured": true, "order": 10 },
+  "catalog": {
+    "featured": true,
+    "order": 10
+  },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -90,7 +102,11 @@
       "workboard_move"
     ]
   },
-  "commandAliases": [{ "name": "workboard" }],
+  "commandAliases": [
+    {
+      "name": "workboard"
+    }
+  ],
   "toolMetadata": {
     "workboard_list": {
       "optional": true
@@ -202,5 +218,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/045246ad28fee377c4f2114901761aa38047053350e65f7cd6b238dabb5c764e/index.js",
+    "styles": [
+      "dist/control-ui/045246ad28fee377c4f2114901761aa38047053350e65f7cd6b238dabb5c764e/index.css"
+    ]
   }
 }

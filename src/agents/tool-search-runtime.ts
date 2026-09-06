@@ -1,10 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
@@ -13,6 +9,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -34,6 +31,11 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
+import {
+  formatCatalogInputError,
+  formatUnknownToolIdError,
+  type ToolLookupErrorOptions,
+} from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
@@ -76,74 +78,10 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
     .join(" ");
 }
 
-function tokenizeLookupValue(input: string): Set<string> {
-  return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
-}
-
-function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
-  const normalizedNeedle = needle.toLowerCase();
-  const name = entry.name.toLowerCase();
-  const id = entry.id.toLowerCase();
-  const label = (entry.label ?? "").toLowerCase();
-  const description = entry.description.toLowerCase();
-  const needleTokens = tokenizeLookupValue(needle);
-  const entryTokens = tokenizeLookupValue(
-    `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
-  );
-  let score = 0;
-  if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
-    score += 40;
-  }
-  if (name && needleTokens.has(name)) {
-    score += 40;
-  }
-  for (const token of needleTokens) {
-    if (entryTokens.has(token)) {
-      score += 12;
-    }
-  }
-  if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
-    score += 8;
-  }
-  return score;
-}
-
-function formatUnknownToolIdError(
-  needle: string,
-  entries: readonly ToolSearchCatalogEntry[],
-  options: UnknownToolErrorOptions = {},
-): string {
-  const nameCounts = new Map<string, number>();
-  for (const entry of entries) {
-    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
-  }
-  const suggestions = uniqueStrings(
-    entries
-      .map((entry) => ({
-        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
-        score: scoreUnknownToolSuggestion(needle, entry),
-      }))
-      .filter((candidate) => candidate.score > 0)
-      .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
-      .map((candidate) => candidate.value),
-  ).slice(0, 3);
-  const recoveryText =
-    options.recoverySurface === "code-mode"
-      ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : options.recoverySurface === "catalog"
-        ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
-        : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
-  if (suggestions.length === 0) {
-    return `Unknown tool id: ${needle}. ${recoveryText}`;
-  }
-  return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
-}
-
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
-  options?: CatalogVisibilityOptions,
-  errorOptions?: UnknownToolErrorOptions,
+  options?: CatalogVisibilityOptions & ToolLookupErrorOptions,
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
   const entries = visibleCatalogEntries(catalog, options);
@@ -157,7 +95,7 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
-    throw new ToolInputError(formatUnknownToolIdError(needle, entries, errorOptions));
+    throw new ToolInputError(formatUnknownToolIdError(needle, entries, options));
   }
   return namedEntry;
 }
@@ -165,7 +103,7 @@ function findEntry(
 function findEntryByExactId(
   catalog: ToolSearchCatalogSession,
   id: string,
-  errorOptions: UnknownToolErrorOptions = {},
+  errorOptions: ToolLookupErrorOptions = {},
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
@@ -329,7 +267,10 @@ async function validateCatalogSchemaValue(
   schemaName: CatalogSchemaName,
   value: unknown,
 ): Promise<CatalogSchemaValidation | undefined> {
-  const schema = schemaName === "inputSchema" ? entry.parameters : entry.outputSchema;
+  const schema =
+    schemaName === "inputSchema"
+      ? resolveAgentToolExecutionSchema(entry.tool, entry.parameters)
+      : entry.outputSchema;
   if (entry.source !== "openclaw" || !schema) {
     return undefined;
   }
@@ -344,36 +285,6 @@ async function validateCatalogSchemaValue(
   } catch (error) {
     throw new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error });
   }
-}
-
-function formatCatalogInputError(
-  entry: ToolSearchCatalogEntry,
-  errors: import("../plugins/schema-validator.js").JsonSchemaValidationError[],
-  value: unknown,
-): string {
-  const schema = isRecord(entry.parameters) ? entry.parameters : undefined;
-  const propertyNames = isRecord(schema?.properties) ? Object.keys(schema.properties) : [];
-  const knownProperties = new Set(propertyNames);
-  const unexpectedProperties =
-    schema?.additionalProperties === false && isRecord(value)
-      ? Object.keys(value).filter((name) => !knownProperties.has(name))
-      : errors.flatMap((error) => (error.additionalProperty ? [error.additionalProperty] : []));
-  const suggestions = uniqueStrings(
-    unexpectedProperties.flatMap((unexpected) => {
-      const nearest = propertyNames
-        .map((name) => ({ name, distance: levenshteinDistance(unexpected, name) }))
-        .filter(
-          ({ distance }) => distance <= Math.min(3, Math.max(1, Math.ceil(unexpected.length / 3))),
-        )
-        .toSorted(
-          (left, right) => left.distance - right.distance || left.name.localeCompare(right.name),
-        )[0];
-      return nearest ? [nearest.name] : [];
-    }),
-  ).slice(0, 3);
-  const details = errors.map((error) => error.text).join("; ");
-  const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
-  return `Invalid arguments for tool "${entry.id}": ${details}.${hint}`;
 }
 
 async function assertCatalogInputMatchesSchema(
@@ -494,7 +405,7 @@ export class ToolSearchRuntime {
     // A tool whose name is a stopword ("do") tokenizes to nothing and so never
     // reaches the ranking at all. Naming it exactly is still an unambiguous
     // request for it, which the previous scorer honored.
-    const exactEntries = entries.filter((entry) => isExact(entry) && !ranked.includes(entry));
+    const exactEntries = exactMatches.filter((entry) => !ranked.includes(entry));
     return [...exactEntries, ...ranked]
       .slice(0, limit)
       .map((entry) => compactToolSearchCatalogEntry(entry));
@@ -517,12 +428,19 @@ export class ToolSearchRuntime {
   describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id, options, options));
+    return describeEntry(
+      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
+    );
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(catalog, findEntry(catalog, id, options, options), input, options);
+    return await this.callEntry(
+      catalog,
+      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
+      input,
+      options,
+    );
   };
 
   callExactId = async (
@@ -536,7 +454,12 @@ export class ToolSearchRuntime {
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(catalog, findEntryByExactId(catalog, id, options), input, options);
+    return await this.callEntry(
+      catalog,
+      findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
+      input,
+      options,
+    );
   };
 
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
@@ -592,9 +515,10 @@ export class ToolSearchRuntime {
   ) => {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
-    await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    bindJoinedCollectorInvocation(entry.tool, toolCallId);
+    await assertCatalogOutputSchemaIsValid(entry);
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {

@@ -2,10 +2,13 @@
 summary: "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony)."
 read_when:
   - You are installing, configuring, or auditing the azure-speech plugin
-title: "Azure Speech plugin"
+title: "Azure Speech plugin reference"
 ---
 
-# Azure Speech plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
@@ -16,7 +19,7 @@ Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony)
 
 ## Surface
 
-contracts: `speechProviders`
+- Contracts: `speechProviders`
 
 ## Related docs
 

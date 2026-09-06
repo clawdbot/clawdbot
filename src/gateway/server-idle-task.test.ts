@@ -28,7 +28,7 @@ describe("scheduleGatewayIdleTask", () => {
     await vi.advanceTimersByTimeAsync(10);
     await Promise.resolve();
     expect(run).toHaveBeenCalledOnce();
-    handle.stop();
+    await handle.stop();
   });
 
   it("quietly cancels idle work rejected by an active restart drain", async () => {
@@ -50,7 +50,8 @@ describe("scheduleGatewayIdleTask", () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
-    handle.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await handle.stop();
   });
 
   it("warns when idle work throws a draining error without an active restart", async () => {
@@ -72,6 +73,6 @@ describe("scheduleGatewayIdleTask", () => {
     await vi.advanceTimersByTimeAsync(10);
 
     expect(warn).toHaveBeenCalledWith(`idle task failed: ${String(error)}`);
-    handle.stop();
+    await handle.stop();
   });
 });

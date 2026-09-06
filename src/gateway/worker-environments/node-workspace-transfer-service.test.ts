@@ -352,6 +352,7 @@ describe("node workspace transfer service", () => {
               direction: "upload",
               token,
               baseManifestRef: prepared.snapshot.manifestRef,
+              referenceManifestRef: prepared.snapshot.manifestRef,
             },
           },
           undefined,

@@ -5,6 +5,7 @@ read_when:
   - You need the path to a transcripts markdown summary
   - You are debugging the core transcripts storage layout
   - You want an agent or the Control UI to read past meeting notes
+  - You want to browse meetings or configure capture in the Control UI
 title: "Transcripts CLI"
 ---
 
@@ -31,6 +32,40 @@ back during capture, summarization, or listing. Default state directory is
 `~/.openclaw`; override with `OPENCLAW_STATE_DIR`. The date directory comes
 from the session start time; the session directory is a filesystem-safe slug
 derived from the session id.
+
+## Read transcripts in the Control UI
+
+In the [Control UI](/web/control-ui#meetings-page), open the sidebar's pencil menu
+(**Edit pinned items**) and choose **Meetings** to browse the same SQLite archive
+at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
+Meeting notes are separate from agent chat history in **Sessions**.
+
+Search titles and session/source IDs; meeting URLs are not searched. Filter by
+exact provider, account, or agent ID, or by the session start date. Date filters
+use UTC: **Started on or after** includes the selected day, and **Started before**
+excludes it. Results load in deterministic pages. Changing a filter or selecting
+**Refresh** starts pagination again.
+
+Select a meeting to open its stored **Summary**. Existing
+`/meetings?selector=...` bookmarks keep working. Select **Transcript** for
+timestamped speaker text. **Search within this transcript** searches stored
+utterances on the Gateway, including text not yet loaded in the browser.
+**Load more** continues reading; the browser keeps the latest five loaded pages.
+The URL preserves the selected meeting and tab. Opening a meeting does not
+generate a missing summary.
+
+**Download Markdown** includes the transcript and any stored summary.
+**Download JSONL** exports the reader's public utterance projection, excluding
+provider-private metadata and local filesystem paths. Local CLI exports retain
+their existing raw format. Browser exports larger than 4 MiB fail visibly
+without a partial file; use `openclaw transcripts path <session> --transcript`
+or `openclaw transcripts path <session> --dir` on the Gateway host for larger
+exports.
+
+Archive reads require `operator.read` or its write/admin implication and
+permission to read the shared archive. On restricted multi-user profiles,
+choosing an agent filter does not grant archive access. Capture configuration
+requires `operator.admin`.
 
 ## Commands
 
@@ -130,7 +165,8 @@ The `transcripts` tool returns both the unchanged raw `sessionId` and a canonica
 include selectors for active captures and entries awaiting finalization. Its
 model-facing text shows up to three complete selectors, prioritizing captures
 awaiting finalization and reporting any omitted count. Structured status details
-retain the full authorized list. Prefer `selector` for subsequent show, stop,
+retain the full authorized list. Bounded active-capture summaries include source
+locators and titles so the agent can identify the intended meeting. Prefer `selector` for subsequent show, stop,
 or summarize calls:
 
 ```json validate=false
@@ -164,24 +200,71 @@ when one capture is active.
 
 Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
-clients use two read-only RPC methods:
+clients use these read-only RPC methods:
 
-| Method             | Parameters                                            | Result                                                                                                                                                    |
-| ------------------ | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transcripts.list` | Optional `limit` (1–200, default 50) and `providerId` | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, and an overview preview of at most 280 characters. |
-| `transcripts.get`  | Required `selector`; optional `includeUtterances`     | One `session`, stored `summary` and its Markdown when available, and optional bounded `utterances`.                                                       |
+| Method               | Parameters                                                                                                                                             | Result                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcripts.list`   | Optional `limit` (1–200, default 50), `cursor`, `query`, exact `providerId`/`accountId`/`agentId`, and `startedAfter`/`startedBefore` date-time bounds | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, a bounded overview, and `nextCursor`.                               |
+| `transcripts.get`    | Required `selector`; optional `includeUtterances`, `limit` (1–100), `cursor`, and utterance `query`                                                    | One `session`, stored `summary`, optional `utterances`, and `nextCursor`. Explicit pagination returns full text; legacy requests retain the recent window described below. |
+| `transcripts.export` | Required `selector` and `format` (`markdown` or `jsonl`)                                                                                               | A base64-encoded file with `filename`, `mimeType`, and `sizeBytes`.                                                                                                        |
+| `transcripts.status` | None                                                                                                                                                   | Capture enablement, provider availability and setup metadata, configured-source health, active subscriptions, and the latest saved transcript.                             |
 
-Both methods require `operator.read` and expose meetings across one trusted
-Gateway domain, not just the current agent or chat session. Use separate Gateway
-domains when readers need isolation. Source locators contain only `providerId`,
-`accountId`, `guildId`, `channelId`, and `meetingUrl` when present, never arbitrary
-capture metadata. See [Gateway protocol](/gateway/protocol).
+These methods require `operator.read` or its write/admin implication and expose
+meetings across one trusted Gateway domain. Restricted operator profiles need
+permission to read the shared archive; selecting an agent filter does not grant
+access. Use separate Gateway domains when readers need isolation. Source
+locators contain only `providerId`, `accountId`, `guildId`, `channelId`, `threadTs`,
+`fileId`, `kind`, and sanitized `meetingUrl` when present, never arbitrary capture
+metadata. See [Gateway protocol](/gateway/protocol).
+
+List search matches titles and session/source IDs, excluding meeting URLs.
+Date bounds use session start times: `startedAfter` is inclusive and
+`startedBefore` is exclusive. Dates are compared by instant using JavaScript
+date-string semantics, including stored UTC offsets. Original timestamps and
+selectors remain unchanged. Unparseable stored dates sort last and are excluded
+from date ranges. Equal instants sort by session ID, then original timestamp.
+Chronological page selection scans candidate captures before reading only the
+selected page's notes and participants, so read time grows with archive size.
+Cursors belong to their current query and filters;
+changing either requires a fresh first page. A null `nextCursor` ends pagination.
 
 The stored summary Markdown is the canonical notes text, matching the CLI's
-`show` output. RPC reads do not materialize files. Utterances are omitted unless
-requested and bounded by the capture limit of 2,000; each utterance text is also
-sanitized and bounded. Summary participants and model/heuristic provenance are
-shown when available; older summaries need not contain them.
+`show` output. Reads do not generate summaries or materialize files. Utterances
+are omitted unless `includeUtterances` is true. Supplying `limit`, `cursor`, or
+`query` selects paginated reads: at most 100 utterances per page, default 50,
+without truncating stored text. `query` searches the full stored transcript,
+including unloaded pages. Paginated reads, lists, and status results are bounded
+to 1 MiB, with stored payload bounds enforced before transfer into JavaScript.
+Oversized rows or invalid cursors fail visibly.
+Summary participants and model/heuristic provenance are shown when available;
+older summaries need not contain them.
+
+For compatibility with clients released before archive pagination, `transcripts.get`
+without `limit`, `cursor`, or `query` retains the most recent 2,000 utterances in
+chronological order, with each sanitized text clipped to 4,000 UTF-16 units.
+These legacy requests return `nextCursor: null` and retain a 25 MiB public-result
+ceiling, matching the existing Gateway client transport limit. They preserve
+the original raw-row reading behavior before text clipping and public projection.
+Send an explicit `limit` to adopt bounded page reads and retrieve complete text;
+continue with `nextCursor` until it is null. All archive access checks apply to
+both request shapes.
+
+Exports are bounded to 4 MiB and fail without returning a partial file. Markdown
+preserves stored notes and appends the complete transcript under a separate
+heading. JSONL contains the public
+utterance projection: sequence, utterance ID, full text, speaker identity, source
+timestamps, and finality when available. It excludes private provider metadata
+and filesystem paths; the local CLI export retains its raw utterance format.
+Use `openclaw transcripts path <session> --transcript` on the Gateway host for
+larger exports.
+
+Status reports registered subscriptions, not confirmed recording. `armed`,
+`not-active`, and `unknown` remain distinct; a sanitized URL alone cannot prove
+which original invitation started a capture. Provider, configured-source, and
+active lists are limited to 100 entries with omitted counts. Saved utterance
+counts come from durable rows. The latest transcript is the most recently
+updated session containing utterances; source speech times are not ingestion
+timestamps.
 
 ## JSON output
 
@@ -243,6 +326,12 @@ If terminal persistence fails, `status` reports the ended capture under
 `pendingFinalization`, separately from active captures. Use the tool's `stop`
 action for that session to retry persistence without stopping the provider again.
 
+If the provider cannot finish cleanup and has not reported that capture ended,
+`status` keeps the capture active with `cleanupPending: true`. Existing utterances
+stay intact, and final notes wait for cleanup. Retry `stop` with the same selector
+after the provider recovers. Replacing or disabling the plugin does not transfer
+cleanup to another provider instance.
+
 A session can appear in `list` without a summary while capture is still active,
 if a provider failed during stop, or if metadata was stored before any utterances
 arrived.
@@ -286,6 +375,34 @@ to the legacy files. Keep the archive until you have verified the imported
 sessions and any exports you rely on.
 
 ## Configuration
+
+Open **Settings → Communications → Meeting capture** to edit the existing
+`transcripts.enabled` and `transcripts.autoStart` settings. **Enable transcript
+storage** controls whether durable capture is permitted; each auto-start source
+opts in a provider and source. You can add or remove sources and edit their
+title, account, source locators, and optional custom session ID. Occupancy mode
+chooses session IDs automatically, so its custom ID field is disabled while
+preserving the saved value.
+
+The controls use the shared Settings draft, automatic saving, validation, and
+apply flow. If **Apply changes** appears, use it to activate saved changes.
+If a restart interrupts a pending draft, **Autosave paused after reconnect** keeps
+that draft without sending it to the new connection. Review it and select
+**Save** in the Settings footer. The full transcript schema editor is available
+under **Meeting capture → Advanced settings**.
+
+Changing only auto-start source titles applies to future captures without
+restarting or interrupting current captures. Current and historical notes keep
+their original title, source, agent attribution, and selector. Other source edits
+retain normal Gateway restart behavior.
+
+Startup retries preserve the same admitted ID, original title, start time,
+source, and saved notes only while the exact failed provider attempt retains
+retry authority. This applies to generated and configured IDs. Retries stop
+after twelve attempts, service shutdown, manual stop, or a failure that retains
+cleanup custody. Status reports a bounded diagnostic without provider error
+details. Recover pending cleanup with the tool's `stop` action before trying a
+new capture.
 
 Meeting transcript capture is enabled by default. To opt out globally:
 
@@ -339,9 +456,11 @@ that grace cancels the stop. Otherwise, OpenClaw stops capture and generates not
 Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
 continue a meeting across a Gateway restart, OpenClaw reopens the most recent
 session for the same provider, account, guild, and channel when it stopped within
-the last 10 minutes. The session keeps its original ID and start time, and new
+the last 10 minutes. The session keeps its original ID, title, and start time, and new
 utterances append to it. A later return within that window also reuses the meeting;
 outside the window, capture gets a new ID.
+If the room is routed to a different agent, that agent starts a new capture;
+the original agent retains its stored meeting and summary permissions.
 
 The provider must report occupancy. `discord-voice` supports it; an unsupported
 provider logs a warning and skips the entry instead of capturing continuously.

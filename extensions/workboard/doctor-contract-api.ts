@@ -10,8 +10,6 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
-// Doctor enumeration cold-loads this closure; sqlite-store pulls the
-// plugin-state-runtime/kysely graph, so it stays behind lazy imports below.
 
 const MAX_CARDS = 2000;
 
@@ -177,7 +175,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "workboard-28-kv-to-sqlite",
     label: "Workboard .28 plugin-state KV",
     async detectLegacyState(params) {
-      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
       const env = migrationEnv(params);
       const cards = await openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -207,6 +204,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       if (count === 0) {
         return null;
       }
+      // Empty legacy namespaces need no SQLite runtime. Resolve the target only
+      // when there is state to preview and migrate.
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
       return {
         preview: [
           `- Workboard: ${count} legacy .28 plugin-state KV ${count === 1 ? "entry" : "entries"} → ${resolveWorkboardSqlitePath(env)}`,

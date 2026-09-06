@@ -708,6 +708,27 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__public-share-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.chat-pane__public-share-indicator svg {
+  width: 13px;
+  height: 13px;
+}
+
 .chat-pane__header-center .chat-pane__sharing-menu,
 .chat-pane__header-center .chat-pane__draft-indicator {
   position: absolute;
@@ -896,43 +917,6 @@ openclaw-chat-pane {
   min-height: 34px;
 }
 
-.chat-header-session-menu__trigger {
-  position: relative;
-}
-
-.chat-header-session-menu__status-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 6px;
-  height: 6px;
-  border: 1px solid var(--chat-surface);
-  border-radius: 999px;
-  background: var(--info);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"],
-.chat-header-session-menu__status-icon[data-tone="warn"] {
-  color: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"] {
-  background: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"],
-.chat-header-session-menu__status-icon[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"] {
-  background: var(--danger);
-}
-
-.chat-header-session-menu__status-icon[data-tone="info"] {
-  color: var(--info);
-}
-
 .chat-header-session-menu--compact .session-menu__back {
   z-index: 1;
   position: sticky;
@@ -1003,16 +987,25 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
   );
 }
 
-/* Apply the safe edge to whichever header occupies the first content row;
-   mobile has a separate topbar row. */
+/* Only the physical top-left header needs window-control clearance. A left
+   dock puts the side tabs there; mobile has a separate topbar row. */
 .shell:not(.shell--mobile-nav)
-  :is(
-    .chat-split-view__column:first-child
-      > .chat-split-view__cell:first-child
-      :is(.chat-main__conversation-column, .chat-pane-primary-column)
-      > .chat-pane__header,
-    .sidebar-region--expanded .side-panel__header
-  ) {
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region:not(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      )
+  )
+  > .sidebar-region__header
+  > .chat-pane__header,
+.shell:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+    .sidebar-region--narrow
+  )
+  [data-region-header="side"] {
   padding-left: var(--shell-titlebar-inset);
 }
 
@@ -1023,9 +1016,7 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
    center the session title/actions 2px above the traffic-light/hosted-button
    centerline. Drawer layouts instead fold titlebar clearance into their 58px
    topbar row (layout.mobile.css). */
-html.openclaw-native-macos
-  .shell:not(.shell--mobile-nav)
-  :is(.chat-pane__header, .sidebar-region--expanded .side-panel__header) {
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
   min-height: var(--openclaw-native-titlebar-height, 50px);
 }
 

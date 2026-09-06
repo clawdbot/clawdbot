@@ -117,4 +117,27 @@ describe("flattenMarkdownDetails", () => {
     const markdown = "\\<details>literal\\</details>";
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
   });
+
+  it.each([
+    ["\n \t\n body \n\t \n", " body "],
+    ["\r\n a\r\n \r\n", " a"],
+    ["\n \t", " \t"],
+    ["\r", "\r"],
+    ["body\n\r", "body\n\r"],
+    ["body \t", "body \t"],
+  ])("trims complete blank lines without changing body content in %j", (body, expected) => {
+    expect(flattenMarkdownDetails(`<details>${body}</details>`)).toBe(`**Details**\n\n${expected}`);
+  });
+
+  it("stays responsive on a long blank-line run inside a details body", () => {
+    // A blank-line run that ends on anything else made the previous
+    // `(?:\r?\n[ \t]*)+$` restart from every position in the run.
+    const body = `a${"\n".repeat(60_000)}X`;
+    const started = process.hrtime.bigint();
+    const flattened = flattenMarkdownDetails(`<details>${body}</details>`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(flattened).toBe(`**Details**\n\n${body}`);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
 });

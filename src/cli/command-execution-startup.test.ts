@@ -139,14 +139,14 @@ describe("command-execution-startup", () => {
 
   it("uses the resolved action command path for every execution startup decision", () => {
     const context = mod.resolveCliExecutionStartupContext({
-      argv: ["node", "openclaw", "gateway", "--token", "secret", "call", "health"],
-      commandPath: ["gateway", "call"],
+      argv: ["node", "openclaw", "acp", "--token", "client"],
+      commandPath: ["acp"],
       jsonOutputMode: false,
       env: {},
     });
 
-    expect(context.invocation.commandPath).toEqual(["gateway", "secret"]);
-    expect(context.commandPath).toEqual(["gateway", "call"]);
+    expect(context.commandPath).toEqual(["acp"]);
+    expect(context.startupPolicy.suppressDoctorStdout).toBe(true);
 
     expect(
       mod.resolveCliExecutionStartupContext({

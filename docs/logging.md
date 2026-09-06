@@ -284,6 +284,31 @@ OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
 
+### Slow agent database opens
+
+The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
+a persistent database open takes at least one second:
+
+| Phase           | Work included                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `open`          | Permissions, handle eviction, and opening the connection.                                               |
+| `validation`    | Integrity, version, and owner checks, including Worker waiting and revalidation during async admission. |
+| `configuration` | Connection and WAL settings.                                                                            |
+| `schema`        | Schema initialization or convergence when needed.                                                       |
+| `registration`  | Post-validation eviction and permissions, cleanup setup, and shared-state registration.                 |
+
+The integer millisecond durations partition `elapsedMs`, measured with a
+monotonic clock after lease acquisition. Live cache hits remain quiet. These
+are elapsed durations, including asynchronous waits, rather than CPU time or
+proof that the main event loop was blocked for the whole interval.
+
+The structured warning also includes `pid`, Node's `threadId`, and `isMainThread`
+for the opener emitting it. Inspect each `openclaw logs --json` event's original
+`raw` record; ordinary console text omits structured metadata.
+An opener on the main thread may have awaited an integrity Worker, so these
+fields do not identify the thread performing every phase. Correlate the process
+ID with the log timestamp and current process; PIDs can be reused after exit.
+
 ### Slow reply preparation
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:
@@ -387,6 +412,11 @@ message-flow telemetry (webhooks, queueing, session state). They do **not**
 replace logs — they feed metrics, traces, and exporters. Events are emitted
 in-process by default (set `diagnostics.enabled: false` to turn them off);
 exporting them is separate.
+
+When a session directive rejects a turn before model execution, its existing
+`message.processed` event reports `outcome: "skipped"` with a closed `reason`
+code and the usual channel, message, and session correlation. The rejection
+does not add the user's message, model token, or error reply to that event.
 
 Two adjacent surfaces:
 

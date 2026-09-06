@@ -3,13 +3,8 @@ import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import {
-  emitJsonOrText,
-  formatEnvelopeForText,
-  providerSummaryText,
-  resolveModelRefOverride,
-  resolveTransport,
-} from "./shared.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { resolveModelRefOverride, resolveTransport } from "./shared.js";
 import {
   runTtsConvert,
   runTtsPersonas,
@@ -18,11 +13,11 @@ import {
   runTtsVoices,
 } from "./tts-runtime.js";
 
-function registerTransportTtsCommand(
+function registerTransportTtsCommand<T>(
   command: Command,
   defaultTransport: "local" | "gateway",
-  run: (opts: Record<string, unknown>, transport: "local" | "gateway") => Promise<unknown>,
-  formatText: (value: unknown) => string = (value) => JSON.stringify(value, null, 2),
+  run: (opts: Record<string, unknown>, transport: "local" | "gateway") => Promise<T>,
+  formatText: (value: T) => string = (value) => JSON.stringify(value, null, 2),
 ): void {
   command
     .option("--local", "Force local execution", false)

@@ -2,7 +2,13 @@
   "id": "msteams",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "msteams-conversations-json-to-plugin-state" },
+      { "id": "msteams-polls-json-to-plugin-state" },
+      { "id": "msteams-sso-tokens-json-to-plugin-state" },
+      { "id": "msteams-delegated-token-json-to-plugin-state" },
+      { "id": "msteams-feedback-learnings-json-to-plugin-state" }
+    ]
   },
   "name": "Microsoft Teams",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",

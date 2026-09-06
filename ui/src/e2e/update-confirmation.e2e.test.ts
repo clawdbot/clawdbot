@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI update confirmation E2E",
@@ -18,6 +19,7 @@ const UPDATE_AVAILABLE = {
 } as const;
 const UPDATE_RUN_RESPONSE = {
   ok: true,
+  runId: createUpdateRunFixture().runId,
   restart: null,
   result: { after: { version: "2.0.0" }, status: "ok" },
 } as const;
@@ -37,7 +39,10 @@ function confirmationDialog(page: Page) {
 
 async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   const gateway = await installMockGateway(page, {
-    methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
+    methodResponses: {
+      "update.run": UPDATE_RUN_RESPONSE,
+      "update.runs.get": { run: createUpdateRunFixture() },
+    },
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
@@ -324,6 +329,7 @@ suite.define(() => {
         await confirmationCopy(page)
           .getByRole("button", { name: "Updating…", exact: true })
           .waitFor();
+        await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
         await page.screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "07-update-running.png"),
@@ -336,7 +342,9 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         await updateIssue.locator("summary").click();
-        expect(await updateIssue.locator(".sidebar-update-card__action").isDisabled()).toBe(true);
+        await updateIssue.locator(".sidebar-update-card__action").click();
+        await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
+        expect(await gateway.getRequests("update.run")).toHaveLength(1);
       },
     );
   });
@@ -358,6 +366,7 @@ suite.define(() => {
               valid: true,
             },
             "update.run": UPDATE_RUN_RESPONSE,
+            "update.runs.get": { run: createUpdateRunFixture() },
           },
         });
 

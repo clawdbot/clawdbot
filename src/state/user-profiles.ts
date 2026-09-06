@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 // Durable user profiles plus typed login identities in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -19,7 +20,7 @@ import {
 import { mergeUserGitHubConnection } from "./user-github-connections.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
-import { emitUserProfilesChanged } from "./user-profile-events.js";
+import { emitUserProfilesChanged, publishUserProfileAliasChange } from "./user-profile-events.js";
 import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
@@ -94,7 +95,7 @@ function normalizeEmail(email: string): string {
 
 function normalizeInitialDisplayName(name: string | null | undefined): string | null {
   const normalized = name?.trim();
-  return normalized ? normalized.slice(0, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
+  return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
 function toUserProfile(row: UserProfileRow): UserProfile {
@@ -251,8 +252,8 @@ function ensureProfileForEmailWithInitialName(
   const now = Date.now();
   const displayName =
     initialDisplayName ??
-    (normalizedEmail.split("@", 1)[0] || normalizedEmail).slice(
-      0,
+    truncateUtf16Safe(
+      normalizedEmail.split("@", 1)[0] || normalizedEmail,
       MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
     );
   ensureUserProfilesSchema(options);
@@ -405,6 +406,7 @@ function mergeUserProfiles(
     db,
     kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", targetProfileId),
   );
+  deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
 }
 
 function adoptDisplayNameIfEmpty(

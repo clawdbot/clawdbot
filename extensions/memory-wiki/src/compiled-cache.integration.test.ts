@@ -39,8 +39,9 @@ import {
 import { renderWikiMarkdown } from "./markdown.js";
 import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
+import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
@@ -192,6 +193,73 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     blobStateDir = "";
     blobStoreEnv = {};
   });
+
+  it("reuses an existing publication when local source sync starts with an inactive owner", async () => {
+    const { rootDir, config } = await createPersistentVault({
+      initialize: true,
+      config: { vaultMode: "isolated", ingest: { autoCompile: true } },
+    });
+    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nLocal source.\n");
+    await compileMemoryWikiVault(config);
+    const before = await loadMemoryWikiVaultIdentity(rootDir);
+    deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+
+    const result = await syncMemoryWikiImportedSources({ config });
+
+    expect(result).toMatchObject({
+      importedCount: 0,
+      updatedCount: 0,
+      removedCount: 0,
+      indexesRefreshed: false,
+      indexRefreshReason: "no-import-changes",
+    });
+    expect((await loadMemoryWikiVaultIdentity(rootDir)).compiledCachePublicationId).toBe(
+      before.compiledCachePublicationId,
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+  });
+
+  it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
+    const { rootDir, config } = await createPersistentVault({ initialize: true });
+    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nRequested source.\n");
+    await fs.writeFile(path.join(rootDir, "sources", "unrelated.md"), "# Unrelated\n");
+    await compileMemoryWikiVault(config);
+    const readdir = vi.spyOn(fs, "readdir");
+    try {
+      await initializeMemoryWikiVault(config);
+      await expect(
+        getMemoryWikiPage({ config, lookup: "sources/alpha.md" }),
+      ).resolves.toMatchObject({
+        path: "sources/alpha.md",
+        content: expect.stringContaining("Requested source."),
+      });
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it.each(["source-edit", "log-rollback"] as const)(
+    "explicit activation rejects the compiled snapshot after %s",
+    async (change) => {
+      const { rootDir, config } = await createPersistentVault({ initialize: true });
+      const sourcePath = path.join(rootDir, "sources", "alpha.md");
+      const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+      await fs.writeFile(sourcePath, "# Alpha\n\nOriginal source.\n");
+      const originalLog = await fs.readFile(logPath, "utf8");
+      await compileMemoryWikiVault(config);
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+      if (change === "source-edit") {
+        await fs.writeFile(sourcePath, "# Alpha\n\nChanged source.\n");
+      } else {
+        await fs.writeFile(logPath, originalLog);
+      }
+
+      await activateExistingMemoryWikiVault(config);
+
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    },
+  );
 
   it("round-trips compile through async preparation and claim query after restart", async () => {
     const { rootDir, config } = await createPersistentVault({

@@ -36,14 +36,6 @@ export type HeaderMenuQuickAction = {
   onActivate: () => void;
 };
 
-export type HeaderMenuStatusAction = {
-  id: string;
-  label: string;
-  icon: TemplateResult;
-  tone: "danger" | "warn" | "info";
-  onActivate: () => void;
-};
-
 const EMPTY_SETTINGS = {} as UiSettings;
 
 type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "sharing" | "view";
@@ -70,7 +62,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
-  @property({ attribute: false }) statusActions: HeaderMenuStatusAction[] = [];
   @property({ attribute: false }) sharing: ChatSessionSharingProps | null = null;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
@@ -151,16 +142,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.onOpenCommandPalette();
       return;
     }
-    if (value.startsWith("status:")) {
-      const action = this.statusActions.find(
-        (candidate) => candidate.id === value.slice("status:".length),
-      );
-      if (action) {
-        event.currentTarget.open = false;
-        action.onActivate();
-      }
-      return;
-    }
     if (value.startsWith("quick:")) {
       const [, group, id] = value.split(":");
       const actions = group === "panels" ? this.panelActions : this.layoutActions;
@@ -187,7 +168,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
       return;
     }
-    if (value.startsWith("visibility:") || value.startsWith("member:")) {
+    if (
+      value.startsWith("visibility:") ||
+      value.startsWith("member:") ||
+      value.startsWith("public:")
+    ) {
       if (this.sharing) {
         selectChatSessionSharingItem(this.sharing, value);
       }
@@ -336,26 +321,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
               <div class="session-menu__separator" role="separator"></div>`
           : nothing
       }
-      ${
-        this.compact && this.statusActions.length > 0
-          ? html`${this.statusActions.map(
-                (action) => html`<wa-dropdown-item
-                  class="session-menu__item chat-header-session-menu__status-item"
-                  value=${`status:${action.id}`}
-                >
-                  <span
-                    slot="icon"
-                    class="session-menu__icon chat-header-session-menu__status-icon"
-                    data-tone=${action.tone}
-                    aria-hidden="true"
-                    >${action.icon}</span
-                  >
-                  <span class="session-menu__text">${action.label}</span>
-                </wa-dropdown-item>`,
-              )}
-              <div class="session-menu__separator" role="separator"></div>`
-          : nothing
-      }
       ${this.renderQuickActions("panels", this.panelActions)}
       ${this.renderQuickActions("layout", this.layoutActions)}
       ${
@@ -413,10 +378,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
 
   override render() {
     const menuLabel = t("chat.sidebar.sessionMenu", { session: this.session.label });
-    const statusTone =
-      this.statusActions.find((action) => action.tone === "danger")?.tone ??
-      this.statusActions.find((action) => action.tone === "warn")?.tone ??
-      this.statusActions[0]?.tone;
     return html`
       <wa-dropdown
         class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
@@ -439,15 +400,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           aria-haspopup="menu"
         >
           ${icons.moreHorizontal}
-          ${
-            this.compact && statusTone
-              ? html`<span
-                  class="chat-header-session-menu__status-dot"
-                  data-tone=${statusTone}
-                  aria-hidden="true"
-                ></span>`
-              : nothing
-          }
         </button>
         ${
           this.compact && this.compactView !== "root"

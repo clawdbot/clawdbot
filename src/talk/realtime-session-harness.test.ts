@@ -313,6 +313,27 @@ describe("realtime voice session harness", () => {
     ]);
   });
 
+  it.each(["turn.started", "output.audio.started", "output.audio.delta"] as const)(
+    "does not restore output or echo suppression after a %s observer flushes it",
+    (eventType) => {
+      const events: string[] = [];
+      const harness = createHarness({
+        echoSuppression: { bytesPerMs: 48, tailMs: 3_000, transcriptLookbackMs: 45_000 },
+        onTalkEvent(event) {
+          events.push(event.type);
+          if (event.type === eventType) {
+            harness.flushOutput(() => harness.outputActivity.reset());
+          }
+        },
+      });
+      harness.recordOutputAudio(Buffer.alloc(48_000));
+      expect(events.at(-1)).toBe(eventType);
+      expect(harness.outputActivity.snapshot().chunks).toBe(0);
+      expect(harness.recordInputAudio(Buffer.alloc(480))).toBe(true);
+      harness.close();
+    },
+  );
+
   it("suppresses input through queued output playback plus the echo tail", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

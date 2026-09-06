@@ -16,6 +16,7 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
@@ -2017,11 +2018,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.firstKeptEntryId).toBe("entry-1");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
     const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    expect(droppedCall?.customInstructions).toContain(
+    const droppedPrompt = requireRecord(droppedCall.summaryPrompt).instructions;
+    expect(droppedPrompt).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
-    expect(droppedCall?.customInstructions).toContain("## Decisions");
-    expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+    expect(droppedPrompt).toContain("## Decisions");
+    expect(droppedPrompt).toContain("Keep security caveats.");
     const mainCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
     expect(JSON.stringify(mainCall?.messages)).toContain("dropped history summary");
     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
@@ -2227,69 +2229,91 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
-  it("sends safeguard summaries through the prepared model execution context", async () => {
-    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
-    const sessionManager = stubSessionManager();
-    const model = createAnthropicModelFixture({
-      api: "test-api" as never,
-      baseUrl: "",
-      reasoning: true,
-    });
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
-
-    const providerPrompts: string[] = [];
-    const streamFn: StreamFn = (_activeModel, context, options) => {
-      expect(options?.reasoning).toBe("high");
-      providerPrompts.push(JSON.stringify(context));
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "provider summary" }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 1,
-        },
+  it.each([false, true])(
+    "sends one authoritative safeguard summary format (prefix=%s)",
+    async (prefix) => {
+      testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+      const sessionManager = stubSessionManager();
+      const model = createAnthropicModelFixture({
+        api: "test-api" as never,
+        baseUrl: "",
+        reasoning: true,
       });
-      stream.end();
-      return stream;
-    };
-    const mockContext = createCompactionContext({
-      sessionManager,
-      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
-    });
-    const compactionHandler = createCompactionHandler();
-    const event = {
-      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
-      thinkingLevel: "high" as const,
-      streamFn,
-    };
-    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
-      reserveTokens: 4_000,
-    };
+      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
 
-    const result = (await compactionHandler(event, mockContext)) as {
-      cancel?: boolean;
-      compaction?: { summary?: string };
-    };
+      const providerPrompts: string[] = [];
+      const providerBudgets: Array<number | undefined> = [];
+      const streamFn: StreamFn = (_activeModel, context, options) => {
+        expect(options?.reasoning).toBe("high");
+        providerPrompts.push(JSON.stringify(context));
+        providerBudgets.push(options?.maxTokens);
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "provider summary" }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: createZeroUsageFixture(),
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        });
+        stream.end();
+        return stream;
+      };
+      const mockContext = createCompactionContext({
+        sessionManager,
+        getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+      });
+      const compactionHandler = createCompactionHandler();
+      const event = {
+        ...createCompactionEvent({
+          messageText: "summarize me: receipt_90210",
+          tokensBefore: 1_000,
+        }),
+        customInstructions: "Keep the deployment decision.",
+        thinkingLevel: "high" as const,
+        streamFn,
+      };
+      (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+        reserveTokens: 4_000,
+      };
+      const preparation = {
+        ...event.preparation,
+        isSplitTurn: prefix,
+        messagesToSummarize: prefix ? [] : event.preparation.messagesToSummarize,
+        turnPrefixMessages: prefix ? event.preparation.messagesToSummarize : [],
+        previousSummary: prefix ? undefined : "Earlier deployment decision: use canary staging.",
+      };
 
-    expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("provider summary");
-    expect(providerPrompts).toHaveLength(1);
-    expect(providerPrompts[0]).toContain("[User]: summarize me");
-  });
+      const result = (await compactionHandler({ ...event, preparation }, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary?: string };
+      };
+
+      expect(result.cancel).not.toBe(true);
+      expect(result.compaction?.summary).toContain("provider summary");
+      expect(providerPrompts).toHaveLength(1);
+      expect(providerPrompts[0]).toContain("[User]: summarize me");
+      expect(providerPrompts[0]).toContain("receipt_90210");
+      expect(providerPrompts[0]).toContain("Keep the deployment decision.");
+      expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
+      expect(providerPrompts[0]).not.toContain("## Goal");
+      expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
+      expect(providerPrompts[0]).toContain(prefix ? "## Original Request" : "## Pending user asks");
+      expect(providerPrompts[0]).not.toContain(
+        prefix ? "## Pending user asks" : "## Original Request",
+      );
+      expect(providerBudgets).toEqual([prefix ? 2_000 : 3_200]);
+      if (!prefix) {
+        expect(providerPrompts[0]).toContain("Earlier deployment decision: use canary staging.");
+      }
+    },
+  );
 
   it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
     testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
@@ -2311,14 +2335,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           api: model.api,
           provider: model.provider,
           model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "error",
           errorMessage: "Cannot convert undefined or null to object",
           timestamp: 1,
@@ -2965,13 +2982,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
       }).ok,
     ).toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const historyCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    expect(historyCall.customInstructions).not.toContain("belongs to a split turn");
-    const prefixCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
-    expect(prefixCall.customInstructions).toContain("## Original Request");
-    expect(prefixCall.customInstructions).not.toContain(
-      "Produce a compact, factual summary with these exact section headings",
-    );
 
     const redistillMessages = prependPreviousSummaryForRedistill({
       messages: [{ role: "user", content: "continue", timestamp: 3 }],
@@ -3973,9 +3983,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result).toEqual({ cancel: true });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
-    expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
-      "## Original Request",
-    );
     expect(requireRecord(mockCallArg(mockSummarizeInStages, 2)).customInstructions).toContain(
       "Quality check feedback",
     );
@@ -5068,88 +5075,6 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
-  });
-
-  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t1",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(false);
-
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t2",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "please inspect the repo" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t2",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat assistant-only tool calls as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-      } as AgentMessage),
-    ).toBe(false);
-  });
-
-  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "checking" }],
-      } as AgentMessage),
-    ).toBe(false);
-
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "reasoning", summary: [] }],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: "<b>HEARTBEAT_OK</b>",
-        }),
-      ),
-    ).toBe(false);
   });
 });
 

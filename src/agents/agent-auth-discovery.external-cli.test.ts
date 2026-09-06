@@ -21,7 +21,7 @@ const syntheticAuthMocks = vi.hoisted(() => ({
   prepareProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
-vi.mock("./auth-profiles/store.js", () => storeMocks);
+vi.mock("./auth-profiles/store-runtime.js", () => storeMocks);
 
 vi.mock("./agent-auth-credentials.js", () => credentialMocks);
 

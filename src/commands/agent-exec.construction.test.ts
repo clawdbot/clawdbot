@@ -7,7 +7,8 @@ import { isProcessAlive, waitForDead, waitForPidFile } from "../../test/helpers/
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as cliBackends from "../plugins/cli-backends.runtime.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import * as processSupervisor from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -21,7 +22,7 @@ afterEach(() => {
 });
 
 describe("agent exec command composition", () => {
-  it("bounds blocked service-relay construction through the shipped CLI command", async () => {
+  it("bounds blocked private-input construction through the shipped CLI command", async () => {
     const root = tempDirs.make("openclaw-agent-exec-service-construction-");
     const pidPath = path.join(root, "command.pid");
     const configPath = path.join(root, "openclaw.json");
@@ -76,11 +77,16 @@ describe("agent exec command composition", () => {
       },
       async () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const supervisor = getProcessSupervisor();
+        // POSIX relay cancellation loses cleanup identity. Keep that failed owner
+        // local so shared-worker teardown cannot inherit its expected uncertainty.
+        const supervisor = createProcessSupervisor();
+        vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
         const spawn = supervisor.spawn.bind(supervisor);
         const admitted = createDeferred<SpawnInput>();
+        let pendingRun: ReturnType<typeof spawn> | undefined;
         vi.spyOn(supervisor, "spawn").mockImplementation((input) => {
           const pending = spawn(input);
+          pendingRun = pending;
           admitted.resolve(input);
           return pending;
         });
@@ -103,20 +109,19 @@ describe("agent exec command composition", () => {
           commandPid = await waitForPidFile(pidPath, 3_000, realDelay);
           expect(isProcessAlive(commandPid)).toBe(true);
           expect(createSecretData).toHaveBeenCalledOnce();
-          expect(input).toMatchObject({
-            mode: "child",
-            backendId: "construction-cli",
-            timeoutMs: 1_000,
-          });
-          const runId = expectDefined(input.runId, "command supervisor run ID");
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
-          await vi.advanceTimersByTimeAsync(999);
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+          expect(input).toMatchObject({ mode: "child" });
+          const remainingMs = expectDefined(input.timeoutMs, "remaining construction deadline");
+          expect(remainingMs).toBeGreaterThan(0);
+          expect(remainingMs).toBeLessThanOrEqual(1_000);
+          const processRun = expectDefined(pendingRun, "admitted supervisor process");
+          const settled = vi.fn();
+          void processRun.then(settled, settled);
+          await vi.advanceTimersByTimeAsync(remainingMs - 1);
+          expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
-          expect(supervisor.getRecord(runId)).toMatchObject({
-            state: "exited",
-            terminationReason: "overall-timeout",
-          });
+          const managed = await processRun;
+          await expect(managed.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
+          expect(managed.activity.resultSettled).toBe(true);
           vi.useRealTimers();
           const finished = await result;
           await waitForDead(commandPid, 5_000);
@@ -130,6 +135,13 @@ describe("agent exec command composition", () => {
             process.kill(commandPid, "SIGKILL");
           }
           await result;
+          const cleanup = supervisor.shutdown();
+          // Windows uses a direct child; only POSIX loses the relay's cleanup authority.
+          if (process.platform === "win32") {
+            await expect(cleanup).resolves.toBeUndefined();
+          } else {
+            await expect(cleanup).rejects.toThrow("service child cleanup identity lost");
+          }
         }
       },
     );

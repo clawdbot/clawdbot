@@ -5,7 +5,7 @@ use crate::DesktopState;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
@@ -29,12 +29,7 @@ pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     status_line: Mutex<StatusLine>,
-    _quickchat: MenuItem<tauri::Wry>,
-    open: MenuItem<tauri::Wry>,
-    _check_updates: MenuItem<tauri::Wry>,
-    _start_at_login: CheckMenuItem<tauri::Wry>,
     quickchat_shortcut: Option<CheckMenuItem<tauri::Wry>>,
-    _global_shortcut: Option<CheckMenuItem<tauri::Wry>>,
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
@@ -43,20 +38,6 @@ pub struct TrayHandles {
 struct StatusLine {
     gateway: String,
     pending_count: usize,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ShortcutInitialState {
-    should_register: bool,
-    checked: bool,
-}
-
-fn shortcut_initial_state(marker_exists: bool) -> ShortcutInitialState {
-    let enabled = !marker_exists;
-    ShortcutInitialState {
-        should_register: enabled,
-        checked: enabled,
-    }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -105,7 +86,6 @@ impl TrayHandles {
             status_line.pending_count = 0;
         }
         let _ = self.status.set_text(status_line.text());
-        let _ = self.open.set_enabled(true);
         let _ = self
             .start
             .set_enabled(snapshot.installed && !snapshot.running && !snapshot.reachable);
@@ -140,15 +120,6 @@ pub fn build(
         false,
         None::<&str>,
     )?;
-    let quickchat = MenuItem::with_id(app, QUICKCHAT_ID, "Quick Chat", true, None::<&str>)?;
-    let open = MenuItem::with_id(app, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
-    let check_updates = MenuItem::with_id(
-        app,
-        CHECK_UPDATES_ID,
-        "Check for Updates",
-        true,
-        None::<&str>,
-    )?;
     let autostart_enabled = match app.autolaunch().is_enabled() {
         Ok(enabled) => enabled,
         Err(error) => {
@@ -164,38 +135,33 @@ pub fn build(
         autostart_enabled,
         None::<&str>,
     )?;
-    let quickchat_shortcut_initial_state = global_shortcuts_supported
-        .then(|| shortcut_initial_state(!quickchat::quickchat_shortcut_enabled(app)));
-    let quickchat_shortcut = quickchat_shortcut_initial_state
-        .as_ref()
-        .map(|initial_state| {
+    let quickchat_shortcut_enabled =
+        global_shortcuts_supported.then(|| quickchat::quickchat_shortcut_enabled(app));
+    let quickchat_shortcut = quickchat_shortcut_enabled
+        .map(|enabled| {
             CheckMenuItem::with_id(
                 app,
                 QUICKCHAT_SHORTCUT_ID,
                 "Quick Chat shortcut",
                 true,
-                initial_state.checked,
+                enabled,
                 None::<&str>,
             )
         })
         .transpose()?;
-    let global_shortcut_initial_state = global_shortcuts_supported.then(|| {
-        let shortcut_marker = global_shortcut_disabled_marker(app);
-        shortcut_initial_state(
-            shortcut_marker
-                .as_deref()
-                .is_some_and(global_shortcut_marker_exists),
-        )
+    let global_shortcut_enabled = global_shortcuts_supported.then(|| {
+        !global_shortcut_disabled_marker(app)
+            .as_deref()
+            .is_some_and(global_shortcut_marker_exists)
     });
-    let global_shortcut = global_shortcut_initial_state
-        .as_ref()
-        .map(|initial_state| {
+    let global_shortcut = global_shortcut_enabled
+        .map(|enabled| {
             CheckMenuItem::with_id(
                 app,
                 GLOBAL_SHORTCUT_ID,
                 "Enable Global Shortcut",
                 true,
-                initial_state.checked,
+                enabled,
                 None::<&str>,
             )
         })
@@ -203,18 +169,13 @@ pub fn build(
     let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
-    let quit = MenuItem::with_id(app, QUIT_ID, "Quit OpenClaw", true, None::<&str>)?;
-    let separator_one = PredefinedMenuItem::separator(app)?;
-    let separator_two = PredefinedMenuItem::separator(app)?;
-    let separator_three = PredefinedMenuItem::separator(app)?;
-    let menu_builder = MenuBuilder::new(app).items(&[
-        &status,
-        &separator_one,
-        &quickchat,
-        &open,
-        &check_updates,
-        &start_at_login,
-    ]);
+    let menu_builder = MenuBuilder::new(app)
+        .item(&status)
+        .separator()
+        .text(QUICKCHAT_ID, "Quick Chat")
+        .text(OPEN_ID, "Open Dashboard")
+        .text(CHECK_UPDATES_ID, "Check for Updates")
+        .item(&start_at_login);
     let menu_builder = if let Some(quickchat_shortcut) = quickchat_shortcut.as_ref() {
         menu_builder.item(quickchat_shortcut)
     } else {
@@ -226,14 +187,10 @@ pub fn build(
         menu_builder
     };
     let menu = menu_builder
-        .items(&[
-            &separator_two,
-            &start,
-            &stop,
-            &restart,
-            &separator_three,
-            &quit,
-        ])
+        .separator()
+        .items(&[&start, &stop, &restart])
+        .separator()
+        .text(QUIT_ID, "Quit OpenClaw")
         .build()?;
 
     // macOS draws menu bar icons from the alpha channel alone (see
@@ -243,8 +200,6 @@ pub fn build(
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
     #[cfg(not(target_os = "macos"))]
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
-    let menu_state = state.clone();
-    let menu_start_at_login = start_at_login.clone();
     let menu_quickchat_shortcut = quickchat_shortcut.clone();
     let menu_global_shortcut = global_shortcut.clone();
     let tray_builder = TrayIconBuilder::with_id("openclaw-main")
@@ -254,8 +209,8 @@ pub fn build(
         .on_menu_event(move |app, event| {
             handle_menu(
                 app,
-                &menu_state,
-                &menu_start_at_login,
+                &state,
+                &start_at_login,
                 menu_quickchat_shortcut.as_ref(),
                 menu_global_shortcut.as_ref(),
                 event.id().as_ref(),
@@ -285,33 +240,27 @@ pub fn build(
         quickchat_preference.shortcut,
         false,
     );
-    if let (Some(initial_state), Some(quickchat_shortcut)) = (
-        quickchat_shortcut_initial_state,
-        quickchat_shortcut.as_ref(),
-    ) {
-        if initial_state.should_register {
-            if let Err(error) = app
-                .global_shortcut()
-                .register(quickchat_preference.shortcut)
-            {
-                eprintln!(
-                    "Could not register Quick Chat shortcut {}: {error}",
-                    quickchat_preference.accelerator
-                );
-                set_quickchat_shortcut_checked(quickchat_shortcut, false);
-            } else {
-                quickchat_state.set_shortcut_registered(true);
-            }
+    if let (Some(true), Some(quickchat_shortcut)) =
+        (quickchat_shortcut_enabled, quickchat_shortcut.as_ref())
+    {
+        if let Err(error) = app
+            .global_shortcut()
+            .register(quickchat_preference.shortcut)
+        {
+            eprintln!(
+                "Could not register Quick Chat shortcut {}: {error}",
+                quickchat_preference.accelerator
+            );
+            set_quickchat_shortcut_checked(quickchat_shortcut, false);
+        } else {
+            quickchat_state.set_shortcut_registered(true);
         }
     }
-    if let (Some(initial_state), Some(global_shortcut)) =
-        (global_shortcut_initial_state, global_shortcut.as_ref())
+    if let (Some(true), Some(global_shortcut)) = (global_shortcut_enabled, global_shortcut.as_ref())
     {
-        if initial_state.should_register {
-            if let Err(error) = app.global_shortcut().register(GLOBAL_SHORTCUT) {
-                eprintln!("Could not register global shortcut {GLOBAL_SHORTCUT}: {error}");
-                set_global_shortcut_checked(global_shortcut, false);
-            }
+        if let Err(error) = app.global_shortcut().register(GLOBAL_SHORTCUT) {
+            eprintln!("Could not register global shortcut {GLOBAL_SHORTCUT}: {error}");
+            set_global_shortcut_checked(global_shortcut, false);
         }
     }
 
@@ -322,12 +271,7 @@ pub fn build(
             gateway: "Checking…".to_string(),
             pending_count: 0,
         }),
-        _quickchat: quickchat,
-        open,
-        _check_updates: check_updates,
-        _start_at_login: start_at_login,
         quickchat_shortcut,
-        _global_shortcut: global_shortcut,
         start,
         stop,
         restart,
@@ -550,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn global_shortcut_marker_disables_startup_registration() {
+    fn global_shortcut_marker_tracks_user_opt_out() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock before Unix epoch")
@@ -562,21 +506,9 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let marker = directory.join(GLOBAL_SHORTCUT_DISABLED_MARKER);
 
-        assert_eq!(
-            shortcut_initial_state(marker.exists()),
-            ShortcutInitialState {
-                should_register: true,
-                checked: true,
-            }
-        );
+        assert!(!global_shortcut_marker_exists(&marker));
         fs::write(&marker, b"").expect("write opt-out marker");
-        assert_eq!(
-            shortcut_initial_state(marker.exists()),
-            ShortcutInitialState {
-                should_register: false,
-                checked: false,
-            }
-        );
+        assert!(global_shortcut_marker_exists(&marker));
 
         fs::remove_dir_all(directory).expect("remove test directory");
     }
