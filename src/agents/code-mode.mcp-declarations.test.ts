@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
@@ -31,7 +32,14 @@ describe("Code Mode MCP declarations", () => {
       },
       required: ["limit", "enabled", "value"],
     };
-    const fixtures = [
+    const fixtures: {
+      name: string;
+      schema: JsonSchemaType & {
+        properties?: Record<string, JsonSchemaType & { nullable?: boolean }>;
+      };
+      input?: Record<string, unknown>;
+      expected?: Record<string, unknown>;
+    }[] = [
       {
         name: "defaulted",
         schema: defaultedSchema,
