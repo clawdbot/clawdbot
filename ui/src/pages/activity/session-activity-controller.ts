@@ -15,7 +15,15 @@ import {
 export class SessionActivityController implements ReactiveController {
   result?: SessionsListResult;
   error?: string;
-  loading = false;
+  private requestState: "idle" | "loading" | "retrying" = "idle";
+
+  get loading(): boolean {
+    return this.requestState !== "idle";
+  }
+
+  get retrying(): boolean {
+    return this.requestState === "retrying";
+  }
   private client: GatewayBrowserClient | null = null;
   private queryKey?: string;
   private pending?: AbortController;
@@ -27,7 +35,7 @@ export class SessionActivityController implements ReactiveController {
   private pageActive = !this.observesPageLifecycle || document.visibilityState !== "hidden";
   private readonly eventRefresh = createSessionEventRefreshCoordinator({
     active: this.pageActive,
-    refresh: async () => this.load(this.client, this.filters, true),
+    refresh: async () => this.load(this.client, this.filters, "refresh"),
   });
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -50,6 +58,7 @@ export class SessionActivityController implements ReactiveController {
     this.eventRefresh.reset();
     this.pending?.abort();
     this.pending = undefined;
+    this.requestState = "idle";
     this.client = null;
     this.queryKey = undefined;
     this.result = undefined;
@@ -148,11 +157,10 @@ export class SessionActivityController implements ReactiveController {
   load(
     client: GatewayBrowserClient | null,
     filters: SessionActivityFilters | null,
-    force = false,
+    reason: "query" | "refresh" | "retry" = "query",
   ): void {
     if (!client || !filters) {
       this.resetQuery();
-      this.loading = false;
       this.host.requestUpdate();
       return;
     }
@@ -172,10 +180,10 @@ export class SessionActivityController implements ReactiveController {
     const queryKey = JSON.stringify(request);
     const sameQuery = this.client === client && this.queryKey === queryKey;
     if (sameQuery && this.pending) {
-      this.refreshPending ||= force;
+      this.refreshPending ||= reason === "refresh";
       return;
     }
-    if (!force && sameQuery) {
+    if (reason === "query" && sameQuery) {
       return;
     }
     this.pending?.abort();
@@ -185,7 +193,7 @@ export class SessionActivityController implements ReactiveController {
     this.client = client;
     this.queryKey = queryKey;
     this.filters = filters;
-    this.loading = true;
+    this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
       this.result = undefined;
@@ -207,10 +215,10 @@ export class SessionActivityController implements ReactiveController {
       .finally(() => {
         if (this.pending === pending) {
           this.pending = undefined;
-          this.loading = false;
+          this.requestState = "idle";
           this.host.requestUpdate();
           if (this.refreshPending) {
-            this.load(client, filters, true);
+            this.load(client, filters, "refresh");
           }
         }
       });

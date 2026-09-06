@@ -222,6 +222,8 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
+    // Node releases socket errors before routing can await a plugin or authenticate.
+    socket.once("error", () => socket.destroy());
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     const handleUpgrade = async () => {
       const configSnapshot = getRuntimeConfig();

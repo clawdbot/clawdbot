@@ -22,6 +22,7 @@ export class CodexTranscriptCheckpoint {
   private writing = Promise.resolve();
   private tainted = false;
   private closed = false;
+  private abandoned = false;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParamsV2,
@@ -61,6 +62,11 @@ export class CodexTranscriptCheckpoint {
     }
   };
 
+  abandon(): void {
+    this.closed = this.abandoned = true;
+    this.pending.length = 0;
+  }
+
   flush(close = false): Promise<void> {
     if (this.closed) {
       return this.writing;
@@ -88,6 +94,11 @@ export class CodexTranscriptCheckpoint {
       });
       try {
         await codexTranscriptMirrorRuntime.mirror({
+          assertWriteCurrent: () => {
+            if (this.abandoned) {
+              throw new Error("Codex transcript checkpoint was retired before write");
+            }
+          },
           ...this.params.sessionTarget,
           sessionId: this.params.sessionId,
           cwd: this.params.workspaceDir,

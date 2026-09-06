@@ -4,11 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+let extensionLoadingSupported = false;
 
 type NodeSqliteDatabaseOptions = ConstructorParameters<
   typeof import("node:sqlite").DatabaseSync
@@ -76,6 +76,10 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
       | undefined;
     const version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
+    const capabilities = database
+      .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
+      .get();
+    extensionLoadingSupported = capabilities?.omitted === 0;
     validatedSqliteModule = sqlite;
   } finally {
     database.close();
@@ -97,6 +101,12 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       cause: err,
     });
   }
+}
+
+/** Whether the loaded SQLite library supports native extensions. */
+export function supportsNodeSqliteExtensionLoading(): boolean {
+  requireNodeSqlite();
+  return extensionLoadingSupported;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
@@ -121,48 +131,4 @@ export function readSqliteDataVersion(database: import("node:sqlite").DatabaseSy
     throw new Error("SQLite did not return a numeric PRAGMA data_version");
   }
   return row.data_version;
-}
-
-/** Hold a raw exclusive transaction until release for cross-process coordination. */
-export function tryAcquireExclusiveSqliteCoordinator(
-  location: string,
-  options: { busyTimeoutMs?: number } = {},
-): { release: () => void } | null {
-  const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
-  const database = openNodeSqliteDatabase(location);
-  try {
-    // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
-    // This handle never writes or commits data. Keep the empty database's initial
-    // journal in memory so acquiring a lock does not create filesystem artifacts.
-    database.exec(
-      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;`,
-    );
-  } catch (error) {
-    database.close();
-    if (isSqliteLockError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  return {
-    release: () => {
-      const errors: unknown[] = [];
-      try {
-        database.exec("ROLLBACK");
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        database.close();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite coordinator rollback and close both failed");
-      }
-    },
-  };
 }

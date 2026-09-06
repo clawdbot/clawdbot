@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import {
   resolveProviderModelMaterializationAuthMode,
@@ -155,6 +156,8 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   provider: string;
   modelId: string;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   getModel(): Model;
   nativeModelOwned: boolean;
   requestedProfileId?: string;
@@ -182,6 +185,8 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         provider: params.provider,
         modelId: params.modelId,
         config: params.config,
+        workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
         model,
         // Credential-scoped providers must replace metadata whenever the
         // prepared profile or direct auth source changes.

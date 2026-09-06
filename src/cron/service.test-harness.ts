@@ -142,7 +142,6 @@ export function createFinishedBarrier() {
 export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
-  runSkillCollectionReview?: CronServiceDeps["runSkillCollectionReview"];
   requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
   onEvent?: CronServiceDeps["onEvent"];
 }): {
@@ -166,9 +165,6 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     requestHeartbeat,
     requestHeartbeatAndWait,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    ...(params.runSkillCollectionReview
-      ? { runSkillCollectionReview: params.runSkillCollectionReview }
-      : {}),
     onEvent: (event) => {
       finished.onEvent(event);
       params.onEvent?.(event);

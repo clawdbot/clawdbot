@@ -8,10 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
-  resolveTestProjectsRunnerEnv,
-  resolveTestProjectsRunnerSpawnParams,
-} from "../../scripts/lib/test-projects-delegation.mts";
-import {
   resolveVitestCliEntry,
   resolveMissingVitestDependencyMessage,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -1040,34 +1036,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual({
       PATH: "/usr/bin",
-    });
-  });
-
-  it("does not force the stall watchdog into delegated runner environments", () => {
-    expect(resolveTestProjectsRunnerEnv({ PATH: "/usr/bin" })).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(
-      resolveTestProjectsRunnerEnv({
-        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
-        PATH: "/usr/bin",
-      }),
-    ).toEqual({
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
-      PATH: "/usr/bin",
-    });
-  });
-
-  it("spawns delegated test-project runs in a cleanup-friendly process group", () => {
-    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
-      env: { PATH: "/usr/bin" },
-      detached: true,
-      stdio: "inherit",
-    });
-    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
-      env: { PATH: "/usr/bin" },
-      detached: false,
-      stdio: "inherit",
     });
   });
 

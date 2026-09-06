@@ -32,7 +32,7 @@ export function readSubagentSessionStore(
 ): Record<string, SessionEntry> {
   try {
     return Object.fromEntries(
-      listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
+      listSessionEntriesReadOnly({ agentId, storePath, clone: false, projection: "list" }).map(
         ({ sessionKey, entry }) => [sessionKey, entry],
       ),
     );
