@@ -253,7 +253,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         self.openingID = nil
         self.refreshTask?.cancel()
         self.refreshTask = nil
-        self.store.endProbing { DashboardManager.shared.openWindowCount(for: $0) }
+        self.store.endProbing { Self.activeConsumerCount(for: $0) }
         StatusMenuHighlightDelegate.shared.menuDidClose(menu)
     }
 
@@ -335,8 +335,18 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             guard !Task.isCancelled else { return }
             self.windowOpens[opening.key] = nil
         }
-        guard !Task.isCancelled, DashboardManager.shared.openWindowCount(for: target) == 0 else { return }
+        guard !Task.isCancelled, Self.activeConsumerCount(for: target) == 0 else { return }
         await MacGatewayConnectionFleet.shared.disconnect(profileID: profileID, ifCurrent: { !Task.isCancelled })
+    }
+
+    /// Dashboard windows and native chat windows share a saved profile's fleet
+    /// connection; probe cleanup may only disconnect when neither is open.
+    private static func activeConsumerCount(for target: DashboardGatewayTarget) -> Int {
+        var count = DashboardManager.shared.openWindowCount(for: target)
+        if case let .profile(profileID) = target {
+            count += WebChatManager.shared.openWindowCount(profileID: profileID)
+        }
+        return count
     }
 
     @objc private func manageGateways(_: NSMenuItem) {
