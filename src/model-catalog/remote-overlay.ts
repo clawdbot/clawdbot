@@ -57,17 +57,16 @@ function readStartupSnapshot(): ActiveRemoteModelCatalog | null {
 }
 
 export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
-  // SAFETY: This module alone sets the key to a validated startup snapshot or null.
+  // SAFETY: This module alone sets the key to a record containing a validated snapshot or null.
   const inherited = getEnvironmentData(STARTUP_SNAPSHOT_KEY) as
-    | ActiveRemoteModelCatalog
-    | null
+    | { catalog: ActiveRemoteModelCatalog | null }
     | undefined;
   if (inherited !== undefined) {
-    return inherited;
+    return inherited.catalog;
   }
   // New workers inherit the startup pair, including absence, rather than later downloads.
   const snapshot = readStartupSnapshot();
-  setEnvironmentData(STARTUP_SNAPSHOT_KEY, snapshot);
+  setEnvironmentData(STARTUP_SNAPSHOT_KEY, { catalog: snapshot });
   return snapshot;
 }
 
