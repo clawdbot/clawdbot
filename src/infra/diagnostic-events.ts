@@ -253,6 +253,31 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+/**
+ * Pre-run directive rejection trace. Emitted when an inline reply directive
+ * (e.g. `/model <ref>`) is rejected before any agent run starts, so external
+ * diagnostic surfaces can correlate the rejected inbound message with the
+ * parser decision. Coarse `stage: "pre_run"` covers rejections surfaced from
+ * inline directive application; `errorText` carries the reply returned to the
+ * sender (it already contains the rejection reason).
+ */
+export type DiagnosticDirectiveRejectedEvent = DiagnosticBaseEvent & {
+  type: "directive.rejected";
+  stage: "pre_run";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  agentId?: string;
+  /** Directive category that was rejected (e.g. "model"). */
+  directiveType?: string;
+  /** Raw token parsed for the directive, when available (e.g. the requested model ref). */
+  rawToken?: string;
+  /** Human-readable rejection text returned to the sender. */
+  errorText?: string;
+};
+
 export type DiagnosticMessageDeliveryKind = "text" | "media" | "edit" | "reaction" | "other";
 
 type DiagnosticMessageDeliveryBaseEvent = DiagnosticBaseEvent & {
@@ -847,6 +872,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDispatchStartedEvent
   | DiagnosticMessageDispatchCompletedEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticDirectiveRejectedEvent
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
