@@ -6,53 +6,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   prepareUpdateFailureReport,
   submitUpdateFailureReport,
-  type PreparedUpdateFailureReport,
-  type UpdateFailureReportInput,
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 type UpdateFailureAction = "triage" | "report" | "dismiss";
-
-type UpdateFailureReportPrompts = {
-  chooseAction: () => Promise<UpdateFailureAction | symbol>;
-  confirmSubmission: () => Promise<boolean | symbol>;
-};
-
-type UpdateFailureReportDependencies = {
-  prepare: (
-    input: UpdateFailureReportInput,
-    options: { env: NodeJS.ProcessEnv; stateDir: string },
-  ) => Promise<PreparedUpdateFailureReport>;
-  prompts: UpdateFailureReportPrompts;
-  submit: (
-    prepared: PreparedUpdateFailureReport,
-    previewDigest: string,
-    options: { env: NodeJS.ProcessEnv; stateDir: string },
-  ) => Promise<UpdateFailureReportSubmitResult>;
-};
-
-const defaultDependencies: UpdateFailureReportDependencies = {
-  prepare: prepareUpdateFailureReport,
-  prompts: {
-    chooseAction: async () =>
-      await select<UpdateFailureAction>({
-        message: "Choose the next action for this failed update",
-        options: [
-          { value: "triage", label: "Diagnose update failure" },
-          { value: "report", label: "Report update failure" },
-          { value: "dismiss", label: "Exit" },
-        ],
-      }),
-    confirmSubmission: async () =>
-      await confirm({
-        message: "Submit this sanitized report to openclaw/openclaw now?",
-        initialValue: false,
-      }),
-  },
-  submit: submitUpdateFailureReport,
-};
 
 function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string[] {
   if (result.status === "created") {
@@ -83,15 +42,16 @@ export async function runInteractiveUpdateFailureAction(params: {
   error?: string;
   result?: UpdateRunResult;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  dependencies?: Partial<UpdateFailureReportDependencies>;
 }): Promise<"triage" | "handled"> {
-  const dependencies: UpdateFailureReportDependencies = {
-    ...defaultDependencies,
-    ...params.dependencies,
-    prompts: params.dependencies?.prompts ?? defaultDependencies.prompts,
-  };
   while (true) {
-    const action = await dependencies.prompts.chooseAction();
+    const action = await select<UpdateFailureAction>({
+      message: "Choose the next action for this failed update",
+      options: [
+        { value: "triage", label: "Diagnose update failure" },
+        { value: "report", label: "Report update failure" },
+        { value: "dismiss", label: "Exit" },
+      ],
+    });
     if (isCancel(action) || action === "dismiss") {
       return "handled";
     }
@@ -107,7 +67,7 @@ export async function runInteractiveUpdateFailureAction(params: {
         durationMs: 0,
       };
       const stateDir = resolveStateDir(params.env);
-      const prepared = await dependencies.prepare(
+      const prepared = await prepareUpdateFailureReport(
         {
           attemptId: params.attemptId,
           ...(params.error ? { error: params.error } : {}),
@@ -118,12 +78,15 @@ export async function runInteractiveUpdateFailureAction(params: {
       );
       params.runtime.log("Sanitized update failure report preview:");
       params.runtime.log(prepared.body);
-      const confirmed = await dependencies.prompts.confirmSubmission();
+      const confirmed = await confirm({
+        message: "Submit this sanitized report to openclaw/openclaw now?",
+        initialValue: false,
+      });
       if (isCancel(confirmed) || !confirmed) {
         params.runtime.log("Update failure report cancelled.");
         return "handled";
       }
-      const submitted = await dependencies.submit(prepared, prepared.previewDigest, {
+      const submitted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
         env: params.env,
         stateDir,
       });

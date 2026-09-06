@@ -113,6 +113,11 @@ restart the Gateway and reload the browser. See
 writes an archive containing compiled code and UI with no install scripts or
 runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,
 and exact `plugin_activate_artifact` request. The output file must not exist.
+The default filename is `<plugin-id>.tgz` in the project root, with `/` replaced
+by `__` for scoped ids (for example, `@author__tools.tgz`). Use `--out` to choose
+another path. Packing follows the package's runtime entry selection, including
+`runtimeExtensions`, and bundles a declared setup entry separately. Source/runtime
+entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
 
