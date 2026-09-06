@@ -135,9 +135,10 @@ describe("runIsolatedCompletion native authorization", () => {
       text: "native result",
       owner: { kind: "harness", id: "codex" },
     });
-    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(expect.any(Object), {
-      catalogMode: "static",
-    });
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ catalogMode: "static" }),
+    );
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
       expect.objectContaining({

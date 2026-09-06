@@ -68,7 +68,7 @@ export function createManagedServiceCommandFixture(params: {
               `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});`,
               // The recovery command runs from the helper's temp dir; name the repo tsconfig for path aliases.
               `register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`,
-              `const { isCurrentProcessLaunchdServiceLabel } = await import(${JSON.stringify(new URL("../daemon/launchd-current-service.ts", import.meta.url).href)});`,
+              `const { isCurrentProcessInsideLaunchdService } = await import(${JSON.stringify(new URL("../daemon/launchd-current-service.ts", import.meta.url).href)});`,
             ]
           : []),
         `const fs = require("node:fs");`,
@@ -77,7 +77,7 @@ export function createManagedServiceCommandFixture(params: {
         `state.guardedRestart = process.argv.slice(1);`,
         ...(checksServiceIdentity
           ? [
-              `state.recoveryInsideService = isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway", process.env);`,
+              `state.recoveryInsideService = await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", process.env);`,
               `state.recoveryEnv = Object.fromEntries(["LAUNCH_JOB_LABEL", "LAUNCH_JOB_NAME", "XPC_SERVICE_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND", "OPENCLAW_LAUNCHD_LABEL"].map((key) => [key, process.env[key]]));`,
               // Reproduce the old CLI's early success while its detached restart waits for exit.
               `if (state.recoveryInsideService) {`,

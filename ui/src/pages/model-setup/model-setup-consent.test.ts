@@ -9,6 +9,7 @@ import {
   detection,
   mountPage,
 } from "./model-setup-first-run.test-support.ts";
+import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage activation consent", () => {
   beforeEach(async () => {
@@ -115,7 +116,11 @@ describe("ModelSetupPage activation consent", () => {
         if (decision === "decline") {
           expect(answers.at(-1)).toEqual({ stepId: "consent", value: false });
         } else {
-          expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: activeSession });
+          expect(request).toHaveBeenCalledWith(
+            "wizard.cancel",
+            { sessionId: activeSession },
+            { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+          );
         }
       }
       expect(

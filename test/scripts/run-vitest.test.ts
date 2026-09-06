@@ -1154,7 +1154,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       expect(snapshot).toEqual({
         groupStopped: true,
         noOutputTimedOut: false,
-        result: { code: 0, signal: null },
+        result: { code: 0, signal: null, groupJoined: true },
       });
     } finally {
       lines.close();

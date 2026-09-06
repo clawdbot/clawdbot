@@ -183,6 +183,49 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
+  it("reconciles when a later suffix event redirects above the retained anchor", async () => {
+    const activeChild = {
+      type: "message",
+      id: "active-child",
+      parentId: "answer",
+      message: { role: "assistant", content: "active child" },
+    } as const;
+    const changedActiveChild = {
+      ...activeChild,
+      message: { role: "assistant", content: "changed active child" },
+    } as const;
+    const redirectedRoot = {
+      type: "message",
+      id: "redirected-root",
+      parentId: null,
+      message: { role: "assistant", content: "redirected root" },
+    } as const;
+    const removedTail = {
+      type: "message",
+      id: "removed-tail",
+      parentId: "redirected-root",
+      message: { role: "assistant", content: "removed tail" },
+    } as const;
+    const events = [...rewriteEvents, activeChild, redirectedRoot, removedTail] as const;
+    const nextEvents = [...rewriteEvents, changedActiveChild, redirectedRoot] as const;
+
+    await withRewriteFixture(async ({ db, snapshot, scope }) => {
+      await waitForSessionTranscriptIndexReconcile(scope);
+      replaceTranscriptSuffixForTest(scope, events, nextEvents, rewriteEvents.length);
+
+      expect(snapshot().raw).toHaveLength(nextEvents.length);
+      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
+      await waitForSessionTranscriptIndexReconcile(scope);
+      expect(snapshot()).toMatchObject({
+        active: [expect.objectContaining({ event_seq: nextEvents.length - 1 })],
+        search: [
+          expect.objectContaining({ message_id: "redirected-root", text: "redirected root" }),
+        ],
+      });
+      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
+    }, events);
+  });
+
   it("reconciles when an inactive suffix starts below an active parent", async () => {
     const inactiveEvent = {
       type: "message",

@@ -42,6 +42,7 @@ import {
   transcriptEventContextEligibility,
 } from "./session-transcript-projection-rebuild.js";
 import {
+  isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -360,6 +361,21 @@ function prepareIncrementalTranscriptSuffixMutation(
           .where("identity.event_id", "=", anchorId),
       )
     : undefined;
+  const knownRelativeIds = new Set(anchorId ? [anchorId] : []);
+  const suffixRedirectsOutsideProjection = next.some((event) => {
+    const treeEntry = parseSessionTranscriptTreeEntry(event);
+    if (!treeEntry) {
+      return false;
+    }
+    const redirectsOutside =
+      treeEntry.parentId === null ||
+      !knownRelativeIds.has(treeEntry.parentId) ||
+      (isSessionTranscriptLeafControl(event) &&
+        treeEntry.appendParentId !== null &&
+        !knownRelativeIds.has(treeEntry.appendParentId));
+    knownRelativeIds.add(treeEntry.id);
+    return redirectsOutside;
+  });
   const changedEventWasActive = executeSqliteQueryTakeFirstSync(
     database.db,
     db
@@ -368,8 +384,9 @@ function prepareIncrementalTranscriptSuffixMutation(
       .where("session_id", "=", resolved.sessionId)
       .where("event_seq", "=", startSeq),
   );
-  if (!changedEventWasActive || !anchorId || !anchor) {
-    // Root-level and inactive branches can expose durable history outside the prepared suffix.
+  if (!changedEventWasActive || !anchorId || !anchor || suffixRedirectsOutsideProjection) {
+    // Root-level, inactive, and externally redirected branches can expose durable history outside
+    // the prepared suffix.
     // Rebuild their derived rows after the fenced mutation instead of publishing an incomplete view.
     return prepareReconciledIncrementalSuffixMutation({
       database,
