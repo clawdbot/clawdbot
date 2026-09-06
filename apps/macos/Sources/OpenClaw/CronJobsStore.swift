@@ -10,19 +10,19 @@ final class CronJobsStore {
 
     private struct Snapshot {
         let source: GatewayConnection.ServerLease?
-        let jobs: [CronJob]
+        let summary: CronJobsSummary
     }
 
     private var cachedSnapshot: Snapshot?
-    var jobs: [CronJob] {
-        guard let snapshot = self.cachedSnapshot else { return [] }
+    var summary: CronJobsSummary {
+        guard let snapshot = self.cachedSnapshot else { return .empty }
         // A closed menu misses retirement receipts. Revalidate the cached owner
         // before reopening can expose rows from the previous Gateway.
         if let lease = snapshot.source {
             guard lease.endpointRevision == self.gateway.selectedEndpointRevision,
-                  self.gateway.serverLeaseMatchesCurrentRoute(lease) else { return [] }
+                  self.gateway.serverLeaseMatchesCurrentRoute(lease) else { return .empty }
         }
-        return snapshot.jobs
+        return snapshot.summary
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cron.ui")
@@ -82,9 +82,9 @@ final class CronJobsStore {
             requestLease = lease
             guard self.ownsJobsRequest(generation, lease: lease) else { return }
             self.adoptSource(lease)
-            let jobs = try await self.gateway.cronList(includeDisabled: true, ifCurrentServerLease: lease)
+            let summary = try await self.gateway.cronSummary(ifCurrentServerLease: lease)
             guard self.ownsJobsRequest(generation, lease: lease) else { return }
-            self.cachedSnapshot = Snapshot(source: lease, jobs: jobs)
+            self.cachedSnapshot = Snapshot(source: lease, summary: summary)
         } catch {
             guard self.jobsGeneration == generation, !Task.isCancelled,
                   requestLease.map(self.gateway.serverLeaseMatchesCurrentState) ??
@@ -138,7 +138,7 @@ final class CronJobsStore {
 
     private func adoptSource(_ lease: GatewayConnection.ServerLease) {
         guard self.cachedSnapshot?.source != lease else { return }
-        self.cachedSnapshot = Snapshot(source: lease, jobs: [])
+        self.cachedSnapshot = Snapshot(source: lease, summary: .empty)
     }
 }
 
@@ -154,11 +154,12 @@ extension CronJobsStore {
                 enabled: true,
                 state: .init(nextRunAtMs: now + nextInMinutes * 60000))
         }
-        self.cachedSnapshot = Snapshot(source: nil, jobs: [
+        let jobs = [
             job("fixture-1", "Morning Brief", nextInMinutes: 13),
             job("fixture-2", "Inbox Sweep With A Deliberately Long Name", nextInMinutes: 180),
             job("fixture-3", "Weekly Digest", nextInMinutes: 720),
-        ])
+        ]
+        self.cachedSnapshot = Snapshot(source: nil, summary: .init(total: jobs.count, jobs: jobs))
     }
 }
 #endif

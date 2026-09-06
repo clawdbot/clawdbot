@@ -20,7 +20,7 @@ struct StatusMenuSummariesTests {
                 try #require(fixture.control.state == .connected)
                 let lease = try #require(await fixture.gateway.captureServerLease())
                 await fixture.cron.refreshJobs()
-                let jobs = fixture.cron.jobs
+                let jobs = fixture.cron.summary.jobs
                 fixture.recordCronProof([
                     "stage": "refresh-returned", "storeJobs": String(jobs.count),
                     "firstJob": jobs.first?.id ?? "absent", "lastJob": jobs.last?.id ?? "absent",

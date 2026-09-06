@@ -20,7 +20,9 @@ title: "Menu bar"
 
 The app's main **Gateways** menu is always present. It lists the primary Gateway, when configured, followed by saved Gateways, with Command-1 through Command-9 assigned in that order. Selecting an item opens that Gateway's dashboard window or brings its existing window to the front. Hold Option to reveal **New … Window**, or press Option-Command with the same digit, to open another independent window for that Gateway. The checkmark follows the frontmost dashboard window. **Manage Gateways…** opens **Connection → Gateways** and remains available when no Gateways are configured.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+
+The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
 
 Manual Cron refreshes and successful job changes supersede older reads, so an in-flight response cannot restore a deleted job to the list.
 

@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import Observation
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -7,6 +8,37 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CronJobsStoreTests {
+    @Test func `count-only refreshes notify observers without changing preview rows`() async throws {
+        let fixture = CronSourceFixture()
+        fixture.catalogTotal.setValue(9)
+        let store = CronJobsStore(gateway: fixture.gateway)
+        do {
+            await store.refreshJobs()
+            try #require(store.summary.total == 9)
+            let previewIDs = store.summary.jobs.map(\.id)
+            try #require(previewIDs.count == 8)
+            let changed = LockIsolated(false)
+            withObservationTracking {
+                _ = store.summary
+            } onChange: {
+                changed.setValue(true)
+            }
+
+            fixture.catalogTotal.setValue(10)
+            await store.refreshJobs()
+
+            #expect(changed.value)
+            #expect(store.summary.total == 10)
+            #expect(store.summary.jobs.map(\.id) == previewIDs)
+        } catch {
+            store.stop()
+            await fixture.gateway.shutdown()
+            throw error
+        }
+        store.stop()
+        await fixture.gateway.shutdown()
+    }
+
     @Test(arguments: [false, true], ["menu", "caller"])
     func `stopping a refresh rejects a late job list completion`(succeeds: Bool, owner: String) async throws {
         let fixture = CronSourceFixture(holding: "cron.list")
@@ -26,7 +58,7 @@ struct CronJobsStoreTests {
                 CronSourceFixture.fail(pending, message: "closed menu failure")
             }
             await refresh.value
-            #expect(store.jobs.isEmpty)
+            #expect(store.summary.jobs.isEmpty)
         } catch {
             store.stop()
             refresh.cancel()
@@ -43,8 +75,8 @@ struct CronJobsStoreTests {
         let store = CronJobsStore(gateway: fixture.gateway)
         do {
             store.start()
-            try await self.waitUntil { store.jobs.count == 1 }
-            #expect(store.jobs.first?.name == "Gateway A")
+            try await self.waitUntil { store.summary.jobs.count == 1 }
+            #expect(store.summary.jobs.first?.name == "Gateway A")
             if lateHello {
                 let count = fixture.requests.value.count { $0.method == "cron.list" }
                 let snapshot = try #require(await fixture.gateway.lastSnapshot)
@@ -98,8 +130,8 @@ struct CronJobsStoreTests {
         }
         do {
             store.start()
-            try await self.waitUntil { store.jobs.count == 1 }
-            fixture.emptyJobLists.setValue(true)
+            try await self.waitUntil { store.summary.jobs.count == 1 }
+            fixture.catalogTotal.setValue(0)
             holdNextLookup.setValue(true)
             try self.sendCronEvent(fixture, sequence: 1)
             let reachedGate = try await AsyncTimeout.withTimeout(
@@ -118,13 +150,14 @@ struct CronJobsStoreTests {
             } else {
                 manualRefresh = Task { await store.refreshJobs() }
             }
-            try await AsyncTimeout.withTimeout(seconds: 2, onTimeout: { URLError(.timedOut) }) {
-                await cancelled.wait()
-            }
+            try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { URLError(.timedOut) },
+                operation: { await cancelled.wait() })
             try await Task.sleep(for: .milliseconds(350))
             #expect(fixture.requests.value.count { $0.method == "cron.list" } == count)
             release.finish()
-            try await self.waitUntil { store.jobs.isEmpty }
+            try await self.waitUntil { store.summary.jobs.isEmpty }
             #expect(fixture.requests.value.count { $0.method == "cron.list" } > count)
         } catch {
             await cleanup()
@@ -135,7 +168,9 @@ struct CronJobsStoreTests {
 
     private func sendCronEvent(_ fixture: CronSourceFixture, sequence: Int) throws {
         let request = try #require(fixture.requests.value.last)
-        let event = #"{"type":"event","event":"cron","seq":\#(sequence),"payload":{"jobId":"shared-job","action":"finished"}}"#
+        let event = #"""
+        {"type":"event","event":"cron","seq":\#(sequence),"payload":{"jobId":"shared-job","action":"finished"}}
+        """#
         request.socket.emitReceiveSuccess(.string(event))
     }
 

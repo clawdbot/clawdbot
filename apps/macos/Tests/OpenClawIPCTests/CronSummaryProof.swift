@@ -48,7 +48,7 @@ nonisolated func cronSummaryWireFacts(_ response: Data) -> [String: String] {
         let data = try JSONEncoder().encode(payload)
         // Keep the lossy count even when strict decoding identifies the first rejected row.
         facts["phase"] = "lossy-jobs"
-        facts["lossyJobs"] = try String(OpenClaw.GatewayConnection.decodeCronListResponse(data).count)
+        facts["lossyJobs"] = try String(JSONDecoder().decode(OpenClaw.CronJobsSummary.self, from: data).jobs.count)
         facts["phase"] = "strict-jobs"
         facts["strictJobs"] = try String(JSONDecoder().decode(CronSummaryWirePage.self, from: data).jobs.count)
         facts["kind"] = "success"
