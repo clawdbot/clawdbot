@@ -945,6 +945,98 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("rejects an oversized Google tool ID before retention or dispatch", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = await createTransport({ onStatus, onTalkEvent });
+    try {
+      const ws = await startTransport(transport);
+      ws.emitMessage(
+        encodeJsonFrame({
+          toolCall: { functionCalls: [{ id: "x".repeat(1025), name: "unknown_tool", args: {} }] },
+        }),
+      );
+      await waitForFast(() =>
+        expect(onStatus).toHaveBeenCalledWith(
+          "error",
+          "Google Live tool-call session limit exceeded",
+        ),
+      );
+      expect(ws.readyState).toBe(3);
+      expect(getGoogleLiveToolOwnerState(transport).seenCallIds.size).toBe(0);
+      expect(onTalkEvent.mock.calls.some(([event]) => event.type === "tool.error")).toBe(false);
+    } finally {
+      transport.stop();
+    }
+  });
+
+  it.each(
+    [
+      ["number", 7],
+      ["object", { malformed: true }],
+      ["raw whitespace overflow", " ".repeat(1024) + "x"],
+    ].flatMap(([label, id]) => ["call", "cancel"].map((kind) => ({ label, id, kind }))),
+  )("closes media for invalid raw Google tool IDs: $label ($kind)", async ({ id, kind }) => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const client = createClient();
+    const transport = await createTransport({ onStatus, onTalkEvent }, client);
+    try {
+      const ws = await startTransport(transport);
+      onStatus.mockClear();
+      ws.emitMessage(
+        encodeJsonFrame(
+          kind === "call"
+            ? { toolCall: { functionCalls: [{ id, name: "unknown_tool", args: {} }] } }
+            : { toolCallCancellation: { ids: [id] } },
+        ),
+      );
+      await waitForFast(() => expect(ws.readyState).toBe(3));
+      expect(onStatus).toHaveBeenCalledOnce();
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Google Live tool-call session limit exceeded",
+      );
+      expect(getGoogleLiveToolOwnerState(transport).seenCallIds.size).toBe(0);
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.size).toBe(0);
+      expect(client["request"]).not.toHaveBeenCalled();
+      expect(
+        onTalkEvent.mock.calls.filter(([event]) => event.type === "session.closed"),
+      ).toHaveLength(1);
+      expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+      expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
+    } finally {
+      transport.stop();
+    }
+  });
+
+  it("preserves exact boundary Google tool IDs and duplicate suppression", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = await createTransport({ onStatus, onTalkEvent });
+    try {
+      const ws = await startTransport(transport);
+      const ids = ["😀".repeat(512), "😀".repeat(511) + "xy"];
+      ws.emitMessage(
+        encodeJsonFrame({
+          toolCall: {
+            functionCalls: [...ids, ids[0]].map((id) => ({ id, name: "unknown_tool", args: {} })),
+          },
+        }),
+      );
+      await waitForFast(() =>
+        expect(
+          onTalkEvent.mock.calls.filter(([event]) => event.type === "tool.error"),
+        ).toHaveLength(2),
+      );
+      expect([...getGoogleLiveToolOwnerState(transport).seenCallIds]).toEqual(ids);
+      expect(onStatus.mock.calls.some(([status]) => status === "error")).toBe(false);
+      expect(ws.readyState).toBe(1);
+    } finally {
+      transport.stop();
+    }
+  });
+
   it("fails closed before evicting seen browser tool-call ids", async () => {
     const onStatus = vi.fn();
     const transport = await createTransport({ onStatus });

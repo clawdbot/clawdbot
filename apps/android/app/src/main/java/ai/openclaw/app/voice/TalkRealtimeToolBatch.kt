@@ -7,6 +7,7 @@ internal class TalkRealtimeToolBatch {
   val hasPending: Boolean get() = pending.isNotEmpty()
 
   fun admit(callIds: Collection<String>): Set<String> {
+    check(callIds.all { it.length <= TALK_REALTIME_MAX_ID_CHARS }) { "Realtime tool-call identity limit exceeded" }
     val fresh = callIds.filterNot { it in seen }.toSet()
     check(seen.size + fresh.size <= 1024) { "Realtime tool-call limit exceeded" }
     seen.addAll(fresh)

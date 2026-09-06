@@ -21,6 +21,8 @@ export const TalkModeParamsSchema = closedObject({
 /** Reads Talk configuration; secrets are included only for trusted callers. */
 export const TalkConfigParamsSchema = closedObject({
   includeSecrets: Type.Optional(Type.Boolean()),
+  /** Project the same provider/alias selection as a per-call realtime request. */
+  realtimeProvider: Type.Optional(NonEmptyString),
 });
 
 /** One-shot text-to-speech request with provider-specific voice tuning knobs. */

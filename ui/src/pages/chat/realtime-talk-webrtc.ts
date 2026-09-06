@@ -10,6 +10,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   createRealtimeTalkEventEmitter,
+  isBoundedRealtimeTalkId,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
   submitRealtimeTalkAgentControl,
@@ -20,6 +21,7 @@ import {
 } from "./realtime-talk-shared.ts";
 import { captureRealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 import {
+  REALTIME_TALK_RESPONSE_LIMIT_ERROR,
   RealtimeTalkWebRtcOfferExchange,
   realtimeTalkTranscriptItem,
   RealtimeTalkResponseOutcomeOwner,
@@ -382,15 +384,22 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.emitTalkEvent({ type: "input.audio.committed", final: true });
         return;
       case "response.created":
+        if (!this.responseOutcomes.start(event.response?.id)) {
+          this.failConnection(REALTIME_TALK_RESPONSE_LIMIT_ERROR);
+          return;
+        }
         this.responseActive = true;
         this.responseCreateInFlight = false;
-        this.responseOutcomes.start(event.response?.id);
         this.ctx.callbacks.onStatus?.("thinking", "Generating response");
         return;
       case "response.cancelled":
       case "response.done": {
         const terminal = this.responseOutcomes.finish(event);
         if (!terminal) {
+          return;
+        }
+        if (terminal.error !== undefined) {
+          this.failConnection(terminal.error);
           return;
         }
         const { outcome } = terminal;
@@ -421,7 +430,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
           });
         } finally {
           if (terminal.overflow) {
-            this.failConnection("Realtime response session limit exceeded");
+            this.failConnection(REALTIME_TALK_RESPONSE_LIMIT_ERROR);
           }
           this.responseActive = false;
           this.responseCreateInFlight = false;
@@ -536,7 +545,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       if (this.completedToolCallIds.has(callId)) {
         continue;
       }
-      if (this.completedToolCallIds.size >= MAX_COMPLETED_TOOL_CALL_IDS) {
+      if (
+        !isBoundedRealtimeTalkId(callId) ||
+        (itemId !== undefined && !isBoundedRealtimeTalkId(itemId)) ||
+        this.completedToolCallIds.size >= MAX_COMPLETED_TOOL_CALL_IDS
+      ) {
         this.failConnection("Realtime tool-call session limit exceeded");
         return;
       }

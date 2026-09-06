@@ -6,10 +6,11 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  RealtimeTalkTranscript,
-  RealtimeTalkTranscriptItem,
-  RealtimeTalkTransport,
+import {
+  isBoundedRealtimeTalkId,
+  type RealtimeTalkTranscript,
+  type RealtimeTalkTranscriptItem,
+  type RealtimeTalkTransport,
 } from "./realtime-talk-shared.ts";
 
 type ReservedTranscript = {
@@ -24,7 +25,6 @@ type ReservedTranscript = {
 // Keep exact identities for the connection: eviction could admit a late duplicate
 // final. This matches the WebRTC response/tool identity budget.
 const MAX_TRANSCRIPT_ITEM_IDENTITIES = 1_024;
-const MAX_TRANSCRIPT_ITEM_ID_CHARS = 1_024;
 
 export class ClientVoiceTranscriptQueue {
   private sequence = 0;
@@ -53,8 +53,8 @@ export class ClientVoiceTranscriptQueue {
     }
     if (
       this.items.size >= MAX_TRANSCRIPT_ITEM_IDENTITIES ||
-      item.itemId.length > MAX_TRANSCRIPT_ITEM_ID_CHARS ||
-      (item.previousItemId?.length ?? 0) > MAX_TRANSCRIPT_ITEM_ID_CHARS
+      !isBoundedRealtimeTalkId(item.itemId) ||
+      (item.previousItemId != null && !isBoundedRealtimeTalkId(item.previousItemId))
     ) {
       throw new Error("Realtime transcript item identity limit exceeded");
     }

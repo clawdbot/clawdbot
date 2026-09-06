@@ -118,8 +118,8 @@ describe("Realtime Talk microphone preparation", () => {
       await starting;
       expect(request.mock.calls.map(([method]) => method)).toEqual(
         transport === "gateway-relay"
-          ? ["talk.client.create", "talk.session.create"]
-          : ["talk.client.create"],
+          ? ["talk.catalog", "talk.client.create", "talk.session.create"]
+          : ["talk.catalog", "talk.client.create"],
       );
       expect(getUserMedia).toHaveBeenCalledOnce();
       expect(getUserMedia).toHaveBeenCalledWith({
@@ -166,6 +166,181 @@ describe("Realtime Talk microphone preparation", () => {
     await waitForFast(() => expect(media.track.stop).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalled();
     expect(transports).toHaveLength(0);
+  });
+
+  it("stops a reentrant preparing status before microphone or catalog admission", async () => {
+    const getUserMedia = vi.fn(async () => microphone().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const request = vi.fn(async () => clientSession());
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "agent:main:main",
+      {
+        onStatus: (status) => {
+          if (status === "connecting") {
+            session.stop();
+          }
+        },
+      },
+      { transport: "webrtc" },
+    );
+    sessions.push(session);
+    await session.start();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(transports).toHaveLength(0);
+  });
+
+  it.each(["stop", "ended"] as const)(
+    "owns prepared input during catalog lookup: %s",
+    async (outcome) => {
+      const media = microphone();
+      const catalog = createDeferred<Record<string, unknown>>();
+      const getUserMedia = vi.fn(async () => media.stream);
+      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+      const request = vi.fn(async (method: string) =>
+        method === "talk.catalog" ? await catalog.promise : clientSession(),
+      );
+      const session = sessionFor(request);
+      const starting = session.start();
+      void starting.catch(() => undefined);
+      try {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("talk.catalog", {}, expect.anything()),
+        );
+        expect(getUserMedia).toHaveBeenCalledOnce();
+        if (outcome === "stop") {
+          session.stop();
+        } else {
+          media.track.dispatchEvent(new Event("ended"));
+        }
+        catalog.resolve({});
+        if (outcome === "stop") {
+          await expect(starting).resolves.toBeUndefined();
+        } else {
+          await expect(starting).rejects.toThrow("Microphone");
+        }
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["talk.catalog"]);
+        expect(media.track.stop).toHaveBeenCalledOnce();
+        expect(transports).toHaveLength(0);
+      } finally {
+        session.stop();
+        catalog.resolve({});
+        await starting.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each([
+    ["client", "stop"],
+    ["client", "ended"],
+    ["config", "stop"],
+    ["config", "ended"],
+  ] as const)(
+    "never recovers an invalidated Auto allocation during %s: %s",
+    async (phase, outcome) => {
+      const media = microphone();
+      const allocation = createDeferred<ReturnType<typeof clientSession>>();
+      const config = createDeferred<Record<string, unknown>>();
+      const failure = new Error("Client allocation failed");
+      void allocation.promise.catch(() => undefined);
+      vi.stubGlobal("navigator", {
+        mediaDevices: { getUserMedia: vi.fn(async () => media.stream) },
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.client.create") {
+          if (phase === "client") {
+            return await allocation.promise;
+          }
+          throw failure;
+        }
+        if (method === "talk.config") {
+          return phase === "config" ? await config.promise : { config: {} };
+        }
+        return clientSession("gateway-relay");
+      });
+      const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
+      sessions.push(session);
+      const starting = session.start();
+      void starting.catch(() => undefined);
+      try {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith(
+            phase === "client" ? "talk.client.create" : "talk.config",
+            expect.anything(),
+            expect.anything(),
+          ),
+        );
+        if (outcome === "stop") {
+          session.stop();
+        } else {
+          media.track.dispatchEvent(new Event("ended"));
+        }
+        allocation.reject(failure);
+        config.resolve({ config: {} });
+        await expect(starting).rejects.toThrow(failure);
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          phase === "client"
+            ? ["talk.catalog", "talk.client.create"]
+            : ["talk.catalog", "talk.client.create", "talk.config"],
+        );
+        expect(media.track.stop).toHaveBeenCalledOnce();
+        expect(transports).toHaveLength(0);
+      } finally {
+        session.stop();
+        allocation.reject(failure);
+        config.resolve({ config: {} });
+        await starting.catch(() => undefined);
+      }
+    },
+  );
+
+  it("never recovers a replaced Auto allocation into the new call", async () => {
+    const previous = microphone();
+    const replacement = microphone();
+    const allocation = createDeferred<ReturnType<typeof clientSession>>();
+    const failure = new Error("Replaced client allocation failed");
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(previous.stream)
+      .mockResolvedValueOnce(replacement.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    let creates = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        creates += 1;
+        return creates === 1 ? await allocation.promise : clientSession();
+      }
+      if (method === "talk.config") {
+        return { config: {} };
+      }
+      return clientSession("gateway-relay");
+    });
+    const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
+    sessions.push(session);
+    const starting = session.start();
+    void starting.catch(() => undefined);
+    try {
+      await waitForFast(() => expect(creates).toBe(1));
+      await session.start();
+      allocation.reject(failure);
+      await expect(starting).rejects.toThrow(failure);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+        "talk.catalog",
+        "talk.client.create",
+      ]);
+      expect(previous.track.stop).toHaveBeenCalledOnce();
+      expect(replacement.track.stop).not.toHaveBeenCalled();
+      expect(transports).toHaveLength(1);
+      expect(transports[0]?.context.input.stream).toBe(replacement.stream);
+    } finally {
+      session.stop();
+      allocation.reject(failure);
+      await starting.catch(() => undefined);
+    }
+    expect(replacement.track.stop).toHaveBeenCalledOnce();
   });
 
   it("releases prepared microphone ownership when provider creation fails", async () => {

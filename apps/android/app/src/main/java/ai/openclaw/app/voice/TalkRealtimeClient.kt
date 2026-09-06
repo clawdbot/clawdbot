@@ -12,10 +12,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -23,6 +27,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+
+private const val TRANSCRIPT_REQUEST_TIMEOUT_MS = 10_000L
 
 internal data class TalkRealtimeSnapshot(
   val provider: String,
@@ -53,12 +59,16 @@ internal class TalkRealtimeClient(
   private val responseState = TalkRealtimeResponseState()
   private var voiceSessionId: String? = null
   private var gatewayTranscripts = false
-  private var nativeDelegation = false
+
+  private enum class OutputControl { Ga, Frameless }
+
+  private var outputControl: OutputControl? = null
   private var nativeTranscriptSequence = 0
   private var clientEventSequence = 0
   private var outputResponseId: String? = null
   private var transcriptTail: Deferred<Unit> = CompletableDeferred(Unit)
-  private var queuedTranscripts = 0
+  private val transcriptOwner = Job(this.scope.coroutineContext[Job])
+  private val transcriptScope = CoroutineScope(this.scope.coroutineContext + transcriptOwner)
   private var transcriptFailureReported = false
   private val transcriptOrder: TalkRealtimeTranscriptOrder by lazy {
     TalkRealtimeTranscriptOrder { itemId, role, entryId, text, afterPrevious, written ->
@@ -137,7 +147,12 @@ internal class TalkRealtimeClient(
         check(result.string("transport") == "webrtc") { "Gateway returned an unsupported Talk transport" }
         check(result["clientControl"] == null) { "Client-owned Talk control was not negotiated" }
         gatewayTranscripts = result.string("transcriptOwner") == "gateway"
-        nativeDelegation = result.string("controlSource") == "delegation"
+        outputControl =
+          when (result.string("controlSource")) {
+            "delegation" -> OutputControl.Frameless
+            "transcript" -> OutputControl.Ga
+            else -> null
+          }
         val resolvedSnapshot =
           TalkRealtimeSnapshot(
             provider = result.string("provider") ?: error("Gateway returned no Talk provider"),
@@ -186,6 +201,16 @@ internal class TalkRealtimeClient(
   private fun handleProviderEvent(payload: String) {
     if (closed && closing?.isCompleted != false) return
     val event = runCatching { json.parseToJsonElement(payload) as? JsonObject }.getOrNull() ?: return fail("Invalid realtime event")
+    // Older Gateways omit controlSource. Only discriminating wire events establish
+    // control semantics; session.updated is shared and cannot prove GA support.
+    if (outputControl == null) {
+      outputControl =
+        when (event.string("type")) {
+          "session.started", "turn.done", "input_transcript.added", "output_transcript.added", "delegation.created", "output_audio.delta" -> OutputControl.Frameless
+          "session.created", "response.created" -> OutputControl.Ga
+          else -> null
+        }
+    }
     if (event.string("response_id") in cancelledResponses && event.string("type")?.contains("transcript") == true) return
     val itemId = event.string("item_id")
     when (event.string("type")) {
@@ -266,10 +291,10 @@ internal class TalkRealtimeClient(
 
       "response.created" -> {
         val id = (event["response"] as? JsonObject)?.string("id") ?: return fail("Missing realtime response id")
+        if (id.length > TALK_REALTIME_MAX_ID_CHARS) return fail("Realtime call identity limit exceeded")
         if (id in completedResponses) return
         val cancelled = responseState.created(id)
         if (cancelled != null) {
-          remember(cancelledResponses, cancelled)
           scope.launch { cancelResponse(cancelled) }
         } else {
           onStatus("Thinking")
@@ -349,13 +374,20 @@ internal class TalkRealtimeClient(
   private fun remember(
     ids: MutableSet<String>,
     id: String,
+    prefix: String = "",
   ): Boolean {
-    if (id in ids) return false
+    if (id.length > TALK_REALTIME_MAX_ID_CHARS) {
+      fail("Realtime call identity limit exceeded")
+      return false
+    }
+    // Local role namespaces do not reduce the raw provider ID budget.
+    val key = prefix + id
+    if (key in ids) return false
     if (ids.size >= 1024) {
       fail("Realtime call event limit exceeded")
       return false
     }
-    return ids.add(id)
+    return ids.add(key)
   }
 
   private fun reserveTranscript(
@@ -379,7 +411,7 @@ internal class TalkRealtimeClient(
     if (!final && itemId != null && "$role:$itemId" in finalTranscripts) return
     if (final) {
       if (itemId == null) return fail("Realtime transcript has no item identity")
-      if (!remember(finalTranscripts, "$role:$itemId")) return
+      if (!remember(finalTranscripts, itemId, "$role:")) return
       if (!gatewayTranscripts && !transcriptOrder.settle(itemId, role, text)) {
         return fail("Realtime transcript final has no reserved item")
       }
@@ -393,13 +425,14 @@ internal class TalkRealtimeClient(
     entryId: String,
   ) {
     if (role !in listOf("user", "assistant") || text.isNullOrEmpty()) return
-    if (!remember(finalTranscripts, "$role:$entryId")) return
+    if (!remember(finalTranscripts, entryId, "$role:")) return
     if (!gatewayTranscripts) {
       enqueueTranscript(
         role,
         CompletableDeferred(entryId),
         CompletableDeferred(text),
-        CompletableDeferred(CompletableDeferred(Unit)),
+        // A Deferred is also a Job: name the value to avoid adopting a completed parent.
+        CompletableDeferred(value = CompletableDeferred(Unit)),
         CompletableDeferred(),
       ) {}
     }
@@ -415,9 +448,8 @@ internal class TalkRealtimeClient(
     release: () -> Unit,
   ) {
     val voiceId = voiceSessionId ?: return
-    queuedTranscripts++
     val job =
-      scope.async<Unit>(Dispatchers.Main.immediate) {
+      transcriptScope.async<Unit> {
         try {
           afterPrevious.await().await()
           val orderedEntryId = entryId.await()
@@ -431,8 +463,12 @@ internal class TalkRealtimeClient(
               put("role", role)
               put("text", finalText)
             }.toString(),
-            10_000,
-          )
+            TRANSCRIPT_REQUEST_TIMEOUT_MS,
+          ) { enqueue ->
+            // A transport wait cannot revive a drain whose owner has expired.
+            transcriptOwner.ensureActive()
+            enqueue()
+          }
         } catch (_: Exception) {
           // The failure callback closes the call; keep the queue tail completed so
           // retirement can still issue the logical session close exactly once.
@@ -440,12 +476,11 @@ internal class TalkRealtimeClient(
         } finally {
           written.complete(Unit)
           release()
-          queuedTranscripts--
         }
       }
     val previous = transcriptTail
     transcriptTail =
-      scope.async(Dispatchers.Main.immediate) {
+      transcriptScope.async {
         previous.await()
         job.await()
       }
@@ -487,8 +522,7 @@ internal class TalkRealtimeClient(
   }
 
   private suspend fun cancelResponse(id: String) {
-    if (closed) return
-    remember(cancelledResponses, id)
+    if (closed || !remember(cancelledResponses, id)) return
     try {
       peer.send(
         buildJsonObject {
@@ -517,10 +551,10 @@ internal class TalkRealtimeClient(
   suspend fun cancelOutput() =
     withContext(Dispatchers.Main.immediate) {
       if (closed || !started) return@withContext
-      if (nativeDelegation) {
-        // Frameless Bidi has no client cancel primitive; closing is explicit,
-        // unlike sending a GA event that the native protocol cannot honor.
-        fail("Native realtime response cancellation ended the call")
+      if (outputControl != OutputControl.Ga) {
+        // Native and still-unknown sessions end explicitly rather than borrowing
+        // GA controls that their wire contract has not established.
+        fail("Realtime response cancellation ended the call")
         return@withContext
       }
       val id = responseState.cancel()
@@ -539,26 +573,33 @@ internal class TalkRealtimeClient(
           agent.endSession()
           try {
             peer.close()
+          } catch (error: Throwable) {
+            transcriptOwner.cancelAndJoin()
+            throw error
           } finally {
             transcriptOrder.close()
           }
-          val voiceId = voiceSessionId ?: return@async
+          val voiceId = voiceSessionId
           voiceSessionId = null
           try {
-            // Persistence failures already report through fail(); retirement still owns
-            // the logical close and must not rethrow the completed tail failure.
-            runCatching { transcriptTail.await() }
+            // Accepted finals share one request budget after physical retirement,
+            // not a fresh budget per queued item. Completed failures were reported.
+            if (withTimeoutOrNull(TRANSCRIPT_REQUEST_TIMEOUT_MS) { transcriptTail.join() } == null) reportTranscriptFailure()
           } finally {
-            runCatching {
-              lease.request(
-                "talk.client.close",
-                buildJsonObject {
-                  put("sessionKey", sessionKey)
-                  put("voiceSessionId", voiceId)
-                }.toString(),
-                5_000,
-              )
-            }.onFailure { onFailure("Realtime session close could not be confirmed") }
+            // Cancel the actual RPC jobs, not just their join chain, before logical close.
+            transcriptOwner.cancelAndJoin()
+            if (voiceId != null) {
+              runCatching {
+                lease.request(
+                  "talk.client.close",
+                  buildJsonObject {
+                    put("sessionKey", sessionKey)
+                    put("voiceSessionId", voiceId)
+                  }.toString(),
+                  5_000,
+                )
+              }.onFailure { onFailure("Realtime session close could not be confirmed") }
+            }
           }
         }.also { closing = it }
       cleanup.await()
@@ -567,6 +608,8 @@ internal class TalkRealtimeClient(
   private fun reportTranscriptFailure() {
     if (!transcriptFailureReported) {
       transcriptFailureReported = true
+      // Retired clients cannot overwrite a replacement UI; keep their loss diagnostic.
+      Log.w("TalkRealtime", "Voice transcript could not be saved")
       onFailure("Voice transcript could not be saved")
     }
     closed = true

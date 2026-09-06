@@ -14448,15 +14448,19 @@ public struct TalkClientTranscriptParams: Codable, Sendable {
 
 public struct TalkConfigParams: Codable, Sendable {
     public let includesecrets: Bool?
+    public let realtimeprovider: String?
 
     public init(
-        includesecrets: Bool? = nil)
+        includesecrets: Bool? = nil,
+        realtimeprovider: String? = nil)
     {
         self.includesecrets = includesecrets
+        self.realtimeprovider = realtimeprovider
     }
 
     private enum CodingKeys: String, CodingKey {
         case includesecrets = "includeSecrets"
+        case realtimeprovider = "realtimeProvider"
     }
 }
 

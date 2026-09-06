@@ -11,6 +11,7 @@ import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-r
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 // Control UI chat module implements realtime talk shared behavior.
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { RealtimeTalkInputController } from "./realtime-talk-input.ts";
 
@@ -34,11 +35,20 @@ export type RealtimeTalkTranscriptItem =
     }
   | { type: "settled"; itemId: string };
 
+// Keep retained provider identities bounded without truncation; match Android UTF-16 units.
+export function isBoundedRealtimeTalkId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 1_024;
+}
+
 export function realtimeTalkStatusDetail(
+  status: RealtimeTalkStatus,
   detail: string | null,
-  statusLabel: string,
   activeIdentity: string | null | undefined,
 ): string | null {
+  if (status === "connecting" || status === "idle" || status === "error") {
+    return detail;
+  }
+  const statusLabel = t(status === "thinking" ? "chat.voice.asking" : "chat.voice.listening");
   return [detail ?? statusLabel, activeIdentity].filter(Boolean).join(" — ") || null;
 }
 

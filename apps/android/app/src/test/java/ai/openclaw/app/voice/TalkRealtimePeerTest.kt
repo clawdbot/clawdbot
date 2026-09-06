@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -179,11 +180,13 @@ class StartupPeerConnection {
   companion object {
     var observer: PeerConnection.Observer? = null
     var offer: SdpObserver? = null
+    var offerCreated = CompletableDeferred<SdpObserver>()
     var disposed = false
 
     fun reset() {
       observer = null
       offer = null
+      offerCreated = CompletableDeferred()
       disposed = false
     }
   }
@@ -193,6 +196,7 @@ class StartupPeerConnection {
     constraints: MediaConstraints,
   ) {
     offer = observer
+    offerCreated.complete(observer)
   }
 
   @Implementation fun setLocalDescription(
@@ -233,6 +237,11 @@ class StartupDataChannel {
   companion object {
     private var observer: DataChannel.Observer? = null
     private var state = DataChannel.State.CONNECTING
+    val sent = mutableListOf<String>()
+
+    fun message(payload: String) {
+      observer!!.onMessage(DataChannel.Buffer(java.nio.ByteBuffer.wrap(payload.toByteArray()), false))
+    }
 
     fun open() {
       state = DataChannel.State.OPEN
@@ -242,6 +251,7 @@ class StartupDataChannel {
     fun reset() {
       observer = null
       state = DataChannel.State.CONNECTING
+      sent.clear()
     }
   }
 
@@ -250,6 +260,13 @@ class StartupDataChannel {
   }
 
   @Implementation fun state(): DataChannel.State = state
+
+  @Implementation fun send(buffer: DataChannel.Buffer): Boolean {
+    val bytes = ByteArray(buffer.data.remaining())
+    buffer.data.get(bytes)
+    sent.add(bytes.toString(Charsets.UTF_8))
+    return true
+  }
 
   @Implementation fun unregisterObserver() = Unit
 

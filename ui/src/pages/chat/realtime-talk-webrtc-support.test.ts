@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RealtimeTalkWebRtcOfferExchange } from "./realtime-talk-webrtc-support.ts";
+import {
+  RealtimeTalkWebRtcOfferExchange,
+  RealtimeTalkResponseOutcomeOwner,
+} from "./realtime-talk-webrtc-support.ts";
 
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 
@@ -179,5 +182,32 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
 
     await expect(readAnswer(exchange, () => false)).resolves.toBeUndefined();
     expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe("RealtimeTalkResponseOutcomeOwner identity bounds", () => {
+  it.each([
+    { name: "overlength", id: "x".repeat(1025) },
+    { name: "object", id: { value: "not-an-id" } },
+    { name: "number", id: 42 },
+    { name: "null", id: null },
+  ])("rejects $name before response identity retention", ({ id }) => {
+    const owner = new RealtimeTalkResponseOutcomeOwner(2);
+    expect(owner.start(id as string)).toBe(false);
+    expect(owner.finish({ type: "response.cancelled", response: { id: id as string } })).toEqual({
+      error: "Realtime response session limit exceeded",
+    });
+    for (const responseId of ["é".repeat(1024), "é".repeat(1023) + "x"]) {
+      expect(owner.start(responseId)).toBe(true);
+      const event = {
+        type: "response.done",
+        response: { id: responseId, status: "completed", output: [] },
+      };
+      expect(owner.finish(event)).toEqual({
+        outcome: { status: "completed", responseId },
+        overflow: false,
+      });
+      expect(owner.finish(event)).toBeUndefined();
+    }
   });
 });

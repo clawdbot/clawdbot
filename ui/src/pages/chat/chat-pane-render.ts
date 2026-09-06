@@ -430,20 +430,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail:
-        state.realtimeTalkStatus === "connecting" ||
-        state.realtimeTalkStatus === "idle" ||
-        state.realtimeTalkStatus === "error"
-          ? state.realtimeTalkDetail
-          : realtimeTalkStatusDetail(
-              state.realtimeTalkDetail,
-              t(
-                state.realtimeTalkStatus === "thinking"
-                  ? "chat.voice.asking"
-                  : "chat.voice.listening",
-              ),
-              state.realtimeTalkSession?.activeIdentity,
-            ),
+      realtimeTalkDetail: realtimeTalkStatusDetail(
+        state.realtimeTalkStatus,
+        state.realtimeTalkDetail,
+        state.realtimeTalkSession?.activeIdentity,
+      ),
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,

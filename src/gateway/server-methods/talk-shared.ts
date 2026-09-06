@@ -247,45 +247,40 @@ export function buildTalkRealtimeConfig(
   const savedProvider = normalizeOptionalString(talkRealtime?.provider);
   const requestedProviderId = normalizeOptionalString(requestedProvider);
   const requestedModelId = normalizeOptionalString(requestedModel);
-  // Only a deliberate strict authMethod selection locks provider/model identity.
-  // Legacy Auto and per-call requests keep the prior override behavior.
-  const strictProviderKeys = Object.entries(talkRealtimeProviderConfigs ?? {})
-    .filter(([, entry]) => entry?.authMethod !== undefined)
-    .map(([key]) => key);
-  if (strictProviderKeys.length > 1) {
+  const providers = listRealtimeVoiceProviders(config);
+  // One strict selection can occupy canonical and alias rows of the same provider.
+  // The saved auth row remains authoritative; per-call aliases cannot change its model.
+  const strictEntries = Object.entries(talkRealtimeProviderConfigs ?? {}).filter(
+    ([, entry]) => entry?.authMethod !== undefined,
+  );
+  const savedStrictEntry = strictEntries.find(
+    ([key]) => key === normalizeOptionalLowercaseString(savedProvider),
+  );
+  const lockedProvider = (savedStrictEntry ?? strictEntries[0])?.[0];
+  const definition = providers.find((entry) =>
+    lockedProvider ? providerMatchesId(entry, lockedProvider) : false,
+  );
+  const matchesStrictProvider = (id: string) =>
+    definition
+      ? providerMatchesId(definition, id)
+      : normalizeOptionalLowercaseString(id) === normalizeOptionalLowercaseString(lockedProvider);
+  if (strictEntries.some(([key]) => !matchesStrictProvider(key))) {
     throw new Error("Talk strict authentication requires one selected provider");
   }
-  const strictProvider = strictProviderKeys[0];
-  const strictAuthSelected = strictProvider !== undefined;
-  const lockedProvider = strictProvider;
-  if (strictProvider && savedProvider) {
-    const definition = listRealtimeVoiceProviders(config).find((entry) =>
-      providerMatchesId(entry, strictProvider),
-    );
-    const matches = definition
-      ? providerMatchesId(definition, savedProvider)
-      : normalizeOptionalLowercaseString(savedProvider) ===
-        normalizeOptionalLowercaseString(strictProvider);
-    if (!matches) {
-      throw new Error("Talk strict authentication conflicts with the selected provider");
-    }
+  const strictAuthSelected = lockedProvider !== undefined;
+  if (lockedProvider && savedProvider && !matchesStrictProvider(savedProvider)) {
+    throw new Error("Talk strict authentication conflicts with the selected provider");
   }
-  if (strictAuthSelected && requestedProviderId) {
-    if (!lockedProvider) {
-      throw new Error("Talk strict authentication requires one selected provider");
-    }
-    const definition = listRealtimeVoiceProviders(config).find((entry) =>
-      providerMatchesId(entry, lockedProvider),
+  if (
+    (strictEntries.length > 1 || (strictAuthSelected && savedProvider !== undefined)) &&
+    (!savedStrictEntry || new Set(strictEntries.map(([, entry]) => entry.authMethod)).size > 1)
+  ) {
+    throw new Error("Talk strict authentication has conflicting selections");
+  }
+  if (lockedProvider && requestedProviderId && !matchesStrictProvider(requestedProviderId)) {
+    throw new Error(
+      "Talk provider is selected on the Gateway; change Talk settings before starting a new call",
     );
-    const matches = definition
-      ? providerMatchesId(definition, requestedProviderId)
-      : normalizeOptionalLowercaseString(requestedProviderId) ===
-        normalizeOptionalLowercaseString(lockedProvider);
-    if (!matches) {
-      throw new Error(
-        "Talk provider is selected on the Gateway; change Talk settings before starting a new call",
-      );
-    }
   }
   const explicitProvider = strictAuthSelected
     ? lockedProvider
@@ -306,14 +301,12 @@ export function buildTalkRealtimeConfig(
     config,
     provider: selectedProvider,
     providerConfigs,
-    providers: listRealtimeVoiceProviders(config),
+    providers,
     requestedModel:
       normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
   const provider = selectedProvider ?? voiceModelDefault?.provider;
-  const selected = listRealtimeVoiceProviders(config).find(
-    (entry) => provider && providerMatchesId(entry, provider),
-  );
+  const selected = providers.find((entry) => provider && providerMatchesId(entry, provider));
   const providerModel = provider
     ? normalizeOptionalString(
         resolveProviderRawConfig({

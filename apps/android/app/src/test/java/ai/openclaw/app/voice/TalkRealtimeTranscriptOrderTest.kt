@@ -110,6 +110,22 @@ class TalkRealtimeTranscriptOrderTest {
     }
   }
 
+  @Test fun boundsRawItemAndPredecessorIdentitiesBeforeReservation() {
+    val atLimit = "😀".repeat(512)
+    for (role in listOf(null, "user")) {
+      val reserved = mutableListOf<String>()
+      val owner = TalkRealtimeTranscriptOrder { id, _, _, _, _, _ -> reserved.add(id) }
+      assertFalse(owner.reserve(atLimit + "x", null, role))
+      assertFalse(owner.reserve("valid", atLimit + "x", role))
+      assertTrue(reserved.isEmpty())
+      assertTrue(owner.reserve(atLimit, null, "user"))
+      assertTrue(owner.reserve("next", atLimit, "assistant"))
+      assertTrue(owner.reserve(atLimit, null, "user"))
+      assertEquals(listOf(atLimit, "next"), reserved)
+      owner.close()
+    }
+  }
+
   @Test fun outOfOrderAnnouncementsWaitForTheirPredecessor() {
     val order = mutableMapOf<String, CompletableDeferred<String>>()
     val owner = TalkRealtimeTranscriptOrder { itemId, _, entryId, _, _, _ -> order[itemId] = entryId }

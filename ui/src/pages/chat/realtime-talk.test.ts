@@ -976,6 +976,12 @@ describe("RealtimeTalkSession", () => {
           "talk.config",
           "talk.session.create",
         ]);
+        expect(request).toHaveBeenNthCalledWith(
+          3,
+          "talk.config",
+          provider ? { realtimeProvider: provider.trim() } : {},
+          requestTimeoutOptions,
+        );
         expect(relayInstances).toHaveLength(1);
         expect(relayStart).toHaveBeenCalledOnce();
       } finally {

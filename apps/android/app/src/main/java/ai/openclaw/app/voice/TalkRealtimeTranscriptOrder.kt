@@ -3,6 +3,9 @@ package ai.openclaw.app.voice
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 
+// Match Browser Talk's UTF-16 identity budget; exact IDs must never be truncated.
+internal const val TALK_REALTIME_MAX_ID_CHARS = 1024
+
 internal class TalkRealtimeTranscriptOrder(
   private val maxItems: Int = 1024,
   private val maxSpeechItems: Int = 128,
@@ -30,6 +33,7 @@ internal class TalkRealtimeTranscriptOrder(
     role: String?,
     predecessorProvided: Boolean = true,
   ): Boolean {
+    if (itemId.length > TALK_REALTIME_MAX_ID_CHARS || (previousItemId?.length ?: 0) > TALK_REALTIME_MAX_ID_CHARS) return false
     if (itemId in items) return true
     if (items.size >= maxItems) return false
     if (role != null && speechItems >= maxSpeechItems) return false

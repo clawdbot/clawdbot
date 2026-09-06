@@ -28,6 +28,40 @@ Missing or failed credentials for the selected method stop the call. OAuth never
 
 Web and Android calls inherit the Gateway defaults. Changes apply on the next call; an active call retains the credentials, model, and voice resolved at its creation. When `authMethod` is explicit, a client request for a different saved provider or model is rejected rather than substituting another route. Legacy/Auto configurations keep deliberate per-call provider/model overrides and may recover a failed client-owned call through the Gateway relay; the saved Gateway values remain defaults, not an identity lock. WebRTC session responses report the resolved `authMethod`, `model`, `voice`, and `transport`; readiness is not inferred from an offer URL or a login badge. Android uses a provider data channel, not `gateway-control-v1`. Native GPT-Live delegation remains Gateway-owned. Its frameless protocol has no client response-cancel command; Android ends that call when output cancellation is requested, instead of sending an unsupported GA command.
 
+For a per-call provider override, clients read
+`talk.config({ realtimeProvider: "<provider-or-alias>" })` before deciding whether
+relay recovery is allowed. This read-only projection uses the same canonical/alias
+precedence as session creation, preserves the Gateway's strict authentication lock,
+and retains the existing `includeSecrets` request and Talk secret-scope checks.
+Omitting the parameter projects the saved/default selection. Stopped or replaced
+Browser calls never start a new relay recovery.
+
+With a strict-auth Talk row, a saved provider key must select an auth-bearing
+row; selecting a non-auth row alongside it fails instead of silently changing
+the selected model. Multiple strict-auth rows must refer to the same registered
+provider and auth method. Per-call aliases cannot change that saved
+authentication or model selection.
+
+Browser and Android Talk limit provider-supplied response, tool-call and
+item identifiers stored for duplicate detection or transcript ordering to 1024
+UTF-16 code units. IDs that exceed these budgets are rejected, not truncated;
+the affected call fails rather than weakening duplicate detection. Transcript
+content and tool arguments keep their separate limits.
+
+When an older Gateway omits the output-control metadata, Android determines
+GA versus native control from unambiguous provider events, not the model name
+or offer URL. Cancelling before that protocol is known ends the call visibly;
+it does not send a guessed GA command. Known GA calls retain output cancellation.
+
+After Android releases its audio device and drains captured callbacks, accepted
+final transcripts share one 10-second persistence-drain budget rather than a
+new budget for every queued utterance. Remaining jobs are cancelled before the
+logical close request. Unconfirmed persistence is reported once; a redacted
+Logcat warning remains even when an ended call can no longer update the UI.
+The existing logical close acknowledgment uses its separate five-second request
+budget. Physical audio release itself is still awaited, never assumed complete
+because a timer elapsed.
+
 ## Choose a Talk voice from chat
 
 After setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.

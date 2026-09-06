@@ -384,6 +384,76 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     transport.stop();
   });
 
+  it.each(["tool", "tool item", "response", "created response"])(
+    "rejects an oversized %s ID before tool dispatch",
+    async (kind) => {
+      const onStatus = vi.fn();
+      const onTalkEvent = vi.fn();
+      const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
+      try {
+        await transport.start();
+        const peer = FakePeerConnection.instances[0];
+        const id = "x".repeat(1025);
+        if (kind === "created response") {
+          peer?.channel.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({ type: "response.created", response: { id } }),
+            }),
+          );
+        } else {
+          dispatchCompletedToolCall(peer, {
+            ...(kind === "tool"
+              ? { callId: id }
+              : kind === "tool item"
+                ? { itemId: id }
+                : { responseId: id }),
+            name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+            arguments: "{}",
+          });
+        }
+        expect(onStatus).toHaveBeenCalledWith(
+          "error",
+          kind.startsWith("tool")
+            ? "Realtime tool-call session limit exceeded"
+            : "Realtime response session limit exceeded",
+        );
+        expect(peer?.channel.close).toHaveBeenCalledOnce();
+        expect(peer?.channel.send).not.toHaveBeenCalled();
+        expect(onTalkEvent.mock.calls.some(([event]) => event.type === "tool.call")).toBe(false);
+      } finally {
+        transport.stop();
+      }
+    },
+  );
+
+  it("preserves exact boundary tool IDs and deduplicates without truncation", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
+    try {
+      await transport.start();
+      const peer = FakePeerConnection.instances[0];
+      const ids = ["é".repeat(1024), "é".repeat(1023) + "x"];
+      for (const [index, callId] of [...ids, ids[0]].entries()) {
+        dispatchCompletedToolCall(peer, {
+          responseId: "boundary-" + index,
+          callId,
+          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+          arguments: "{}",
+        });
+      }
+      expect(
+        onTalkEvent.mock.calls
+          .filter(([event]) => event.type === "tool.call")
+          .map(([event]) => event.callId),
+      ).toEqual(ids);
+      expect(onStatus.mock.calls.some(([status]) => status === "error")).toBe(false);
+      expect(peer?.channel.close).not.toHaveBeenCalled();
+    } finally {
+      transport.stop();
+    }
+  });
+
   it("ends the session instead of evicting completed call identities", async () => {
     const onStatus = vi.fn();
     const transport = await createOpenAiTransport({}, { onStatus });
