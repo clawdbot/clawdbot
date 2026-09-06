@@ -44,7 +44,10 @@ async function consumeAcpTurnEvents(params: {
   let sawOutput = false;
   let terminalStatus: AcpTurnStreamOutcome["terminalStatus"];
 
-  const deliverEvent = async (event: AcpRuntimeEvent) => {
+  for await (const event of params.events) {
+    if (!params.eventGate.open) {
+      continue;
+    }
     let forwardedEvent = event;
     if (event.type === "done") {
       // Legacy runTurn adapters may omit status but retain the cancellation reason.
@@ -56,18 +59,15 @@ async function consumeAcpTurnEvents(params: {
         normalizeText(event.message) || "ACP turn failed before completion.",
         event.detailCode ? { detailCode: event.detailCode } : undefined,
       );
-    } else if (event.type === "text_delta" || event.type === "tool_call") {
+    }
+    const outputEvent =
+      event.type === "text_delta" || event.type === "tool_call" ? event : undefined;
+    if (outputEvent) {
       sawOutput = true;
-      await params.onOutputEvent?.(event);
     }
-    await params.onEvent?.(forwardedEvent);
-  };
-
-  for await (const event of params.events) {
-    if (!params.eventGate.open) {
-      continue;
-    }
-    params.eventGate.pendingDelivery = deliverEvent(event);
+    params.eventGate.pendingDelivery = Promise.resolve(
+      outputEvent ? params.onOutputEvent?.(outputEvent) : undefined,
+    ).then(() => params.onEvent?.(forwardedEvent));
     try {
       await params.eventGate.pendingDelivery;
     } finally {

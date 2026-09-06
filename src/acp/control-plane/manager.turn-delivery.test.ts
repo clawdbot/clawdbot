@@ -33,8 +33,8 @@ describe("AcpSessionManager turn delivery", () => {
     async (terminalStatus) => {
       vi.useFakeTimers();
       const { runtimeState, sessionKey, manager } = setupRuntime();
-      const deliveryStarted = createDeferred<void>();
-      const releaseDelivery = createDeferred<void>();
+      const deliveryStarted = createDeferred();
+      const releaseDelivery = createDeferred();
       const result = createDeferred<AcpRuntimeTurnResult>();
       const events: AcpRuntimeEvent[] = [];
       let streamClosed = false;
@@ -110,8 +110,8 @@ describe("AcpSessionManager turn delivery", () => {
     async (promptSubmitted) => {
       vi.useFakeTimers();
       const { runtimeState, sessionKey, manager } = setupRuntime();
-      const deliveryStarted = createDeferred<void>();
-      const promptStarted = createDeferred<void>();
+      const deliveryStarted = createDeferred();
+      const promptStarted = createDeferred();
       const result = createDeferred<AcpRuntimeTurnResult>();
       const cancel = vi.fn(async () => {});
       const deliveryError = new Error("Channel delivery failed");

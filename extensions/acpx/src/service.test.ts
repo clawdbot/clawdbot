@@ -875,7 +875,7 @@ describe("createAcpxRuntimeService", () => {
     });
     vi.useFakeTimers();
     let settled = false;
-    const started = service.start(ctx).then(() => {
+    const started = Promise.resolve(service.start(ctx)).then(() => {
       settled = true;
     });
     try {
