@@ -20,6 +20,7 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -30,7 +31,12 @@ import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
   /** Internal orchestration context, shared across update phases and child processes. */
-  run?: { runId: string; env: NodeJS.ProcessEnv };
+  run?: {
+    runId: string;
+    env: NodeJS.ProcessEnv;
+    /** Prepared before replacement; never load the old authority graph after activation. */
+    requesterAuthority?: UpdateRequesterAuthority;
+  };
   acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;

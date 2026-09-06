@@ -396,7 +396,8 @@
     "!dist/plugin-sdk/blob-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-session.d.ts",
     "!dist/plugin-sdk/speech-provider.d.ts",
-    "!dist/plugin-sdk/realtime-voice-provider.d.ts"
+    "!dist/plugin-sdk/realtime-voice-provider.d.ts",
+    "!dist/plugin-sdk/provider-thinking-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1401,6 +1402,9 @@
     },
     "./plugin-sdk/provider-stream-shared": {
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-thinking-runtime": {
+      "default": "./dist/plugin-sdk/provider-thinking-runtime.js"
     },
     "./plugin-sdk/provider-transport-runtime": {
       "default": "./dist/plugin-sdk/provider-transport-runtime.js"

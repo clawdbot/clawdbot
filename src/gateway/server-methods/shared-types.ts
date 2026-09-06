@@ -361,6 +361,9 @@ type GatewayResidentBridgeContext = {
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
+  workerRepositoryWorkspaceMutationService?: ReturnType<
+    typeof import("../worker-environments/repository-workspace-mutation.js").createRepositoryWorkspaceMutationService
+  >;
   githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
   githubOAuthService?: ReturnType<
     typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle

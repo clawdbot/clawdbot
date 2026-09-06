@@ -1935,6 +1935,84 @@ CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
   FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
 ) STRICT;
 
+-- Logical sessions own repository intent and accepted artifact references,
+-- independently of the worker or rotating transcript session id.
+CREATE TABLE IF NOT EXISTS session_repository_workspaces (
+  workspace_id TEXT NOT NULL PRIMARY KEY CHECK (length(workspace_id) = 36),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  session_key TEXT NOT NULL CHECK (length(session_key) BETWEEN 1 AND 1024),
+  url TEXT NOT NULL CHECK (length(url) BETWEEN 1 AND 4096),
+  requested_ref TEXT CHECK (requested_ref IS NULL OR length(requested_ref) BETWEEN 1 AND 1024),
+  run_setup_script INTEGER NOT NULL DEFAULT 0 CHECK (run_setup_script IN (0, 1)),
+  base_commit TEXT CHECK (base_commit IS NULL OR length(base_commit) IN (40, 64)),
+  base_manifest_hash TEXT,
+  branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 256),
+  checkpoint_ref TEXT,
+  manifest_hash TEXT,
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE (agent_id, session_key),
+  CHECK (base_manifest_hash IS NULL OR base_commit IS NOT NULL),
+  CHECK ((checkpoint_ref IS NULL AND manifest_hash IS NULL)
+    OR (checkpoint_ref IS NOT NULL AND manifest_hash IS NOT NULL AND base_manifest_hash IS NOT NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT,
+  connection_generation TEXT,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_lifecycle_revision TEXT,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  checkpoint_ref TEXT,
+  checkpoint_digest TEXT,
+  claim_id TEXT,
+  run_id TEXT,
+  environment_id TEXT,
+  owner_epoch INTEGER,
+  placement_generation INTEGER,
+  identity_source TEXT NOT NULL CHECK (identity_source IN ('system-detected', 'system-configured', 'agent-override', 'personal')),
+  identity_profile_id TEXT,
+  identity_account_id INTEGER NOT NULL,
+  identity_login TEXT NOT NULL,
+  title TEXT,
+  body TEXT,
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT,
+  execution_id TEXT,
+  last_effect TEXT CHECK (last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IN ('dispatched', 'observed')),
+  push_repository TEXT,
+  repository TEXT,
+  branch TEXT NOT NULL,
+  base_branch TEXT,
+  source_head_commit TEXT,
+  source_index_tree TEXT,
+  workspace_tree TEXT,
+  previous_head_commit TEXT,
+  pushed_head_commit TEXT,
+  head_commit TEXT,
+  pull_request_url TEXT,
+  error_code TEXT,
+  next_action TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
+    OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
+  CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repository_publication_shared_request
+  ON github_repository_publication_requests(session_id, idempotency_key) WHERE owner_profile_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repository_publication_personal_request
+  ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;
+
 -- Session placement lives in the shared state database so local admission,
 -- worker admission, and environment attachment use one durable authority.
 CREATE TABLE IF NOT EXISTS worker_session_placements (
@@ -2157,6 +2235,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   recovery_requested_at_ms INTEGER,
   workspace_accepted_at_ms INTEGER,
   staged_result_ref TEXT,
+  repository_workspace_id TEXT,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;
@@ -2289,6 +2368,15 @@ CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
   ON github_personal_publication_requests(owner_profile_id, session_id, created_at_ms);
 CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
   ON github_personal_publication_requests(status, updated_at_ms, request_id);
+
+-- Older readers validate both local receipt tables exactly. Their immutable
+-- lifecycle binding stays in a first-use companion so those schemas remain readable.
+CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
+  publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
+  request_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  PRIMARY KEY (publication_kind, request_id)
+) STRICT;
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

@@ -166,6 +166,7 @@ function computeTestBrowserHash(params: {
   workspaceDir?: string;
   agentWorkspaceDir?: string;
   dockerEnvPolicyEpoch?: string;
+  readOnlyWorkspaceSkillMounts?: string[];
 }): string {
   const workspaceDir = params.workspaceDir ?? testWorkspaceDir;
   const agentWorkspaceDir = params.agentWorkspaceDir ?? workspaceDir;
@@ -191,7 +192,7 @@ function computeTestBrowserHash(params: {
     agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     createArgsEpoch: params.createArgsEpoch,
-    readOnlyWorkspaceSkillMounts: [],
+    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts ?? [],
   });
 }
 
@@ -580,35 +581,48 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
-  it("includes the explicit env policy epoch in the browser config hash when needed", async () => {
-    const cfg = buildConfig(false);
-    cfg.docker.env = {
-      LANG: "C.UTF-8",
-      GEMINI_API_KEY: "dummy-gemini",
-    };
-    const scopeKey = "session-1";
-    const workspaceDir = testWorkspaceDir;
-    const agentWorkspaceDir = testWorkspaceDir;
-    const expectedHash = computeTestBrowserHash({
-      cfg,
-      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
-      workspaceDir,
-      agentWorkspaceDir,
-      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
-    });
+  it.each([false, true])(
+    "includes the explicit env policy epoch in the browser config hash with skill mount=%s",
+    async (withSkillMount) => {
+      const cfg = buildConfig(false);
+      cfg.docker.env = {
+        LANG: "C.UTF-8",
+        GEMINI_API_KEY: "dummy-gemini",
+      };
+      const scopeKey = "session-1";
+      const workspaceDir = testWorkspaceDir;
+      const agentWorkspaceDir = workspaceDir;
+      if (withSkillMount) {
+        mkdirSync(path.join(workspaceDir, "skills"));
+      }
+      const hashInputs = {
+        cfg,
+        dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+        workspaceDir,
+        agentWorkspaceDir,
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+        readOnlyWorkspaceSkillMounts: withSkillMount
+          ? [`${path.join(workspaceDir, "skills")}:/workspace/skills:ro`]
+          : [],
+      };
+      const expectedHash = computeTestBrowserHash(hashInputs);
+      expect(expectedHash).not.toBe(
+        computeTestBrowserHash({ ...hashInputs, dockerEnvPolicyEpoch: undefined }),
+      );
 
-    await ensureTestSandboxBrowser({
-      scopeKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      cfg,
-    });
+      await ensureTestSandboxBrowser({
+        scopeKey,
+        workspaceDir,
+        agentWorkspaceDir,
+        cfg,
+      });
 
-    const createArgs = requireDockerCreateArgs();
-    expect(createArgs).toContain(`openclaw.configHash=${expectedHash}`);
-    expect(requireDockerCreateEnvEntries()).toContain("GEMINI_API_KEY=dummy-gemini");
-    expect(createArgs.some((arg) => arg.includes("dummy-gemini"))).toBe(false);
-  });
+      const createArgs = requireDockerCreateArgs();
+      expect(createArgs).toContain(`openclaw.configHash=${expectedHash}`);
+      expect(requireDockerCreateEnvEntries()).toContain("GEMINI_API_KEY=dummy-gemini");
+      expect(createArgs.some((arg) => arg.includes("dummy-gemini"))).toBe(false);
+    },
+  );
 
   it("fails before creating a browser container when Docker daemon is unavailable", async () => {
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {

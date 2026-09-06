@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -95,11 +96,22 @@ function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    // The anchor owns forwarded output lifetime. Drop the relay's duplicate writers so
-    // root output can reach EOF while the anchor retains descendant cleanup authority.
-    process.stdout.destroy();
-    process.stderr.destroy();
     anchor.once("spawn", () => {
+      // The anchor inherited these outputs. Close only the relay's duplicate writers
+      // so output EOF does not depend on either process giving up cleanup authority.
+      if (process.versions.bun) {
+        for (const fd of [1, 2]) {
+          const output = createWriteStream("", { fd, autoClose: true });
+          output.once("error", (error) => {
+            report({ type: "relay-error", generation: start.generation, error: error.message });
+            notifyParentLoss();
+          });
+          output.end();
+        }
+      } else {
+        process.stdout.destroy();
+        process.stderr.destroy();
+      }
       anchor?.send(start);
       if (parentLost) {
         anchor?.send({ type: "parent-loss", generation });

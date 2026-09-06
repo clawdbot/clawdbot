@@ -27,8 +27,10 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   message: "";
   projectId?: string;
   visibility?: "draft";
-  worktree: true;
-};
+} & (
+    | { worktree: true; repository?: undefined }
+    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+  );
 
 type SessionPlacementSubmission = {
   sessionKey: string;
@@ -76,6 +78,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "repository",
   "incognito",
   "visibility",
   "permissionMode",
@@ -98,7 +101,15 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
-    record.worktree !== true ||
+    (record.repository === undefined
+      ? record.worktree !== true
+      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+        record.worktree !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.worktreeName !== undefined ||
+        record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined &&

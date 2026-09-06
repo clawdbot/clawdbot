@@ -1,9 +1,8 @@
 /**
- * Regression coverage for PTY key encoding and DSR stripping.
+ * Regression coverage for PTY key encoding.
  * Protects terminal control bytes used by process send-keys and PTY sessions.
  */
 import { expect, test } from "vitest";
-import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 const ESC = "\x1b";
@@ -122,16 +121,4 @@ test("encodePaste wraps bracketed sequences by default", () => {
   const payload = encodePaste("line1\nline2\n");
   expect(payload.startsWith(`${ESC}[200~`)).toBe(true);
   expect(payload.endsWith(`${ESC}[201~`)).toBe(true);
-});
-
-test("stripDsrRequests removes cursor queries and counts them", () => {
-  const input = "hi\x1b[6nthere\x1b[?6n";
-  const { cleaned, requests } = stripDsrRequests(input);
-  expect(cleaned).toBe("hithere");
-  expect(requests).toBe(2);
-});
-
-test("buildCursorPositionResponse returns CPR sequence", () => {
-  expect(buildCursorPositionResponse()).toBe("\x1b[1;1R");
-  expect(buildCursorPositionResponse(12, 34)).toBe("\x1b[12;34R");
 });

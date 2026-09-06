@@ -592,7 +592,10 @@ process.stdin.resume();
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
     });
 
-    expect(result.error).toBeUndefined();
+    expect(
+      result.error,
+      formatCliProcessFailure({ reason: "managed update handoff refusal", ...result }),
+    ).toBeUndefined();
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/Managed update handoff root mismatch/iu);
     expect(await snapshotTree(root)).toEqual(before);
