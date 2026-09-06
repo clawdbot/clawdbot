@@ -58,6 +58,7 @@ export type ManifestModelCatalogSuppressionEntry = {
   model: string;
   mergeKey: string;
   reason?: string;
+  retirement?: NonNullable<ModelCatalog["suppressions"]>[number]["retirement"];
   when?: NonNullable<ModelCatalog["suppressions"]>[number]["when"];
 };
 
@@ -269,7 +270,7 @@ function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<
   );
 }
 
-function buildModelCatalogProviderAliasTargets(
+export function buildModelCatalogProviderAliasTargets(
   plugin: ManifestModelCatalogPlugin,
 ): ReadonlyMap<string, readonly string[]> {
   const ownedProviders = buildOwnedProviderSet(plugin);
@@ -289,13 +290,10 @@ function buildModelCatalogProviderAliasTargets(
 }
 
 function buildModelCatalogProviderRefs(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  const ownedProviders = buildOwnedProviderSet(plugin);
-  const refs = new Set(ownedProviders);
-  for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-    const aliasProvider = normalizeModelCatalogProviderId(rawAlias);
-    const targetProvider = normalizeModelCatalogProviderId(alias.provider);
-    if (aliasProvider && targetProvider && ownedProviders.has(targetProvider)) {
-      refs.add(aliasProvider);
+  const refs = new Set(buildOwnedProviderSet(plugin));
+  for (const aliases of buildModelCatalogProviderAliasTargets(plugin).values()) {
+    for (const alias of aliases) {
+      refs.add(alias);
     }
   }
   return refs;
@@ -353,6 +351,7 @@ export function planManifestModelCatalogSuppressions(params: {
         model,
         mergeKey: buildModelCatalogMergeKey(provider, model),
         ...(suppression.reason ? { reason: suppression.reason } : {}),
+        ...(suppression.retirement ? { retirement: suppression.retirement } : {}),
         ...(suppression.when ? { when: suppression.when } : {}),
       });
     }

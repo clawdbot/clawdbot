@@ -294,6 +294,26 @@ advertised node command.
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+#### SQLite write admission
+
+`runSqliteImmediateTransaction(db, prepare, options?)` from
+`openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
+the event loop. Its asynchronous `prepare` function may run more than once when
+another writer holds the database. Keep preparation repeatable: read and plan
+there, then return a **synchronous** transaction callback. Revalidate current
+owner and row predicates inside that callback before writing.
+
+Returning `undefined` from preparation skips the write and resolves the helper
+to `undefined`, even while another writer remains active. Otherwise, the helper
+resolves to the transaction callback's result. It rejects an already active
+transaction or preparation that leaves a transaction open. Once admitted, the
+callback runs once; callback and commit failures are never replayed.
+
+Admission retries use the connection's existing `busy_timeout`; this is not a
+total deadline for preparation or transaction execution. `options` supplies the
+same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
+database handle and its owning operation alive until the returned promise settles.
+
 #### Webhook body rejection
 
 Use `readWebhookBodyOrReject` or `readJsonWebhookBodyOrReject` from

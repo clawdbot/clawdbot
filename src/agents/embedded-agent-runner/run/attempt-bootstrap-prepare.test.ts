@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -18,17 +19,16 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         trigger: "user",
+        bootstrapWorkspaceDir: params.agentWorkspace,
         isCanonicalWorkspace: params.agentWorkspace === params.sessionWorkspace,
         config: { agents: { defaults: { workspace: params.agentWorkspace } } },
       } as EmbeddedRunAttemptParams,
-      bootstrapWorkspaceDir: params.agentWorkspace,
-      effectiveWorkspace: params.sessionWorkspace,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: params.sessionWorkspace,
+        resolvedWorkspace: params.sessionWorkspace,
+      }),
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => undefined,
-      resolvedWorkspace: params.sessionWorkspace,
-      sessionAgentId: "main",
-      sessionLabel: "agent:main:session-1",
     });
   }
 
@@ -88,13 +88,12 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         isCanonicalWorkspace: true,
         config: { agents: { defaults: { workspace } } },
       } as EmbeddedRunAttemptParams,
-      effectiveWorkspace: workspace,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: workspace,
+        resolvedWorkspace: workspace,
+      }),
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => undefined,
-      resolvedWorkspace: workspace,
-      sessionAgentId: "main",
-      sessionLabel: "agent:main:session-1",
     });
 
     expect(explicit).toEqual(omitted);

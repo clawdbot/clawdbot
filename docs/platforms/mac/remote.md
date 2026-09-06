@@ -25,7 +25,7 @@ Mac node capabilities and Talk Mode.
    Gateway and complete any sign-in prompts there.
 4. Return to OpenClaw. The saved Gateway's dashboard opens; check the account
    name in its sidebar footer. You can open more windows from
-   **File → New Gateway Window…**. The app reopens your selected Gateway after
+   **File → New Gateway Window…** or the **Gateways** menu. The app reopens your selected Gateway after
    restart, including when a separate primary Gateway supplies Mac capabilities.
 
 Cloudflare Access issues the personal application session through its

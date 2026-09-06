@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-chatgpt-responses">;
 
@@ -317,14 +318,7 @@ function createAssistantMessage(model: ResponsesModel): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   };

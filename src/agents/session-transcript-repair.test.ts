@@ -8,6 +8,7 @@ import {
   stripToolResultDetails,
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 const DEFAULT_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -39,44 +40,20 @@ describe("sanitizeToolUseResultPairing", () => {
     secondText?: string;
   }): AgentMessage[] =>
     castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
+      textToolResult("call_1", "read", "first", { isError: false }),
       ...(opts?.middleMessage ? [castAgentMessage(opts.middleMessage)] : []),
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: opts?.secondText ?? "second" }],
-        isError: false,
-      },
+      textToolResult("call_1", "read", opts?.secondText ?? "second", { isError: false }),
     ]);
 
   it("moves tool results directly after tool calls and inserts missing results", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
-        ],
-      },
+      sparseAssistant([
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+      ]),
       { role: "user", content: "user message that should come after tool use" },
-      {
-        role: "toolResult",
-        toolCallId: "call_2",
-        toolName: "exec",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
+      textToolResult("call_2", "exec", "ok", { isError: false }),
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
@@ -90,10 +67,7 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("uses custom text for synthesized missing tool results", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
       { role: "user", content: "user message that should come after tool use" },
     ]);
 
@@ -108,23 +82,14 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "checking" },
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
-          { type: "toolCall", id: "call_3", name: "write", arguments: {} },
-        ],
-      },
+      sparseAssistant([
+        { type: "text", text: "checking" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+        { type: "toolCall", id: "call_3", name: "write", arguments: {} },
+      ]),
       { role: "user", content: "user message that should come after tool use" },
-      {
-        role: "toolResult",
-        toolCallId: "call_2",
-        toolName: "exec",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
+      textToolResult("call_2", "exec", "ok", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input, {
@@ -155,32 +120,17 @@ describe("sanitizeToolUseResultPairing", () => {
   it("keeps parallel tool results when code-mode display turns arrive first", () => {
     // Display-only assistant turns must not cause synthetic results before real results arrive.
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_search", name: "lcm_expand_query", arguments: {} },
-          { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
-        ],
-      },
+      sparseAssistant([
+        { type: "toolCall", id: "call_search", name: "lcm_expand_query", arguments: {} },
+        { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
+      ]),
       {
         role: "assistant",
         content: [{ type: "text", text: "Lcm Expand Query: missing tool result" }],
         stopReason: "stop",
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_status",
-        toolName: "session_status",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_search",
-        toolName: "lcm_expand_query",
-        content: [{ type: "text", text: "expanded" }],
-        isError: false,
-      },
+      textToolResult("call_status", "session_status", "ok", { isError: false }),
+      textToolResult("call_search", "lcm_expand_query", "expanded", { isError: false }),
       { role: "user", content: "next turn" },
     ]);
 
@@ -201,28 +151,10 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("moves late real results ahead of newer assistant tool calls instead of synthesizing", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_exec", name: "exec", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_read",
-        toolName: "read",
-        content: [{ type: "text", text: "real read output" }],
-        isError: false,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_exec",
-        toolName: "exec",
-        content: [{ type: "text", text: "real exec output" }],
-        isError: false,
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_read", name: "read", arguments: {} }]),
+      sparseAssistant([{ type: "toolCall", id: "call_exec", name: "exec", arguments: {} }]),
+      textToolResult("call_read", "read", "real read output", { isError: false }),
+      textToolResult("call_exec", "exec", "real exec output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
@@ -247,17 +179,8 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "   ",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
+      textToolResult("call_1", "   ", "ok", { isError: false }),
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
@@ -295,17 +218,8 @@ describe("sanitizeToolUseResultPairing", () => {
   it("drops orphan tool results that do not match any tool call", () => {
     const input = castAgentMessages([
       { role: "user", content: "hello" },
-      {
-        role: "toolResult",
-        toolCallId: "call_orphan",
-        toolName: "read",
-        content: [{ type: "text", text: "orphan" }],
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "ok" }],
-      },
+      textToolResult("call_orphan", "read", "orphan", { isError: false }),
+      sparseAssistant([{ type: "text", text: "ok" }]),
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
@@ -333,13 +247,9 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("does not report preserved unframed results as discarded", () => {
-    const orphan = castAgentMessage({
-      role: "toolResult",
-      toolCallId: "call_orphan",
-      toolName: "read",
-      content: [{ type: "text", text: "orphan" }],
-      isError: false,
-    });
+    const orphan = castAgentMessage(
+      textToolResult("call_orphan", "read", "orphan", { isError: false }),
+    );
 
     const result = repairToolUseResultPairing([orphan], {
       preserveUnframedToolResults: true,
@@ -419,13 +329,7 @@ describe("sanitizeToolUseResultPairing", () => {
         content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
         stopReason: "aborted",
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_aborted",
-        toolName: "exec",
-        content: [{ type: "text", text: "partial result" }],
-        isError: false,
-      },
+      textToolResult("call_aborted", "exec", "partial result", { isError: false }),
       { role: "user", content: "retrying" },
     ]);
   }
@@ -629,10 +533,7 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
   it("moves a uniquely attributable normalized record only once", () => {
     const input = castAgentMessages([
       makeAssistant("call_read"),
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_write", name: "write", arguments: {} }],
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_write", name: "write", arguments: {} }]),
       {
         ...makeResult("call_read", "late read"),
         toolName: "   ",
@@ -957,15 +858,12 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
 describe("sanitizeToolCallInputs legacy block filtering", () => {
   it("drops malformed snake_case tool call blocks", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "before" },
-          { type: "tool_use", id: "tool_1", name: "read" },
-          { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
-          { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
-        ],
-      },
+      sparseAssistant([
+        { type: "text", text: "before" },
+        { type: "tool_use", id: "tool_1", name: "read" },
+        { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
+        { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
@@ -1002,10 +900,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("drops tool calls missing input or arguments", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read" }],
-      },
+      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read" }]),
       { role: "user", content: "hello" },
     ]);
 
@@ -1188,14 +1083,11 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("keeps valid tool calls and preserves text blocks", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "before" },
-          { type: "toolUse", id: "call_ok", name: "read", input: { path: "a" } },
-          { type: "toolCall", id: "call_drop", name: "read" },
-        ],
-      },
+      sparseAssistant([
+        { type: "text", text: "before" },
+        { type: "toolUse", id: "call_ok", name: "read", input: { path: "a" } },
+        { type: "toolCall", id: "call_drop", name: "read" },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input);
@@ -1208,25 +1100,22 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me check the gateway config.",
-            thinkingSignature: "sig_gateway",
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Let me check the gateway config.",
+          thinkingSignature: "sig_gateway",
+        },
+        {
+          type: "toolCall",
+          id: "call_gateway",
+          name: "gateway",
+          arguments: {
+            action: "config.get",
+            path: "channels.telegram",
           },
-          {
-            type: "toolCall",
-            id: "call_gateway",
-            name: "gateway",
-            arguments: {
-              action: "config.get",
-              path: "channels.telegram",
-            },
-          },
-        ],
-      },
+        },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, {
@@ -1269,18 +1158,15 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me reuse the tool id.",
-            thinkingSignature: "sig_duplicate",
-          },
-          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
-          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Let me reuse the tool id.",
+          thinkingSignature: "sig_duplicate",
+        },
+        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, {
@@ -1305,17 +1191,14 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     } as const;
     const input = castAgentMessages([
       firstAssistant,
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Second signed replay turn.",
-            thinkingSignature: "sig_second",
-          },
-          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Second signed replay turn.",
+          thinkingSignature: "sig_second",
+        },
+        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, {
@@ -1328,26 +1211,22 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("preserves signed-thinking turns that reuse a mutable earlier tool id", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } }],
-      },
+      sparseAssistant([
+        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+      ]),
       {
         role: "toolResult",
         toolCallId: "call_shared",
         content: [{ type: "text", text: "mutable result" }],
       },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Signed replay can keep its provider-owned id.",
-            thinkingSignature: "sig_later",
-          },
-          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Signed replay can keep its provider-owned id.",
+          thinkingSignature: "sig_later",
+        },
+        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+      ]),
       {
         role: "toolResult",
         toolCallId: "stale_call",
@@ -1386,17 +1265,14 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const input = castAgentMessages([
       firstAssistant,
       firstResult,
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Signed replay has a displaced result.",
-            thinkingSignature: "sig_later",
-          },
-          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Signed replay has a displaced result.",
+          thinkingSignature: "sig_later",
+        },
+        { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+      ]),
       userMessage,
       displacedResult,
     ]);
@@ -1412,25 +1288,22 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
   it("drops signed-thinking assistant turns with sessions_spawn attachments when the result is missing", () => {
     const content = "SIGNED_THINKING_ATTACHMENT_CONTENT";
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me spawn a helper.",
-            thinkingSignature: "sig_spawn",
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Let me spawn a helper.",
+          thinkingSignature: "sig_spawn",
+        },
+        {
+          type: "toolUse",
+          id: "call_spawn",
+          name: "sessions_spawn",
+          input: {
+            task: "inspect attachment",
+            attachments: [{ name: "snapshot.txt", content }],
           },
-          {
-            type: "toolUse",
-            id: "call_spawn",
-            name: "sessions_spawn",
-            input: {
-              task: "inspect attachment",
-              attachments: [{ name: "snapshot.txt", content }],
-            },
-          },
-        ],
-      },
+        },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, {
@@ -1445,31 +1318,23 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
   it("keeps signed-thinking assistant turns with sessions_spawn attachments when the result is present", () => {
     const content = "SIGNED_THINKING_ATTACHMENT_CONTENT";
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me spawn a helper.",
-            thinkingSignature: "sig_spawn",
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Let me spawn a helper.",
+          thinkingSignature: "sig_spawn",
+        },
+        {
+          type: "toolUse",
+          id: "call_spawn",
+          name: "sessions_spawn",
+          input: {
+            task: "inspect attachment",
+            attachments: [{ name: "snapshot.txt", content }],
           },
-          {
-            type: "toolUse",
-            id: "call_spawn",
-            name: "sessions_spawn",
-            input: {
-              task: "inspect attachment",
-              attachments: [{ name: "snapshot.txt", content }],
-            },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_spawn",
-        toolName: "sessions_spawn",
-        content: [{ type: "text", text: "done" }],
-      },
+        },
+      ]),
+      textToolResult("call_spawn", "sessions_spawn", "done"),
     ]);
 
     const out = sanitizeToolCallInputs(input, {
@@ -1483,22 +1348,19 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "Let me normalize this tool name.",
-            thinkingSignature: "sig_generic",
-          },
-          {
-            type: "toolCall",
-            id: "call_read",
-            name: " read ",
-            arguments: { path: "README.md" },
-          },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "thinking",
+          thinking: "Let me normalize this tool name.",
+          thinkingSignature: "sig_generic",
+        },
+        {
+          type: "toolCall",
+          id: "call_read",
+          name: " read ",
+          arguments: { path: "README.md" },
+        },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
@@ -1559,17 +1421,14 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("preserves toolUse input shape for sessions_spawn when no attachments are present", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "sessions_spawn",
-            input: { task: "hello" },
-          },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "toolUse",
+          id: "call_1",
+          name: "sessions_spawn",
+          input: { task: "hello" },
+        },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input);
@@ -1583,20 +1442,17 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it("preserves sessions_spawn attachments for mixed-case and padded tool names", () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "  SESSIONS_SPAWN  ",
-            input: {
-              task: "hello",
-              attachments: [{ name: "a.txt", content: "SECRET" }],
-            },
+      sparseAssistant([
+        {
+          type: "toolUse",
+          id: "call_1",
+          name: "  SESSIONS_SPAWN  ",
+          input: {
+            task: "hello",
+            attachments: [{ name: "a.txt", content: "SECRET" }],
           },
-        ],
-      },
+        },
+      ]),
     ]);
 
     const out = sanitizeToolCallInputs(input);
@@ -1648,12 +1504,7 @@ describe("stripToolResultDetails", () => {
   it("returns the same array reference when there are no toolResult details", () => {
     const input = castAgentMessages([
       { role: "assistant", content: [{ type: "text", text: "a" }] },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-      },
+      textToolResult("call_1", "read", "ok"),
       { role: "user", content: "b" },
     ]);
 

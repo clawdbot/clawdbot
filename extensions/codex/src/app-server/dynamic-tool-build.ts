@@ -321,6 +321,7 @@ export async function buildDynamicTools(
     // Capability-gated tools (requiredClientCaps) need the originating client's
     // declared caps in this sibling harness too, not only the embedded runner.
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -397,6 +398,7 @@ export async function buildDynamicTools(
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
     computerContextEpoch: input.computerContextEpoch,
+    oneShotCliRun: params.oneShotCliRun,
     registerRunCleanup: input.registerRunCleanup,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),

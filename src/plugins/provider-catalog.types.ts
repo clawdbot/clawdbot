@@ -21,6 +21,7 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+    profileId?: string;
   };
   resolveProviderAuth: (
     providerId?: string,

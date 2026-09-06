@@ -3431,7 +3431,82 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("marks local embedded replacement deltas", async () => {
+  it.each([
+    {
+      name: "unkeyed replacement snapshots",
+      updates: [{ text: "Hello world" }, { text: "Goodbye world" }],
+      expectedDeltas: [
+        { deltaText: "Hello world", replace: undefined },
+        { deltaText: "Goodbye world", replace: true },
+      ],
+      expectedText: "Goodbye world",
+    },
+    {
+      name: "identical snapshots from distinct assistant items",
+      updates: [
+        { itemId: "first", text: "Echo" },
+        { itemId: "second", text: "Echo" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo", replace: undefined },
+      ],
+      expectedText: "EchoEcho",
+    },
+    {
+      name: "a new assistant item extending an earlier item's text",
+      updates: [
+        { itemId: "first", text: "Echo", delta: "Echo" },
+        { itemId: "second", text: "Echo!", delta: "Echo!" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo!", replace: undefined },
+      ],
+      expectedText: "EchoEcho!",
+    },
+    {
+      name: "replayed and growing snapshots of one assistant item",
+      updates: [
+        { itemId: "answer", text: "Echo", delta: "Echo" },
+        { itemId: "answer", text: "Echo", delta: "Echo" },
+        { itemId: "answer", text: "Echo again", delta: " again" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: " again", replace: undefined },
+      ],
+      expectedText: "Echo again",
+    },
+    {
+      name: "item-scoped deltas without snapshots",
+      updates: [
+        { itemId: "first", delta: "Echo" },
+        { itemId: "first", delta: "Echo" },
+        { itemId: "second", delta: "!" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "!", replace: undefined },
+      ],
+      expectedText: "EchoEcho!",
+    },
+    {
+      name: "empty corrections that remove only the current assistant item",
+      updates: [
+        { itemId: "first", text: "Hello" },
+        { itemId: "second", text: " world" },
+        { itemId: "second", text: "" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Hello", replace: undefined },
+        { deltaText: " world", replace: undefined },
+        { deltaText: "Hello", replace: true },
+      ],
+      expectedText: "Hello",
+    },
+  ])("projects local embedded $name", async ({ updates, expectedDeltas, expectedText }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
 
@@ -3441,18 +3516,11 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await sendMainChat(backend, "replace", "run-local-replace");
 
-    registeredListener?.({
-      runId: "run-local-replace",
-      stream: "assistant",
-      data: { text: "Hello world" },
-    });
-    registeredListener?.({
-      runId: "run-local-replace",
-      stream: "assistant",
-      data: { text: "Goodbye world" },
-    });
+    for (const data of updates) {
+      registeredListener?.({ runId: "run-local-replace", stream: "assistant", data });
+    }
 
-    pending.resolve({ payloads: [{ text: "Goodbye world" }], meta: {} });
+    pending.resolve({ payloads: [], meta: {} });
     await flushMicrotasks();
 
     const chatPayloads = events
@@ -3463,20 +3531,21 @@ describe("EmbeddedTuiBackend", () => {
             state?: string;
             deltaText?: string;
             replace?: boolean;
+            message?: { content?: Array<{ text?: string }> };
           },
       );
     expect(
       chatPayloads
         .filter((payload) => payload.state === "delta")
         .map((payload) => ({
-          state: payload.state,
           deltaText: payload.deltaText,
           replace: payload.replace,
         })),
-    ).toEqual([
-      { state: "delta", deltaText: "Hello world", replace: undefined },
-      { state: "delta", deltaText: "Goodbye world", replace: true },
-    ]);
+    ).toEqual(expectedDeltas);
+    expect(chatPayloads.at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ text: expectedText }] },
+    });
   });
 
   it("keeps internal context private when local deltas split its delimiters", async () => {
@@ -3518,7 +3587,10 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {
+  it.each([
+    { name: "unkeyed fallback", itemId: undefined },
+    { name: "fallback reusing an assistant item ID", itemId: "answer" },
+  ])("keeps a $name deliverable after a retryable lifecycle error", async ({ itemId }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
 
@@ -3528,6 +3600,14 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await sendMainChat(backend, "recover after timeout", "run-local-fallback");
 
+    if (itemId) {
+      for (const data of [
+        { itemId: "prefix", text: "Discarded attempt: " },
+        { itemId, text: "draft answer" },
+      ]) {
+        registeredListener?.({ runId: "run-local-fallback", stream: "assistant", data });
+      }
+    }
     registeredListener?.({
       runId: "run-local-fallback",
       stream: "lifecycle",
@@ -3554,7 +3634,14 @@ describe("EmbeddedTuiBackend", () => {
     registeredListener?.({
       runId: "run-local-fallback",
       stream: "assistant",
-      data: { text: "fallback answer", delta: "fallback answer" },
+      data: { itemId, text: "fallback answer", delta: "fallback answer" },
+    });
+    expect(events.at(-1)).toMatchObject({
+      event: "chat",
+      payload: {
+        state: "delta",
+        message: { content: [{ text: "fallback answer" }] },
+      },
     });
     registeredListener?.({
       runId: "run-local-fallback",
@@ -3583,9 +3670,15 @@ describe("EmbeddedTuiBackend", () => {
     { failureCount: 2, streamedText: "recovered answer", finalText: "recovered answer" },
     { failureCount: 1, streamedText: "outdated draft", finalText: "authoritative final answer" },
     { failureCount: 1, streamedText: undefined, finalText: "authoritative unstreamed answer" },
+    {
+      failureCount: 2,
+      streamedText: "recovered item answer",
+      finalText: "recovered item answer",
+      itemId: "answer",
+    },
   ])(
     "replaces $failureCount expired attempt failures with authoritative result '$finalText'",
-    async ({ failureCount, streamedText, finalText }) => {
+    async ({ failureCount, streamedText, finalText, itemId }) => {
       const pending = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
       const backend = new EmbeddedTuiBackend();
@@ -3595,6 +3688,14 @@ describe("EmbeddedTuiBackend", () => {
       backend.start();
       await sendMainChat(backend, "recover after a slow retry", runId);
       for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        if (itemId) {
+          for (const data of [
+            { itemId: "prefix", text: `Discarded attempt ${attempt + 1}: ` },
+            { itemId, text: "draft answer" },
+          ]) {
+            registeredListener?.({ runId, stream: "assistant", data });
+          }
+        }
         registeredListener?.({
           runId,
           stream: "lifecycle",
@@ -3613,7 +3714,14 @@ describe("EmbeddedTuiBackend", () => {
         registeredListener?.({
           runId,
           stream: "assistant",
-          data: { text: streamedText, delta: streamedText },
+          data: { itemId, text: streamedText, delta: streamedText },
+        });
+        expect(events.at(-1)).toMatchObject({
+          event: "chat",
+          payload: {
+            state: "delta",
+            message: { content: [{ text: streamedText }] },
+          },
         });
       }
       registeredListener?.({
