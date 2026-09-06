@@ -23,6 +23,7 @@ import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agent-run-termi
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasContinuationSessionSpawnEvidence,
   hasCommittedOutboundDeliveryEvidence,
   getAutomaticDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
@@ -128,6 +129,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  requireContinuationProgress?: boolean;
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
@@ -287,9 +289,11 @@ export async function sendSubagentAnnounceDirectly(params: {
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
+    const requireVisibleTurnOutcome =
+      params.requireVisibleReply || params.requireContinuationProgress;
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
-      : params.requireVisibleReply && deliveryTarget.deliver
+      : requireVisibleTurnOutcome && deliveryTarget.deliver
         ? "automatic"
         : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
@@ -481,6 +485,14 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (requireVisibleTurnOutcome) {
+        return {
+          delivered: false,
+          path: "direct",
+          disposition: "agent_run_pending",
+          error: "required requester turn is still running",
+        };
+      }
       return {
         delivered: true,
         path: "direct",
@@ -499,7 +511,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
     const requiresAutomaticFinalReceipt =
-      shouldDeliverAgentFinal && (params.expectsCompletionMessage || params.requireVisibleReply);
+      shouldDeliverAgentFinal && (params.expectsCompletionMessage || requireVisibleTurnOutcome);
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
@@ -632,7 +644,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
-      (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
+      (!shouldDeliverAgentFinal && !requireVisibleTurnOutcome && hasMessagingToolDelivery) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
       (!requiresMessageToolDelivery &&
@@ -644,16 +656,27 @@ export async function sendSubagentAnnounceDirectly(params: {
               ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
               : !origin?.to,
           )));
-    const acceptsIntentionalSilentCompletion =
-      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+    // Continuations share final-delivery routing and suppression checks. Only
+    // an accepted successor that owns completion can replace the visible final.
+    const continuationProgressDelivered =
+      hasVisibleCompletionReply ||
+      directAnnounceResult?.runtimeContinuationStarted === true ||
+      hasContinuationSessionSpawnEvidence(directAnnounceResult?.acceptedSessionSpawns);
+    if (params.requireContinuationProgress && !continuationProgressDelivered) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "continuation turn did not start another subagent or deliver a visible final",
+      };
+    }
+    const silentCompletionOk = hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       !hasVisibleCompletionReply &&
       (params.requireVisibleReply ||
         (params.expectsCompletionMessage &&
           (shouldDeliverAgentFinal ||
-            (!requiresMessageToolDelivery &&
-              !hasCompletionSideEffect &&
-              !acceptsIntentionalSilentCompletion))))
+            (!requiresMessageToolDelivery && !hasCompletionSideEffect && !silentCompletionOk))))
     ) {
       return {
         delivered: false,

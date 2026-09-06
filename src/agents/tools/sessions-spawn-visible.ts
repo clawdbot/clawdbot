@@ -447,6 +447,7 @@ export async function maybeSpawnVisibleSession(params: {
       status: "accepted",
       childSessionKey,
       runId,
+      expectsCompletionMessage: params.expectsCompletionMessage,
       mode: "run",
       cleanup: "keep",
       ...(sessionUrl ? { sessionUrl } : {}),

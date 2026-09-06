@@ -931,6 +931,8 @@ describe("createCodexDynamicToolBridge", () => {
         status: "accepted",
         runId: "run_5f3a9c",
         childSessionKey: "child-7b21",
+        expectsCompletionMessage: true,
+        inlineDelivery: false,
         mode: "run",
       }),
     );
@@ -957,7 +959,12 @@ describe("createCodexDynamicToolBridge", () => {
       expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
     );
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_5f3a9c", childSessionKey: "child-7b21" },
+      {
+        runId: "run_5f3a9c",
+        childSessionKey: "child-7b21",
+        expectsCompletionMessage: true,
+        inlineDelivery: false,
+      },
     ]);
   });
 
@@ -985,6 +992,8 @@ describe("createCodexDynamicToolBridge", () => {
         status: "accepted",
         runId: "run_compacted",
         childSessionKey: "child-compacted",
+        expectsCompletionMessage: false,
+        inlineDelivery: true,
       }),
     );
 
@@ -999,7 +1008,12 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual(expectInputText("Child launch recorded."));
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_compacted", childSessionKey: "child-compacted" },
+      {
+        runId: "run_compacted",
+        childSessionKey: "child-compacted",
+        expectsCompletionMessage: false,
+        inlineDelivery: true,
+      },
     ]);
   });
 
@@ -1983,6 +1997,8 @@ describe("createCodexDynamicToolBridge", () => {
                   status: "accepted",
                   runId: "child-run",
                   childSessionKey: "child-session",
+                  expectsCompletionMessage: true,
+                  inlineDelivery: false,
                 });
       const outer = new AbortController();
       const bridge = createCodexDynamicToolBridge({
@@ -2033,7 +2049,12 @@ describe("createCodexDynamicToolBridge", () => {
           expect(bridge.telemetry.successfulCronAdds).toBe(1);
         } else {
           expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-            { runId: "child-run", childSessionKey: "child-session" },
+            {
+              runId: "child-run",
+              childSessionKey: "child-session",
+              expectsCompletionMessage: true,
+              inlineDelivery: false,
+            },
           ]);
         }
       } finally {

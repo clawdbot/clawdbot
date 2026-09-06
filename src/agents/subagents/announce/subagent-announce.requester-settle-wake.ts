@@ -69,16 +69,15 @@ const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
-  requireVisibleReply: boolean;
+  allowContinuation: boolean;
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
 }): string {
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Child settlement ends this batch, not necessarily the original user request. Review the results against the requested outcome and continue any remaining in-scope work before replying.",
-    params.requireVisibleReply
-      ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
+    params.allowContinuation
+      ? "[Subagent Context] Child settlement ends this batch, not necessarily the original user request. Review the completion results against the requested outcome before deciding whether the original task is done. If additional action is required, continue any remaining in-scope work; otherwise send a truthful user-facing update."
       : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
     ...(params.modelRouteChange
       ? [
@@ -390,7 +389,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,
-    requireVisibleReply: requesterYieldedAfterDelivery,
+    allowContinuation: requesterYieldedAfterDelivery,
     modelRouteChange,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
@@ -480,7 +479,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
-        ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
+        ...(requesterYieldedAfterDelivery ? { requireContinuationProgress: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
@@ -488,9 +487,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         resolveGatewayContext,
       });
     } catch (error) {
-      // A transport exception can arrive after gateway admission. Replay the
-      // same persisted idempotency key; only a known no-turn result may rotate it.
-      const lastError = error instanceof Error ? error.message : String(error);
+      delivery = {
+        delivered: false,
+        path: "direct",
+        disposition: "retryable",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    // Direct delivery normalizes RPC failures to retryable results. Both forms
+    // can follow admission, so only a known no-turn result may rotate the key.
+    if (delivery.disposition === "retryable") {
+      const lastError = delivery.error ?? "requester settle transport failed";
       const replayCount = (state.replayCount ?? 0) + 1;
       const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
       if (
@@ -525,6 +532,28 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     if (delivery.delivered) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
       return true;
+    }
+    if (delivery.disposition === "agent_run_pending") {
+      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0];
+      const lastError = delivery.error ?? "requester settle turn is still running";
+      // The admitted turn may later resolve through Gateway dedupe. Keep this
+      // batch dispatching and preserve the transport-failure replay budget.
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
+        nextAttemptAt: Date.now() + retryDelayMs,
+        batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+        lastError,
+      };
+      params.transitionBatch(settledBatch, state);
+      logWarn(
+        `requester settle wake turn still running; same-key poll scheduled in ${Math.round(retryDelayMs / 1000)}s`,
+      );
+      return false;
     }
     if (
       delivery.disposition === "ambiguous" ||

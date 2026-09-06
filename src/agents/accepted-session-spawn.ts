@@ -8,6 +8,8 @@ export type AcceptedSessionSpawn = {
   childSessionKey: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
+  /** True when the child delivers directly to its bound channel instead. */
+  inlineDelivery?: boolean;
 };
 
 /** Normalize a tool result that accepted a child session spawn. */
@@ -25,6 +27,7 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
     runId,
     childSessionKey,
     expectsCompletionMessage: details.expectsCompletionMessage === true,
+    inlineDelivery: details.inlineDelivery === true,
   };
 }
 

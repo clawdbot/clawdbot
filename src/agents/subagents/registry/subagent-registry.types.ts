@@ -70,6 +70,7 @@ export type SubagentRestartRecoveryReceipt = {
 type SubagentDeliveryDisposition =
   | "delivered"
   | "session_queued"
+  | "agent_run_pending"
   | "intentional_non_delivery"
   | "retryable"
   | "ambiguous"

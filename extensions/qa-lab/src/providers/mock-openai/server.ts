@@ -92,6 +92,13 @@ import {
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
   QA_SUBAGENT_SELF_YIELD_MARKER,
+  QA_REQUESTER_SETTLE_FINAL_MARKER,
+  QA_REQUESTER_SETTLE_PREMATURE_FINAL_MARKER,
+  QA_REQUESTER_SETTLE_SEQUENTIAL_PROMPT_RE,
+  QA_REQUESTER_SETTLE_WAVE_ONE_MARKER,
+  QA_REQUESTER_SETTLE_WAVE_ONE_WORKER_RE,
+  QA_REQUESTER_SETTLE_WAVE_TWO_MARKER,
+  QA_REQUESTER_SETTLE_WAVE_TWO_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
@@ -1389,6 +1396,66 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("sessions_yield", {
       message: "Waiting for the remote job to report back.",
     });
+  }
+  if (QA_REQUESTER_SETTLE_WAVE_ONE_WORKER_RE.test(prompt)) {
+    return buildAssistantEvents(QA_REQUESTER_SETTLE_WAVE_ONE_MARKER);
+  }
+  if (QA_REQUESTER_SETTLE_WAVE_TWO_WORKER_RE.test(prompt)) {
+    return buildAssistantEvents(QA_REQUESTER_SETTLE_WAVE_TWO_MARKER);
+  }
+  if (QA_REQUESTER_SETTLE_SEQUENTIAL_PROMPT_RE.test(allInputText)) {
+    const isSettleWake = /Every subagent spawned from this session has now settled/i.test(prompt);
+    if (isSettleWake && prompt.includes(QA_REQUESTER_SETTLE_WAVE_TWO_MARKER)) {
+      return buildAssistantEvents(QA_REQUESTER_SETTLE_FINAL_MARKER);
+    }
+    if (isSettleWake && prompt.includes(QA_REQUESTER_SETTLE_WAVE_ONE_MARKER)) {
+      if (/send your consolidated final answer to the user now/i.test(prompt)) {
+        return buildAssistantEvents(QA_REQUESTER_SETTLE_PREMATURE_FINAL_MARKER);
+      }
+      if (
+        /If additional action is required, continue any remaining in-scope work/i.test(prompt) &&
+        scenarioState.requesterSettleSequentialWave === 1 &&
+        canCallSessionsSpawn
+      ) {
+        scenarioState.requesterSettleSequentialWave = 2;
+        return buildToolCallEventsWithArgs("sessions_spawn", {
+          task: `Requester settle sequential wave two worker: reply exactly ${QA_REQUESTER_SETTLE_WAVE_TWO_MARKER}.`,
+          label: "qa-requester-settle-wave-two",
+          thread: false,
+          mode: "run",
+        });
+      }
+      if (
+        scenarioState.requesterSettleSequentialWave === 2 &&
+        hasCompletedToolOutput &&
+        canCallSessionsYield &&
+        !/\byielded\b/i.test(toolOutput)
+      ) {
+        return buildToolCallEventsWithArgs("sessions_yield", {
+          message: `Waiting for ${QA_REQUESTER_SETTLE_WAVE_TWO_MARKER}.`,
+        });
+      }
+      return buildAssistantEvents("NO_REPLY");
+    }
+    if (scenarioState.requesterSettleSequentialWave === 0 && canCallSessionsSpawn) {
+      scenarioState.requesterSettleSequentialWave = 1;
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Requester settle sequential wave one worker: reply exactly ${QA_REQUESTER_SETTLE_WAVE_ONE_MARKER}.`,
+        label: "qa-requester-settle-wave-one",
+        thread: false,
+        mode: "run",
+      });
+    }
+    if (
+      scenarioState.requesterSettleSequentialWave === 1 &&
+      hasCompletedToolOutput &&
+      canCallSessionsYield &&
+      !/\byielded\b/i.test(toolOutput)
+    ) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_REQUESTER_SETTLE_WAVE_ONE_MARKER}.`,
+      });
+    }
   }
   const terminalCompletionCase = extractLastMatchingUserTurn(
     input,
@@ -2715,6 +2782,7 @@ export async function startQaMockOpenAiServer(params?: {
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
       repeatedRequestRecoveryAttempts: 0,
+      requesterSettleSequentialWave: 0,
       toolLoopReadAttempts: 0,
     };
     scenarioStates.set(key, state);

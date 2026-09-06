@@ -1643,6 +1643,7 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
         runId: "run-child",
         childSessionKey: "agent:claude:subagent:child",
         expectsCompletionMessage: true,
+        inlineDelivery: false,
       },
     ]);
     expect(ctx.state.replayState).toEqual({

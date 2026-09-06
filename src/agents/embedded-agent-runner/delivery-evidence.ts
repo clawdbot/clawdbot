@@ -36,6 +36,7 @@ export type AgentDeliveryEvidence = {
   /** Durable recovery evidence sets this when its bounded target projection omitted entries. */
   messagingToolSentTargetsTruncated?: unknown;
   acceptedSessionSpawns?: unknown;
+  runtimeContinuationStarted?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
     toolSummary?: {
@@ -119,6 +120,19 @@ function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
     ? value.some((entry) => {
         const spawn = asOptionalRecord(entry);
         return hasNonEmptyString(spawn?.runId) && hasNonEmptyString(spawn?.childSessionKey);
+      })
+    : false;
+}
+
+export function hasContinuationSessionSpawnEvidence(value: unknown): boolean {
+  return Array.isArray(value)
+    ? value.some((entry) => {
+        const spawn = asOptionalRecord(entry);
+        return (
+          hasNonEmptyString(spawn?.runId) &&
+          hasNonEmptyString(spawn?.childSessionKey) &&
+          (spawn?.expectsCompletionMessage === true || spawn?.inlineDelivery === true)
+        );
       })
     : false;
 }
@@ -409,6 +423,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "messagingToolSentMediaUrls" in value ||
     "messagingToolSentTargets" in value ||
     "acceptedSessionSpawns" in value ||
+    "runtimeContinuationStarted" in value ||
     "successfulCronAdds" in value ||
     "meta" in value
   );
@@ -549,10 +564,14 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
 
 /** Returns whether committed non-messaging resource effects make replay unsafe. */
 function hasCommittedNonMessagingOutboundDeliveryEvidence(
-  result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
+  result: Pick<
+    AgentDeliveryEvidence,
+    "acceptedSessionSpawns" | "runtimeContinuationStarted" | "successfulCronAdds"
+  >,
 ): boolean {
   return (
     hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
+    result.runtimeContinuationStarted === true ||
     hasPositiveNumber(result.successfulCronAdds)
   );
 }

@@ -171,6 +171,29 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fallback-steer while a direct agent run is pending", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      disposition: "agent_run_pending" as const,
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      disposition: "agent_run_pending",
+    });
+  });
+
   it.each([
     {
       name: "cannot deliver",

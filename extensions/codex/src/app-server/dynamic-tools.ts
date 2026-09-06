@@ -439,7 +439,12 @@ export type CodexDynamicToolBridge = {
     coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
-    acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+    acceptedSessionSpawns: Array<{
+      runId: string;
+      childSessionKey: string;
+      expectsCompletionMessage: boolean;
+      inlineDelivery: boolean;
+    }>;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
@@ -447,6 +452,8 @@ export type CodexDynamicToolBridge = {
 function normalizeAcceptedSessionSpawn(result: unknown): {
   runId: string;
   childSessionKey: string;
+  expectsCompletionMessage: boolean;
+  inlineDelivery: boolean;
 } | null {
   const details = asOptionalRecord(asOptionalRecord(result)?.details);
   if (!details || details.status !== "accepted") {
@@ -454,7 +461,14 @@ function normalizeAcceptedSessionSpawn(result: unknown): {
   }
   const runId = normalizeOptionalString(details.runId);
   const childSessionKey = normalizeOptionalString(details.childSessionKey);
-  return runId && childSessionKey ? { runId, childSessionKey } : null;
+  return runId && childSessionKey
+    ? {
+        runId,
+        childSessionKey,
+        expectsCompletionMessage: details.expectsCompletionMessage === true,
+        inlineDelivery: details.inlineDelivery === true,
+      }
+    : null;
 }
 
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];

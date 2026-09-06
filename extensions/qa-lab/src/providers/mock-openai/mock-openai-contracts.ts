@@ -379,6 +379,16 @@ export function isStrandedFinalRetryFailureRequest(allInputText: string): boolea
 }
 export const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
 export const QA_SUBAGENT_SELF_YIELD_MARKER = "QA-SUBAGENT-SELF-YIELD-FOLLOW-UP-OK";
+export const QA_REQUESTER_SETTLE_SEQUENTIAL_PROMPT_RE =
+  /requester settle sequential waves qa check/i;
+export const QA_REQUESTER_SETTLE_WAVE_ONE_WORKER_RE =
+  /requester settle sequential wave one worker/i;
+export const QA_REQUESTER_SETTLE_WAVE_TWO_WORKER_RE =
+  /requester settle sequential wave two worker/i;
+export const QA_REQUESTER_SETTLE_WAVE_ONE_MARKER = "QA-REQUESTER-SETTLE-WAVE-ONE-OK";
+export const QA_REQUESTER_SETTLE_WAVE_TWO_MARKER = "QA-REQUESTER-SETTLE-WAVE-TWO-OK";
+export const QA_REQUESTER_SETTLE_FINAL_MARKER = "QA-REQUESTER-SETTLE-FINAL-OK";
+export const QA_REQUESTER_SETTLE_PREMATURE_FINAL_MARKER = "QA-REQUESTER-SETTLE-PREMATURE-FINAL";
 export const QA_SUBAGENT_TERMINAL_MARKERS = {
   visible: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
   silent: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
@@ -428,6 +438,7 @@ export type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
+  requesterSettleSequentialWave: 0 | 1 | 2;
   toolLoopReadAttempts: number;
 };
 

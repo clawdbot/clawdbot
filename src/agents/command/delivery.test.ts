@@ -880,6 +880,12 @@ describe("deliverAgentCommandResult payload normalization", () => {
       expected: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
     },
     {
+      name: "runtime-owned continuation",
+      result: { runtimeContinuationStarted: true },
+      field: "runtimeContinuationStarted",
+      expected: true,
+    },
+    {
       name: "successful cron add",
       result: { successfulCronAdds: 1 },
       field: "successfulCronAdds",

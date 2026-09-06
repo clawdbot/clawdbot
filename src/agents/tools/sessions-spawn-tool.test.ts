@@ -472,10 +472,14 @@ describe("sessions_spawn tool", () => {
           mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect").expectsCompletionMessage,
         ).toBe(expected);
 
-        await tool.execute("visible", {
+        const visibleResult = await tool.execute("visible", {
           task: "visible child",
           visible: true,
           ...input,
+        });
+        expect(visibleResult.details).toMatchObject({
+          status: "accepted",
+          expectsCompletionMessage: expected,
         });
         expect(registerRun).toHaveBeenCalledWith(
           expect.objectContaining({ expectsCompletionMessage: expected }),

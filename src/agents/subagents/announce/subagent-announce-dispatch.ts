@@ -8,6 +8,7 @@ type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition =
   | "delivered"
   | "session_queued"
+  | "agent_run_pending"
   | "intentional_non_delivery"
   | "retryable"
   | "ambiguous"
@@ -156,6 +157,7 @@ export async function runSubagentAnnounceDispatch(params: {
   if (
     primaryDirect.delivered ||
     primaryDirect.disposition === "session_queued" ||
+    primaryDirect.disposition === "agent_run_pending" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||
     primaryDirect.disposition === "permanent_failure"

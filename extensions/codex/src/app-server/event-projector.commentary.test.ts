@@ -705,7 +705,12 @@ describe("CodexAppServerEventProjector commentary projection", () => {
       {
         ...buildEmptyToolTelemetry(),
         acceptedSessionSpawns: [
-          { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+          {
+            runId: "child-run",
+            childSessionKey: "agent:main:subagent:child",
+            expectsCompletionMessage: true,
+            inlineDelivery: false,
+          },
         ],
       },
       { yieldDetected: true },
@@ -713,7 +718,12 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     expect(result.yieldDetected).toBe(true);
     expect(result.acceptedSessionSpawns).toEqual([
-      { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+      {
+        runId: "child-run",
+        childSessionKey: "agent:main:subagent:child",
+        expectsCompletionMessage: true,
+        inlineDelivery: false,
+      },
     ]);
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });

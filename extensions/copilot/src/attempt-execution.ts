@@ -298,6 +298,7 @@ export async function runCopilotExecution(context: {
                 childSessionKey,
                 expectsCompletionMessage:
                   acceptedSessionSpawnDetails.expectsCompletionMessage === true,
+                inlineDelivery: acceptedSessionSpawnDetails.inlineDelivery === true,
               });
             }
             await runAgentHarnessAfterToolCallHook({

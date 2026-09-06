@@ -566,14 +566,19 @@ describe("requester settle dispatch deadline", () => {
       await vi.advanceTimersByTimeAsync(20);
       await expect(firstWake).resolves.toBe(false);
       expect(child.requesterSettleWake).toMatchObject({
-        status: "pending",
+        status: "dispatching",
         attemptCount: 1,
+        replayCount: 1,
       });
 
       await vi.advanceTimersByTimeAsync(30_000);
       const replay = wake();
       await vi.advanceTimersByTimeAsync(20);
       await expect(replay).resolves.toBe(false);
+      const firstIdempotencyKey = deliver.mock.calls[0]?.[0]?.directIdempotencyKey;
+      expect(firstIdempotencyKey).toEqual(expect.any(String));
+      expect(firstIdempotencyKey).not.toBe("");
+      expect(deliver.mock.calls[1]?.[0]?.directIdempotencyKey).toBe(firstIdempotencyKey);
 
       const deadlineCancelled = acceptedSignals.map((signal) => signal.aborted);
       releaseBlocker();

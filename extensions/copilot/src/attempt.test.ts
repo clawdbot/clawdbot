@@ -1949,6 +1949,7 @@ describe("runCopilotAttempt", () => {
               runId: "run-copilot-child",
               childSessionKey: "agent:main:subagent:copilot-child",
               expectsCompletionMessage: true,
+              inlineDelivery: false,
             },
           },
           startedAt: Date.now(),
@@ -1977,6 +1978,7 @@ describe("runCopilotAttempt", () => {
         runId: "run-copilot-child",
         childSessionKey: "agent:main:subagent:copilot-child",
         expectsCompletionMessage: true,
+        inlineDelivery: false,
       },
     ]);
   });

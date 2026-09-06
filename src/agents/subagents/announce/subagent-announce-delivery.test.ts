@@ -4908,14 +4908,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     path: "direct",
     reason: "visible_reply_missing",
   } as const;
+  const pendingRequesterFinal = {
+    delivered: false,
+    path: "direct",
+    disposition: "agent_run_pending",
+  } as const;
 
-  const externalRequesterSettleRoute = {
+  type RequesterSettleRoute = {
+    name: string;
+    sessionKey: string;
+    origin?: { channel?: string; to?: string; accountId?: string };
+    requesterIsSubagent?: boolean;
+    agentParams: {
+      deliver: boolean;
+      channel: string | undefined;
+      accountId: string | undefined;
+      to: string | undefined;
+    };
+  };
+
+  type RequesterSettleDeliveryCase = {
+    name: string;
+    response: Record<string, unknown>;
+    routes?: readonly RequesterSettleRoute[];
+    requireVisibleReply: boolean;
+    requireContinuationProgress?: boolean;
+    recordsVisibleFinal?: boolean;
+    expected: Readonly<Record<string, unknown>>;
+  };
+
+  const externalRequesterSettleRoute: RequesterSettleRoute = {
     name: "Discord",
     sessionKey: "agent:main:discord:dm:U123",
     origin: { channel: "discord", to: "dm:U123", accountId: "acct-1" },
     agentParams: { deliver: true, channel: "discord", accountId: "acct-1", to: "dm:U123" },
   };
-  const requesterSettleRoutes = [
+  const requesterSettleRoutes: readonly RequesterSettleRoute[] = [
     externalRequesterSettleRoute,
     {
       name: "no origin",
@@ -4938,13 +4966,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   ];
 
-  const requesterSettleCases = [
+  const requesterSettleCases: RequesterSettleDeliveryCase[] = [
     ...["accepted", "in_flight"].map((status) => ({
       name: `does not record ${status} handoff as a visible final`,
       routes: requesterSettleRoutes,
       response: { status },
       requireVisibleReply: true,
-      expected: deliveredRequesterFinal,
+      expected: pendingRequesterFinal,
     })),
     {
       name: "does not record a canceled partial answer as a visible final",
@@ -4956,7 +4984,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "records a non-yielded visible final without requiring a reply",
       routes: requesterSettleRoutes.slice(1),
-      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      response: { status: "ok", result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: false,
       recordsVisibleFinal: true,
       expected: deliveredRequesterFinal,
@@ -4977,7 +5005,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "accepts a yielded requester's visible final answer",
       recordsVisibleFinal: true,
       routes: requesterSettleRoutes.slice(1),
-      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      response: { status: "ok", result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: true,
       expected: deliveredRequesterFinal,
     },
@@ -5186,6 +5214,89 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "accepts a follow-on subagent spawn when the settle turn may continue",
+      response: {
+        result: {
+          payloads: [],
+          acceptedSessionSpawns: [
+            {
+              runId: "run-next",
+              childSessionKey: "agent:main:next",
+              expectsCompletionMessage: true,
+            },
+          ],
+        },
+      },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "does not treat a fire-and-forget spawn as requester continuation",
+      response: {
+        result: {
+          payloads: [],
+          acceptedSessionSpawns: [
+            {
+              runId: "run-background",
+              childSessionKey: "agent:main:background",
+              expectsCompletionMessage: false,
+            },
+          ],
+        },
+      },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts inline ACP delivery as requester continuation",
+      response: {
+        result: {
+          payloads: [],
+          acceptedSessionSpawns: [
+            {
+              runId: "run-inline",
+              childSessionKey: "agent:main:acp:inline",
+              expectsCompletionMessage: false,
+              inlineDelivery: true,
+            },
+          ],
+        },
+      },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "accepts a Codex native continuation owned by the runtime",
+      response: { result: { payloads: [], runtimeContinuationStarted: true } },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: deliveredRequesterFinal,
+    },
+    ...(["accepted", "started", "in_flight"] as const).map((status) => ({
+      name: `keeps a ${status} continuation turn pending`,
+      response: { status },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: pendingRequesterFinal,
+    })),
+    {
+      name: "rejects an empty continuation turn",
+      response: {},
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a silent continuation turn",
+      response: { result: { payloads: [{ text: "NO_REPLY" }] } },
+      requireVisibleReply: false,
+      requireContinuationProgress: true,
+      expected: missingRequesterFinal,
+    },
+    {
       name: "rejects a cron side effect without a final reply",
       response: { result: { payloads: [], successfulCronAdds: 1 } },
       requireVisibleReply: true,
@@ -5332,15 +5443,29 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ];
 
   it.each(
-    requesterSettleCases.flatMap((testCase) =>
-      (testCase.routes ?? [externalRequesterSettleRoute]).map((route) => ({
-        testCase,
-        route,
-      })),
-    ),
+    requesterSettleCases
+      .flatMap((testCase) =>
+        testCase.requireVisibleReply
+          ? [
+              testCase,
+              {
+                ...testCase,
+                name: `continuation: ${testCase.name}`,
+                requireVisibleReply: false,
+                requireContinuationProgress: true,
+              },
+            ]
+          : [testCase],
+      )
+      .flatMap((testCase) =>
+        (testCase.routes ?? [externalRequesterSettleRoute]).map((route) => ({
+          testCase,
+          route,
+        })),
+      ),
   )("$route.name: $testCase.name", async ({ testCase, route }) => {
-    const { response, requireVisibleReply, expected } = testCase;
-    const callGateway = createGatewayMock({ status: "ok", ...response });
+    const { response, requireVisibleReply, requireContinuationProgress, expected } = testCase;
+    const callGateway = createGatewayMock(response);
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const sendMessage = createSendMessageMock();
     const origin = route.origin;
@@ -5366,6 +5491,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterIsSubagent: "requesterIsSubagent" in route && route.requesterIsSubagent === true,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
+      ...(requireContinuationProgress ? { requireContinuationProgress: true } : {}),
       ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
       directIdempotencyKey: "announce-requester-settle-direct",
       sourceTool: "subagent_announce",
@@ -5383,7 +5509,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);
     expect(agentParams.sourceReplyDeliveryMode).toBe(
-      requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
+      (requireVisibleReply || requireContinuationProgress) && route.agentParams.deliver
+        ? "automatic"
+        : undefined,
     );
   });
 
