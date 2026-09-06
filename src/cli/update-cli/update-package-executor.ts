@@ -39,11 +39,6 @@ type PackageExecutorImplementation<PreparedState> = {
   ) => Promise<void>;
 };
 
-function createPreparedPackageUpdate(): PreparedPackageUpdate {
-  // SAFETY: The owning WeakMap, not an inspectable property, carries this private brand at runtime.
-  return Object.freeze({}) as PreparedPackageUpdate;
-}
-
 function createPackageExecutor<PreparedState>(
   implementation: PackageExecutorImplementation<PreparedState>,
 ): PackageUpdateExecutor {
@@ -63,7 +58,8 @@ function createPackageExecutor<PreparedState>(
   return Object.freeze({
     async prepare(update) {
       const state = await implementation.prepare(update);
-      const prepared = createPreparedPackageUpdate();
+      // SAFETY: The owning WeakMap, not an inspectable property, carries this private brand at runtime.
+      const prepared = Object.freeze({}) as PreparedPackageUpdate;
       preparedStates.set(prepared, { value: state });
       return prepared;
     },
