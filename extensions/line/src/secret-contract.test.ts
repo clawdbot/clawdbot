@@ -64,6 +64,28 @@ describe("LINE secret contract", () => {
     expect(context.warnings).toStrictEqual([]);
   });
 
+  it("leaves a channel-level signing secret unresolved when no default account is admitted", () => {
+    const context = collect({
+      channels: {
+        line: {
+          enabled: true,
+          channelSecret: STORE_SECRET_REF,
+          accounts: { work: { channelAccessToken: "work-token", channelSecret: "work-secret" } },
+        },
+      },
+    });
+
+    expect(context.assignments).toStrictEqual([]);
+    expect(context.warnings).toEqual([
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.line.channelSecret",
+        message:
+          "channels.line.channelSecret: no enabled LINE account inherits this channel-level channelSecret.",
+      },
+    ]);
+  });
+
   it("leaves a channel-level credential unresolved once accounts.default supplies its own", () => {
     const context = collect({
       channels: {

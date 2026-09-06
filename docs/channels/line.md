@@ -190,7 +190,7 @@ Token/secret files:
 `tokenFile` and `secretFile` must point to regular files. Symlinks are rejected.
 Inline config values win over files; env vars are the last fallback for the default account.
 
-`channelAccessToken` and `channelSecret` accept plaintext or SecretRef values across env/file/exec/store providers ([Secrets Management](/gateway/secrets)), including for named accounts. A configured reference the runtime cannot resolve is reported as an unavailable credential rather than a missing one, and the account refuses to start rather than serving the webhook without a signing secret.
+`channelAccessToken` and `channelSecret` accept a plaintext value or a `SecretRef` object across env/file/exec/store providers ([Secrets Management](/gateway/secrets)), including for named accounts. A configured `SecretRef` the runtime cannot resolve is reported as an unavailable credential rather than a missing one, and the account refuses to start rather than serving the webhook without a signing secret.
 
 Multiple accounts:
 

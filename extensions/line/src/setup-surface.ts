@@ -1,6 +1,5 @@
 // Line plugin module implements setup surface behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
@@ -112,14 +111,9 @@ function createLineTokenCredential(params: {
     inputPrompt: params.inputPrompt,
     allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
     resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
-    accountConfigured: (account) =>
-      Boolean(
-        normalizeOptionalString(account.channelAccessToken) &&
-        normalizeOptionalString(account.channelSecret),
-      ),
-    hasConfiguredValue: (account) =>
-      hasConfiguredSecretInput(account.config[params.configKey]) ||
-      Boolean(normalizeOptionalString(account.config[params.fileKey])),
+    // `configuredFields` above already answers both "is this configured" questions through the
+    // shared secret-input check, which reads a configured reference the runtime has not resolved.
+    // Overriding them here with the resolved value is what made a reference look unset.
     resolvedValue: (account) => normalizeOptionalString(account[params.configKey]),
     envValue: ({ accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID
@@ -128,7 +122,10 @@ function createLineTokenCredential(params: {
     patchAccount: ({ cfg, accountId, patch, clearFields }) =>
       patchLineAccountConfig({ cfg, accountId, enabled: true, clearFields, patch }),
     useEnv: { clearFields: [params.configKey, params.fileKey] },
-    set: { clearFields: [params.fileKey], value: "resolved" },
+    // Store what the operator chose. `value: "resolved"` would write the plaintext the wizard
+    // resolved a reference to, which is the opposite of what its "external secret provider"
+    // option says it does; plaintext entry is unaffected because both halves are the same string.
+    set: { clearFields: [params.fileKey] },
   });
 }
 

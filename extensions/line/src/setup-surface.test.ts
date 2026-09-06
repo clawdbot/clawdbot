@@ -54,6 +54,49 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
+  it("stores the reference the operator chose instead of the value it resolves to", async () => {
+    const credential = lineSetupWizard.credentials?.[0];
+    if (!credential?.applySet) {
+      throw new Error("expected the LINE token credential to support applySet");
+    }
+    const ref = { source: "store", provider: "default", id: "LINE_TOKEN" } as const;
+
+    const cfg = await credential.applySet({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      credentialValues: {},
+      value: ref,
+      resolvedValue: "resolved-plaintext-token",
+    });
+
+    expect(cfg.channels?.line?.channelAccessToken).toEqual(ref);
+  });
+
+  it("treats a configured reference as configured while it stays unresolved", () => {
+    const credential = lineSetupWizard.credentials?.[0];
+    if (!credential?.inspect) {
+      throw new Error("expected the LINE token credential to support inspect");
+    }
+    const cfg = {
+      channels: {
+        line: {
+          accounts: {
+            default: {
+              channelAccessToken: { source: "store", provider: "default", id: "LINE_TOKEN" },
+              channelSecret: { source: "store", provider: "default", id: "LINE_SECRET" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const state = credential.inspect({ cfg, accountId: "default" });
+
+    expect(state.resolvedValue).toBeUndefined();
+    expect(state.hasConfiguredValue).toBe(true);
+    expect(state.accountConfigured).toBe(true);
+  });
+
   installChannelDmPolicyContractSuite({
     dmPolicy: lineSetupWizard.dmPolicy!,
     cases: [

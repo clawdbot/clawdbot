@@ -16,6 +16,7 @@ import {
   hasConfiguredSecretInput,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   LineAccountConfig,
   LineConfig,
@@ -158,15 +159,33 @@ export function resolveLineAccount(params: {
   };
 }
 
+/**
+ * Whether the channel root admits a default account. Only the access token does that; a
+ * root-level signing secret alone never adds one, so it would have no account to serve.
+ */
+export function channelRootAdmitsDefaultLineAccount(params: {
+  config: { channelAccessToken?: unknown; tokenFile?: unknown } | undefined;
+  secretDefaults?: SecretDefaults;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const env = params.env ?? process.env;
+  return (
+    hasConfiguredSecretInput(params.config?.channelAccessToken, params.secretDefaults) ||
+    Boolean(normalizeOptionalString(params.config?.tokenFile)) ||
+    Boolean(normalizeOptionalString(env.LINE_CHANNEL_ACCESS_TOKEN))
+  );
+}
+
 export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const ids = new Set<string>();
 
   if (
-    hasConfiguredSecretInput(lineConfig?.channelAccessToken, cfg.secrets?.defaults) ||
-    lineConfig?.tokenFile ||
-    process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()
+    channelRootAdmitsDefaultLineAccount({
+      config: lineConfig,
+      secretDefaults: cfg.secrets?.defaults,
+    })
   ) {
     ids.add(DEFAULT_ACCOUNT_ID);
   }

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { channelRootAdmitsDefaultLineAccount } from "./accounts.js";
 
 const LINE_CHANNEL = "line";
 
@@ -43,12 +44,23 @@ function accountSuppliesCredential(params: {
 /**
  * LINE resolves a default account from channel-level credentials even when the accounts map
  * names only other accounts, so the root credential keeps a consumer the shared surface omits.
+ * The account has to be admitted first: without it the root credential has nothing to serve and
+ * resolving it would run an exec or store provider for no consumer.
  */
-function resolveLineSecretSurface(channel: Record<string, unknown>): ChannelAccountSurface {
-  const surface = resolveChannelAccountSurface(channel);
+function resolveLineSecretSurface(params: {
+  channel: Record<string, unknown>;
+  defaults: SecretDefaults | undefined;
+  env: NodeJS.ProcessEnv;
+}): ChannelAccountSurface {
+  const surface = resolveChannelAccountSurface(params.channel);
   if (
     !surface.hasExplicitAccounts ||
-    surface.accounts.some((entry) => normalizeAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID)
+    surface.accounts.some((entry) => normalizeAccountId(entry.accountId) === DEFAULT_ACCOUNT_ID) ||
+    !channelRootAdmitsDefaultLineAccount({
+      config: params.channel,
+      secretDefaults: params.defaults,
+      env: params.env,
+    })
   ) {
     return surface;
   }
@@ -70,7 +82,11 @@ export function collectRuntimeConfigAssignments(params: {
   if (!channel) {
     return;
   }
-  const surface = resolveLineSecretSurface(channel);
+  const surface = resolveLineSecretSurface({
+    channel,
+    defaults: params.defaults,
+    env: params.context.env,
+  });
   for (const { field, fileField } of LINE_CREDENTIALS) {
     collectConditionalChannelFieldAssignments({
       channelKey: LINE_CHANNEL,
