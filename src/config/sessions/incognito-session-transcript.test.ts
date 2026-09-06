@@ -74,9 +74,10 @@ describe("session creation scope", () => {
 
       const created = await createSessionEntryWithTranscript(
         scope,
-        ({ existingEntry, sessionEntries }) => {
+        ({ existingEntry, targetEntry, isLabelInUse }) => {
           expect(existingEntry).toBeUndefined();
-          expect(sessionEntries).toEqual({});
+          expect(targetEntry).toBeUndefined();
+          expect(isLabelInUse("unused")).toBe(false);
           return { ok: true, entry };
         },
         { cwd: state.workspaceDir },
@@ -110,10 +111,10 @@ describe("session creation scope", () => {
 
       const updated = { ...entry, label: "recreated", updatedAt: 2 };
       await expect(
-        createSessionEntryWithTranscript(scope, ({ existingEntry, sessionEntries }) => {
+        createSessionEntryWithTranscript(scope, ({ existingEntry, targetEntry, isLabelInUse }) => {
           expect(existingEntry).toMatchObject(entry);
-          expect(Object.keys(sessionEntries)).toEqual([key]);
-          expect(sessionEntries[key]).toMatchObject(entry);
+          expect(targetEntry).toMatchObject(entry);
+          expect(isLabelInUse("recreated")).toBe(false);
           return { ok: true, entry: updated };
         }),
       ).resolves.toMatchObject({ ok: true, sessionFile: key });

@@ -4,6 +4,7 @@ import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   isStickyAgentRunTerminalOutcome,
@@ -106,6 +107,23 @@ describe("agent run terminal outcome", () => {
           }).reason,
       ),
     ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
+  });
+
+  it.each([
+    { metadata: {}, reason: "aborted", sticky: false },
+    { metadata: { livenessState: "abandoned" }, reason: "aborted", sticky: false },
+    { metadata: { livenessState: "blocked" }, reason: "blocked", sticky: false },
+    { metadata: { timeoutPhase: "provider" }, reason: "hard_timeout", sticky: true },
+  ])("preserves auth revocation wait precedence with $metadata", ({ metadata, reason, sticky }) => {
+    const outcome = buildAgentRunTerminalOutcomeFromWaitResult({
+      status: "error",
+      stopReason: "auth-revoked",
+      ...metadata,
+    });
+
+    expect(outcome?.reason).toBe(reason);
+    expect(outcome?.stopReason).toBe("auth-revoked");
+    expect(isStickyAgentRunTerminalOutcome(outcome)).toBe(sticky);
   });
 
   it("keeps queue and gateway draining timeouts non-sticky", () => {

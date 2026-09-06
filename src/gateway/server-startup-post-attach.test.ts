@@ -272,7 +272,7 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
-vi.mock("../agents/tools/transcripts-tool.js", () => ({
+vi.mock("../transcripts/auto-start.js", () => ({
   createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
 }));
 

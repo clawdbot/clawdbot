@@ -1,7 +1,9 @@
 // Real Gateway proof: execute only on a machine with isolated SQLite coordination.
 import { describe, expect, it, vi } from "vitest";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as approvalWebPush from "./approval-web-push.js";
+import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -12,6 +14,8 @@ describe("public Gateway close startup presentation lifetime", () => {
   it("starts without waiting for approval recovery but joins it before close returns", async ({
     signal,
   }) => {
+    let recoverySignal: AbortSignal | undefined;
+    const expectHeldWork = await observeHeldGatewayWorkDrain(() => recoverySignal);
     const release = createDeferredCore();
     const recoveries: Promise<void>[] = [];
     const restoreRecoveries: Array<() => void> = [];
@@ -25,6 +29,7 @@ describe("public Gateway close startup presentation lifetime", () => {
         const observation = vi
           .spyOn(delivery, "recoverTerminalDeliveries")
           .mockImplementation(() => {
+            recoverySignal = getAsyncWorkSignal();
             const work = (async () => {
               await release.promise;
               await recover();
@@ -40,7 +45,6 @@ describe("public Gateway close startup presentation lifetime", () => {
     signal.addEventListener("abort", unblock, { once: true });
     let startup: Promise<GatewayHarness> | undefined;
     let closing: Promise<void> | undefined;
-    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
     let finishedAtClose: boolean | undefined;
     try {
       startup = createGatewaySuiteHarness({
@@ -51,21 +55,19 @@ describe("public Gateway close startup presentation lifetime", () => {
       expect(recoveries).toHaveLength(1);
       expect(recoveryFinished).toBe(false);
 
-      // A repaired close waits for the bounded release. A broken early close releases
-      // immediately, but cannot turn its captured completion ordering into a pass.
-      releaseTimer = setTimeout(unblock, 5_000);
       closing = gateway.server
         .close({ reason: "startup approval recovery lifetime proof" })
         .then(() => {
           finishedAtClose = recoveryFinished;
           unblock();
         });
+      await expectHeldWork(closing);
+      unblock();
       await closing;
       await Promise.all(recoveries);
       expect(finishedAtClose).toBe(true);
       expect(recoveryFinished).toBe(true);
     } finally {
-      clearTimeout(releaseTimer);
       unblock();
       const [started] = await Promise.allSettled([startup]);
       try {
