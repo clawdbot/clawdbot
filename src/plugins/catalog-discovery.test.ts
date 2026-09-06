@@ -131,7 +131,11 @@ describe("plugin discovery identity and local join", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       catalog: { categories: ["tools"], official: false },
-      local: { present: true, action: "install" },
+      local: {
+        present: true,
+        action: "install",
+        install: { source: "official", pluginId: "calendar-local" },
+      },
     });
     expect(resolvePluginDiscoveryIdentity(tools[0]?.id ?? "")).toEqual({
       origin: "local",

@@ -3146,6 +3146,38 @@ export const en: TranslationMap & {
     enabledRestart: "Enabled {name}. A Gateway restart is required to apply the change.",
     disabledSuccess: "Disabled {name}.",
     disabledRestart: "Disabled {name}. A Gateway restart is required to apply the change.",
+    installWizard: {
+      title: "Install {name}",
+      progressLabel: "Plugin installation progress",
+      reviewStep: "Review",
+      installStep: "Install",
+      restartStep: "Restart",
+      configureStep: "Configure",
+      enableStep: "Enable",
+      capabilities: "Declared capabilities",
+      noDeclaredCapabilities: "No skills or MCP servers declared in the catalog.",
+      restartImpact: "Gateway restart",
+      restartDescription:
+        "Installation restarts the Gateway and briefly interrupts active sessions.",
+      installingBody: "Installing the reviewed plugin package…",
+      reconnectingBody: "The Gateway is restarting. Reconnecting and checking installed state…",
+      loadingConfiguration: "Loading the plugin configuration schema…",
+      configureBody: "Complete the required settings before this plugin is enabled.",
+      enablingBody: "Enabling the plugin and verifying its final state…",
+      policyWarningTitle: "Review required",
+      continueInstall: "Continue installation",
+      failedTitle: "Installation did not complete",
+      consentCancelled: "Capability review was cancelled. The plugin was not installed.",
+      installedStateMissing:
+        "The Gateway reconnected, but the installed plugin was not found. Retry to refresh its state.",
+      reconnectTimedOut:
+        "The Gateway did not reconnect after installation. Check the Gateway status, then retry.",
+      configSaveFailed: "Plugin configuration could not be saved.",
+      successTitle: "Plugin ready",
+      successBody: "{name} is installed and enabled.",
+      saveAndEnable: "Save and enable",
+      managePlugin: "Manage plugin",
+    },
   },
   labsPage: {
     intro:

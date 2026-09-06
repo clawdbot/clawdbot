@@ -388,6 +388,7 @@ export const PluginDiscoveryLocalFactsSchema = closedObject({
     Type.Literal("error"),
   ]),
   pluginId: Type.Optional(NonEmptyString),
+  install: Type.Optional(PluginCatalogInstallActionSchema),
   action: Type.Union([
     Type.Literal("install"),
     Type.Literal("manage"),

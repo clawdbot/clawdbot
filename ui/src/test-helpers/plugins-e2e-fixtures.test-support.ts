@@ -305,9 +305,31 @@ export const localOnlyDiscoveryPlugin = {
     enabled: false,
     state: "not-installed",
     pluginId: "local-calendar",
+    install: { source: "official", pluginId: "local-calendar" },
     action: "install",
   },
 } satisfies PluginDiscoveryEntry;
+
+export const localCalendarDisabled = {
+  id: "local-calendar",
+  name: "Local Calendar",
+  packageName: "@openclaw/local-calendar",
+  description: "Coordinate work using the included calendar plugin.",
+  version: "1.0.0",
+  kind: ["productivity"],
+  origin: "official",
+  installed: true,
+  enabled: false,
+  state: "disabled",
+  category: "tool",
+  removable: false,
+} satisfies PluginCatalogItem;
+
+export const localCalendarEnabled = {
+  ...localCalendarDisabled,
+  enabled: true,
+  state: "enabled",
+} satisfies PluginCatalogItem;
 
 function availableDiscoveryPlugin(index: number, prefix: string): PluginDiscoveryEntry {
   return {
@@ -492,6 +514,65 @@ export const localOnlyDetail = {
     versions: [],
   },
 } satisfies PluginDiscoveryDetailResult;
+
+export const matrixNeedsSetup = {
+  id: "matrix",
+  name: "Matrix",
+  packageName: "matrix",
+  description: "Connect OpenClaw to Matrix rooms and direct messages.",
+  version: "2.1.0",
+  kind: ["channel"],
+  origin: "global",
+  installed: true,
+  enabled: false,
+  state: "needs-setup",
+  category: "channel",
+  removable: true,
+} satisfies PluginCatalogItem;
+
+export const matrixEnabled = {
+  ...matrixNeedsSetup,
+  enabled: true,
+  state: "enabled",
+} satisfies PluginCatalogItem;
+
+export const matrixConfigSchema = {
+  generatedAt: "2026-09-03T00:00:00.000Z",
+  schema: {
+    type: "object",
+    properties: {
+      plugins: {
+        type: "object",
+        properties: {
+          entries: {
+            type: "object",
+            properties: {
+              matrix: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean", title: "Enabled" },
+                  config: {
+                    type: "object",
+                    properties: {
+                      homeserver: { type: "string", title: "Homeserver" },
+                      accessToken: { type: "string", title: "Access token" },
+                    },
+                    required: ["homeserver", "accessToken"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  uiHints: {
+    "plugins.entries.matrix.config.homeserver": { advanced: false },
+    "plugins.entries.matrix.config.accessToken": { advanced: false, sensitive: true },
+  },
+  version: "e2e",
+};
 
 export function configSnapshot(isWorkboardEnabled: boolean) {
   const config = {

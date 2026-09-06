@@ -2132,9 +2132,236 @@ h3.plugins-subheader {
   color: var(--text-strong);
 }
 
+/* ---------- install wizard ---------- */
+
+.plugin-install-wizard {
+  display: grid;
+  max-height: min(88dvh, 840px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.plugin-install-wizard__header,
+.plugin-install-wizard__body,
+.plugin-install-wizard__actions {
+  padding: var(--space-5);
+}
+
+.plugin-install-wizard__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.plugin-install-wizard__header > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.plugin-install-wizard__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.plugin-install-wizard__title-row h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-xl);
+}
+
+.plugin-install-wizard__progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+}
+
+.plugin-install-wizard__progress li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugin-install-wizard__progress li > span {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.plugin-install-wizard__progress li > span svg {
+  width: 14px;
+  height: 14px;
+}
+
+.plugin-install-wizard__progress li.is-active {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.plugin-install-wizard__progress li.is-active > span {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.plugin-install-wizard__progress li.is-complete,
+.plugin-install-wizard__success {
+  color: var(--ok);
+}
+
+.plugin-install-wizard__progress li.is-complete > span {
+  border-color: var(--ok);
+  background: var(--ok-subtle);
+}
+
+.plugin-install-wizard__body {
+  min-height: 210px;
+}
+
+.plugin-install-wizard__review dl {
+  display: grid;
+  margin: 0;
+}
+
+.plugin-install-wizard__review dl > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: var(--space-4);
+  padding-block: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.plugin-install-wizard__review dt {
+  color: var(--muted);
+}
+
+.plugin-install-wizard__review dd {
+  margin: 0;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.plugin-install-wizard__review > p,
+.plugin-install-wizard__status,
+.plugin-install-wizard__working p,
+.plugin-install-wizard__success p,
+.plugin-install-wizard__alert p {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.plugin-install-wizard__working,
+.plugin-install-wizard__success {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.plugin-install-wizard__working p,
+.plugin-install-wizard__success p {
+  margin: 0;
+}
+
+.plugin-install-wizard__success > span,
+.plugin-install-wizard__success > span svg {
+  width: 40px;
+  height: 40px;
+}
+
+.plugin-install-wizard__success strong {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+}
+
+.plugin-install-wizard__spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: plugin-install-spin 800ms linear infinite;
+}
+
+@keyframes plugin-install-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-install-wizard__spinner {
+    animation: none;
+  }
+}
+
+.plugin-install-wizard__alert {
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: var(--radius-lg);
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.plugin-install-wizard__alert--warning {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+  background: var(--warn-subtle);
+  color: var(--warn);
+}
+
+.plugin-install-wizard__config {
+  margin-top: var(--space-4);
+}
+
+.plugin-install-wizard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 560px) {
+  .plugin-install-wizard__header,
+  .plugin-install-wizard__body,
+  .plugin-install-wizard__actions {
+    padding: var(--space-4);
+  }
+
+  .plugin-install-wizard__progress {
+    grid-template-columns: repeat(5, auto);
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .plugin-install-wizard__progress li {
+    font-size: 0;
+  }
+
+  .plugin-install-wizard__review dl > div {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
   .plugin-catalog-detail__hero {
     grid-template-columns: 1fr;
     gap: var(--space-5);

@@ -78,6 +78,7 @@ function projectLocalFacts(
     enabled: plugin.enabled,
     state: plugin.state,
     pluginId: plugin.id,
+    ...(!plugin.installed && plugin.install ? { install: plugin.install } : {}),
     action: plugin.installed
       ? "manage"
       : mutationAllowed && (remoteInstallable || plugin.install)

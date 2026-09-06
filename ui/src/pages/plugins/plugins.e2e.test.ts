@@ -25,12 +25,17 @@ import {
   initialInventory,
   installResult,
   installedPluginsInventory,
+  localCalendarDisabled,
+  localCalendarEnabled,
   localOnlyDetail,
   localOnlyDiscoveryPlugin,
   lobsterInspection,
   lobsterPlugin,
   matrixDetail,
+  matrixConfigSchema,
   matrixDiscoveryPlugin,
+  matrixEnabled,
+  matrixNeedsSetup,
   remoteIconPlugin,
   secondDiscoveryPageItems,
   telegramPlugin,
@@ -484,6 +489,195 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
+  it("installs, configures, and enables a catalog plugin across Gateway restarts", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...pluginMethods, "config.schema", "config.set"],
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "config.schema": matrixConfigSchema,
+        "plugins.list": {
+          sequence: [
+            initialInventory,
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixEnabled]),
+          ],
+        },
+        "plugins.install": {
+          ok: true,
+          plugin: matrixNeedsSetup,
+          restartRequired: true,
+        },
+        "plugins.setEnabled": {
+          ok: true,
+          plugin: matrixEnabled,
+          restartRequired: true,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("heading", { level: 1, name: "Matrix", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.waitFor();
+      expect(await wizard.textContent()).toContain("ClawHub · matrix");
+      expect(await wizard.textContent()).toContain("Gateway restart");
+      expect(await wizard.textContent()).toContain("Matrix messaging");
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+
+      const installRequest = await gateway.waitForRequest("plugins.install");
+      expect(installRequest.params).toEqual({ source: "clawhub", packageName: "matrix" });
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+
+      await expect
+        .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
+          timeout: 5_000,
+        })
+        .toBe("configuring");
+      await expect.poll(() => wizard.textContent(), { timeout: 5_000 }).toContain("Homeserver");
+      await wizard.getByRole("textbox", { name: "Homeserver" }).fill("https://matrix.example");
+      await wizard.getByRole("textbox", { name: "Access token" }).fill("secret-token");
+      await wizard.getByRole("button", { name: "Save and enable", exact: true }).click();
+
+      await gateway.waitForRequest("plugins.setEnabled");
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
+      expect(await wizard.textContent()).toContain("Matrix is installed and enabled.");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("installs and enables a no-config local plugin through the same restart-safe wizard", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.list": {
+          sequence: [
+            initialInventory,
+            inventory([...initialInventory.plugins, localCalendarDisabled]),
+            inventory([...initialInventory.plugins, localCalendarDisabled]),
+            inventory([...initialInventory.plugins, localCalendarEnabled]),
+          ],
+        },
+        "plugins.install": {
+          ok: true,
+          plugin: localCalendarDisabled,
+          restartRequired: true,
+        },
+        "plugins.setEnabled": {
+          ok: true,
+          plugin: localCalendarEnabled,
+          restartRequired: false,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${localOnlyDiscoveryPlugin.id}`);
+      await page.getByRole("heading", { level: 1, name: "Local Calendar", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Local Calendar"]');
+      await wizard.getByText("Official · local-calendar", { exact: true }).waitFor();
+      await wizard.getByRole("button", { name: "Install Local Calendar", exact: true }).click();
+      expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
+        source: "official",
+        pluginId: "local-calendar",
+      });
+
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("plugins.setEnabled");
+      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
+      expect(await wizard.textContent()).not.toContain("Complete the required settings");
+      expect(await wizard.textContent()).toContain("Local Calendar is installed and enabled.");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a failed installation visible and retryable", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.install": {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "ClawHub package download failed; check the network and retry.",
+          },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      await wizard.getByRole("alert").getByText("Installation did not complete").waitFor();
+      expect(await wizard.getByRole("alert").textContent()).toContain(
+        "ClawHub package download failed; check the network and retry.",
+      );
+
+      await wizard.getByRole("button", { name: "Try again", exact: true }).click();
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      await expect.poll(async () => (await gateway.getRequests("plugins.install")).length).toBe(2);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("turns a stalled Gateway restart into an actionable retry", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.install": {
+          ok: true,
+          plugin: matrixNeedsSetup,
+          restartRequired: true,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.clock.install();
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      await expect
+        .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"))
+        .toBe("reconnecting");
+
+      await page.clock.runFor(30_000);
+      await wizard.getByText("Installation did not complete", { exact: true }).waitFor();
+      expect(await wizard.getByRole("alert").textContent()).toContain(
+        "The Gateway did not reconnect after installation. Check the Gateway status, then retry.",
+      );
+      expect(await wizard.getByRole("button", { name: "Try again", exact: true }).count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders local-only discovery without inventing ClawHub popularity or provenance", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -527,6 +721,76 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}plugins`);
       await page.getByText("Local Calendar", { exact: true }).waitFor();
       expect(await page.getByText(/ClawHub is unavailable/u).count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("installs, configures, and enables a catalog plugin across Gateway restarts", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...pluginMethods, "config.schema", "config.set"],
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "config.schema": matrixConfigSchema,
+        "plugins.list": {
+          sequence: [
+            initialInventory,
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixNeedsSetup]),
+            inventory([...initialInventory.plugins, matrixEnabled]),
+          ],
+        },
+        "plugins.install": { ok: true, plugin: matrixNeedsSetup, restartRequired: true },
+        "plugins.setEnabled": { ok: true, plugin: matrixEnabled, restartRequired: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
+        source: "clawhub",
+        packageName: "matrix",
+      });
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await wizard.getByRole("textbox", { name: "Homeserver" }).fill("https://matrix.example");
+      await wizard.getByRole("textbox", { name: "Access token" }).fill("secret-token");
+      await wizard.getByRole("button", { name: "Save and enable", exact: true }).click();
+      await gateway.waitForRequest("plugins.setEnabled");
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps failed and stalled installations actionable", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.install": {
+          __mockError: { code: "UNAVAILABLE", message: "Package download failed; retry." },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      await wizard.getByText("Installation did not complete", { exact: true }).waitFor();
+      await wizard.getByRole("button", { name: "Try again", exact: true }).click();
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      await expect.poll(async () => (await gateway.getRequests("plugins.install")).length).toBe(2);
     } finally {
       await context.close();
     }
@@ -742,6 +1006,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await discoveryWorkboardCard.locator("wa-switch").count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe("/plugins");
       expect(await gateway.getRequests("plugins.setEnabled")).toEqual([]);
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      const install = page.getByRole("button", { name: "Install", exact: true });
+      await install.waitFor();
+      expect(await install.getAttribute("aria-disabled")).toBe("true");
+      expect(await gateway.getRequests("plugins.install")).toEqual([]);
+      await page.goto(`${server.baseUrl}plugins`);
       await discoveryWorkboardCard.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/workboard");
     } finally {
