@@ -2,8 +2,8 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
 import type { ChatModelPickerOption } from "./chat-model-picker-options.ts";
+import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 function cooldownOption(): ChatModelPickerOption {
   return {

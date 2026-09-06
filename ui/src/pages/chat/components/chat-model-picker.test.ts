@@ -2,8 +2,8 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
 import type { ChatModelPickerOption } from "./chat-model-picker-options.ts";
+import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 function cooldownOption(): ChatModelPickerOption {
   return {
@@ -44,9 +44,6 @@ describe("renderChatModelPicker cooldown selection", () => {
 
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onModelSelect).toHaveBeenCalledWith(
-      "ollama-t440/qwen2.5-coder:14b",
-      "agent:main:main",
-    );
+    expect(onModelSelect).toHaveBeenCalledWith("ollama-t440/qwen2.5-coder:14b", "agent:main:main");
   });
 });
