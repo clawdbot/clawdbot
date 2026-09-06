@@ -456,8 +456,11 @@ jobs:
     name: Generate QA profile evidence (${{ matrix.id }})
     needs: [validate_selected_ref, plan_qa_profile]
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 150
+    # Reserve time around the supervised profile run for checkout/install/build setup and for
+    # always-run evidence validation/upload. The child deadline must not consume the job budget.
+    timeout-minutes: 180
     permissions:
+      checks: read
       contents: read
     environment: qa-live-shared
     strategy:
@@ -475,6 +478,22 @@ jobs:
         with:
           script: |
             const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const checkRunId = Number(job.check_run_id);
+            if (!Number.isSafeInteger(checkRunId)) {
+              throw new Error("GitHub did not return a valid job check run ID.");
+            }
+            const { data: checkRun } = await github.rest.checks.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id: checkRunId,
+            });
+            const jobStartedAtSeconds = Math.floor(
+              Date.parse(checkRun.started_at) / 1000,
+            );
+            if (!Number.isFinite(jobStartedAtSeconds)) {
+              throw new Error("GitHub did not return a valid job check run start timestamp.");
+            }
+            core.exportVariable("QA_JOB_STARTED_AT_SECONDS", String(jobStartedAtSeconds));
             const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
             const calledWorkflowRef =
               "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
@@ -660,10 +679,6 @@ jobs:
           }
           trap cleanup_timeout_supervisor EXIT
 
-          mkfifo "$timeout_supervisor_fifo"
-          tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &
-          supervisor_tee_pid=$!
-
           timeout_child_env=(env)
           if [[ -v LC_ALL ]]; then
             timeout_child_env+=("LC_ALL=$LC_ALL")
@@ -671,28 +686,51 @@ jobs:
             timeout_child_env+=("-u" "LC_ALL")
           fi
 
-          qa_exit_code=0
-          LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m \
-            "${timeout_child_env[@]}" bash -c 'exec "$@" 2>&3' bash \
-            pnpm openclaw qa run \
-              --repo-root . \
-              --qa-profile "$QA_PROFILE" \
-              --concurrency 3 \
-              --fast \
-              --output-dir "$qa_output_dir" \
-              "${scenario_args[@]}" \
-            3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
+          job_timeout_seconds=$((180 * 60))
+          finalization_reserve_seconds=$((30 * 60))
+          timeout_kill_grace_seconds=30
+          # The job check run starts before the first action, charging runner/action startup while
+          # excluding prerequisite jobs and queue time from this job's child budget.
+          elapsed_setup_seconds=$(($(date +%s) - QA_JOB_STARTED_AT_SECONDS))
+          remaining_child_seconds=$((job_timeout_seconds - elapsed_setup_seconds - finalization_reserve_seconds - timeout_kill_grace_seconds))
+          profile_timeout_seconds=$((remaining_child_seconds < 140 * 60 ? remaining_child_seconds : 140 * 60))
 
-          wait "$supervisor_tee_pid"
-          supervisor_tee_pid=""
+          qa_exit_code=0
+          budget_exhausted=false
+          if ((profile_timeout_seconds <= 0)); then
+            budget_exhausted=true
+            qa_exit_code=124
+          else
+            mkfifo "$timeout_supervisor_fifo"
+            tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &
+            supervisor_tee_pid=$!
+            LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s "${profile_timeout_seconds}s" \
+              "${timeout_child_env[@]}" bash -c 'exec "$@" 2>&3' bash \
+              pnpm openclaw qa run \
+                --repo-root . \
+                --qa-profile "$QA_PROFILE" \
+                --concurrency 3 \
+                --fast \
+                --output-dir "$qa_output_dir" \
+                "${scenario_args[@]}" \
+              3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
+          fi
+
+          if [[ -n "$supervisor_tee_pid" ]]; then
+            wait "$supervisor_tee_pid"
+            supervisor_tee_pid=""
+          fi
 
           timeout_outcome="none"
-          if [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+          if [[ "$budget_exhausted" == "true" ]]; then
+            timeout_outcome="term"
+            echo "::warning::QA profile '${QA_PROFILE}' skipped because setup consumed its run budget; the finalization reserve remains available for partial evidence."
+          elif [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
             timeout_outcome="kill"
-            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after ${profile_timeout_seconds} seconds and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
           elif [[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
             timeout_outcome="term"
-            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after ${profile_timeout_seconds} seconds and was terminated; partial evidence will still be uploaded."
           fi
 
           QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$published_output_dir" \
