@@ -43,6 +43,7 @@ export type TranslationBatchItem = {
   key: string;
   text: string;
   textHash: string;
+  sourcePath?: string;
 };
 
 export function flattenTranslations(

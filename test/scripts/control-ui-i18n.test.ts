@@ -113,8 +113,11 @@ describe("translation provider privacy and fallback", () => {
         net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
         syncBuiltinESMExports();
         let requests = 0;
-        globalThis.fetch = async () => {
+        globalThis.fetch = async (input, init) => {
           requests += 1;
+          const request = new Request(input, init);
+          const payload = await request.json();
+          assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
           const text = JSON.stringify({ connect: "Connecter" });
           const events = [
@@ -128,7 +131,7 @@ describe("translation provider privacy and fallback", () => {
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
         const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
-        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "fixture" }], "fr");
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml" }], "fr");
         assert.equal(result.get("connect"), "Connecter");
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
@@ -167,6 +170,19 @@ describe("translation provider privacy and fallback", () => {
     expect(log).toContain("primary model unavailable");
     expect(log).not.toContain(primary);
     expect(log).not.toContain(fallback);
+  });
+
+  it("includes native owner context in the translation batch budget", async () => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "200");
+    llm.completeSimple.mockResolvedValue(response());
+    const contextualEntries = entries.slice(0, 2).map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      sourcePath: "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+    }));
+
+    expect((await translateNativeEntries(contextualEntries, "fr")).size).toBe(2);
+    expect(llm.completeSimple).toHaveBeenCalledTimes(2);
   });
 
   it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
