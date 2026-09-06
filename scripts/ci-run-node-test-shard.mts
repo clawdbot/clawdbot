@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
@@ -90,7 +91,13 @@ export function resolveShardPlans(env: NodeJS.ProcessEnv = process.env): ShardPl
     return targets.map((target) => ({ kind: "target", name: target, target }));
   }
 
-  const groups = parseJsonEnv(env, "OPENCLAW_NODE_TEST_GROUPS_JSON");
+  // The CI manifest packs matrix groups so preflight's job outputs stay under
+  // GitHub's 1 MiB UTF-16 cap. Plain JSON remains for the Vitest cache warmer,
+  // which writes its small group list straight into GITHUB_ENV.
+  const packedGroups = env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64?.trim();
+  const groups = packedGroups
+    ? decodeNodeTestGroups(packedGroups)
+    : parseJsonEnv(env, "OPENCLAW_NODE_TEST_GROUPS_JSON");
   const groupPlans = Array.isArray(groups) ? groups.filter(isShardGroupConfig) : [];
   const configs = parseJsonEnv(env, "OPENCLAW_NODE_TEST_CONFIGS_JSON", []);
   const groupEnv = parseJsonEnv(env, "OPENCLAW_NODE_TEST_ENV_JSON");

@@ -436,6 +436,12 @@ function runCiManifestFixture(options: {
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
+    // The manifest packs grouped Node rows through the target's codec and the
+    // shard runner unpacks them; fixtures ship the real module.
+    writeFileSync(
+      path.join(scriptsDir, "ci-node-test-groups-codec.mts"),
+      readFileSync("scripts/lib/ci-node-test-groups-codec.mts"),
+    );
     writeFileSync(
       path.join(scriptsDir, "ci-node-test-plan.mts"),
       options.nodeTestShards
@@ -14079,6 +14085,60 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]);
   });
 
+  it("packs grouped Node matrix rows and unpacks them in the shard runner", () => {
+    const groups = [
+      {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        includePatterns: ["src/a.test.ts", "src/b.test.ts"],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shard_name: "core-unit-fast-1",
+        timing_key: "core-unit-fast-1#include-2-abcd",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shard_name: "core-runtime-infra-misc",
+      },
+    ];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: [
+        {
+          checkName: "checks-node-compact-small-1",
+          groups,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "compact-small-1",
+        },
+      ],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const [row] = JSON.parse(
+      expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "packed Node matrix"),
+    ).include;
+    expect(row).toMatchObject({
+      check_name: "checks-node-compact-small-1",
+      groups_gzip_base64: expect.any(String),
+      requires_go: false,
+    });
+    expect(row).not.toHaveProperty("groups");
+    const runStep = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run Node test shard",
+    );
+    const packedEnv = evaluateWorkflowExpression(
+      runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64,
+      { eventName: "pull_request", matrix: row, repository: "openclaw/openclaw", runAttempt: 1 },
+    );
+    expect(
+      resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: String(packedEnv) }).map((plan) =>
+        plan.kind === "group" ? plan.plan : plan,
+      ),
+    ).toEqual(groups);
+  });
+
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
@@ -14107,6 +14167,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
+      "${{ matrix.groups_gzip_base64 || '' }}",
+    );
+    expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
     );

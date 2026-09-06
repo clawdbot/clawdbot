@@ -456,7 +456,12 @@ Outer suites and the remaining checkout contract cases stay sequential.
 
 Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
 The manifest separately enforces total-job budgets: 64 Node rows for canonical
-pushes and 120 for canonical PRs, including precise and plugin plans. The smaller
+pushes and 120 for canonical PRs, including precise and plugin plans. GitHub
+also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
+has 524,288 characters for every matrix together. Grouped Node rows list each
+striped test file explicitly; the manifest emits that list as gzip+base64 JSON
+(`groups_gzip_base64`), the shard runner unpacks it, and the planner tests keep
+the packed full pull-request matrix under half of that cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
 and Android at two because those runner pools are narrower. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
