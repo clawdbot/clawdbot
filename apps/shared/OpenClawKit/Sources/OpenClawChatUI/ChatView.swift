@@ -331,6 +331,15 @@ public struct OpenClawChatView: View {
         .padding(.vertical, Layout.outerPaddingVertical)
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity, alignment: .top)
+        #elseif os(iOS)
+        self.messageList
+            .padding(.horizontal, Layout.outerPaddingHorizontal)
+            .modifier(ChatFloatingComposerBar {
+                self.iOSFloatingBottomChrome
+            })
+            .padding(.top, Layout.outerPaddingVertical)
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: .infinity, alignment: .top)
         #else
         VStack(spacing: 0) {
             self.messageList
@@ -353,6 +362,28 @@ public struct OpenClawChatView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         #endif
     }
+
+    #if os(iOS)
+    @ViewBuilder
+    private var iOSFloatingBottomChrome: some View {
+        VStack(spacing: 0) {
+            self.progressCard
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
+            self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.vertical, Layout.swarmPaddingVertical)
+                .padding(.top, Layout.stackSpacing)
+            if self.surfaceDecision.mountsComposer {
+                self.composer
+                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+                    .padding(.top, Layout.stackSpacing)
+                    .padding(.bottom, Layout.outerPaddingVertical)
+            }
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var progressCard: some View {

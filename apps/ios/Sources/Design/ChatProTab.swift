@@ -6,8 +6,8 @@ import SwiftUI
 private struct ChatScrollEdgeTreatment: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
+            // Soft edges need the transcript to reach the chrome. ChatView
+            // overlays the composer so this blur is not blocked by a footer fill.
             content.scrollEdgeEffectStyle(.soft, for: .vertical)
         } else {
             content
