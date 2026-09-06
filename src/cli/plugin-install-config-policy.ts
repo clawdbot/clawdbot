@@ -37,7 +37,7 @@ function isPluginInstallCommand(commandPath: string[]): boolean {
   return commandPath[0] === "plugins" && commandPath[1] === "install";
 }
 
-function readBundledInstallRecoveryMetadata(rootDir: string): {
+function readPluginInstallRecoveryMetadata(rootDir: string): {
   pluginId?: string;
   allowInvalidConfigRecovery: boolean;
 } {
@@ -60,83 +60,25 @@ function readBundledInstallRecoveryMetadata(rootDir: string): {
   };
 }
 
-function resolveBundledInstallRecoveryMetadata(
-  request: Pick<
-    PluginInstallRequestContext,
-    "rawSpec" | "normalizedSpec" | "resolvedPath" | "marketplace"
-  >,
+function resolvePluginInstallRecoveryMetadata(
+  rawSpec: string,
+  localPath: string | undefined,
 ): {
   pluginId?: string;
   allowInvalidConfigRecovery?: boolean;
 } {
-  if (request.marketplace) {
-    return {};
+  // A local or file: request must never inherit recovery authority from a catalog name.
+  if (localPath !== undefined) {
+    const direct = readPluginInstallRecoveryMetadata(localPath);
+    return direct.pluginId || direct.allowInvalidConfigRecovery ? direct : {};
   }
-  if (request.resolvedPath && fs.existsSync(path.join(request.resolvedPath, "package.json"))) {
-    const direct = readBundledInstallRecoveryMetadata(request.resolvedPath);
-    if (direct.pluginId || direct.allowInvalidConfigRecovery) {
-      return direct;
-    }
-  }
-  if (
-    resolveFileNpmSpecToLocalPath(request.rawSpec) !== null ||
-    (request.resolvedPath !== undefined && fs.existsSync(request.resolvedPath))
-  ) {
-    return {};
-  }
-  const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
-  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
-  for (const value of [
-    request.rawSpec.trim(),
-    request.normalizedSpec.trim(),
-    rawNpmPrefixSpec ?? "",
-    normalizedNpmPrefixSpec ?? "",
-  ]) {
-    if (!value) {
-      continue;
-    }
-    const bundled = findBundledPluginSource({
-      lookup: { kind: "npmSpec", value },
-    });
-    if (!bundled) {
-      continue;
-    }
-    const recovered = readBundledInstallRecoveryMetadata(bundled.localPath);
-    return {
-      pluginId: recovered.pluginId ?? bundled.pluginId,
-      allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery,
-    };
-  }
-  return {};
-}
-
-function resolveOfficialExternalInstallRecoveryMetadata(
-  request: Pick<PluginInstallRequestContext, "rawSpec" | "normalizedSpec" | "marketplace">,
-): {
-  pluginId?: string;
-  allowInvalidConfigRecovery?: boolean;
-} {
-  if (request.marketplace) {
-    return {};
-  }
-  if (resolveFileNpmSpecToLocalPath(request.rawSpec) !== null) {
-    return {};
-  }
-  if (fs.existsSync(resolveUserPath(request.rawSpec))) {
-    return {};
-  }
-  const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
-  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
+  const npmPrefixSpec = parseNpmPrefixSpec(rawSpec);
   const values = new Set(
     normalizeStringEntries([
-      request.rawSpec,
-      request.normalizedSpec,
-      rawNpmPrefixSpec ?? "",
-      normalizedNpmPrefixSpec ?? "",
-      parseRegistryNpmSpec(request.rawSpec)?.name ?? "",
-      parseRegistryNpmSpec(request.normalizedSpec)?.name ?? "",
-      rawNpmPrefixSpec ? parseRegistryNpmSpec(rawNpmPrefixSpec)?.name : "",
-      normalizedNpmPrefixSpec ? parseRegistryNpmSpec(normalizedNpmPrefixSpec)?.name : "",
+      rawSpec,
+      npmPrefixSpec ?? "",
+      parseRegistryNpmSpec(rawSpec)?.name ?? "",
+      npmPrefixSpec ? parseRegistryNpmSpec(npmPrefixSpec)?.name : "",
     ]),
   );
   if (values.size === 0) {
@@ -149,10 +91,24 @@ function resolveOfficialExternalInstallRecoveryMetadata(
       continue;
     }
     const pluginId = resolveOfficialExternalPluginId(entry);
+    // An official descriptor owns this decision even when recovery is explicitly disabled.
     return {
       ...(pluginId ? { pluginId } : {}),
       allowInvalidConfigRecovery: install?.allowInvalidConfigRecovery === true,
     };
+  }
+  for (const value of [rawSpec.trim(), npmPrefixSpec ?? ""]) {
+    if (!value) {
+      continue;
+    }
+    const bundled = findBundledPluginSource({ lookup: { kind: "npmSpec", value } });
+    if (bundled) {
+      const recovered = readPluginInstallRecoveryMetadata(bundled.localPath);
+      return {
+        pluginId: recovered.pluginId ?? bundled.pluginId,
+        allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery,
+      };
+    }
   }
   return {};
 }
@@ -229,27 +185,15 @@ export function resolvePluginInstallRequestContext(params: {
     };
   }
   const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
-  const bundledRecovered = resolveBundledInstallRecoveryMetadata({
-    rawSpec: params.rawSpec,
-    normalizedSpec,
-    resolvedPath: resolveUserPath(normalizedSpec),
-    marketplace: params.marketplace,
-  });
-  const officialRecovered = resolveOfficialExternalInstallRecoveryMetadata({
-    rawSpec: params.rawSpec,
-    normalizedSpec,
-    marketplace: params.marketplace,
-  });
-  const recovered =
-    officialRecovered.pluginId || officialRecovered.allowInvalidConfigRecovery !== undefined
-      ? officialRecovered
-      : bundledRecovered;
+  const resolvedPath = resolveUserPath(normalizedSpec);
+  const localPath = fileSpec || fs.existsSync(resolvedPath) ? resolvedPath : undefined;
+  const recovered = resolvePluginInstallRecoveryMetadata(params.rawSpec, localPath);
   return {
     ok: true,
     request: {
       rawSpec: params.rawSpec,
       normalizedSpec,
-      resolvedPath: resolveUserPath(normalizedSpec),
+      resolvedPath,
       ...(params.installKind === "plugin" || recovered.pluginId ? { installKind: "plugin" } : {}),
       ...(recovered.pluginId ? { bundledPluginId: recovered.pluginId } : {}),
       ...(recovered.allowInvalidConfigRecovery !== undefined
