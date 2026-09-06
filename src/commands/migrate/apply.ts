@@ -4,6 +4,7 @@ import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatSkippedSymbolicLinkLines } from "../../infra/backup-create.js";
 import type { MigrationApplyResult, MigrationProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
@@ -23,7 +24,10 @@ function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
 }
 
 /** Creates a verified pre-migration backup, treating absent local state as empty. */
-async function createPreMigrationBackup(opts: { output?: string }): Promise<string | undefined> {
+async function createPreMigrationBackup(opts: {
+  output?: string;
+  runtime: RuntimeEnv;
+}): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {
@@ -38,6 +42,23 @@ async function createPreMigrationBackup(opts: { output?: string }): Promise<stri
         verify: true,
       },
     );
+    // The stub runtime above discards the create summary and an archive carries no
+    // record of its own omissions, so this rollback path is the only place an
+    // operator can learn that its safety net omitted links. Warnings go to stderr
+    // so `--json` stdout stays a single parseable document.
+    const omittedLinkLines = formatSkippedSymbolicLinkLines(result.skippedSymbolicLinks);
+    if (omittedLinkLines.length > 0) {
+      opts.runtime.error(
+        `Warning: the pre-migration backup omitted ${omittedLinkLines.length} symbolic link${
+          omittedLinkLines.length === 1 ? "" : "s"
+        } whose target no backed-up path owns; restoring ${result.archivePath} will not recreate ${
+          omittedLinkLines.length === 1 ? "it" : "them"
+        }:`,
+      );
+      for (const line of omittedLinkLines) {
+        opts.runtime.error(line);
+      }
+    }
     return result.archivePath;
   } catch (err) {
     if (shouldTreatMissingBackupAsEmptyState(err)) {
@@ -99,7 +120,10 @@ export async function runMigrationApply(params: {
     }
     const backupPath = params.opts.noBackup
       ? undefined
-      : await createPreMigrationBackup({ output: params.opts.backupOutput });
+      : await createPreMigrationBackup({
+          output: params.opts.backupOutput,
+          runtime: params.runtime,
+        });
     if (!params.opts.noBackup) {
       tick();
     }

@@ -7,6 +7,11 @@ import { runMigrationApply } from "./apply.js";
 
 let stateDir = "";
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-migrate-apply-" });
+const backupCreateCommandMock = vi.hoisted(() => vi.fn());
+
+// The pre-migration backup runs the real archiver against real state, so the
+// omission-reporting path is pinned at this boundary instead.
+vi.mock("../backup.js", () => ({ backupCreateCommand: backupCreateCommandMock }));
 
 vi.mock("../../config/paths.js", async (importActual) => {
   const actual = await importActual<typeof import("../../config/paths.js")>();
@@ -121,5 +126,41 @@ describe("runMigrationApply", () => {
     expect(result.summary.errors).toBe(1);
     expect(result.items[0]?.details?.recoveryPath).toBe("/tmp/staged-memory");
     expect(result.reportDir).toContain("codex");
+  });
+
+  it("reports symbolic links the pre-migration backup omitted", async () => {
+    backupCreateCommandMock.mockResolvedValue({
+      archivePath: "/tmp/pre-migration.tar.gz",
+      skippedSymbolicLinks: [
+        { sourcePath: "/state/venv/bin/python3", linkTarget: "/usr/bin/python3" },
+      ],
+    });
+    const provider: MigrationProviderPlugin = {
+      id: "codex",
+      label: "Codex",
+      plan: vi.fn(async () => buildEmptyPlan()),
+      apply: vi.fn(async () => buildEmptyPlan()),
+    };
+    const reported: string[] = [];
+    const runtime = {
+      ...createNonExitingRuntime(),
+      error: (...args: unknown[]) => {
+        reported.push(args.map(String).join(" "));
+      },
+    };
+
+    await runMigrationApply({
+      runtime,
+      opts: { yes: true, json: true },
+      providerId: "codex",
+      provider,
+    });
+
+    expect(backupCreateCommandMock).toHaveBeenCalledOnce();
+    // Without this the archive omits the link, the create summary is discarded,
+    // and the migration proceeds with no record of the omission anywhere.
+    expect(reported.join("\n")).toContain("omitted 1 symbolic link");
+    expect(reported.join("\n")).toContain("/tmp/pre-migration.tar.gz");
+    expect(reported).toContain("- /state/venv/bin/python3 -> /usr/bin/python3");
   });
 });

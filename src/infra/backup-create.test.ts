@@ -177,14 +177,10 @@ describe("formatBackupCreateSummary", () => {
   const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
 
   it("shortens the home directory in both sides of a skipped symbolic link", () => {
-    // AGENTS.md: "Never disclose credentials, private config, personal data ... in
-    // source, commits, GitHub text, logs, or proof captures." This summary is text
-    // operators paste into issues, so a raw home path in it leaks a username. The
-    // link TARGET was previously printed unshortened while its source was
-    // shortened -- inconsistent with every other display path in this file. The
-    // round-trip create test cannot catch that: its target is a tmpdir path, which
-    // shortenHomePath leaves untouched. Hence this unit assertion, which uses a
-    // home-relative target on purpose.
+    // Operators paste this summary into issues, so a raw home path in either half
+    // of the line leaks a username. The round-trip create test cannot hold that
+    // invariant: its target is a tmpdir path, which shortenHomePath leaves
+    // untouched. Hence this assertion, whose target is home-relative on purpose.
     const home = expectDefined(resolveHomeDir(), "home directory");
     const summary = formatBackupCreateSummary(
       makeResult({
@@ -3081,12 +3077,11 @@ describe("createBackupArchive", () => {
     { label: "an existing target", targetBasename: "outside-target.txt", targetExists: true },
     { label: "a dangling target", targetBasename: "outside-target.txt", targetExists: false },
     {
-      // An unowned target is unrestorable whatever its spelling. While one
-      // predicate answered both remappability and restorability, its backslash
-      // rule excluded this link from the omission path, so it reached the archive
-      // guard and failed the whole backup with "must be relative". A backslash
-      // target a declared asset owns still fails there, on purpose: see
-      // "rejects a declared absolute target containing a backslash".
+      // An unowned target is unrestorable whatever its spelling: a spelling rule
+      // that exempted this link from the omission path would fail the whole backup
+      // with "must be relative". A backslash target a declared asset owns does fail
+      // there, on purpose: see "rejects a declared absolute target containing a
+      // backslash".
       label: "a target containing a backslash",
       targetBasename: "outside\\target.txt",
       targetExists: true,

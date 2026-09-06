@@ -1,9 +1,9 @@
 // Tests the archive symlink policy: which targets an archive may carry, and how
 // a state link is mapped onto one.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { BackupAsset } from "../commands/backup-shared.js";
 import {
   assertArchiveSymbolicLinkTarget,
@@ -11,9 +11,41 @@ import {
   remapDeclaredAbsoluteSymbolicLinkTarget,
 } from "./backup-archive-path-policy.js";
 
+const realpathSyncTargets = vi.hoisted(() => [] as string[]);
+
+// `realpathSync` resolves a relative path against `process.cwd()`, so the policy
+// must keep relative targets away from the filesystem or its verdict would follow
+// the operator's shell. `process.chdir()` throws inside a Vitest worker, so record
+// which targets reach the filesystem instead of comparing two directories.
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return await mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    (actual) => ({
+      realpathSync: Object.assign(
+        (target: Parameters<typeof actual.realpathSync>[0]) => {
+          realpathSyncTargets.push(String(target));
+          return actual.realpathSync(target);
+        },
+        { native: actual.realpathSync.native },
+      ) as typeof actual.realpathSync,
+    }),
+    { mirrorToDefault: true },
+  );
+});
+
 const archiveRoot = "2026-09-06T12-00-00.000+00-00-openclaw-backup";
 const stateAssetPath = `${archiveRoot}/payload/posix/Users/dev/.openclaw`;
 const assets = [{ archivePath: stateAssetPath }];
+
+// Payload encoding for an absolute POSIX source path, so a rewritten target is one
+// hop instead of the whole temp-root chain.
+const archiveEntryPathFor = (sourcePath: string): string =>
+  `${archiveRoot}/payload/posix${sourcePath}`;
+
+beforeEach(() => {
+  realpathSyncTargets.length = 0;
+});
 
 describe("assertArchiveSymbolicLinkTarget", () => {
   it("accepts a relative target inside the same declared asset", () => {
@@ -60,16 +92,53 @@ describe("assertArchiveSymbolicLinkTarget", () => {
   });
 });
 
+// A target that is relative on the running platform must never be resolved, so
+// neither answer can depend on where the operator's shell happens to be.
+describe("cwd-relative symbolic link targets", () => {
+  // A colon in a segment puts this target in the set the archive guard refuses as
+  // non-relative, so it reaches the ownership question while staying relative.
+  const relativeTargetWithDriveSegment = "sub/x:1";
+  const declaredStatePath = path.resolve(path.sep, "declared", "state");
+  const sourceAssets: BackupAsset[] = [
+    {
+      kind: "state",
+      sourcePath: declaredStatePath,
+      displayPath: declaredStatePath,
+      archivePath: stateAssetPath,
+    },
+  ];
+
+  it("reports one unrestorable without resolving the target", () => {
+    expect(isUnrestorableSymbolicLinkTarget(relativeTargetWithDriveSegment, sourceAssets)).toBe(
+      true,
+    );
+    expect(realpathSyncTargets).toEqual([]);
+  });
+
+  it("leaves one unremapped without resolving the target", () => {
+    expect(
+      remapDeclaredAbsoluteSymbolicLinkTarget({
+        linkpath: relativeTargetWithDriveSegment,
+        archiveEntryPath: archiveEntryPathFor(path.join(declaredStatePath, "bin", "link")),
+        archiveRoot,
+        assets: sourceAssets,
+      }),
+    ).toBe(relativeTargetWithDriveSegment);
+    expect(realpathSyncTargets).toEqual([]);
+  });
+});
+
 // The source-side predicates read the filesystem, so they need a real asset root.
 describe.runIf(process.platform !== "win32")("state symbolic link mapping", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let sourceRoot: string;
   let stateSourcePath: string;
   let sourceAssets: BackupAsset[];
 
-  beforeAll(() => {
-    // macOS resolves the temp root through /private, and containment compares the
-    // link's real target against the asset path, so declare the resolved root.
-    sourceRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-link-policy-")));
+  beforeEach(() => {
+    // The tracker resolves the system temp root, and containment compares the
+    // link's real target against the asset path, so the declared root is canonical.
+    sourceRoot = tempDirs.make("openclaw-link-policy-");
     stateSourcePath = path.join(sourceRoot, "state");
     mkdirSync(path.join(stateSourcePath, "bin"), { recursive: true });
     sourceAssets = [
@@ -81,10 +150,6 @@ describe.runIf(process.platform !== "win32")("state symbolic link mapping", () =
       },
     ];
     writeFileSync(path.join(sourceRoot, "outside.txt"), "outside\n", "utf8");
-  });
-
-  afterAll(() => {
-    rmSync(sourceRoot, { recursive: true, force: true });
   });
 
   describe("isUnrestorableSymbolicLinkTarget", () => {
@@ -103,16 +168,16 @@ describe.runIf(process.platform !== "win32")("state symbolic link mapping", () =
     });
 
     it("reports an unowned absolute target containing a backslash", () => {
-      // Restorability is decided by ownership, not spelling. While the remap
-      // predicate answered both questions, its backslash rule made this link look
-      // restorable, so it reached the archive guard and failed the whole backup.
+      // Ownership decides restorability, so a spelling rule must not exempt an
+      // unowned target from the omission path and fail the whole backup instead.
       expect(isUnrestorableSymbolicLinkTarget(path.join(sourceRoot, "we\\ird.txt"), [])).toBe(true);
     });
 
     it("keeps a backslash target a declared asset owns with the archive guard", () => {
-      // The payload encoding folds backslashes into slashes, so this link cannot
-      // be represented faithfully. Omitting it would drop a link into content the
-      // archive does contain, which is a separate question from this omission path.
+      // The payload encoder folds backslashes into slashes, so this target shares an
+      // archive path with `we/ird.txt` and an archived link cannot say which it
+      // means. Omitting it instead would drop a link into content the archive does
+      // contain, which is a separate question from this omission path.
       const ownedTarget = path.join(stateSourcePath, "we\\ird.txt");
       writeFileSync(ownedTarget, "owned\n", "utf8");
       expect(isUnrestorableSymbolicLinkTarget(ownedTarget, sourceAssets)).toBe(false);
@@ -126,11 +191,6 @@ describe.runIf(process.platform !== "win32")("state symbolic link mapping", () =
   });
 
   describe("remapDeclaredAbsoluteSymbolicLinkTarget", () => {
-    // Payload encoding for an absolute POSIX source path, so the rewritten target
-    // is one hop instead of the whole temp-root chain.
-    const archiveEntryPathFor = (sourcePath: string): string =>
-      `${archiveRoot}/payload/posix${sourcePath}`;
-
     it("rewrites an owned absolute target as an archive-relative one", () => {
       const ownedTarget = path.join(stateSourcePath, "config.json");
       writeFileSync(ownedTarget, "{}\n", "utf8");
@@ -144,7 +204,7 @@ describe.runIf(process.platform !== "win32")("state symbolic link mapping", () =
       ).toBe("../config.json");
     });
 
-    // Rows resolve lazily: the temp asset root only exists once beforeAll ran.
+    // Rows resolve lazily: the temp asset root only exists once beforeEach ran.
     it.each([
       { label: "a relative target", resolveLinkpath: () => "../sibling.txt" },
       { label: "an unowned absolute target", resolveLinkpath: () => "/etc/hosts" },
@@ -163,5 +223,28 @@ describe.runIf(process.platform !== "win32")("state symbolic link mapping", () =
         }),
       ).toBe(linkpath);
     });
+  });
+
+  it("resolves one link target once across both answers in a run", () => {
+    // Creation asks whether the link is restorable during traversal and where its
+    // target lands while writing the entry, so one run cache keeps a link to a
+    // single ownership walk.
+    const ownedTarget = path.join(stateSourcePath, "config.json");
+    writeFileSync(ownedTarget, "{}\n", "utf8");
+    const ownedTargets = new Map<string, string | undefined>();
+
+    expect(isUnrestorableSymbolicLinkTarget(ownedTarget, sourceAssets, ownedTargets)).toBe(false);
+    expect(
+      remapDeclaredAbsoluteSymbolicLinkTarget({
+        linkpath: ownedTarget,
+        archiveEntryPath: archiveEntryPathFor(path.join(stateSourcePath, "bin", "link")),
+        archiveRoot,
+        assets: sourceAssets,
+        ownedTargets,
+      }),
+    ).toBe("../config.json");
+    // The temp-dir helper canonicalizes the system temp root through the same
+    // function, so count only this target's resolutions.
+    expect(realpathSyncTargets.filter((target) => target === ownedTarget)).toEqual([ownedTarget]);
   });
 });

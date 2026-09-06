@@ -26,6 +26,7 @@ import {
   assertArchiveSymbolicLinkTarget,
   isUnrestorableSymbolicLinkTarget,
   remapDeclaredAbsoluteSymbolicLinkTarget,
+  type DeclaredSymbolicLinkTargetCache,
 } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
@@ -290,6 +291,21 @@ function buildManifest(
   };
 }
 
+/**
+ * One display line per omitted symbolic link. Creation is the only boundary that
+ * knows these omissions, so a caller that discards the create log (`migrate
+ * apply`) still reports them from here rather than restating the format. Both
+ * sides go through `shortenHomePath`: an operator pastes these lines into an
+ * issue, so neither the link nor its target may carry a real home path.
+ */
+export function formatSkippedSymbolicLinkLines(
+  skippedSymbolicLinks: BackupCreateResult["skippedSymbolicLinks"],
+): string[] {
+  return skippedSymbolicLinks.map(
+    (link) => `- ${shortenHomePath(link.sourcePath)} -> ${shortenHomePath(link.linkTarget)}`,
+  );
+}
+
 export function formatBackupCreateSummary(result: BackupCreateResult): string[] {
   const lines = [`Backup archive: ${result.archivePath}`];
   lines.push(`Included ${result.assets.length} path${result.assets.length === 1 ? "" : "s"}:`);
@@ -322,14 +338,8 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
         `Skipped ${result.skippedSymbolicLinks.length} symbolic link${
           result.skippedSymbolicLinks.length === 1 ? "" : "s"
         } (target outside the backup):`,
+        ...formatSkippedSymbolicLinkLines(result.skippedSymbolicLinks),
       );
-      for (const link of result.skippedSymbolicLinks) {
-        // Both sides go through shortenHomePath. The target was previously printed
-        // raw while the source was shortened, so a summary a user pastes into an
-        // issue embedded their real home path — inconsistent with every other
-        // display path in this file, and with the surrounding `skipped` variants.
-        lines.push(`- ${shortenHomePath(link.sourcePath)} -> ${shortenHomePath(link.linkTarget)}`);
-      }
     }
     if (result.verified) {
       lines.push("Archive verification: passed");
@@ -562,6 +572,9 @@ export async function createBackupArchive(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     let skippedVolatileCount = 0;
     const skippedSymbolicLinks: BackupCreateResult["skippedSymbolicLinks"] = [];
+    // The filter and `onWriteEntry` both ask who owns a link target, so without
+    // this every archived absolute link pays for two `realpathSync` walks.
+    const ownedSymbolicLinkTargets: DeclaredSymbolicLinkTargetCache = new Map();
     // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
@@ -620,7 +633,10 @@ export async function createBackupArchive(
       }
       if (isBackupTarFilterSymbolicLink(entryStat)) {
         const linkTarget = readSymbolicLinkTarget(resolvedEntryPath);
-        if (linkTarget && isUnrestorableSymbolicLinkTarget(linkTarget, result.assets)) {
+        if (
+          linkTarget &&
+          isUnrestorableSymbolicLinkTarget(linkTarget, result.assets, ownedSymbolicLinkTargets)
+        ) {
           skippedSymbolicLinks.push({ sourcePath: resolvedEntryPath, linkTarget });
           return false;
         }
@@ -636,6 +652,7 @@ export async function createBackupArchive(
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
         skippedSymbolicLinks.length = 0;
+        ownedSymbolicLinkTargets.clear();
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
@@ -673,6 +690,7 @@ export async function createBackupArchive(
                         archiveEntryPath,
                         archiveRoot,
                         assets: result.assets,
+                        ownedTargets: ownedSymbolicLinkTargets,
                       });
                       assertArchiveSymbolicLinkTarget({
                         archiveRoot,

@@ -89,39 +89,67 @@ export function assertArchiveSymbolicLinkTarget(params: {
   }
 }
 
-// Every target `assertPortableRelativePathSyntax` refuses as non-relative:
-// absolute on this platform, plus the drive and rooted spellings that guard
-// rejects on any platform. Both questions below start from this set, so create
-// classifies exactly the targets verification would refuse.
+// Every target `assertPortableRelativePathSyntax` refuses as non-relative.
+// `isWindowsDrivePath` folds backslashes into slashes, splits on `/`, and matches
+// any segment against /^[a-zA-Z]:/, so this set is wider than "absolute on this
+// platform": it also holds rooted and drive spellings, and relative POSIX targets
+// with a colon in a segment such as `sub/x:1`. Matching the guard's set exactly is
+// the point — create classifies precisely the targets verification would refuse,
+// so no target reaches the archive on one side and is rejected on the other.
 function isNonRelativeSymbolicLinkTarget(linkpath: string): boolean {
   return path.isAbsolute(linkpath) || linkpath.startsWith("/") || isWindowsDrivePath(linkpath);
 }
 
 /** Whether a non-relative state link target could still become a portable archive target. */
 function isRemappableAbsoluteSymbolicLinkTarget(linkpath: string | undefined): linkpath is string {
-  // A portable archive target cannot contain a backslash, so a backslash-bearing
-  // target has no archive spelling to be rewritten into, even when a declared
-  // asset owns it. That link stays with the archive guard.
+  // A backslash-bearing target has no unambiguous archive spelling, because the
+  // payload encoder folds `\` into `/`, so it is never rewritten even when a
+  // declared asset owns it. That link stays with the archive guard.
   return (
     linkpath !== undefined && isNonRelativeSymbolicLinkTarget(linkpath) && !linkpath.includes("\\")
   );
 }
+
+/**
+ * One create run's link-target ownership answers, keyed by raw link target.
+ * Valid only for a single run: the answer depends on the asset set, which is
+ * fixed there, and on filesystem state, which the run treats as stable.
+ */
+export type DeclaredSymbolicLinkTargetCache = Map<string, string | undefined>;
 
 // Tar exposes the first link hop, while assets own the final canonical path.
 // Resolve before containment so chains map to one portable archive target.
 function resolveDeclaredSymbolicLinkTargetSourcePath(
   linkpath: string,
   assets: readonly BackupAsset[],
+  ownedTargets?: DeclaredSymbolicLinkTargetCache,
 ): string | undefined {
-  let targetSourcePath: string;
-  try {
-    targetSourcePath = realpathSync(linkpath);
-  } catch {
+  // `realpathSync` resolves a relative target against `process.cwd()`, not against
+  // the link's own directory, so a target that is relative on this platform must
+  // never reach the filesystem: the verdict would follow the operator's shell, and
+  // a target that happened to resolve under the cwd would be rewritten to name
+  // content the source link never pointed at. Refusing here leaves such a target
+  // ownerless by construction, which is the same verdict from every cwd.
+  if (!path.isAbsolute(linkpath)) {
     return undefined;
   }
-  return assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))
-    ? targetSourcePath
-    : undefined;
+  if (ownedTargets?.has(linkpath)) {
+    return ownedTargets.get(linkpath);
+  }
+  const resolveOwnedTargetSourcePath = (): string | undefined => {
+    let targetSourcePath: string;
+    try {
+      targetSourcePath = realpathSync(linkpath);
+    } catch {
+      return undefined;
+    }
+    return assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))
+      ? targetSourcePath
+      : undefined;
+  };
+  const ownedTargetSourcePath = resolveOwnedTargetSourcePath();
+  ownedTargets?.set(linkpath, ownedTargetSourcePath);
+  return ownedTargetSourcePath;
 }
 
 /** Rewrite an absolute link target owned by a declared asset into an archive-relative one. */
@@ -130,6 +158,7 @@ export function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
   archiveEntryPath: string;
   archiveRoot: string;
   assets: readonly BackupAsset[];
+  ownedTargets?: DeclaredSymbolicLinkTargetCache;
 }): string | undefined {
   if (!isRemappableAbsoluteSymbolicLinkTarget(params.linkpath)) {
     return params.linkpath;
@@ -137,6 +166,7 @@ export function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
   const targetSourcePath = resolveDeclaredSymbolicLinkTargetSourcePath(
     params.linkpath,
     params.assets,
+    params.ownedTargets,
   );
   if (!targetSourcePath) {
     return params.linkpath;
@@ -152,29 +182,31 @@ export function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
  * creation omits and reports it instead of failing the whole backup. Every link
  * that is archived still passes `assertArchiveSymbolicLinkTarget`.
  *
- * Only non-relative targets qualify, and the asymmetry with an escaping relative
- * target is the point rather than an oversight: an absolute target resolves
- * outside any restore tree, so omitting the link loses nothing a stricter policy
- * would have kept, while a relative escape _would_ resolve to a path inside or
- * beside the restored tree — the substitution hazard this module's archive guard
- * exists to prevent. An escaping relative link therefore still fails creation.
+ * Only the spellings `assertPortableRelativePathSyntax` refuses qualify, and the
+ * asymmetry with an escaping relative target is the point rather than an
+ * oversight. A refused spelling has no archive target to be written at all, and an
+ * absolute one also resolves outside any restore tree, so omitting the link loses
+ * nothing a stricter policy would have kept. A relative escape the guard accepts
+ * syntactically _would_ resolve to a path inside or beside the restored tree — the
+ * substitution hazard this module's archive guard exists to prevent — so an
+ * escaping relative link still fails creation.
  *
- * Restorability is a wider question than remappability, so the two must not
- * share a predicate. Spelling decides remappability: a backslash-bearing target
- * can never become a portable archive target. Ownership decides restorability:
- * whatever the spelling, an unowned absolute target has no archive path to point
- * at. Answering restorability with the remap predicate left an unowned
- * backslash target failing the whole backup, which is the defect this omission
- * path exists to remove; a backslash target a declared asset _does_ own stays
- * with the guard, because the payload encoding folds backslashes into slashes
- * and cannot represent it faithfully.
+ * Restorability is a wider question than remappability, so the two do not share a
+ * predicate. Ownership decides restorability: whatever the spelling, an unowned
+ * absolute target has no archive path to point at. Spelling decides
+ * remappability: a backslash-bearing target has no unambiguous archive spelling.
+ * A backslash target a declared asset _does_ own is therefore restorable and
+ * still stays with the guard: the payload encoder folds backslashes into slashes
+ * (`buildBackupArchivePath`), so `dir/a\b` and `dir/a/b` share one archive path
+ * and an archived link cannot say which of the two it means.
  */
 export function isUnrestorableSymbolicLinkTarget(
   linkpath: string,
   assets: readonly BackupAsset[],
+  ownedTargets?: DeclaredSymbolicLinkTargetCache,
 ): boolean {
   if (!isNonRelativeSymbolicLinkTarget(linkpath)) {
     return false;
   }
-  return !resolveDeclaredSymbolicLinkTargetSourcePath(linkpath, assets);
+  return !resolveDeclaredSymbolicLinkTargetSourcePath(linkpath, assets, ownedTargets);
 }
