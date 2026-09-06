@@ -59,7 +59,7 @@ export function buildRoster(people: Person[], githubPeople: Person[] = []): Rost
   return {
     members: all
       .filter((person) => person.status !== "archived")
-      .sort((a, b) => primaryLogin(a).localeCompare(primaryLogin(b))),
+      .toSorted((a, b) => primaryLogin(a).localeCompare(primaryLogin(b))),
     byLogin,
     byDiscordId,
   };

@@ -59,7 +59,7 @@ function emptyGithub(): GithubCounts {
 function increment(counts: Record<string, number>, key: string, value = 1): void {
   // Channel names come from external data and can collide with Object.prototype keys.
   Object.defineProperty(counts, key, {
-    value: (Object.hasOwn(counts, key) ? counts[key] : 0) + value,
+    value: (Object.hasOwn(counts, key) ? (counts[key] ?? 0) : 0) + value,
     enumerable: true,
     configurable: true,
     writable: true,
@@ -120,7 +120,7 @@ function emptyReport(
     period: { ...period },
     generatedAtMs: nowMs,
     status: nowMs < period.untilMs ? "partial" : "closed",
-    orgs: [...new Set(orgs)].sort(),
+    orgs: [...new Set(orgs)].toSorted(),
     memberCount: 0,
     activeMembers: 0,
     totals: { github: emptyGithub(), discord: { messages: 0, channels: {} } },
@@ -145,7 +145,7 @@ function evidenceItem(item: GithubItem): GithubItem {
 }
 
 function finishReport(report: ReportDocument): ReportDocument {
-  report.members.sort(
+  report.members = report.members.toSorted(
     (a, b) =>
       b.github.total + b.discord.total - (a.github.total + a.discord.total) ||
       a.login.localeCompare(b.login),
@@ -163,16 +163,16 @@ function finishReport(report: ReportDocument): ReportDocument {
       };
     }
   }
-  report.otherActors.sort(
+  report.otherActors = report.otherActors.toSorted(
     (a, b) => b.github.total - a.github.total || a.login.localeCompare(b.login),
   );
-  report.unmatchedDiscord.sort(
+  report.unmatchedDiscord = report.unmatchedDiscord.toSorted(
     (a, b) => b.messages - a.messages || a.authorId.localeCompare(b.authorId),
   );
   return boundReportDocument(report);
 }
 
-export type AggregateDayOptions = {
+type AggregateDayOptions = {
   period: PeriodDescriptor;
   nowMs: number;
   orgs: string[];
@@ -203,7 +203,7 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
   const patterns = (options.ignoreCommentPatterns ?? []).map(
     (pattern) => new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, "")),
   );
-  for (const item of [...options.items].sort(newestFirst)) {
+  for (const item of options.items.toSorted(newestFirst)) {
     if (item.atMs < period.sinceMs || item.atMs >= Math.min(period.untilMs, nowMs)) {
       continue;
     }
@@ -252,7 +252,7 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
   }
   const channels = new Map(discordConfig?.channels.map((channel) => [channel.id, channel]));
   const unmatched = new Map<string, number>();
-  for (const message of [...options.messages].sort(
+  for (const message of options.messages.toSorted(
     (a, b) =>
       b.atMs - a.atMs ||
       a.channelId.localeCompare(b.channelId) ||
@@ -268,10 +268,11 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
     ) {
       continue;
     }
+    const separator = message.channelName.indexOf("/");
     const channelName =
-      message.channelId === message.parentChannelId
+      message.channelId === message.parentChannelId || separator < 0
         ? message.channelName
-        : message.channelName.split("/")[0];
+        : message.channelName.slice(0, separator);
     const person = roster.byDiscordId.get(message.authorId);
     const member = person ? members.get(primaryLogin(person)) : undefined;
     report.totals.discord.messages++;
@@ -334,12 +335,12 @@ export function aggregateDays(options: {
       }
     }
   }
-  const days = [...byDay.values()].sort((a, b) => a.period.sinceMs - b.period.sinceMs);
+  const days = [...byDay.values()].toSorted((a, b) => a.period.sinceMs - b.period.sinceMs);
   const scopes = new Set(
     days.map((day) =>
-      [...day.orgs]
+      day.orgs
         .map((org) => org.toLowerCase())
-        .sort()
+        .toSorted()
         .join(","),
     ),
   );
@@ -419,12 +420,15 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
     if (member.github.items.length > 200 || member.discord.excerpts.length > 8) {
       report.truncated = true;
     }
-    member.github.items = member.github.items.map(evidenceItem).sort(newestFirst).slice(0, 200);
-    member.discord.excerpts.sort(
-      (a, b) =>
-        b.atMs - a.atMs || a.channel.localeCompare(b.channel) || a.excerpt.localeCompare(b.excerpt),
-    );
-    member.discord.excerpts = member.discord.excerpts.slice(0, 8);
+    member.github.items = member.github.items.map(evidenceItem).toSorted(newestFirst).slice(0, 200);
+    member.discord.excerpts = member.discord.excerpts
+      .toSorted(
+        (a, b) =>
+          b.atMs - a.atMs ||
+          a.channel.localeCompare(b.channel) ||
+          a.excerpt.localeCompare(b.excerpt),
+      )
+      .slice(0, 8);
   }
   if (Buffer.byteLength(JSON.stringify(report)) <= MAX_REPORT_BYTES) {
     return report;
@@ -444,7 +448,7 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
         list: member.discord.excerpts,
       })),
     ])
-    .sort((a, b) => a.atMs - b.atMs);
+    .toSorted((a, b) => a.atMs - b.atMs);
   for (const entry of evidence) {
     if (size <= MAX_REPORT_BYTES) {
       break;

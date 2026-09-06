@@ -1,4 +1,4 @@
-import type { DiscordSourceConfig, FetchLike, Roster, SourceRuntime } from "../../types.js";
+import type { DiscordSourceConfig, Roster, SourceRuntime } from "../../types.js";
 
 export const config: DiscordSourceConfig = {
   token: "synthetic-discord-secret",
@@ -27,7 +27,11 @@ export function json(body: unknown, status = 200, headers?: HeadersInit) {
 export function runtime(
   handler: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined,
   signal?: AbortSignal,
-): SourceRuntime & { fetchImpl: FetchLike; requests: URL[]; logs: string[] } {
+): SourceRuntime & {
+  fetchImpl: NonNullable<SourceRuntime["fetchImpl"]>;
+  requests: URL[];
+  logs: string[];
+} {
   const requests: URL[] = [];
   const logs: string[] = [];
   const log = (text: string) => logs.push(text);

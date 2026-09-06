@@ -3,7 +3,7 @@ import { countDescription, ITEM_LABELS, memberSummary, safeExternalUrl } from ".
 
 function text(value: string): string {
   return value
-    .replace(/[\\`*_{}\[\]()#+.!|>~-]/g, "\\$&")
+    .replace(/[\\`*_{}[\]()#+.!|>~-]/g, "\\$&")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\r?\n/g, " ");

@@ -16,7 +16,7 @@ export type PageContext = {
   displayTimezone: string;
 };
 export type PeriodIndex = Record<Period, PeriodListEntry[]>;
-export type TrendDay = { key: string; github: number; discord: number };
+type TrendDay = { key: string; github: number; discord: number };
 
 function href(basePath: string, ...segments: string[]): string {
   return `${basePath}/${segments.map(encodeURIComponent).join("/")}/`;
@@ -56,7 +56,7 @@ function shell(ctx: PageContext, title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} · Team Reports</title><style nonce="${escapeHtml(ctx.nonce)}">${REPORT_STYLES}</style></head><body><header><nav aria-label="Main"><a class="brand" href="${escapeHtml(ctx.basePath)}/">Team Reports</a><a href="${escapeHtml(ctx.basePath)}/people/">People</a><a href="${escapeHtml(ctx.basePath)}/latest/">Latest closed day</a></nav><a href="${escapeHtml(ctx.absoluteUrl)}" target="_blank" rel="noopener">Open in a new window</a></header><main>${body}</main><footer>Report windows use UTC. Generation times are shown in ${escapeHtml(ctx.displayTimezone)}. Links may not open inside the Control UI frame.</footer></body></html>`;
 }
 
-export function renderTrend(days: TrendDay[]): string {
+function renderTrend(days: TrendDay[]): string {
   if (days.length === 0) {
     return '<p class="muted">No stored daily activity yet.</p>';
   }

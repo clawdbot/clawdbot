@@ -21,7 +21,7 @@ const STOP_TIMEOUT_MS = 30_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
 
-export function nextClosedDayDue(
+function nextClosedDayDue(
   nowMs: number,
   schedule: TeamReportsConfig["schedule"],
   random = Math.random(),
@@ -33,7 +33,7 @@ export function nextClosedDayDue(
   return scheduled > nowMs ? scheduled : scheduled + DAY_MS;
 }
 
-export function nextIntradayDue(nowMs: number, everyHours: number): number | undefined {
+function nextIntradayDue(nowMs: number, everyHours: number): number | undefined {
   if (everyHours === 0) {
     return undefined;
   }
@@ -110,7 +110,7 @@ export class TeamReportsScheduler {
         .flatMap((entry) => {
           const report = this.options.store.getPeriod("day", entry.key)?.report;
           return report
-            ? [...report.sources.github.warnings, ...(report.sources.discord?.warnings ?? [])]
+            ? report.sources.github.warnings.concat(report.sources.discord?.warnings ?? [])
             : [];
         }),
     };

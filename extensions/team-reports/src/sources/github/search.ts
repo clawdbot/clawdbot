@@ -46,23 +46,29 @@ export async function* search<T>(
       yield* range(mid + 1, end);
       return;
     }
-    if (result.total_count >= 1000)
+    if (result.total_count >= 1000) {
       client.warn(
         `${org} ${kind}`,
         new GithubSourceError("Search cap reached within one second; some activity may be missing"),
       );
+    }
     const seen = new Set<string>();
     let emitted = 0;
     for (;;) {
-      if (result.incomplete_results)
+      if (result.incomplete_results) {
         client.warn(
           `${org} ${kind}`,
           new GithubSourceError("GitHub returned incomplete search results"),
         );
+      }
       yield* result.items;
       emitted += result.items.length;
-      if (!page.next || emitted >= 1000) break;
-      if (seen.has(page.next)) throw new GithubSourceError("Search pagination did not advance");
+      if (!page.next || emitted >= 1000) {
+        break;
+      }
+      if (seen.has(page.next)) {
+        throw new GithubSourceError("Search pagination did not advance");
+      }
       seen.add(page.next);
       page = await client.get(page.next);
       result = parse(schema, page.data);

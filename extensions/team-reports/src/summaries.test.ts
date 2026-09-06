@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildEvidenceDigest, generateSummaries } from "./summaries.js";
+import { generateSummaries } from "./summaries.js";
 import type { GithubCounts, PersonReport, ReportDocument } from "./types.js";
 
 type Complete = Parameters<typeof generateSummaries>[0]["llm"]["complete"];
@@ -261,7 +261,6 @@ describe("team report summaries", () => {
     expect(digest).not.toContain("RAW BODY");
     expect(digest).toContain("Public summary 99");
     expect(digest).not.toContain('"title":"Public summary 19"');
-    expect(buildEvidenceDigest(input)).toBe(digest);
   });
 
   it("propagates cancellation and does not return a late model result or start a repair", async () => {

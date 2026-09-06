@@ -2,10 +2,3 @@
 // ./github and ./discord (sources lane). Keep signatures stable.
 export { createGithubSource } from "./github/index.js";
 export { createDiscordSource } from "./discord/index.js";
-export type {
-  DiscordSource,
-  DiscordSourceConfig,
-  GithubSource,
-  GithubSourceConfig,
-  SourceRuntime,
-} from "../types.js";

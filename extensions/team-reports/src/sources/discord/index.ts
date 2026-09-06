@@ -196,7 +196,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
       }
       checkAbort(runtime.signal);
       const messages = [...collected.values()]
-        .sort(
+        .toSorted(
           (left, right) =>
             left.message.atMs - right.message.atMs || left.url.localeCompare(right.url),
         )

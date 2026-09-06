@@ -64,7 +64,7 @@ export async function generateReportPeriods(params: {
     throw new Error("GitHub roster unavailable; check token access and configured teams");
   }
   const roster = buildRoster(resolved.people, loaded.people);
-  params.onRoster([...new Set([...roster.byLogin.values()])]);
+  params.onRoster([...new Set(roster.byLogin.values())]);
   const statuses: Record<string, SourceStatus> = {};
   for (const period of params.periods) {
     runtime.signal.throwIfAborted();

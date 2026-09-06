@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it } from "vitest";
-import manifest from "../openclaw.plugin.json";
+import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 
 const minimal = { github: { token: "fixture-token", orgs: ["acme"] } };

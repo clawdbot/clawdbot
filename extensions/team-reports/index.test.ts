@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
@@ -114,9 +115,9 @@ describe("Team Reports registration", () => {
   it.each(["disable", "restart"] as const)(
     "does not revive storage or collection when credentials resolve after runtime %s",
     async (reason) => {
-      const entered = Promise.withResolvers<void>();
+      const entered = createDeferred<void>();
       const credentials =
-        Promise.withResolvers<Awaited<ReturnType<typeof configRuntime.resolveTeamReportsConfig>>>();
+        createDeferred<Awaited<ReturnType<typeof configRuntime.resolveTeamReportsConfig>>>();
       vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockImplementation(() => {
         entered.resolve();
         return credentials.promise;

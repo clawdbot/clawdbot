@@ -57,7 +57,7 @@ const scheduleSchema = z.strictObject({
 });
 const retentionSchema = z.strictObject({ days: z.number().int().min(0).default(400) });
 
-export const teamReportsConfigSchema = z
+const teamReportsConfigSchema = z
   .strictObject({
     basePath: z
       .string()
@@ -97,7 +97,7 @@ export const teamReportsConfigSchema = z
       });
     }
     try {
-      new Intl.DateTimeFormat("en", { timeZone: config.displayTimezone });
+      new Intl.DateTimeFormat("en", { timeZone: config.displayTimezone }).resolvedOptions();
     } catch {
       context.addIssue({
         code: "custom",
@@ -107,7 +107,7 @@ export const teamReportsConfigSchema = z
     }
     for (const [index, pattern] of config.github.ignoreCommentPatterns.entries()) {
       try {
-        new RegExp(pattern);
+        RegExp(pattern);
       } catch {
         context.addIssue({
           code: "custom",

@@ -34,8 +34,18 @@ function repoPath(repo: string): string {
 }
 
 function inWindow(date: string | null | undefined, window: ActivityWindow): boolean {
-  const atMs = date ? Date.parse(date) : NaN;
+  const atMs = date ? Date.parse(date) : Number.NaN;
   return atMs >= window.sinceMs && atMs < window.untilMs;
+}
+
+function commentTitle(body: string | null | undefined): string {
+  const firstLine =
+    body
+      ?.split(/\r\n?|\n/, 1)[0]
+      ?.trim()
+      .replace(/\s+/g, " ") || "Comment";
+  const characters = [...firstLine];
+  return characters.length > 140 ? `${characters.slice(0, 139).join("")}…` : firstLine;
 }
 
 async function listRepos(
@@ -52,8 +62,9 @@ async function listRepos(
           pathWithQuery(`/orgs/${encodeURIComponent(org)}/repos`, { type: "all" }),
           repoSchema,
         )) {
-          if (!repo.archived && !excluded.has(repo.full_name.toLowerCase()))
+          if (!repo.archived && !excluded.has(repo.full_name.toLowerCase())) {
             repos.set(repo.full_name.toLowerCase(), repo);
+          }
         }
       },
       true,
@@ -72,10 +83,11 @@ function coauthors(message: string, roster: Roster): string[] {
     const fromEmail = /^(?:\d+\+)?([a-z\d-]+)@users\.noreply\.github\.com$/i.exec(email)?.[1];
     const fromName = /^@?([a-z\d-]+)$/i.exec(name)?.[1];
     const login = (fromEmail ?? fromName)?.toLowerCase();
-    if (login && (fromEmail || name.startsWith("@") || roster.byLogin.has(login)))
+    if (login && (fromEmail || name.startsWith("@") || roster.byLogin.has(login))) {
       logins.add(login);
+    }
   }
-  return [...logins].sort();
+  return [...logins].toSorted();
 }
 
 export function createGithubSource(runtime: SourceRuntime): GithubSource {
@@ -95,8 +107,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 {},
               ),
               userSchema,
-            ))
+            )) {
               add(user.login);
+            }
           },
           true,
         );
@@ -112,8 +125,13 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 }),
                 collaboratorSchema,
               )) {
-                if (user.permissions?.push || user.permissions?.maintain || user.permissions?.admin)
+                if (
+                  user.permissions?.push ||
+                  user.permissions?.maintain ||
+                  user.permissions?.admin
+                ) {
                   add(user.login);
+                }
               }
             },
             true,
@@ -123,7 +141,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       checkAbort(runtime.signal);
       return {
         people: [...people]
-          .sort(([a], [b]) => a.localeCompare(b, "en"))
+          .toSorted(([a], [b]) => a.localeCompare(b, "en"))
           .map(([, person]) => person),
         status,
       };
@@ -137,20 +155,24 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         !Number.isFinite(window.sinceMs) ||
         !Number.isFinite(window.untilMs) ||
         window.untilMs <= window.sinceMs
-      )
+      ) {
         throw new Error("Invalid GitHub activity window");
+      }
       const repos = await listRepos(client, cfg);
       const items = new Map<string, GithubItem>();
       const active = new Set<string>();
       const mergedBy = new Map<string, string | undefined>();
       const add = (item: GithubItem) => {
         checkAbort(runtime.signal);
-        if (item.atMs >= window.sinceMs && item.atMs < window.untilMs)
+        if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
           items.set(`${item.kind}\0${item.url}\0${item.actor.toLowerCase()}\0${item.atMs}`, item);
+        }
       };
       const addCommit = (repo: string, commit: z.infer<typeof commitSchema>) => {
         const date = commit.commit.committer?.date;
-        if (!inWindow(date, window)) return;
+        if (!inWindow(date, window)) {
+          return;
+        }
         active.add(repo.toLowerCase());
         add({
           kind: "commit",
@@ -171,8 +193,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 until: new Date(window.untilMs).toISOString(),
               }),
               commitSchema,
-            ))
+            )) {
               addCommit(repo.full_name, commit);
+            }
           });
         }
       };
@@ -183,19 +206,25 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             repo.full_name.slice(0, repo.full_name.indexOf("/")).toLowerCase() ===
             org.toLowerCase(),
         );
-        if (orgRepos.length === 0) continue;
+        if (orgRepos.length === 0) {
+          continue;
+        }
         // pushed_at also discovers commit-only repos; do not require issue activity to scan commits.
         const candidates = orgRepos.filter(
           (repo) => !repo.pushed_at || Date.parse(repo.pushed_at) >= window.sinceMs,
         );
-        for (const repo of candidates) active.add(repo.full_name.toLowerCase());
+        for (const repo of candidates) {
+          active.add(repo.full_name.toLowerCase());
+        }
         await client.attempt(`Issue search for ${org}`, async () => {
           for await (const issue of search(client, "issues", org, window, issueSchema)) {
             const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
               .exec(issue.repository_url)?.[1]
               ?.toLowerCase();
             const repo = repoName ? repos.get(repoName) : undefined;
-            if (!repo) continue;
+            if (!repo) {
+              continue;
+            }
             active.add(repo.full_name.toLowerCase());
             const common = {
               repo: repo.full_name,
@@ -204,14 +233,17 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               url: issue.html_url,
               actor: issue.user?.login ?? "",
             };
-            if (inWindow(issue.created_at, window))
+            if (inWindow(issue.created_at, window)) {
               add({
                 ...common,
                 kind: issue.pull_request ? "pr_opened" : "issue_opened",
                 atMs: Date.parse(issue.created_at),
               });
+            }
             if (issue.pull_request?.merged_at) {
-              if (!inWindow(issue.pull_request.merged_at, window)) continue;
+              if (!inWindow(issue.pull_request.merged_at, window)) {
+                continue;
+              }
               const key = `${repo.full_name}#${issue.number}`;
               if (!mergedBy.has(key)) {
                 // Cache failed/missing lookups too; never substitute the PR author for the merger.
@@ -225,13 +257,14 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 });
               }
               const actor = mergedBy.get(key);
-              if (actor)
+              if (actor) {
                 add({
                   ...common,
                   actor,
                   kind: "pr_merged",
                   atMs: Date.parse(issue.pull_request.merged_at),
                 });
+              }
             } else if (inWindow(issue.closed_at, window)) {
               add({
                 ...common,
@@ -241,7 +274,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             }
           }
         });
-        if (candidates.length === 0) continue;
+        if (candidates.length === 0) {
+          continue;
+        }
         if (candidates.length === 1) {
           // A single REST list costs no more requests and avoids the smaller search quota.
           strategies.add("per-repo");
@@ -268,16 +303,20 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 first,
               )) {
                 const repo = repos.get(commit.repository.full_name.toLowerCase());
-                if (repo) addCommit(repo.full_name, commit);
+                if (repo) {
+                  addCommit(repo.full_name, commit);
+                }
               }
             }
           });
         }
       }
       status.stats.commitStrategy = strategies.size > 1 ? "mixed" : ([...strategies][0] ?? "none");
-      for (const key of [...active].sort()) {
+      for (const key of [...active].toSorted()) {
         const repo = repos.get(key);
-        if (!repo) continue;
+        if (!repo) {
+          continue;
+        }
         status.stats.reposScanned = Number(status.stats.reposScanned) + 1;
         for (const [endpoint, kind] of [
           ["issues/comments", "issue_comment"],
@@ -290,16 +329,17 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               }),
               commentSchema,
             )) {
-              if (inWindow(comment.created_at, window))
+              if (inWindow(comment.created_at, window)) {
                 add({
                   kind,
                   repo: repo.full_name,
-                  title: comment.body ?? "",
+                  title: commentTitle(comment.body),
                   body: comment.body ?? "",
                   url: comment.html_url,
                   atMs: Date.parse(comment.created_at),
                   actor: comment.user?.login ?? "",
                 });
+              }
             }
           });
         }
@@ -311,14 +351,16 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             const date = inWindow(advisory.updated_at, window)
               ? advisory.updated_at
               : advisory.published_at;
-            if (!inWindow(date, window)) continue;
+            if (!inWindow(date, window)) {
+              continue;
+            }
             const actors = new Set(
               [
                 advisory.publisher?.login,
                 ...(advisory.credits ?? []).map((credit) => credit.user?.login),
               ].filter((login): login is string => Boolean(login)),
             );
-            for (const actor of actors)
+            for (const actor of actors) {
               add({
                 kind: "security_advisory",
                 repo: repo.full_name,
@@ -327,12 +369,13 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                 atMs: Date.parse(date ?? ""),
                 actor,
               });
+            }
           }
         });
       }
       checkAbort(runtime.signal);
       return {
-        items: [...items.values()].sort(
+        items: [...items.values()].toSorted(
           (a, b) =>
             a.atMs - b.atMs ||
             a.url.localeCompare(b.url, "en") ||

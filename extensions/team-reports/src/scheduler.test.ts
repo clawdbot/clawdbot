@@ -6,8 +6,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTeamReportsConfig, type TeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
-import { type ReportSourceFactory, type ResolvedTeamReportsConfig } from "./run.js";
-import { nextClosedDayDue, nextIntradayDue, TeamReportsScheduler } from "./scheduler.js";
+import type { ReportSourceFactory, ResolvedTeamReportsConfig } from "./run.js";
+import { TeamReportsScheduler } from "./scheduler.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
 
@@ -183,15 +183,16 @@ describe("Team Reports schedule boundaries", () => {
     { random: 0.5, expected: "2026-08-20T00:07:30Z" },
     { random: 1, expected: "2026-08-20T00:10:00Z" },
   ])("keeps closed-day jitter in the configured window ($random)", ({ random, expected }) => {
-    const schedule = parseTeamReportsConfig({
-      github: { token: "fixture", orgs: ["sample"] },
-    }).schedule;
-    expect(nextClosedDayDue(Date.parse("2026-08-20T00:00:00Z"), schedule, random)).toBe(
-      Date.parse(expected),
-    );
-    expect(nextClosedDayDue(Date.parse("2026-08-20T00:11:00Z"), schedule, random)).toBe(
-      Date.parse(expected) + 86_400_000,
-    );
+    vi.spyOn(Math, "random").mockReturnValue(random);
+    for (const [now, expectedDue] of [
+      ["2026-08-20T00:00:00Z", Date.parse(expected)],
+      ["2026-08-20T00:11:00Z", Date.parse(expected) + 86_400_000],
+    ] as const) {
+      vi.setSystemTime(new Date(now));
+      const { scheduler } = setup({ schedule: { closedDayUtc: "00:05", jitterMinutes: 5 } });
+      scheduler.start();
+      expect(scheduler.status().nextDue.closedDay).toBe(expectedDue);
+    }
   });
 
   it.each([
@@ -199,9 +200,12 @@ describe("Team Reports schedule boundaries", () => {
     { now: "2026-08-20T04:00:00Z", hours: 4, expected: "2026-08-20T08:00:00Z" },
     { now: "2026-08-20T23:59:59Z", hours: 4, expected: "2026-08-21T00:00:00Z" },
     { now: "2026-08-20T21:00:00Z", hours: 5, expected: "2026-08-21T00:00:00Z" },
+    { now: "2026-08-20T02:15:00Z", hours: 0, expected: undefined },
   ])("aligns intraday refreshes to UTC boundaries ($now, $hours)", ({ now, hours, expected }) => {
-    expect(nextIntradayDue(Date.parse(now), hours)).toBe(Date.parse(expected));
-    expect(nextIntradayDue(Date.parse(now), 0)).toBeUndefined();
+    vi.setSystemTime(new Date(now));
+    const { scheduler } = setup({ schedule: { intradayEveryHours: hours } });
+    scheduler.start();
+    expect(scheduler.status().nextDue.intraday).toBe(expected ? Date.parse(expected) : undefined);
   });
 
   it("does not schedule another closed-day run today when the next jitter sample is larger", async () => {

@@ -1,4 +1,4 @@
-import type { GithubSourceConfig, Person, Roster, SourceLogger } from "../../../types.js";
+import type { GithubSourceConfig, Person, Roster, SourceRuntime } from "../../../types.js";
 
 export const config: GithubSourceConfig = {
   token: "synthetic-test-credential",
@@ -13,7 +13,7 @@ export const sinceMs = Date.parse("2026-08-20T00:00:00Z");
 export const untilMs = Date.parse("2026-08-21T00:00:00Z");
 export const window = { sinceMs, untilMs };
 export const at = "2026-08-20T12:00:00Z";
-export const logger: SourceLogger = { info() {}, warn() {}, error() {} };
+export const logger: SourceRuntime["logger"] = { info() {}, warn() {}, error() {} };
 const people: Person[] = ["builder", "reviewer", "helper"].map((login) => ({
   github: [login],
 }));
@@ -51,7 +51,11 @@ export function json(body: unknown, headers?: HeadersInit, status = 200) {
   return new Response(JSON.stringify(body), { status, headers });
 }
 export function emptyRoute(url: URL): Response {
-  if (url.pathname === "/orgs/example/repos") return json([repo()]);
-  if (url.pathname.startsWith("/search/")) return json({ total_count: 0, items: [] });
+  if (url.pathname === "/orgs/example/repos") {
+    return json([repo()]);
+  }
+  if (url.pathname.startsWith("/search/")) {
+    return json({ total_count: 0, items: [] });
+  }
   return json([]);
 }

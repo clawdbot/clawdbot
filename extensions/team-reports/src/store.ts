@@ -25,7 +25,7 @@ import type { Period, ReportDocument, SummaryDocument } from "./types.js";
 const MAX_REPORT_BYTES = 2 * 1024 * 1024;
 const DAY_MS = 86_400_000;
 
-export type StoredPeriod = {
+type StoredPeriod = {
   report: ReportDocument;
   summary: SummaryDocument | null;
   markdown: string;
@@ -52,8 +52,8 @@ export type PersonDay = {
   reviewComments: number;
   discordMessages: number;
 };
-export type RunPeriod = { period: Period; key: string };
-export type ReportRun = {
+type RunPeriod = { period: Period; key: string };
+type ReportRun = {
   id: string;
   kind: "closed-day" | "intraday" | "manual";
   startedAtMs: number;

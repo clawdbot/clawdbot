@@ -6,7 +6,9 @@ import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../type
 export class GithubSourceError extends Error {}
 
 export function checkAbort(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new DOMException("GitHub collection aborted", "AbortError");
+  if (signal?.aborted) {
+    throw new DOMException("GitHub collection aborted", "AbortError");
+  }
 }
 
 async function wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -34,7 +36,9 @@ async function wait(ms: number, signal?: AbortSignal): Promise<void> {
 
 export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
-  if (!result.success) throw new GithubSourceError("Invalid API response; check API compatibility");
+  if (!result.success) {
+    throw new GithubSourceError("Invalid API response; check API compatibility");
+  }
   return result.data;
 }
 
@@ -58,8 +62,9 @@ export class GithubClient {
         this.base.password ||
         this.base.search ||
         this.base.hash
-      )
+      ) {
         throw new Error();
+      }
     } catch {
       throw new GithubSourceError(
         "GitHub API base URL must be HTTPS without credentials, query, or fragment",
@@ -84,7 +89,9 @@ export class GithubClient {
       await action();
     } catch (error) {
       this.warn(scope, error);
-      if (required) this.status.ok = false;
+      if (required) {
+        this.status.ok = false;
+      }
     }
   }
 
@@ -157,7 +164,9 @@ export class GithubClient {
         }
       } catch (error) {
         checkAbort(this.runtime.signal);
-        if (error instanceof GithubSourceError) throw error;
+        if (error instanceof GithubSourceError) {
+          throw error;
+        }
         throw new GithubSourceError(
           controller.signal.aborted
             ? "API request timed out"
@@ -166,18 +175,17 @@ export class GithubClient {
       } finally {
         clearTimeout(timeout);
         if (release) {
-          try {
-            await release();
-          } catch {
+          await release().catch(() => {
             checkAbort(this.runtime.signal);
             throw new GithubSourceError("Could not release API response");
-          }
+          });
         }
       }
       checkAbort(this.runtime.signal);
       const remaining = response.headers.get("x-ratelimit-remaining");
-      if (remaining !== null && Number.isFinite(Number(remaining)))
+      if (remaining !== null && Number.isFinite(Number(remaining))) {
         this.status.stats.rateLimitRemaining = Number(remaining);
+      }
       const retryAfter = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
       const resetHeader = response.headers.get("x-ratelimit-reset");
       const resetDelay =
@@ -203,13 +211,15 @@ export class GithubClient {
         continue;
       }
       if (response.status >= 500 && failures < 3) {
-        await wait(1000 * 2 ** failures++, this.runtime.signal);
+        failures += 1;
+        await wait(1000 * 2 ** (failures - 1), this.runtime.signal);
         continue;
       }
-      if (!response.ok)
+      if (!response.ok) {
         throw new GithubSourceError(
           `HTTP ${response.status}; check token permissions and repository access`,
         );
+      }
       const next = response.headers
         .get("link")
         ?.split(/,\s*(?=<)/)
@@ -225,7 +235,9 @@ export class GithubClient {
     while (next) {
       checkAbort(this.runtime.signal);
       const canonical = this.url(next).href;
-      if (seen.has(canonical)) throw new GithubSourceError("API pagination did not advance");
+      if (seen.has(canonical)) {
+        throw new GithubSourceError("API pagination did not advance");
+      }
       seen.add(canonical);
       const page = await this.get(next);
       for (const item of parse(z.array(schema), page.data)) {

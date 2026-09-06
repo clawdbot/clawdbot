@@ -13,7 +13,7 @@ import {
 import type { TeamReportsStore } from "./store.js";
 import type { Period, Person, PersonReport } from "./types.js";
 
-export type TeamReportsHttpOptions = {
+type TeamReportsHttpOptions = {
   basePath: string;
   displayTimezone: string;
   getStore: () => TeamReportsStore | undefined;

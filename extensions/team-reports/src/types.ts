@@ -98,16 +98,16 @@ export type DiscordMessage = {
   content: string;
 };
 
-export type DiscordExcerpt = { channel: string; atMs: number; excerpt: string };
+type DiscordExcerpt = { channel: string; atMs: number; excerpt: string };
 
-export type DiscordCounts = {
+type DiscordCounts = {
   total: number;
   /** channel name -> count */
   channels: Record<string, number>;
   excerpts: DiscordExcerpt[];
 };
 
-export type PersonSummary = {
+type PersonSummary = {
   text: string;
   confidence: "high" | "medium" | "low";
   source: "model" | "fallback";
@@ -177,14 +177,14 @@ export type SummaryDocument = {
 // Source contracts (implemented under src/sources/github and src/sources/discord)
 // ---------------------------------------------------------------------------
 
-export type SourceLogger = {
+type SourceLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
   error: (message: string, meta?: Record<string, unknown>) => void;
 };
 
-export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 /** Per-run context handed to sources. Sources must honor `signal` and never log credentials. */
 export type SourceRuntime = {

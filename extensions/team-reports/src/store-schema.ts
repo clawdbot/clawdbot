@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_team_reports_runs_started
   ON team_reports_runs(started_at_ms DESC);
 `;
 
-export const periodSchema = z.enum(["day", "week", "month"]);
+const periodSchema = z.enum(["day", "week", "month"]);
 const countsSchema = z.object({
   total: z.number(),
   commits: z.number(),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FetchLike } from "../../types.js";
+import type { SourceRuntime } from "../../types.js";
 import {
   at,
   commit,
@@ -20,7 +20,9 @@ function source(
   route: (url: URL, init?: RequestInit) => Response | Promise<Response>,
   signal?: AbortSignal,
 ) {
-  const fetchImpl = vi.fn<FetchLike>((input, init) => Promise.resolve(route(new URL(input), init)));
+  const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
+    Promise.resolve(route(new URL(input), init)),
+  );
   return { api: createGithubSource({ logger, fetchImpl, signal }), fetchImpl };
 }
 
@@ -51,8 +53,9 @@ describe("GitHub reports source", () => {
           ? json([{ login: "reviewer" }])
           : json([{ login: "builder" }], { Link: `<${url}&page=2>; rel="next"` });
       }
-      if (url.pathname.endsWith("/repos"))
+      if (url.pathname.endsWith("/repos")) {
         return json([repo(), repo("old", true), repo("excluded")]);
+      }
       if (url.pathname.endsWith("/collaborators")) {
         expect(url.searchParams.get("affiliation")).toBe("direct");
         return json([
@@ -100,8 +103,9 @@ describe("GitHub reports source", () => {
           ? json({ total_count: 1000, items: [] })
           : json({ total_count: 3, items: [merged, oldMerge, merged] });
       }
-      if (url.pathname === "/repos/example/app/pulls/2")
+      if (url.pathname === "/repos/example/app/pulls/2") {
         return json({ merged_by: { login: "reviewer" } });
+      }
       return emptyRoute(url);
     });
     const result = await api.collect(config, window, roster);
@@ -144,18 +148,23 @@ describe("GitHub reports source", () => {
   it("splits commit searches and paginates their result pages", async () => {
     let searches = 0;
     const { api } = source((url) => {
-      if (url.pathname === "/orgs/example/repos")
+      if (url.pathname === "/orgs/example/repos") {
         return json(Array.from({ length: 12 }, (_, i) => repo(`app${i}`)));
+      }
       if (url.pathname === "/search/commits") {
         searches++;
-        if (searches === 1) return json({ total_count: 1000, items: [] });
-        if (searches === 2)
+        if (searches === 1) {
+          return json({ total_count: 1000, items: [] });
+        }
+        if (searches === 2) {
           return json(
             { total_count: 2, items: [commit("later", "Later", "app0")] },
             { Link: `<${url}&page=2>; rel="next"` },
           );
-        if (searches === 3)
+        }
+        if (searches === 3) {
           return json({ total_count: 2, items: [commit("earlier", "Earlier", "app0")] });
+        }
         return json({ total_count: 0, items: [] });
       }
       return emptyRoute(url);
@@ -169,16 +178,19 @@ describe("GitHub reports source", () => {
 
   it("skips excluded and archived search results, isolates repo failures and keeps comment bodies", async () => {
     const { api } = source((url) => {
-      if (url.pathname === "/orgs/example/repos")
+      if (url.pathname === "/orgs/example/repos") {
         return json([repo(), repo("other"), repo("old", true), repo("excluded")]);
-      if (url.pathname === "/search/issues")
+      }
+      if (url.pathname === "/search/issues") {
         return json({
           total_count: 4,
           items: [issue(), issue(2, "other"), issue(3, "old"), issue(4, "excluded")],
         });
-      if (url.pathname === "/repos/example/app/issues/comments")
+      }
+      if (url.pathname === "/repos/example/app/issues/comments") {
         return json({ message: config.token }, {}, 403);
-      if (url.pathname === "/repos/example/other/issues/comments")
+      }
+      if (url.pathname === "/repos/example/other/issues/comments") {
         return json([
           {
             user: { login: "reviewer" },
@@ -193,6 +205,7 @@ describe("GitHub reports source", () => {
             html_url: "https://github.test/comment/2",
           },
         ]);
+      }
       return emptyRoute(url);
     });
     const result = await api.collect(
@@ -210,9 +223,50 @@ describe("GitHub reports source", () => {
     ]);
   });
 
+  it.each([
+    ["issues/comments", "issue_comment"],
+    ["pulls/comments", "review_comment"],
+  ])("bounds %s titles while preserving full comment bodies", async (endpoint, kind) => {
+    const comments = [
+      { body: "  First\t  line  \r\nFull body stays here", title: "First line" },
+      { body: "x".repeat(140), title: "x".repeat(140) },
+      { body: `${"x".repeat(141)}\nMore details`, title: `${"x".repeat(139)}…` },
+      { body: "🦞".repeat(140), title: "🦞".repeat(140) },
+      { body: `${"🦞".repeat(141)}\nMore details`, title: `${"🦞".repeat(139)}…` },
+      { body: " \t\nLater line", title: "Comment" },
+      { body: "", title: "Comment" },
+      { body: null, title: "Comment" },
+    ];
+    const { api } = source((url) => {
+      if (url.pathname === `/repos/example/app/${endpoint}`) {
+        return json(
+          comments.map(({ body }, index) => ({
+            user: { login: "reviewer" },
+            body,
+            created_at: at,
+            html_url: `https://github.test/comment/${index}`,
+          })),
+        );
+      }
+      return emptyRoute(url);
+    });
+    const result = await api.collect(config, window, roster);
+    expect(result.status.ok).toBe(true);
+    expect(result.items).toEqual(
+      comments.map(({ body, title }, index) =>
+        expect.objectContaining({
+          kind,
+          title,
+          body: body ?? "",
+          url: `https://github.test/comment/${index}`,
+        }),
+      ),
+    );
+  });
+
   it("emits opened/closed events and advisory credit within half-open windows", async () => {
     const { api } = source((url) => {
-      if (url.pathname === "/search/issues")
+      if (url.pathname === "/search/issues") {
         return json({
           total_count: 3,
           items: [
@@ -221,7 +275,8 @@ describe("GitHub reports source", () => {
             { ...issue(3), created_at: new Date(untilMs).toISOString() },
           ],
         });
-      if (url.pathname.endsWith("/security-advisories"))
+      }
+      if (url.pathname.endsWith("/security-advisories")) {
         return json([
           {
             summary: "Fix exposed input",
@@ -232,6 +287,7 @@ describe("GitHub reports source", () => {
             publisher: { login: "helper" },
           },
         ]);
+      }
       return emptyRoute(url);
     });
     const result = await api.collect(config, window, roster);

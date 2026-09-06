@@ -12,14 +12,14 @@ import type {
 type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 
-export type SummaryOptions = {
+type SummaryOptions = {
   enabled: boolean;
   model?: string;
   reasoning?: CompletionParams["reasoning"];
   agentId?: string;
 };
 
-export type SummaryResult = {
+type SummaryResult = {
   report: ReportDocument;
   summary: SummaryDocument;
   reused: boolean;
@@ -139,7 +139,7 @@ function memberDigest(member: PersonReport) {
   };
 }
 
-export function buildEvidenceDigest(report: ReportDocument): string {
+function buildEvidenceDigest(report: ReportDocument): string {
   const members = report.members.toSorted((left, right) => compareText(left.login, right.login));
   const topItems = new Map<string, GithubItem>();
   for (const member of members) {

@@ -148,12 +148,12 @@ describe("team report attribution", () => {
     const report = day(comments);
     expect(report.totals.github).toMatchObject({ total: 3, issueComments: 2, reviewComments: 1 });
     expect(member(report, "alpha").github.items.map((entry) => entry.url)).toContain(
-      comments[1].url,
+      "https://github.com/sample/project/issues/2#issuecomment-2",
     );
     expect(
       member(report, "alpha").github.items.every((entry) => !Object.hasOwn(entry, "body")),
     ).toBe(true);
-    expect(comments[0].body).toBe("Ready for review");
+    expect(comments[0]).toMatchObject({ body: "Ready for review" });
   });
 
   it("excludes bot logins and out-of-window activity without dropping quiet members", () => {
