@@ -2296,7 +2296,6 @@ src/cli/daemon-cli/lifecycle.ts	1
 src/cli/daemon-cli/restart-health-probe.ts	9
 src/cli/daemon-cli/restart-health.ts	1
 src/cli/daemon-cli/start-repair.ts	1
-src/cli/daemon-cli/status.gather.ts	10
 src/cli/deps.ts	2
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	7
