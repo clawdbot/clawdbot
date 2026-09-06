@@ -541,6 +541,12 @@ it("rejects bounded cleanup across opaque hydration-boundary rows", async () => 
     path: resolveSessionTranscriptDatabasePath(scope),
   });
   const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
+  openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  })
+    .db.prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
+    .run(scope.sessionId);
 
   expect(() =>
     manager.removeTrailingEntries(

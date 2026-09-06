@@ -365,6 +365,49 @@ export function readTranscriptEventAtSeqSync(
     : undefined;
 }
 
+/** Reads the nearest indexed event before a raw transcript sequence. */
+export function readPreviousIndexedTranscriptEventSync(
+  scope: SessionTranscriptReadScope,
+  beforeSeq: number,
+): SessionTranscriptEventRow | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities as identity")
+      .innerJoin("transcript_events as event", (join) =>
+        join
+          .onRef("event.session_id", "=", "identity.session_id")
+          .onRef("event.seq", "=", "identity.seq"),
+      )
+      .select(["event.event_json", "identity.seq"])
+      .where("identity.session_id", "=", resolved.sessionId)
+      .where("identity.seq", "<", beforeSeq)
+      .where("identity.event_type", "in", [
+        "message",
+        "thinking_level_change",
+        "model_change",
+        "compaction",
+        "reset",
+        "branch_summary",
+        "custom",
+        "custom_message",
+        "label",
+        "session_info",
+      ])
+      .orderBy("identity.seq", "desc")
+      .limit(1),
+  );
+  return row
+    ? {
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        seq: sqliteNumber(row.seq),
+      }
+    : undefined;
+}
+
 export function loadTranscriptEventsFromDatabase(
   database: OpenClawAgentDatabase,
   sessionId: string,

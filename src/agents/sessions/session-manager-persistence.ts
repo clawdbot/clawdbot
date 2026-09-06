@@ -4,7 +4,7 @@ import {
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
   loadTranscriptSuffixEventsBoundedSync,
-  readTranscriptEventAtSeqSync,
+  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
   replaceTranscriptSuffixEventsSync,
   type TranscriptEntryAnchor,
@@ -85,21 +85,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (candidateRemoveStart === candidatePreservedStart) {
       return 0;
     }
-    if (this.boundedContextIncomplete && candidateRemoveStart === 1) {
-      let previousSeq = (this.persistedSuffixStartSeq ?? 0) - 1;
-      while (previousSeq >= 0 && this.persistenceTarget) {
-        const previous = readTranscriptEventAtSeqSync(this.persistenceTarget, previousSeq)?.event;
-        // SAFETY: SQLite transcript rows deserialize to the persisted SessionEntry/FileEntry union.
-        const previousEntry = previous as FileEntry | undefined;
-        if (previousEntry && isIndexedSessionEntry(previousEntry)) {
-          if (predicate(previousEntry)) {
-            throw new RangeError(
-              "Bounded transcript cleanup cannot cross the hydrated removal window",
-            );
-          }
-          break;
-        }
-        previousSeq -= 1;
+    if (
+      this.boundedContextIncomplete &&
+      candidateRemoveStart === 1 &&
+      this.persistenceTarget &&
+      this.persistedSuffixStartSeq !== undefined
+    ) {
+      const previous = readPreviousIndexedTranscriptEventSync(
+        this.persistenceTarget,
+        this.persistedSuffixStartSeq,
+      )?.event;
+      // SAFETY: Indexed SQLite transcript rows deserialize to the persisted SessionEntry union.
+      const previousEntry = previous as SessionEntry | undefined;
+      if (previousEntry && predicate(previousEntry)) {
+        throw new RangeError("Bounded transcript cleanup cannot cross the hydrated removal window");
       }
     }
     // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,

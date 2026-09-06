@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
@@ -12,7 +9,6 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
-import { SYNC_REBUILD_MAX_BYTES, SYNC_REBUILD_MAX_ROWS } from "./session-transcript-index.js";
 
 export type IncrementalSuffixIdempotencyMutation = {
   suffixIdentityKeys: readonly (readonly [string, string | null])[];
@@ -60,27 +56,6 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
   const removedKeys = [...removedIdempotencyKeys];
   if (removedKeys.length === 0) {
     return { suffixIdentityKeys, replacementByIdempotencyKey: [] };
-  }
-  if (params.startSeq > SYNC_REBUILD_MAX_ROWS) {
-    throw new RangeError(
-      `Transcript idempotency-owner promotion exceeds the synchronous row limit for ${params.resolved.sessionId}`,
-    );
-  }
-  const prefixBytes = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    db
-      .selectFrom("transcript_events")
-      .select(
-        /* kysely-allow-raw: bound idempotency-owner recovery by exact stored JSONL bytes. */
-        sql<number>`coalesce(sum(OCTET_LENGTH(event_json) + 1), 0)`.as("serialized_bytes"),
-      )
-      .where("session_id", "=", params.resolved.sessionId)
-      .where("seq", "<", params.startSeq),
-  )?.serialized_bytes;
-  if ((prefixBytes ?? 0) > SYNC_REBUILD_MAX_BYTES) {
-    throw new RangeError(
-      `Transcript idempotency-owner promotion exceeds the synchronous byte limit for ${params.resolved.sessionId}`,
-    );
   }
   const trimCharacters =
     " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";

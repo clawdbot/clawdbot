@@ -19,6 +19,7 @@ import {
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
   readTranscriptEventAtSeqSync,
+  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
@@ -67,6 +68,7 @@ export {
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
+  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
   readTranscriptRawDelta,
   readTranscriptMutationAtSync,

@@ -782,7 +782,7 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, duplicateKeyEvents);
   });
 
-  it("rejects idempotency-owner promotion beyond the synchronous prefix bound", async () => {
+  it("promotes an idempotency owner beyond the projection rebuild row bound", async () => {
     const prefix = Array.from({ length: SYNC_REBUILD_MAX_ROWS + 1 }, (_value, index) => ({
       type: "message" as const,
       id: `keyed-prefix-${index}`,
@@ -808,23 +808,47 @@ describe("SQLite exact transcript suffix replacement", () => {
       db.prepare(
         "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
       ).run("retry", scope.sessionId, owner.id);
-      expect(() =>
-        prepareSqliteTranscriptSuffixMutation(
-          openOpenClawAgentDatabase(scope),
-          scope,
-          duplicateKeyEvents,
-          duplicateKeyEvents.slice(0, -1),
-          duplicateKeyEvents.length - 1,
-        ),
-      ).toThrow("idempotency-owner promotion exceeds the synchronous row limit");
+      replaceTranscriptSuffixForTest(
+        scope,
+        duplicateKeyEvents,
+        duplicateKeyEvents.slice(0, -1),
+        duplicateKeyEvents.length - 1,
+      );
       expect(
         db
           .prepare(
             "SELECT event_id, message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
           )
           .get(scope.sessionId, duplicateId),
-      ).toEqual({ event_id: duplicateId, message_idempotency_key: null });
+      ).toEqual({ event_id: duplicateId, message_idempotency_key: "retry" });
     }, duplicateKeyEvents);
+  });
+
+  it("removes a unique keyed suffix beyond the projection rebuild row bound", async () => {
+    const prefix = Array.from({ length: SYNC_REBUILD_MAX_ROWS + 1 }, (_value, index) => ({
+      type: "message" as const,
+      id: `unique-prefix-${index}`,
+      parentId: index === 0 ? "root" : `unique-prefix-${index - 1}`,
+      message: { role: "assistant" as const, content: `prefix ${index}` },
+    }));
+    const owner = {
+      type: "message" as const,
+      id: "unique-suffix-owner",
+      parentId: prefix.at(-1)?.id ?? "root",
+      message: { role: "assistant" as const, content: "owner", idempotencyKey: "unique" },
+    };
+    const events = [rewriteEvents[0], ...prefix, owner];
+    await withRewriteFixture(({ db, scope }) => {
+      replaceTranscriptSuffixForTest(scope, events, events.slice(0, -1), events.length - 1);
+
+      expect(
+        db
+          .prepare(
+            "SELECT event_id FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+          )
+          .get(scope.sessionId, owner.id),
+      ).toBeUndefined();
+    }, events);
   });
 
   it("rotates generation while updating raw, identity, active, and FTS rows", async () => {
