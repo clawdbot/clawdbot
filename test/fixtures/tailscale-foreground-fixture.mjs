@@ -17,9 +17,5 @@ if (JSON.stringify(args) === JSON.stringify(serveArgs)) {
   process.stdout.write("Press Ctrl+C to exit.\n");
 } else {
   process.stderr.write("Funnel is not enabled on your tailnet.\n");
-  const marker = process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER;
-  if (marker) {
-    await import("node:fs/promises").then(({ writeFile }) => writeFile(marker, "ready"));
-  }
 }
 setInterval(() => {}, 1000);

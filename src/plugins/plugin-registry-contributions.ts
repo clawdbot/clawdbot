@@ -44,7 +44,7 @@ type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
-export type PluginRegistryContributionKey =
+type PluginRegistryContributionKey =
   | "providers"
   | "channels"
   | "channelConfigs"

@@ -22,14 +22,12 @@ function normalizeTargetContextRef(value) {
   return raw.replace(/^refs\/heads\//u, "");
 }
 
-function isEarlierFinalSameExtendedStableLine(params) {
+function isEarlierStableSameReleaseMonth(params) {
   const { baseline, candidate } = params;
   return (
     baseline?.channel === "stable" &&
-    baseline.correctionNumber === undefined &&
     baseline.year === candidate.year &&
     baseline.month === candidate.month &&
-    baseline.patch >= 33 &&
     compareOpenClawVersions(baseline.version, candidate.version) < 0
   );
 }
@@ -100,17 +98,17 @@ export function resolveReleaseUpgradeBaseline(candidateVersion, publishedVersion
   const baseline =
     requestedBaseline?.version ??
     published.find((version) =>
-      isEarlierFinalSameExtendedStableLine({ baseline: parseVersion(version), candidate }),
+      isEarlierStableSameReleaseMonth({ baseline: parseVersion(version), candidate }),
     );
   if (
     !baseline ||
     !published.includes(baseline) ||
-    !isEarlierFinalSameExtendedStableLine({ baseline: parseVersion(baseline), candidate })
+    !isEarlierStableSameReleaseMonth({ baseline: parseVersion(baseline), candidate })
   ) {
     throw new Error(
       requestedBaseline
-        ? `previous_version ${requestedBaseline.version} is not a published final predecessor of ${candidate.version} on ${targetContextRef}`
-        : `no published final extended-stable baseline predates candidate ${candidate.version} on ${targetContextRef}`,
+        ? `previous_version ${requestedBaseline.version} is not a published stable predecessor of ${candidate.version} on ${targetContextRef}`
+        : `no published stable baseline from the frozen release month predates candidate ${candidate.version} on ${targetContextRef}`,
     );
   }
   return `openclaw@${baseline}`;

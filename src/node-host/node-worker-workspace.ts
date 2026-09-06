@@ -10,6 +10,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import {
   NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  NODE_WORKSPACE_DRAIN_COMMAND,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -18,6 +19,8 @@ import type {
   NodeWorkerWorkspaceRetainInput,
   NodeWorkerWorkspaceRetainResult,
 } from "../worker/node-workspace-retain-protocol.js";
+import { isWorkspaceInspectionCommand } from "../worker/workspace-inspection-protocol.js";
+import { inspectSessionWorkspace } from "../worker/workspace-inspection.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   type NodeWorkerTransferGateway,
@@ -25,6 +28,8 @@ import {
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
 import {
+  assertWorkspaceArgv,
+  ensureContainedDirectory,
   hashNodeWorkerWorkspaceComponent as hashPathComponent,
   nodeWorkerWorkspaceGenerationKey as workspaceGenerationKey,
   nodeWorkerWorkspaceLaunchGenerationKey as launchGenerationKey,
@@ -33,6 +38,8 @@ import {
   parseNodeWorkerWorkspaceTransferGeneration as parseTransferArtifactGeneration,
   resolveNodeManagedWorkspaceIdentity,
   type NodeWorkerManagedWorkspaceRequest,
+  type NodeWorkerWorkspaceLaunchReference,
+  type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
@@ -41,22 +48,6 @@ const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
 const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
-
-type NodeWorkerWorkspaceLaunchReference = {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-};
-
-type WorkspaceSession = {
-  gatewayNamespace: string;
-  environmentHash: string;
-  sessionHash: string;
-  workspacesRoot: string;
-  environmentRoot: string;
-  sessionRoot: string;
-};
 
 type AcceptedRetainSnapshot = {
   controllerId: string;
@@ -156,54 +147,6 @@ async function removeIfEmpty(target: string): Promise<void> {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") {
       throw error;
-    }
-  }
-}
-
-function ensureContainedDirectory(parent: string, name: string): string {
-  const candidate = path.join(parent, name);
-  fs.mkdirSync(candidate, { recursive: true });
-  const stats = fs.lstatSync(candidate);
-  const resolved = fs.realpathSync.native(candidate);
-  if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
-    throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
-  }
-  return resolved;
-}
-
-function resolveArgumentPath(workspaceDir: string, arg: string): string | undefined {
-  if (path.isAbsolute(arg)) {
-    return arg;
-  }
-  if (arg.startsWith(".") || arg.includes("/") || (path.sep === "\\" && arg.includes("\\"))) {
-    return path.resolve(workspaceDir, arg);
-  }
-  return undefined;
-}
-
-function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
-  // This private transport owns cwd and direct path operands; it is not the user-facing
-  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
-  for (const [index, arg] of argv.entries()) {
-    // Canonical workspace helpers travel as the source operand to `node -e`.
-    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
-    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
-      continue;
-    }
-    const candidate = resolveArgumentPath(workspaceDir, arg);
-    if (!candidate) {
-      continue;
-    }
-    let resolved = candidate;
-    try {
-      resolved = fs.realpathSync.native(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    if (resolved !== workspaceDir && !isPathInside(workspaceDir, resolved)) {
-      throw new Error("INVALID_REQUEST: workspace command argv resolves outside its workspace");
     }
   }
 }
@@ -620,6 +563,20 @@ export class NodeWorkerWorkspaceRuntime {
     const finishOperation = this.beginWorkspaceOperation(input.gatewayNamespace, generationKey);
     try {
       return await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
+        if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+          signal?.throwIfAborted();
+          return projectNodeWorkerWorkspaceExecResult(
+            path.join(sessionRootCandidate, String(input.generation)),
+            {
+              stdout: "drained\n",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            },
+          );
+        }
         const gatewayRoot = ensureContainedDirectory(this.root, input.gatewayNamespace);
         const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
         const environmentRoot = ensureContainedDirectory(workspacesRoot, environmentHash);
@@ -687,7 +644,10 @@ export class NodeWorkerWorkspaceRuntime {
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest
           // result across command gaps; supersede it on transfer or drop it with its generation.
-          if (!(input.transfer.direction === "download" && input.transfer.attachments)) {
+          if (
+            !(input.transfer.direction === "download" && input.transfer.attachments) &&
+            !(input.transfer.direction === "upload" && input.transfer.publicationBaseCommit)
+          ) {
             this.latestTransferredManifest.set(generationKey, stdout);
           }
           return projectNodeWorkerWorkspaceExecResult(workspacePath, {
@@ -698,6 +658,31 @@ export class NodeWorkerWorkspaceRuntime {
             killed: false,
             termination: "exit",
           });
+        }
+        if (isWorkspaceInspectionCommand(input.argv)) {
+          const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
+          if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
+          }
+          const workspaceDir = fs.realpathSync.native(workspacePath);
+          if (!isPathInside(sessionRoot, workspaceDir)) {
+            throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
+          }
+          const stdout = await inspectSessionWorkspace(workspaceDir, input.input, () =>
+            signal?.throwIfAborted(),
+          );
+          return projectNodeWorkerWorkspaceExecResult(
+            workspaceDir,
+            {
+              stdout,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            },
+            input.argv,
+          );
         }
         if (input.resetWorkspace) {
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.

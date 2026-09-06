@@ -72,6 +72,29 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
     }
 
+    func testWatchMessageDeliveryIsReachableFromSettings() throws {
+        self.launchApp(for: Self.settingsScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let watch = app.buttons.containing(.staticText, identifier: "Apple Watch").firstMatch
+        for _ in 0..<5 where !watch.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(watch.isHittable)
+        watch.tap()
+        let delivery = app.buttons.containing(.staticText, identifier: "Message Delivery").firstMatch
+        XCTAssertTrue(delivery.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "watch-delivery-settings")
+        XCTAssertTrue(app.buttons["Connect Apple Watch"].exists)
+        XCTAssertFalse(app.buttons["Enable Standalone Voice"].exists)
+        XCTAssertFalse(app.buttons["Enable Direct Gateway Connection"].exists)
+        delivery.tap()
+        XCTAssertTrue(app.navigationBars["Message Delivery"].waitForExistence(timeout: 8))
+        let loaded = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ OR label == %@", "No saved Watch messages", "Discard…")).firstMatch
+        XCTAssertTrue(loaded.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "watch-message-delivery")
+    }
+
     func testAgentsNavigateToSettingsThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
         self.launchApp(for: Self.agentScreenshotTarget)

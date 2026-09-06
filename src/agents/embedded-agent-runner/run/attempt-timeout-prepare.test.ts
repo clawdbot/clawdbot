@@ -128,12 +128,7 @@ describe("prepareEmbeddedAttemptTimeout", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      state: {
-        markAborted: vi.fn(),
-        markTimedOut: vi.fn(),
-        markTimedOutDuringToolExecution: vi.fn(),
-        readTimedOutDuringCompaction: () => false,
-      },
+      state: { terminal: { kind: "ok" } },
     });
     const input = {
       attempt: {

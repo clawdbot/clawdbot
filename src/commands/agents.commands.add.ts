@@ -16,7 +16,6 @@ import {
 } from "../agents/agent-scope.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
-  ensureAuthProfileStore,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -26,7 +25,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
@@ -384,15 +383,9 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
       while (true) {
         const authChoice = await promptAuthChoiceGrouped({
           prompter,
-          store: authStore,
           includeSkip: true,
           config: nextConfig,
         });

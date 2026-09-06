@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import {
   getChannelPlugin,
@@ -22,10 +21,7 @@ import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-poli
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import {
-  appendMessageToolReadHint,
-  appendMessageToolVisibleReplyHint,
-} from "./message-tool-description.js";
+import { appendMessageToolReadHint } from "./message-tool-description.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping.js";
 import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
@@ -282,26 +278,14 @@ export function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
-export function buildMessageToolDescription(
-  actions: string[] | undefined,
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
-  requireExplicitTarget?: boolean,
-): string {
+export function buildMessageToolDescription(actions: string[] | undefined): string {
   const baseDescription = "Send/manage channel messages.";
   if (actions && actions.length > 0) {
     const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
     return appendMessageToolReadHint(
-      appendMessageToolVisibleReplyHint(
-        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
-        sourceReplyDeliveryMode,
-        requireExplicitTarget,
-      ),
+      `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
       sortedActions,
     );
   }
-  return appendMessageToolVisibleReplyHint(
-    `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
-    sourceReplyDeliveryMode,
-    requireExplicitTarget,
-  );
+  return `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`;
 }

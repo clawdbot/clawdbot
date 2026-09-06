@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import * as commandExec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { nodeFilePath } from "../test-utils/node-file-path.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -102,8 +103,17 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
   }
   const realWrite = fs.writeFile.bind(fs);
   const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-    const owned = typeof file === "string" && initGates.has(path.dirname(file));
-    if (owned && path.basename(file) === DEFAULT_AGENTS_FILENAME) {
+    const filePath = nodeFilePath(file);
+    const parent = filePath ? path.dirname(filePath) : undefined;
+    const workspaceDir =
+      parent && initGates.has(parent)
+        ? parent
+        : parent &&
+            path.basename(parent).startsWith("openclaw-bootstrap-") &&
+            initGates.has(path.dirname(parent))
+          ? path.dirname(parent)
+          : undefined;
+    if (workspaceDir && filePath && path.basename(filePath) === DEFAULT_AGENTS_FILENAME) {
       if (++agentsWrites === dirs.length) {
         admitted.resolve();
       }
@@ -113,7 +123,7 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
     try {
       return await realWrite(file, data, options);
     } finally {
-      if (owned && path.basename(file) === DEFAULT_USER_FILENAME) {
+      if (workspaceDir && filePath && path.basename(filePath) === DEFAULT_USER_FILENAME) {
         const last = ++userWrites === dirs.length;
         if (last) {
           templates.resolve();

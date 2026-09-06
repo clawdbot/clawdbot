@@ -39,7 +39,7 @@ type UninstallActions = PluginConfigUninstallActions & {
   directory: boolean;
 };
 
-export const UNINSTALL_ACTION_LABELS = {
+const UNINSTALL_ACTION_LABELS = {
   entry: "plugin settings",
   install: "install record",
   allowlist: "allowlist entry",
@@ -63,19 +63,31 @@ const UNINSTALL_ACTION_ORDER = [
   "directory",
 ] as const satisfies ReadonlyArray<keyof UninstallActions>;
 
-export function formatUninstallActionLabels(actions: UninstallActions): string[] {
-  return UNINSTALL_ACTION_ORDER.flatMap((key) =>
-    actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
-  );
+export function formatUninstallActionLabels(
+  actions: UninstallActions,
+  preview?: { channelConfigKeys: readonly string[] },
+): string[] {
+  return UNINSTALL_ACTION_ORDER.flatMap((key) => {
+    if (!actions[key]) {
+      return [];
+    }
+    if (preview) {
+      if (key === "memorySlot" || key === "contextEngineSlot") {
+        const slot = key === "memorySlot" ? "memory" : "contextEngine";
+        return [`${UNINSTALL_ACTION_LABELS[key]} (will reset to "${defaultSlotIdForKey(slot)}")`];
+      }
+      if (key === "channelConfig") {
+        return preview.channelConfigKeys.map(
+          (id) => `${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${id})`,
+        );
+      }
+    }
+    return [UNINSTALL_ACTION_LABELS[key]];
+  });
 }
 
 function hasUninstallAction(actions: PluginConfigUninstallActions): boolean {
   return Object.values(actions).some(Boolean);
-}
-
-export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
-  const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
-  return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
 }
 
 export type PluginUninstallDirectoryRemoval = {

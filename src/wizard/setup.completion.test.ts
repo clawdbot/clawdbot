@@ -85,42 +85,53 @@ describe("setupWizardShellCompletion", () => {
     expect(prompter.note).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      description: "upgrading a slow shell profile",
-      profileInstalled: true,
-      usesSlowPattern: true,
-    },
-    {
-      description: "installing a new shell profile",
-      profileInstalled: false,
-      usesSlowPattern: false,
-    },
-  ])(
-    "keeps onboarding completion optional when $description is not writable",
-    async ({ profileInstalled, usesSlowPattern }) => {
-      const profilePath = "/tmp/read-only/.zshrc";
-      const prompter = createPrompter();
-      const deps = createDeps();
-      vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
-        shell: "zsh",
-        profileInstalled,
-        cacheExists: false,
-        cachePath: "/tmp/openclaw.zsh",
-        usesSlowPattern,
-      });
-      vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError("EACCES", profilePath));
+  describe.each(["en", "zh-CN", "zh-TW"])("%s permission recovery", (locale) => {
+    it.each([
+      {
+        description: "upgrading a slow shell profile",
+        profileInstalled: true,
+        usesSlowPattern: true,
+      },
+      {
+        description: "installing a new shell profile",
+        profileInstalled: false,
+        usesSlowPattern: false,
+      },
+    ])(
+      "offers session recovery when $description fails",
+      async ({ profileInstalled, usesSlowPattern }) => {
+        await withLocale(locale, async () => {
+          const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
+          const prompter = createPrompter();
+          const deps = createDeps();
+          vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
+            shell: "zsh",
+            profileInstalled,
+            cacheExists: false,
+            cachePath: "/tmp/openclaw.zsh",
+            usesSlowPattern,
+          });
+          vi.mocked(deps.installCompletion!).mockRejectedValue(
+            wrappedFsError("EACCES", failedPath),
+          );
 
-      await expect(
-        setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
-      ).resolves.not.toThrow();
+          await expect(
+            setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+          ).resolves.not.toThrow();
 
-      expect(prompter.note).toHaveBeenCalledWith(
-        `Shell completion was not changed: ${profilePath} is not writable. Run \`openclaw completion --install\` against a writable profile file.`,
-        "Shell completion",
-      );
-    },
-  );
+          expect(prompter.note).toHaveBeenCalledTimes(1);
+          expect(prompter.note).toHaveBeenCalledWith(
+            expect.stringContaining("source /tmp/openclaw.zsh"),
+            "Shell completion",
+          );
+          expect(prompter.note).toHaveBeenCalledWith(
+            expect.stringContaining(failedPath),
+            "Shell completion",
+          );
+        });
+      },
+    );
+  });
 
   it("re-throws unexpected completion installation errors", async () => {
     const prompter = createPrompter();
@@ -174,6 +185,7 @@ describe("setupWizardShellCompletion", () => {
         "Shell completion",
       );
       expect(deps.installCompletion).not.toHaveBeenCalled();
+      expect(prompter.note.mock.calls.flat().join("\n")).not.toContain("source /tmp/openclaw.zsh");
     },
   );
 

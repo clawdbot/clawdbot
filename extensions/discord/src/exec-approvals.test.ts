@@ -79,10 +79,34 @@ describe("discord exec approvals", () => {
   it("falls back to commands.ownerAllowFrom for exec approvers", () => {
     const cfg = {
       ...buildConfig(),
-      commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
+      commands: {
+        ownerAllowFrom: [
+          "discord:123",
+          "user:456",
+          "789",
+          "discord:<@987>",
+          "user:<@654>",
+          "pk:999",
+        ],
+      },
     } as OpenClawConfig;
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789", "987", "654"]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
+  });
+
+  it("rejects retired global owners without changing explicit approval targets", () => {
+    const cfg = {
+      ...buildConfig(),
+      commands: { ownerAllowFrom: ["discord:user:123"] },
+    } as OpenClawConfig;
+
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(
+      getDiscordExecApprovalApprovers({
+        cfg,
+        configOverride: { approvers: ["discord:user:456"] },
+      }),
+    ).toEqual(["456"]);
   });
 });

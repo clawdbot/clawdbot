@@ -172,7 +172,9 @@ async function runXaiCatalog(options: { auth?: "none"; apiKey?: false } = {}) {
 describe("xai provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockReset();
+    providerAuthRuntimeMocks.resolveApiKeyForProvider
+      .mockReset()
+      .mockRejectedValue(new Error("No runtime credential"));
     vi.stubEnv("XAI_API_KEY", "");
   });
 
@@ -437,16 +439,30 @@ describe("xai provider plugin", () => {
     });
   });
 
-  it("keeps the Grok OAuth transport when xAI OAuth discovery is unavailable", async () => {
+  it("reports OAuth discovery failure without retrying with an API key", async () => {
     mockXaiRuntimeOAuth();
-    stubXaiFetch(() => new Response("temporarily unavailable", { status: 503 }));
-    const { result } = await runXaiCatalog();
+    const fetchMock = stubXaiFetch(() => new Response("temporarily unavailable", { status: 503 }));
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey: "alternate-key" }));
+    const result = await provider.catalog?.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey,
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
 
-    expect(result.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
-    expect(result.auth).toBe("oauth");
-    expect(result.apiKey).toBeUndefined();
-    expect(result.models.map((model) => model.id)).toContain("auto");
-    expect(result.models.map((model) => model.id)).toContain("grok-build-0.1");
+    expect(result).toEqual({
+      providers: {},
+      outcomes: [{ provider: "xai", profileId: "xai-profile", status: "unavailable" }],
+    });
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.every(([url]) =>
+        (url instanceof Request ? url.url : url.toString()).startsWith(
+          "https://cli-chat-proxy.grok.com/",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("falls back to API-key discovery when xAI OAuth credential resolution fails", async () => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deliverReplies } from "./bot/delivery.js";
@@ -157,6 +158,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
       assertPlatformSendAuthorized,
     });
   }
+
+  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
+    const source = "<https://example.com/a.pdf|Manual>";
+    const text = sanitizeForPlainText(source, { style: "markdown" });
+
+    await sendThrough("public", text, async () => {});
+
+    expect(requests.at(-1)?.fields.text).toBe("Manual");
+  });
 
   it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
     const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");

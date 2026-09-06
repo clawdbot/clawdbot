@@ -57,7 +57,6 @@ export type ControlUiBootstrapConfig = {
    * gateways running unreleased branch code.
    */
   devGitBranch?: string;
-  localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
@@ -73,5 +72,7 @@ export type ControlUiBootstrapConfig = {
   terminalEnabled?: boolean;
   /** Whether the Labs-gated CLI agents model-picker group is enabled. */
   cliAgentsEnabled?: boolean;
+  /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */
+  pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

@@ -124,6 +124,8 @@ Track check timing in the relevant automation's scratch; do not create a separat
 
 **Stay quiet (`NO_REPLY`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
 
+When both lists apply at once, stay quiet. Only an urgent item overrides quiet hours.
+
 **Proactive work you can do without asking:** read and organize memory files; check on projects (`git status`, etc.); update documentation; commit and push your own changes; review and update `USER.md` and `MEMORY.md`.
 
 ### Memory Maintenance

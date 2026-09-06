@@ -1,14 +1,11 @@
 // OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
-import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import type {
-  CacheRetention,
   Context,
   Model,
   OpenAIResponsesCompat,
@@ -17,9 +14,12 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  clampOpenAIPromptCacheKey,
+  resolveOpenAIResponsesCacheParams,
+} from "./openai-prompt-cache.js";
+import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   applyCommonResponsesParams,
@@ -42,13 +42,6 @@ function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCom
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
-}
-
-function getPromptCacheRetention(
-  compat: ResolvedOpenAIResponsesCompat,
-  cacheRetention: CacheRetention,
-): "24h" | undefined {
-  return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
 // OpenAI Responses-specific options
@@ -85,7 +78,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      return createClient(model, context, apiKey, options?.headers, cacheSessionId);
+      return createClient(
+        model,
+        context,
+        apiKey,
+        resolveOpencodeSessionHeaders(model, options),
+        cacheSessionId,
+      );
     },
     buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
     processStreamOptions: {
@@ -147,32 +146,7 @@ function createClient(
     headers["x-client-request-id"] = sessionId;
   }
 
-  // Merge options headers last so they can override defaults
-  if (optionsHeaders) {
-    Object.assign(headers, optionsHeaders);
-  }
-
-  const defaultHeaders =
-    model.provider === "cloudflare-ai-gateway"
-      ? {
-          ...headers,
-          Authorization: headers.Authorization ?? null,
-          "cf-aig-authorization": `Bearer ${apiKey}`,
-        }
-      : headers;
-
-  const baseUrl = isCloudflareProvider(model.provider)
-    ? resolveCloudflareBaseUrl(model)
-    : model.baseUrl;
-  return new OpenAI({
-    apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
-    dangerouslyAllowBrowser: true,
-    defaultHeaders,
-    maxRetries: 0,
-    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
-    fetch: getAiTransportHost().buildModelFetch(model),
-  });
+  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
 }
 
 function buildParams(
@@ -198,7 +172,7 @@ function buildParams(
       cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
+    ...resolveOpenAIResponsesCacheParams(model, cacheRetention, compat.supportsLongCacheRetention),
     store: false,
   };
 

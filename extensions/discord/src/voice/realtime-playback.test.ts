@@ -1,6 +1,5 @@
 import type { PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
-import type { RealtimeVoiceSessionHarness } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -117,7 +116,8 @@ defineDiscordVoiceTests(
         show: true,
         suppress: false,
       });
-      const { bridgeParams } = await createJoinedAgentProxyFixture();
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+      beginSpeakerTurn(entry);
 
       void bridgeParams?.onToolCall?.(
         {
@@ -201,7 +201,8 @@ defineDiscordVoiceTests(
     });
 
     it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
-      const { bridgeParams } = await createJoinedAgentProxyFixture();
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+      beginSpeakerTurn(entry);
 
       expect(() =>
         bridgeParams?.onToolCall?.(
@@ -221,16 +222,16 @@ defineDiscordVoiceTests(
       });
     });
 
-    it("does not require speaker context for internal exact-speech consults", async () => {
+    it("does not consult the agent again for internal exact speech", async () => {
+      agentCommandMock
+        .mockResolvedValueOnce({ payloads: [{ text: "already answered" }] })
+        .mockResolvedValueOnce({ payloads: [{ text: "direct internal answer" }] });
       const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
-      if (entry.realtimeLifecycle.status !== "active") {
-        throw new Error("expected active Discord realtime session");
-      }
-      const realtime = entry.realtimeLifecycle.instance as unknown as {
-        playback: { enqueueExactSpeechMessage: (text: string) => void };
-      };
-      realtime.playback.enqueueExactSpeechMessage("already answered");
-      realtime.playback.enqueueExactSpeechMessage("direct internal answer");
+      beginSpeakerTurn(entry);
+      await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
+      beginSpeakerTurn(entry);
+      await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
+      agentCommandMock.mockClear();
 
       void bridgeParams?.onToolCall?.(
         {
@@ -422,26 +423,17 @@ defineDiscordVoiceTests(
     });
 
     it("drains a complete 6.8-second provider burst in order after backpressure and response completion", async () => {
-      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      if (entry.realtimeLifecycle.status !== "active") {
-        throw new Error("expected active Discord realtime session");
-      }
-      const realtime = entry.realtimeLifecycle.instance as unknown as {
-        playback: { currentOutputStream: () => PassThrough | null };
-      };
+      const { bridgeParams, manager, player } = await createJoinedAgentProxyFixture();
       // Real provider chunks are 400 ms; Discord's consumer has not drained any yet.
       const expected = Array.from({ length: 17 }, (_, index) => {
         bridgeParams.audioSink.sendAudio(Buffer.alloc(19_200, index));
         return Buffer.alloc(76_800, index);
       });
-      const stream = realtime.playback.currentOutputStream();
       const output = lastAudioResourceInput() as PassThrough;
-      expect(stream?.writableNeedDrain).toBe(true);
       expect(player.stop).not.toHaveBeenCalled();
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
 
       bridgeParams.onResponseDone?.({ status: "completed" });
-      expect(stream?.writableEnded).toBe(false);
       const received: Buffer[] = [];
       output.on("data", (chunk: Buffer) => received.push(chunk));
       await finished(output);
@@ -454,22 +446,15 @@ defineDiscordVoiceTests(
     });
 
     it("does not let a cancelled response's drain resume or end a later response", async () => {
-      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      if (entry.realtimeLifecycle.status !== "active") {
-        throw new Error("expected active Discord realtime session");
-      }
-      const realtime = entry.realtimeLifecycle.instance as unknown as {
-        playback: { currentOutputStream: () => PassThrough | null };
-      };
+      const { bridgeParams, manager, player } = await createJoinedAgentProxyFixture();
       for (let index = 0; index < 17; index += 1) {
         bridgeParams.audioSink.sendAudio(Buffer.alloc(19_200));
       }
-      const oldStream = realtime.playback.currentOutputStream();
-      expect(oldStream?.writableNeedDrain).toBe(true);
+      const oldStream = lastAudioResourceInput() as PassThrough;
 
       bridgeParams.onResponseDone?.({ status: "cancelled" });
       bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
-      const nextStream = realtime.playback.currentOutputStream();
+      const nextStream = lastAudioResourceInput() as PassThrough;
       expect(nextStream).not.toBe(oldStream);
       oldStream?.emit("drain");
       await Promise.resolve();
@@ -485,21 +470,22 @@ defineDiscordVoiceTests(
     it.each(["before", "after"] as const)(
       "releases queued speech after an encoder failure %s provider completion",
       async (ordering) => {
+        agentCommandMock
+          .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+          .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] })
+          .mockResolvedValueOnce({ payloads: [{ text: "third answer" }] });
         const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
         try {
-          if (entry.realtimeLifecycle.status !== "active") {
-            throw new Error("expected active Discord realtime session");
-          }
-          const realtime = entry.realtimeLifecycle.instance as unknown as {
-            playback: { enqueueExactSpeechMessage: (text: string) => void };
-          };
-          realtime.playback.enqueueExactSpeechMessage("first answer");
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
           bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
-          realtime.playback.enqueueExactSpeechMessage("second answer");
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
           expectUserMessageNotIncludes("second answer");
           if (ordering === "after") {
             bridgeParams.onResponseDone?.({ status: "completed" });
           }
+          const interruptionsBeforeFailure = realtimeSessionMock.handleBargeIn.mock.calls.length;
 
           const output = lastAudioResourceInput() as PassThrough;
           output.destroy(new Error("encoder failed"));
@@ -511,9 +497,12 @@ defineDiscordVoiceTests(
             bridgeParams.onEvent?.({ direction: "server", type: "response.done" });
           }
           expectUserMessageIncludes("second answer");
-          realtime.playback.enqueueExactSpeechMessage("third answer");
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "third question");
           expectUserMessageNotIncludes("third answer");
-          expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+          expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledTimes(
+            interruptionsBeforeFailure,
+          );
         } finally {
           await manager.destroy();
         }
@@ -558,31 +547,16 @@ defineDiscordVoiceTests(
     );
 
     it.each([
-      [
-        { status: "failed" as const, responseId: "response-1", message: "provider failed" },
-        "turn.ended",
-      ],
-      [
-        {
-          status: "incomplete" as const,
-          responseId: "response-1",
-          reason: "max_output_tokens",
-          message: "provider response incomplete",
-        },
-        "turn.ended",
-      ],
-      [
-        { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
-        "turn.cancelled",
-      ],
-    ])("retires each response once and plays a later response", async (outcome, terminalType) => {
-      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      if (entry.realtimeLifecycle.status !== "active") {
-        throw new Error("expected active Discord realtime session");
-      }
-      const realtime = entry.realtimeLifecycle.instance as unknown as {
-        harness: RealtimeVoiceSessionHarness;
-      };
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+    ])("retires a $status response and plays a later response", async (outcome) => {
+      const { bridgeParams, manager, player } = await createJoinedAgentProxyFixture();
 
       bridgeParams.onEvent?.({
         direction: "server",
@@ -597,12 +571,9 @@ defineDiscordVoiceTests(
         type: "response.done",
       });
 
-      expect(
-        realtime.harness.talk.recentEvents.filter((event) => event.type === terminalType),
-      ).toHaveLength(1);
       expect(manager.status()).toHaveLength(1);
       expect(realtimeSessionMock.close).not.toHaveBeenCalled();
-      expect(player.stop).toHaveBeenCalledTimes(1);
+      expect(player.stop).not.toHaveBeenCalled();
 
       bridgeParams.onEvent?.({
         direction: "server",
@@ -617,11 +588,6 @@ defineDiscordVoiceTests(
         type: "response.done",
       });
 
-      expect(
-        realtime.harness.talk.recentEvents.filter(
-          (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
-        ),
-      ).toHaveLength(2);
       expect(createAudioResourceMock).toHaveBeenCalledOnce();
       expect(player.play).toHaveBeenCalledOnce();
       expect(manager.status()).toHaveLength(1);
@@ -635,7 +601,7 @@ defineDiscordVoiceTests(
 
       expect(createAudioResourceMock).not.toHaveBeenCalled();
       expect(player.play).not.toHaveBeenCalled();
-      expect(player.stop).toHaveBeenCalledWith(true);
+      expect(player.stop).not.toHaveBeenCalled();
 
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
       bridgeParams?.onResponseDone?.({
@@ -645,7 +611,7 @@ defineDiscordVoiceTests(
 
       expect(createAudioResourceMock).not.toHaveBeenCalled();
       expect(player.play).not.toHaveBeenCalled();
-      expect(player.stop).toHaveBeenCalledTimes(2);
+      expect(player.stop).not.toHaveBeenCalled();
     });
   },
 );

@@ -2,8 +2,11 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 it.each(["success", "failure", "replaced", "replaced-during-refresh"])(
   "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
@@ -22,7 +25,7 @@ it.each(["success", "failure", "replaced", "replaced-during-refresh"])(
     const { gateway, publish } = createGatewayHarness({
       request,
     } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const created = vi.fn();
     sessions.subscribeCreated(created);
     const operation = sessions.recover({ key: "agent:main:expired", agentId: "main" });

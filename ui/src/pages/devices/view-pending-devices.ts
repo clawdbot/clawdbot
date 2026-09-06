@@ -125,16 +125,22 @@ function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: P
           <dd class="settings-row__value settings-row__value--mono" title=${req.deviceId}>
             ${req.deviceId}
           </dd>
-          ${req.remoteIp
-            ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
-                <dd class="settings-row__value settings-row__value--mono">${req.remoteIp}</dd>`
-            : nothing}
+          ${
+            req.remoteIp
+              ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
+                  <dd class="settings-row__value settings-row__value--mono">${req.remoteIp}</dd>`
+              : nothing
+          }
           <dt class="settings-row__desc">${t("devices.inventory.requestedAccessLabel")}</dt>
           <dd class="settings-row__value">${formatAccessSummary(approval.requested)}</dd>
-          ${approval.approved
-            ? html`<dt class="settings-row__desc">${t("devices.inventory.approvedAccessLabel")}</dt>
-                <dd class="settings-row__value">${formatAccessSummary(approval.approved)}</dd>`
-            : nothing}
+          ${
+            approval.approved
+              ? html`<dt class="settings-row__desc">
+                    ${t("devices.inventory.approvedAccessLabel")}
+                  </dt>
+                  <dd class="settings-row__value">${formatAccessSummary(approval.approved)}</dd>`
+              : nothing
+          }
         </dl>
       </details>
     </div>

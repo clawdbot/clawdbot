@@ -157,11 +157,13 @@ export class DebugOverlay extends OpenClawLightDomElement {
     return html`
       <section class="debug-overlay__section">
         <h3>${t(section.titleKey)}</h3>
-        ${state.status === "loading"
-          ? html`<div class="debug-overlay__empty">${t("common.loading")}</div>`
-          : state.status === "unavailable"
-            ? html`<div class="debug-overlay__empty">${t("debug.overlay.unavailable")}</div>`
-            : section.render(state.value, this.statusHistory)}
+        ${
+          state.status === "loading"
+            ? html`<div class="debug-overlay__empty">${t("common.loading")}</div>`
+            : state.status === "unavailable"
+              ? html`<div class="debug-overlay__empty">${t("debug.overlay.unavailable")}</div>`
+              : section.render(state.value, this.statusHistory)
+        }
       </section>
     `;
   }

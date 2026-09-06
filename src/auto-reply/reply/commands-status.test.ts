@@ -5,7 +5,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -58,24 +58,20 @@ type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(
-    async (): Promise<StatusPluginHealthSnapshot> => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
-  collectRuntimePluginHealthSnapshot: vi.fn(
-    (): StatusPluginHealthSnapshot => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
+  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
+  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {

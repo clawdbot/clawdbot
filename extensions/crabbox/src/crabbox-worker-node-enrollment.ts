@@ -141,7 +141,7 @@ let phase = "preparation";
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
   const downloadArchive = async (artifact, token, archive) => {
-    phase = "download";
+    phase = "download connection";
     if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
     const url = new URL(artifact.url);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (artifact.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -153,6 +153,11 @@ let phase = "preparation";
       agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
+    // Observe transport progress without changing when the pinned request may send credentials.
+    request.once("socket", (socket) => {
+      socket.once("connect", () => { phase = url.protocol === "https:" ? "download TLS" : "download HTTP response"; });
+      socket.once("secureConnect", () => { if (!pin) phase = "download HTTP response"; });
+    });
     const pendingResponse = once(request, "response").then(([response]) => response);
     // Pinned private certificates authenticate the socket before any bearer bytes leave.
     void (async () => {
@@ -160,6 +165,7 @@ let phase = "preparation";
         const [socket] = await once(request, "socket");
         await once(socket, "secureConnect");
         if (normalizePin(socket.getPeerCertificate().fingerprint256 ?? "") !== pin) throw new Error("Cloud worker bootstrap TLS fingerprint mismatch");
+        phase = "download HTTP response";
       }
       request.end();
     })().catch((error) => request.destroy(error));
@@ -167,6 +173,7 @@ let phase = "preparation";
     try {
       if (response.statusCode !== 200) throw new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode);
       if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
+      phase = "download body";
       const output = await fsp.open(archive, "wx", 0o600);
       try { await verifyArchive(response, artifact, output); }
       finally { await output.close(); }

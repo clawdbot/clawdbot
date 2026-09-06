@@ -10,10 +10,12 @@ import {
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
+import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
+  stringifyCodexPluginPolicy,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,
@@ -517,19 +519,6 @@ function appApprovalCeiling(mode: CodexPluginDestructiveApprovalMode): CodexAppT
   return mode === "ask" ? "prompt" : "auto";
 }
 
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Intersects a stored app-ID cap with current policy without admitting new apps. */
 export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   config: CodexPluginThreadConfig,
@@ -596,6 +585,17 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     if (!currentApp) {
       continue;
     }
+    if (currentApp.destructiveApprovalMode === "ask") {
+      // Captured ask can tighten today's policy. Pin the link reviewer too;
+      // per-tool prompt ceilings below do not override native account reviewers.
+      Object.assign(
+        appPatch,
+        buildCodexAppApprovalOverrides(currentPolicy.config, {
+          id: appId,
+          approvalOverrideToolConfigKeys: [],
+        }),
+      );
+    }
     const storedAppCeiling = appApprovalCeiling(captured.destructiveApprovalMode);
     const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp));
     // Current inventory owns existence; captured modes only cap tools that
@@ -628,7 +628,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const fingerprint = crypto
     .createHash("sha256")
     .update(
-      stableStringify({
+      stringifyCodexPluginPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         authority: scheduled,
@@ -729,7 +729,7 @@ export function buildScheduledCodexAppAuthorityInputFingerprint(
   return crypto
     .createHash("sha256")
     .update(
-      stableStringify({
+      stringifyCodexPluginPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         baseFingerprint,

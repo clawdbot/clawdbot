@@ -24,20 +24,6 @@ export function truncateUtf8Prefix(value: string, maxBytes: number): string {
   return truncateEncodedPrefix(Buffer.from(value.slice(0, maxBytes)), maxBytes);
 }
 
-/** Reuses bounded encoding for repeated prefix limits no greater than maxBytes. */
-export function createUtf8PrefixTruncator(value: string, maxBytes: number) {
-  if (maxBytes <= 0) {
-    return () => "";
-  }
-  const bytes = Buffer.from(value.slice(0, maxBytes));
-  return (limit: number): string =>
-    limit <= 0
-      ? ""
-      : value.length <= limit && bytes.byteLength <= limit
-        ? value
-        : truncateEncodedPrefix(bytes, limit);
-}
-
 /** Keeps the longest UTF-8 suffix that fits within the byte limit. */
 export function truncateUtf8Suffix(value: string, maxBytes: number): string {
   if (maxBytes <= 0) {
@@ -46,8 +32,8 @@ export function truncateUtf8Suffix(value: string, maxBytes: number): string {
   if (value.length <= maxBytes && Buffer.byteLength(value) <= maxBytes) {
     return value;
   }
-  // Full length matters: fractional subtraction rounds before index conversion.
-  const bytes = Buffer.from(value);
+  // Extra UTF-16 unit shields split surrogates; fractional limits need the original byte length.
+  const bytes = Buffer.from(Number.isInteger(maxBytes) ? value.slice(-maxBytes - 1) : value);
   let start = bytes.byteLength - maxBytes;
   while (start < bytes.byteLength && isContinuationByte(bytes[start])) {
     start += 1;

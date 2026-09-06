@@ -439,18 +439,22 @@ releasePolicyIt("returns 124 when the release ancestry total budget is exhausted
   expect(report.commands).toEqual([]);
 });
 
-// Protect the one-source distribution contract independently of the generator's formatter.
+// Ask Bash to decode the source independently of the generator and fixture codec.
 it("keeps exactly one byte-identical generated CI owner", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
   const source = readFileSync(".github/actions/git-owner/owner.py", "utf8");
-  const bodies = [...workflow.matchAll(/run_owner <<'PYTHON'\n([\s\S]*?) {10}PYTHON\n/gu)];
-  expect(bodies).toHaveLength(1);
-  const body = bodies[0]?.[1]
-    ?.split("\n")
-    .slice(1)
-    .map((line) => line.slice(10))
-    .join("\n");
-  expect(body).toBe(source);
+  const projections = [
+    ...workflow.matchAll(/^ {10}run_owner '[\s\S]*?^ {10}# End generated CI Git owner\.$/gmu),
+  ];
+  expect(projections).toHaveLength(1);
+  for (const [projection] of projections) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e"], {
+      encoding: "utf8",
+      input: "run_owner() { printf '%s' \"$1\"; }\n" + projection.replace(/^ {10}/gmu, ""),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(source);
+  }
 });
 
 it("binds read-only checkout authentication only to the workflow repository", () => {

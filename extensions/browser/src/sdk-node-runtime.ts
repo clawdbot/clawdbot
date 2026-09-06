@@ -8,7 +8,6 @@ export {
   ensureGatewayStartupAuth,
   ErrorCodes,
   errorShape,
-  isLoopbackHost,
   isNodeCommandAllowed,
   respondUnavailableOnNodeInvokeError,
   resolveGatewayAuth,

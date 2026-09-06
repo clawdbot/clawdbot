@@ -1,4 +1,6 @@
+import type { SkillsProposalsListResultSchema } from "@openclaw/gateway-protocol";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { Static } from "typebox";
 import { formatBytes } from "../../lib/agents/display.ts";
 import type {
   SkillWorkshopEvaluation,
@@ -8,26 +10,8 @@ import type {
 
 type SkillProposalStatus = SkillWorkshopProposalStatus;
 type SkillProposalKind = SkillWorkshopProposal["kind"];
-type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
-
-type SkillProposalManifestEntry = {
-  id: string;
-  kind: SkillProposalKind;
-  status: SkillProposalStatus;
-  title: string;
-  description: string;
-  skillName: string;
-  skillKey: string;
-  createdAt: string;
-  updatedAt: string;
-  scanState: SkillProposalScanState;
-};
-
-export type SkillProposalManifest = {
-  schema: "openclaw.skill-workshop.proposals-manifest.v1";
-  updatedAt: string;
-  proposals: SkillProposalManifestEntry[];
-};
+export type SkillProposalManifest = Static<typeof SkillsProposalsListResultSchema>;
+type SkillProposalManifestEntry = SkillProposalManifest["proposals"][number];
 
 type SkillProposalSupportFileRecord = {
   path: string;
@@ -49,6 +33,7 @@ type SkillProposalRecord = {
   description: string;
   createdAt: string;
   updatedAt: string;
+  appliedAt?: string;
   proposedVersion: string;
   draftHash: string;
   evaluation?: SkillWorkshopEvaluation;
@@ -57,6 +42,7 @@ type SkillProposalRecord = {
   target: {
     skillName: string;
     skillKey: string;
+    source?: string;
   };
 };
 
@@ -170,7 +156,6 @@ export function proposalFromManifest(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previousIsCurrent ? previous.supportFiles : [],
-    isNew: previous?.isNew ?? false,
   };
 }
 
@@ -206,7 +191,6 @@ export function proposalFromInspect(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
-    isNew: previous?.isNew ?? false,
   };
 }
 
@@ -239,6 +223,5 @@ export function proposalFromEvaluation(
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previous.supportFiles,
-    isNew: previous.isNew,
   };
 }

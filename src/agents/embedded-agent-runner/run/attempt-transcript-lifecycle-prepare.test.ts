@@ -13,15 +13,20 @@ import {
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { createAssistantErrorTranscript } from "../../assistant-error-transcript.js";
+import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
@@ -39,7 +44,7 @@ type InitialWriterFixture = {
 };
 
 async function withInitialWriter(
-  run: (fixture: InitialWriterFixture) => Promise<void>,
+  run: (fixture: InitialWriterFixture) => Promise<void | (() => Promise<void>)>,
   options: { existing?: boolean } = {},
 ) {
   await withOpenClawTestState({ label: "initial-session-writer" }, async (state) => {
@@ -89,14 +94,14 @@ async function withInitialWriter(
         arm: vi.fn(),
         throwIfFiredAfterPrepCleanup: async () => controller.signal.throwIfAborted(),
       };
-      await promptState.withSessionWriterContext(async () => {
+      const afterAttempt = await promptState.withSessionWriterContext(async () => {
         prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: runParams,
           externalAbortController,
         });
         const openManager = () =>
           SessionManager.open({ ...target, ...promptState.sessionWriterFence }, state.workspaceDir);
-        await prepared.withOwnedTranscriptWrite(() =>
+        return prepared.withOwnedTranscriptWrite(() =>
           run({
             admission,
             controller,
@@ -118,6 +123,8 @@ async function withInitialWriter(
           }),
         );
       });
+      await prepared?.transcriptLifecycle.dispose();
+      await afterAttempt?.();
       expect(externalAbortController.arm).toHaveBeenCalledOnce();
     } finally {
       try {
@@ -132,6 +139,69 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it.each([false, true])(
+    "settles one terminal error after attempt teardown (existing=%s)",
+    async (existing) => {
+      await withInitialWriter(
+        async ({ manager, runParams, target }) => {
+          manager.appendMessage(userMessage);
+          const owner = createAssistantErrorTranscript({ runId: runParams.runId });
+          installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
+          manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
+          expect(
+            SessionManager.open(target)
+              .getBranch()
+              .filter((entry) => entry.type === "message"),
+          ).toHaveLength(1);
+          return async () => {
+            await owner.settle(true);
+            expect(
+              SessionManager.open(target)
+                .getBranch()
+                .filter((entry) => entry.type === "message"),
+            ).toHaveLength(2);
+          };
+        },
+        { existing },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "prepares a fresh keyed turn before its first append (existing=%s)",
+    async (existing) => {
+      await withInitialWriter(
+        async ({ manager, runParams, target }) => {
+          const message = { ...userMessage, idempotencyKey: `${runParams.runId}:user` };
+          const recorder = createUserTurnTranscriptRecorder({
+            message,
+            target: { ...target, sessionEntry: undefined },
+          });
+          expect(Boolean(loadSessionEntry(target))).toBe(existing);
+          expect(
+            preparePersistedCurrentUserTurn({
+              sessionManager: manager,
+              message,
+              recorder,
+              runId: runParams.runId,
+            }),
+          ).toBeUndefined();
+          manager.appendMessage(message);
+          expect(loadSessionEntry(target)).toMatchObject({
+            sessionId: target.sessionId,
+            activeWriterRunId: runParams.runId,
+          });
+          expect(
+            SessionManager.open(target)
+              .getBranch()
+              .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+          ).toHaveLength(1);
+        },
+        { existing },
+      );
+    },
+  );
+
   it.each([false, true])(
     "retains the exact committed writer for later mutations (existing=%s)",
     async (existing) => {

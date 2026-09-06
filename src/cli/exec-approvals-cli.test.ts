@@ -188,6 +188,119 @@ describe("exec approvals CLI", () => {
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
+  it("separates allowlist grants that differ only by scope", async () => {
+    const pattern = "/usr/bin/git";
+    const lastUsedAt = 1;
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern, lastUsedAt },
+            {
+              pattern,
+              source: "allow-always",
+              argPattern: execApprovals.buildCwdBoundHashedArgPattern(
+                [pattern, "status"],
+                "/workspace",
+              ),
+              lastUsedAt,
+            },
+            { pattern, source: "allow-always", lastUsedAt },
+            { pattern, argPattern: "^status$", lastUsedAt },
+            { pattern: "=command:manual0000000000", lastUsedAt },
+            { pattern: "=command:generated00000", source: "allow-always", lastUsedAt },
+          ],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = loggedOutput().split("\n");
+    const rows = output.filter((line) => line.includes(pattern));
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows).size).toBe(4);
+    expect(rows[0]).toContain("any args");
+    expect(rows[1]).toContain("argv+cwd");
+    expect(rows[2]).toContain("inactive");
+    expect(rows[3]).toContain("argv");
+
+    // A reserved prefix is only an exact-command grant when the source says so;
+    // `approvals allowlist add` stores any pattern without one.
+    const commandRows = output.filter((line) => line.includes("=command:"));
+    expect(commandRows).toHaveLength(2);
+    expect(commandRows[0]).toContain("any args");
+    expect(commandRows[1]).toContain("command text");
+  });
+
+  it.each([40, 60])("keeps grant scopes distinct in a %s-column terminal", async (columns) => {
+    const originalColumns = process.stdout.columns;
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
+    try {
+      const pattern = "/usr/bin/git";
+      const lastUsedAt = 1;
+      localSnapshot.file = {
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              { pattern, lastUsedAt },
+              { pattern, argPattern: "^status$", lastUsedAt },
+              {
+                pattern,
+                source: "allow-always",
+                argPattern: execApprovals.buildCwdBoundHashedArgPattern(
+                  [pattern, "status"],
+                  "/workspace",
+                ),
+                lastUsedAt,
+              },
+              { pattern, source: "allow-always", lastUsedAt },
+            ],
+          },
+        },
+      };
+      await runApprovalsCommand(["approvals", "get"]);
+      const rows = loggedOutput()
+        .split("\n")
+        .filter((line) => line.startsWith("│ local"));
+      expect(rows).toHaveLength(4);
+      expect(new Set(rows).size).toBe(4);
+      for (const [index, scope] of ["any args", "argv", "argv+cwd", "inactive"].entries()) {
+        expect(rows[index]).toContain(scope);
+      }
+    } finally {
+      Object.defineProperty(process.stdout, "columns", {
+        configurable: true,
+        value: originalColumns,
+      });
+    }
+  });
+
+  it("marks a manual legacy argv hash inactive instead of an argument restriction", async () => {
+    const pattern = "/usr/bin/tool";
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern, argPattern: "sha256:argv:obsolete", lastUsedAt: 1 }],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    // matchArgPattern never matches a legacy hash, so the audit must not present
+    // the entry as a live argument restriction.
+    const rows = loggedOutput()
+      .split("\n")
+      .filter((line) => line.includes(pattern));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("inactive");
+    expect(rows[0]).not.toMatch(/\bargv\b/);
+  });
+
   it("redacts the socket token from local get JSON while preserving its path", async () => {
     localSnapshot.file = {
       version: 1,
