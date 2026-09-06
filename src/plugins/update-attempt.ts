@@ -38,7 +38,7 @@ export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
   return (
     `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
     `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
-    `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to follow that registry line.`
+    `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to replace this version pin.`
   );
 }
 
@@ -272,7 +272,6 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   fallbackSpec?: string;
   usedNpmFallback: boolean;
   hasSpecOverride: boolean;
-  hasOfficialNpmSpec: boolean;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
   channelFallbackSuffix: string;
@@ -289,10 +288,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   const currentLabel = params.currentVersion ?? "unknown";
   const unchanged = isPluginUpdateUnchanged({ ...params, nextVersion: resolvedProbeVersion });
   const newerExactPinnedDefaultLine =
-    unchanged &&
-    params.record.source === "npm" &&
-    !params.hasSpecOverride &&
-    !params.hasOfficialNpmSpec
+    unchanged && params.record.source === "npm" && !params.hasSpecOverride
       ? await resolveNewerExactPinnedNpmDefaultLine({
           currentVersion: params.currentVersion,
           recordedSpec: params.record.spec,

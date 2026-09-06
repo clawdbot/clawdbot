@@ -7,6 +7,7 @@ import {
   errorShape,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/subagent-spawn-cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -168,6 +169,7 @@ async function handleSessionSend(params: {
         sessionKey: canonicalKey,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         message: (p as { message: string }).message,
+        ...(p.mentions ? { mentions: p.mentions } : {}),
         thinking: (p as { thinking?: string }).thinking,
         attachments: (p as { attachments?: unknown[] }).attachments,
         timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
@@ -247,12 +249,23 @@ async function handleSessionSend(params: {
   });
   if (sendAcked) {
     if (isFreshChatSendStarted({ payload: sendPayload, cached: sendCached })) {
-      await reactivateCompletedSubagentSession({
-        sessionKey: canonicalKey,
-        runId: startedRunId,
-        task: (p as { message: string }).message,
-        gatewayContextResolver: params.context.resolveGatewayContext,
-      });
+      try {
+        await reactivateCompletedSubagentSession({
+          sessionKey: canonicalKey,
+          runId: startedRunId,
+          task: (p as { message: string }).message,
+          gatewayContextResolver: params.context.resolveGatewayContext,
+        });
+      } catch (error) {
+        if (startedRunId) {
+          await terminateAcceptedCollectorRun({
+            childSessionKey: canonicalKey,
+            gatewayRunId: startedRunId,
+            sessionCleanup: "preserve",
+          });
+        }
+        throw error;
+      }
     }
     emitSessionsChanged(params.context, {
       sessionKey: canonicalKey,

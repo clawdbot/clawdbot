@@ -74,48 +74,6 @@ export type SourceReplyContentState = {
   backedManagedOutgoingContent: boolean;
 };
 
-function replaceAssistantTextWithDisplayText(
-  message: Record<string, unknown>,
-  displayContent: AssistantDisplayContentBlock[],
-): AssistantDisplayContentBlock[] {
-  const original = Array.isArray(message.content)
-    ? (message.content as AssistantDisplayContentBlock[])
-    : [];
-  const content: AssistantDisplayContentBlock[] = [];
-  const seenText = new Set<string>();
-  for (const block of original) {
-    if (block.type === "thinking" || block.type === "toolCall") {
-      content.push(block);
-      continue;
-    }
-    if (block.type !== "text" || typeof block.text !== "string") {
-      continue;
-    }
-    const splitText = splitMediaFromOutput(block.text).text;
-    if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
-      continue;
-    }
-    const text = sanitizeAssistantDisplayText(splitText, {
-      preserveBoundaries: true,
-    });
-    if (text) {
-      if (text === block.text) {
-        content.push(block);
-      } else {
-        const { textSignature: _textSignature, ...rest } = block;
-        content.push({ ...rest, text });
-      }
-      seenText.add(text);
-    }
-  }
-  for (const block of displayContent) {
-    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
-      content.push(block);
-    }
-  }
-  return content;
-}
-
 function mergeAssistantDisplayContent(
   modelContent: AssistantDisplayContentBlock[],
   preparedDisplayContent: AssistantDisplayContentBlock[],
@@ -149,6 +107,7 @@ function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   managedMediaUrls?: readonly string[];
+  retainOriginalText?: true;
 }): Record<string, unknown> {
   const prepared = applyAssistantDeliveryDirectives(
     {
@@ -157,7 +116,48 @@ function buildAssistantDisplayRewrite(params: {
     },
     { managedMediaUrls: params.managedMediaUrls },
   );
-  const content = replaceAssistantTextWithDisplayText(params.message, prepared.content);
+  const original = Array.isArray(params.message.content)
+    ? (params.message.content as AssistantDisplayContentBlock[])
+    : [];
+  const content: AssistantDisplayContentBlock[] = [];
+  const seenText = new Set<string>();
+  for (const block of original) {
+    if (block.type === "thinking" || block.type === "toolCall") {
+      content.push(block);
+      continue;
+    }
+    if (
+      block.type !== "text" ||
+      typeof block.text !== "string" ||
+      (!params.retainOriginalText &&
+        !prepared.content.some(
+          (candidate) => candidate.type === "text" && candidate.text === block.text,
+        ))
+    ) {
+      continue;
+    }
+    const splitText = splitMediaFromOutput(block.text).text;
+    if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
+      continue;
+    }
+    const text = sanitizeAssistantDisplayText(splitText, {
+      preserveBoundaries: true,
+    });
+    if (text) {
+      if (text === block.text) {
+        content.push(block);
+      } else {
+        const { textSignature: _textSignature, ...rest } = block;
+        content.push({ ...rest, text });
+      }
+      seenText.add(text);
+    }
+  }
+  for (const block of prepared.content) {
+    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
+      content.push(block);
+    }
+  }
   return {
     ...prepared,
     content,
@@ -342,6 +342,7 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: {
     aborted: true;
     origin: ChatAbortOrigin;
@@ -368,6 +369,7 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
@@ -637,6 +639,8 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
     message: target.message,
     displayContent: params.content,
     managedMediaUrls: params.mediaUrls,
+    // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
+    retainOriginalText: true,
   });
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
     message: rewrittenMessage,

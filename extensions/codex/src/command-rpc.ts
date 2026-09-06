@@ -36,6 +36,7 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "./app-server/request.js";
+import { createCodexSessionGenerationSupersededError } from "./app-server/session-binding.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -51,6 +52,7 @@ export type CodexControlRequestOptions = {
   agentDir?: string;
   sessionKey?: string;
   sessionId?: string;
+  storePath?: string;
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
@@ -71,17 +73,14 @@ async function prepareControlAuth(
   options: CodexControlRequestOptions,
   startOptions: CodexAppServerStartOptions,
 ) {
-  if (
-    !options.onResponse ||
-    !options.config ||
-    !options.sessionKey ||
-    options.authProfileId === null ||
-    startOptions.homeScope === "user"
-  ) {
+  if (!options.onResponse) {
     return {
       authProfileId: options.authProfileId ?? undefined,
       clientOptions: { authProfileId: options.authProfileId },
     };
+  }
+  if (!options.config || !options.sessionKey || !options.sessionId) {
+    throw new Error("Codex control subscription requires admitted session authority.");
   }
   const config = options.config;
   const { sessionAgentId } = resolveSessionAgentIdsStrict({
@@ -93,13 +92,25 @@ async function prepareControlAuth(
   const workspaceDir = resolveAgentWorkspaceDir(config, sessionAgentId);
   const entry = getSessionEntry({
     agentId: sessionAgentId,
-    storePath: resolveStorePath(config.session?.store, { agentId: sessionAgentId }),
+    storePath:
+      options.storePath?.trim() ||
+      resolveStorePath(config.session?.store, { agentId: sessionAgentId }),
     sessionKey: options.sessionKey,
     hydrateSkillPromptRefs: false,
     readConsistency: "latest",
   });
+  if (entry?.sessionId !== options.sessionId) {
+    throw createCodexSessionGenerationSupersededError(options.sessionId);
+  }
+  if (options.authProfileId === null || startOptions.homeScope === "user") {
+    return {
+      authProfileId: options.authProfileId ?? undefined,
+      clientOptions: { authProfileId: options.authProfileId },
+    };
+  }
   const model = resolveSessionModelRef(config, entry, sessionAgentId);
-  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config });
+  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
+  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
   const { plan, attempts } = prepareAgentRuntimeAuth({
     provider: model.provider,
     modelId: model.model,
@@ -107,7 +118,7 @@ async function prepareControlAuth(
     agentDir,
     workspaceDir,
     authProfileStore: store,
-    sessionAuthProfileId: entry?.authProfileOverride ?? options.authProfileId,
+    sessionAuthProfileId: authProfileId,
     sessionAuthProfileSource: entry?.authProfileOverrideSource,
     harnessId: "codex",
     harnessAuthBootstrap: "harness",

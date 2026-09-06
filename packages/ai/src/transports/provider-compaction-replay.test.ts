@@ -359,6 +359,7 @@ describe("prepared compaction replay eligibility", () => {
     api: "anthropic-messages",
     provider: "anthropic",
     id: "claude-sonnet-4-6",
+    baseUrl: "https://api.anthropic.com",
   };
 
   it.each([

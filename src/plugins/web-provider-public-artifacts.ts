@@ -8,7 +8,6 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
-import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
   loadBundledWebFetchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
@@ -16,8 +15,10 @@ import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
-import { resolveManifestDeclaredWebProviderCandidates } from "./web-provider-resolution-shared.js";
-import { resolveBundledWebSearchResolutionConfig } from "./web-search-providers.shared.js";
+import {
+  resolveBundledWebProviderResolutionConfig,
+  resolveManifestDeclaredWebProviderCandidates,
+} from "./web-provider-resolution-shared.js";
 
 type BundledWebProviderPublicArtifactParams = {
   config?: PluginLoadOptions["config"];
@@ -63,10 +64,7 @@ function resolveBundledCandidatePluginIds(params: {
       ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
     };
   }
-  const resolvedConfig =
-    params.contract === "webSearchProviders"
-      ? resolveBundledWebSearchResolutionConfig(params).config
-      : resolveBundledWebFetchResolutionConfig(params).config;
+  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.configKey,
@@ -92,9 +90,7 @@ function resolveBundledRuntimeCandidatePluginIds(params: {
   manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | null {
   const search = params.contract === "webSearchProviders";
-  const resolvedConfig = (
-    search ? resolveBundledWebSearchResolutionConfig : resolveBundledWebFetchResolutionConfig
-  )(params).config;
+  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: search ? "webSearch" : "webFetch",

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import {
+  publishSessionCatalogHost,
+  type SessionCatalogProvider,
+} from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
@@ -209,6 +212,8 @@ export async function listClaudeSessionCatalog(params: {
   allowProcessHomeFallback?: boolean;
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -253,9 +258,7 @@ export async function listClaudeSessionCatalog(params: {
         ]
       : [];
   for (const host of localHosts) {
-    if (params.onHost) {
-      void host.then(params.onHost).catch(() => undefined);
-    }
+    publishSessionCatalogHost(params, host);
   }
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
@@ -270,6 +273,7 @@ export async function listClaudeSessionCatalog(params: {
       label: "Paired nodes",
       kind: "node",
       connected: false,
+      canStartTerminal: false,
       sessions: [],
       error: createNodeListFailedError(error),
     };
@@ -278,11 +282,13 @@ export async function listClaudeSessionCatalog(params: {
       hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
+  params.signal?.throwIfAborted();
   const eligible = nodes
     .filter(
       (node) =>
         node.gatewayLocal !== true &&
-        node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
+        (node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) ||
+          catalogTerminal.claudeNodeTerminalCapability(node).canStartTerminal) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
     .slice(0, MAX_HOSTS - localHosts.length)
@@ -290,7 +296,9 @@ export async function listClaudeSessionCatalog(params: {
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
       const hostId = `node:${node.nodeId}`;
-      const common = {
+      const { canOpenTerminalClaude, canStartTerminal } =
+        catalogTerminal.claudeNodeTerminalCapability(node);
+      const common: ClaudeSessionCatalogHost = {
         hostId,
         label: resolveNodeLabel(node),
         kind: "node" as const,
@@ -302,15 +310,20 @@ export async function listClaudeSessionCatalog(params: {
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
           node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
-        ...catalogTerminal.claudeNodeTerminalCapability(node),
+        canOpenTerminalClaude,
+        canStartTerminal,
+        sessions: [],
       };
       if (node.connected !== true) {
         const host: ClaudeSessionCatalogHost = Object.assign({}, common, {
-          sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
         });
         params.onHost?.(host);
         return host;
+      }
+      if (!node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND)) {
+        params.onHost?.(common);
+        return common;
       }
       const eventualHost = Promise.resolve()
         .then(async () => {
@@ -324,31 +337,26 @@ export async function listClaudeSessionCatalog(params: {
             },
             timeoutMs: NODE_INVOKE_TIMEOUT_MS,
             scopes: ["operator.write"],
+            signal: params.signal,
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
-        .catch(
-          (): ClaudeSessionCatalogHost =>
-            Object.assign({}, common, {
-              sessions: [],
-              error: {
-                code: "NODE_INVOKE_FAILED",
-                message: "Paired node Claude sessions are unavailable",
-              },
-            }),
+        .catch((): ClaudeSessionCatalogHost =>
+          Object.assign({}, common, {
+            error: {
+              code: "NODE_INVOKE_FAILED",
+              message: "Paired node Claude sessions are unavailable",
+            },
+          }),
         );
-      if (params.onHost) {
-        // The fail-soft response can finish first; the original node invoke still
-        // publishes its authoritative host page whenever cold discovery completes.
-        void eventualHost.then(params.onHost).catch(() => undefined);
-      }
+      // Retain publication through cold discovery without extending the fail-soft response.
+      publishSessionCatalogHost(params, eventualHost);
       try {
         return await withTimeout(eventualHost, NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS, {
           message: "paired node Claude session catalog timed out",
         });
       } catch {
         return Object.assign({}, common, {
-          sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
             message: "Paired node Claude sessions are unavailable",

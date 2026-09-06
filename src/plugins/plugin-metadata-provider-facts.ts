@@ -16,7 +16,7 @@ import type { PluginProviderAuthAliasCandidate } from "./plugin-metadata-snapsho
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
@@ -46,31 +46,31 @@ function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoin
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .filter(isRecord)
-    .filter((endpoint) => {
-      const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-      return endpointClass ? PROVIDER_ENDPOINT_CLASSES.has(endpointClass) : false;
-    })
-    .map((endpoint) => {
-      const endpointClass = normalizeOptionalString(endpoint.endpointClass)!;
-      const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
-      const googleVertexRegionHostSuffix = normalizeOptionalString(
-        endpoint.googleVertexRegionHostSuffix,
-      )?.toLowerCase();
-      return Object.assign(
-        {
-          endpointClass,
-          hosts: normalizeProviderHosts(endpoint.hosts),
-          hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
-          baseUrls: normalizeProviderHosts(endpoint.baseUrls)
-            .map(normalizePluginProviderBaseUrl)
-            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-        },
-        googleVertexRegion ? { googleVertexRegion } : {},
-        googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {},
-      );
+  const endpoints: PluginManifestProviderEndpoint[] = [];
+  for (const endpoint of value) {
+    if (!isRecord(endpoint)) {
+      continue;
+    }
+    const endpointClass = normalizeOptionalString(endpoint.endpointClass);
+    if (!endpointClass || !PROVIDER_ENDPOINT_CLASSES.has(endpointClass)) {
+      continue;
+    }
+    const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
+    const googleVertexRegionHostSuffix = normalizeOptionalString(
+      endpoint.googleVertexRegionHostSuffix,
+    )?.toLowerCase();
+    endpoints.push({
+      endpointClass,
+      hosts: normalizeProviderHosts(endpoint.hosts),
+      hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
+      baseUrls: normalizeProviderHosts(endpoint.baseUrls)
+        .map(normalizePluginProviderBaseUrl)
+        .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+      ...(googleVertexRegion ? { googleVertexRegion } : {}),
+      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
     });
+  }
+  return endpoints;
 }
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {

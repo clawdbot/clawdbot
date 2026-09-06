@@ -68,7 +68,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 
     - prompts for provider API keys
     - generates a gateway token and writes it to `.env`
-    - creates the auth-profile secret key directory
+    - creates the legacy auth-profile secret key directory
     - starts the gateway via Docker Compose
 
     Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the gateway's network namespace and only works once the gateway container exists.
@@ -238,8 +238,10 @@ The explicit tsdown heap override is also the supported opt-in for attempting a 
 `OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
 existing source-directory names are also accepted when they differ. The Docker
 build resolves the selection to source directories once, installs production
-dependencies, and includes the selected plugin runtime in the image. Source
-checkouts also compile first-party plugins published separately with
+dependencies, links each selected plugin's own runtime dependencies under its
+packaged root in `/app/dist/extensions/<id>`, and includes the selected plugin
+runtime in the image. Source checkouts also compile first-party plugins
+published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
@@ -299,7 +301,7 @@ separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
 the Node, archive, and manifest digests. Build that appliance independently
 from the same landed OpenClaw source.
 
-To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id.
+To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id. Restart the Gateway after adding or changing a mount; runtime loading and setup use the mounted source.
 
 ### Observability
 
@@ -450,7 +452,9 @@ That mounted config directory holds:
 - `state/openclaw.sqlite` for shared provider auth and `agents/<agentId>/agent/openclaw-agent.sqlite` for agent-local OAuth/API-key profiles
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
-The auth-profile secret directory stores the local encryption key for OAuth-backed auth profile token material. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
+The auth-profile secret directory stores the local encryption key used to recover legacy encrypted OAuth sidecar credentials. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
+
+Current OAuth token material is stored as plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and ID-token values. The separate key mount does not encrypt current SQLite rows or protect these tokens from a state-only backup or copy. Treat the config directory and its backups as credentials.
 
 Installed downloadable plugins store package state under the mounted OpenClaw home, so install records and package roots survive container replacement; gateway startup does not regenerate bundled-plugin dependency trees.
 

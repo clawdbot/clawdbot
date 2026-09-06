@@ -85,6 +85,7 @@ const state = vi.hoisted(() => ({
   gatewayCallMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
+  resolveAcpLifecycleEndFieldsMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
   runMemoryFlushIfNeededMock: vi.fn(
@@ -143,12 +144,10 @@ const state = vi.hoisted(() => ({
   loadFullModelCatalogMock: vi.fn(async () => {
     throw new Error("full model catalog should not materialize");
   }),
-  loadPreparedModelCatalogSnapshotMock: vi.fn(
-    async (): Promise<ModelCatalogSnapshot> => ({
-      entries: [],
-      routeVariants: [],
-    }),
-  ),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+    entries: [],
+    routeVariants: [],
+  })),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -207,6 +206,8 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpRuntimeEvent: (...args: unknown[]) => state.emitAcpRuntimeEventMock(...args),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
+  resolveAcpLifecycleEndFields: (...args: unknown[]) =>
+    state.resolveAcpLifecycleEndFieldsMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
   resolveCliTranscriptReplyText: (result: { payloads?: Array<{ text?: string }> }) =>
@@ -1097,6 +1098,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionEntry: params.sessionEntry,
       }),
     );
+    state.resolveAcpLifecycleEndFieldsMock.mockReset().mockReturnValue({});
     state.appendExactAssistantMessageMock.mockReset().mockResolvedValue({
       ok: true,
       target: {
@@ -3085,7 +3087,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       internalDeliveryMediaUrls: ["/tmp/payload.png"],
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });
@@ -3147,7 +3149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });
@@ -3179,7 +3181,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       runId: "image:task-policy:agent-loop",
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });
@@ -5494,6 +5496,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("preserves ACP cancelled results without a stop reason", async () => {
     setupAcpSession();
+    state.resolveAcpLifecycleEndFieldsMock.mockReturnValueOnce({
+      aborted: true,
+      stopReason: "stop",
+      status: "cancelled",
+    });
     state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "done", status: "cancelled" });
@@ -5505,10 +5512,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
-      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+      expect.objectContaining({
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
+      }),
     );
     expect(state.buildAcpResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
+    const signal = requireRecord(mockCallArg(state.acpRunTurnMock), "ACP turn").signal;
+    expect(signal).toHaveProperty("aborted", false);
+    expect(mockCallArg(state.resolveAcpLifecycleEndFieldsMock)).toBe(signal);
+    expect(state.resolveAcpLifecycleEndFieldsMock).toHaveBeenCalledWith(
+      signal,
+      undefined,
+      "cancelled",
+    );
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ reason: "cancelled", status: "error" }),
+      }),
     );
   });
 });

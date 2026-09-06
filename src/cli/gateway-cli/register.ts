@@ -393,7 +393,7 @@ function resolveSupportExportRpcOptions(
 }
 
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(raw);

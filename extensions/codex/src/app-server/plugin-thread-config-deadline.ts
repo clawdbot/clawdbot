@@ -76,8 +76,7 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
     Boolean(params.scheduledRuntimeAuthority) ||
     !params.nativeToolSurfaceEnabled ||
     shouldBuildCodexPluginThreadConfig(params.pluginConfig);
-  // Restricted runs still need a config so thread/start carries an explicit
-  // apps._default denial patch without app inventory discovery.
+  // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
     params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority
       ? params.pluginConfig
@@ -104,19 +103,25 @@ async function buildCodexPluginThreadConfigWithinDeadline(
 ): Promise<CodexPluginThreadConfig> {
   const { requestTimeoutMs, signal, request, failClosedOnTimeout, transform, ...buildParams } =
     params;
+  signal.throwIfAborted();
   const timeoutMs = resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs);
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
   const deadlineMs = Date.now() + timeoutMs;
-  const boundedRequest: CodexPluginRuntimeRequest = (method, requestParams) => {
+  let requestTimedOut = false;
+  const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
     const remainingTimeoutMs = deadlineMs - Date.now();
-    if (remainingTimeoutMs <= 0) {
+    if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
-    return request(method, requestParams, {
-      timeoutMs: remainingTimeoutMs,
-      signal,
-    });
+    try {
+      return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
+    } catch (error) {
+      // Inventory readers absorb failures. Preserve timeout evidence before they
+      // turn it into missing apps, even if the wall clock trails the request timer.
+      requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
+      throw error;
+    }
   };
   try {
     return await withAbortableTimeout({
@@ -127,18 +132,26 @@ async function buildCodexPluginThreadConfigWithinDeadline(
           ...buildParams,
           request: boundedRequest,
         });
-        return transform ? await transform(config, boundedRequest) : config;
+        const result = transform ? await transform(config, boundedRequest) : config;
+        // Inventory readers can absorb an RPC timeout into an unavailable result.
+        if (requestTimedOut || Date.now() >= deadlineMs) {
+          throw new CodexPluginThreadConfigDeadlineError();
+        }
+        return result;
       })(),
       timeoutMessage: "Codex plugin thread config deadline elapsed",
       createTimeoutError: () => new CodexPluginThreadConfigDeadlineError(),
     });
   } catch (error) {
-    if (signal.aborted || !isCodexPluginThreadConfigTimeoutError(error)) {
+    if (
+      signal.aborted ||
+      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+    ) {
       throw error;
     }
     if (failClosedOnTimeout) {
       throw new AgentHarnessPreflightError(
-        `Scheduled Codex app policy verification exceeded its ${timeoutMs} ms startup budget. No app tools were executed. Retry after Codex app inventory is responsive, or reauthorize the automation.`,
+        `Codex app policy verification exceeded its ${timeoutMs} ms startup budget. No app tools were executed. Retry after Codex app inventory is responsive.`,
       );
     }
     return buildCodexPluginThreadConfigTimeoutFallback({
@@ -176,7 +189,9 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
   const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
   return {
     enabled: true,
-    requiresCurrentPolicyCheck: Boolean(params.scheduledRuntimeAuthority),
+    // The bound context stores admitted apps only; native config owns excluded
+    // app IDs and tool/link overrides that can change between turns.
+    requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
     inputFingerprint,
     enabledPluginConfigKeys,
     accountAppRecoveryEnabled: policy?.allowAllPlugins,

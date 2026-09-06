@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { renderChatQueue } from "./components/chat-composer-queue.ts";
 
 afterEach(async () => {
@@ -54,11 +55,13 @@ describe("chat composer steering queue", () => {
     expect(onQueueRemove).toHaveBeenCalledWith("reset");
   });
 
-  it("renders the durable steer mode without a run-bound state", () => {
+  it("renders one actionable steer control without a duplicate state badge", () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const onQueueSteer = vi.fn();
     render(
       renderChatQueue({
+        canAbort: true,
         queue: [
           {
             id: "steer-1",
@@ -68,20 +71,43 @@ describe("chat composer steering queue", () => {
             sendState: "waiting-idle",
           },
         ],
+        onQueueSteer,
         onQueueRemove: vi.fn(),
       }),
       container,
     );
 
-    const badges = container.querySelectorAll(".chat-queue__badge");
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.steer"));
+    expect(container.querySelector(".chat-queue__badge")).toBeNull();
+    const steerButton = container.querySelector<HTMLButtonElement>(".chat-queue__steer");
+    expect(steerButton?.textContent?.trim()).toBe(t("chat.queue.steer"));
+    steerButton?.click();
+    expect(onQueueSteer).toHaveBeenCalledWith("steer-1");
     expect(container.querySelector(".chat-queue__state")).toBeNull();
     expect(container.querySelector(".chat-queue__global-state")).toBeNull();
     const icon = container.querySelector(".chat-queue__icon");
     expect(icon?.querySelector('path[d="M21 5v12a2 2 0 0 1-2 2h-6"]')).not.toBeNull();
     expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).toBeNull();
     expect(icon?.querySelector("circle")).toBeNull();
+  });
+
+  it("keeps the steer state badge when no steer action is available", () => {
+    const container = renderQueue({
+      queue: [
+        {
+          id: "steer-idle",
+          text: "change course",
+          createdAt: 1,
+          queueMode: "steer",
+          sendState: "waiting-idle",
+        },
+      ],
+      onQueueRemove: vi.fn(),
+    });
+
+    expect(container.querySelector(".chat-queue__steer")).toBeNull();
+    expect(container.querySelector(".chat-queue__badge--steered")?.textContent?.trim()).toBe(
+      t("chat.queue.steer"),
+    );
   });
 
   it("keeps the queue identifier on failed and unconfirmed rows", () => {
@@ -119,7 +145,6 @@ describe("chat composer steering queue", () => {
     }
     const row = rows[0];
     expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
     expect(row?.querySelector(".chat-queue__error .chat-queue__badge")?.textContent?.trim()).toBe(
       t("common.failed"),
     );
@@ -444,6 +469,48 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditCancel).not.toHaveBeenCalled();
   });
 
+  it("edits and explicitly removes queued recipients without reassigning identical labels", () => {
+    let editingText = "@Alex @Alex";
+    let editingMentions: readonly HumanMention[] = [
+      { profileId: "first-alex", start: 0, end: 5 },
+      { profileId: "second-alex", start: 6, end: 11 },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const draw = () =>
+      render(
+        renderChatQueue({
+          queue: [{ ...waiting("a", 1), text: "@Alex @Alex" }],
+          editingId: "a",
+          editingText,
+          editingMentions,
+          onQueueRemove: vi.fn(),
+          onQueueEditChange: (text, mentions) => {
+            editingText = text;
+            editingMentions = mentions ?? [];
+            draw();
+          },
+        }),
+        container,
+      );
+    draw();
+    const editor = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    editor.setSelectionRange(0, 6);
+    editor.dispatchEvent(
+      new InputEvent("beforeinput", { bubbles: true, inputType: "deleteContentBackward" }),
+    );
+    editor.value = "@Alex";
+    editor.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }),
+    );
+    expect(editingMentions).toEqual([{ profileId: "second-alex", start: 0, end: 5 }]);
+    expect(container.textContent).toContain("Will notify: @Alex");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+    expect(editingMentions).toEqual([]);
+    expect(editor.value).toBe("@Alex");
+    expect(container.textContent).not.toContain("Will notify:");
+  });
+
   it("projects one offline state on each row without a queue header", () => {
     const container = renderQueue({
       offline: true,
@@ -465,7 +532,13 @@ describe("chat composer queue reordering", () => {
     const container = renderQueue({
       canAbort: true,
       queue: [
-        { id: "a", text: "a", createdAt: 1, sendState: "waiting-model" },
+        {
+          id: "a",
+          text: "a",
+          createdAt: 1,
+          queueMode: "steer",
+          sendState: "waiting-model",
+        },
         { id: "b", text: "b", createdAt: 2, sendState: "waiting-model" },
       ],
       onQueueSteer: vi.fn(),
@@ -480,6 +553,7 @@ describe("chat composer queue reordering", () => {
     const steerButtons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
     expect(steerButtons).toHaveLength(2);
     expect(steerButtons.every((button) => button.disabled)).toBe(true);
+    expect(container.querySelectorAll(".chat-queue__badge--steered")).toHaveLength(1);
   });
 
   it.each([

@@ -478,7 +478,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           isError: true,
         })
       : false;
-    if (state.turnAdoptionState && !state.turnAdoptionState.adopted) {
+    if (
+      state.turnAdoptionState &&
+      !state.turnAdoptionState.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
       releaseInboundDedupeIfClaimed();
     } else {
       commitInboundDedupeIfClaimed();

@@ -21,13 +21,15 @@ export function renderSessionGlyph(options: {
   const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}`;
   return html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>
-    ${running
-      ? html`<span
-          class="session-glyph__ring${queued ? " session-glyph__ring--queued" : ""}"
-          role="img"
-          aria-label=${t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")}
-        ></span>`
-      : nothing}
+    ${
+      running
+        ? html`<span
+            class="session-glyph__ring${queued ? " session-glyph__ring--queued" : ""}"
+            role="img"
+            aria-label=${t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")}
+          ></span>`
+        : nothing
+    }
     ${badge}
   </span>`;
 }

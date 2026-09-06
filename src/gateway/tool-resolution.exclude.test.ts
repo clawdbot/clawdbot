@@ -17,6 +17,7 @@ type CreateOpenClawToolsArg = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  questionPrompt?: { send: (payload: unknown) => unknown; messageChannel?: string };
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
   gatewayCallerAccountId?: string;
@@ -138,6 +139,34 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("hands loopback ask_user the originating-channel prompt sender", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:telegram:direct:1",
+      messageProvider: "telegram",
+      currentChannelId: "1",
+      accountId: "default",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().questionPrompt).toEqual(
+      expect.objectContaining({
+        messageChannel: "telegram",
+        send: expect.any(Function),
+      }),
+    );
+  });
+
+  it("does not invent a prompt sender without a deliverable channel", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().questionPrompt).toBeUndefined();
   });
 
   it("passes immutable source-reply authority into message-tool construction", () => {
@@ -455,7 +484,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const schemaProperties = presentation?.parameters?.properties;
     expect(
       Object.keys(schemaProperties && typeof schemaProperties === "object" ? schemaProperties : {}),
-    ).toEqual(["command", "workdir", "env", "timeoutSeconds", "host", "node"]);
+    ).toEqual(["title", "command", "workdir", "env", "timeoutSeconds", "host", "node"]);
     const hostSchema = (
       schemaProperties && typeof schemaProperties === "object"
         ? (schemaProperties as Record<string, unknown>).host
@@ -968,6 +997,32 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { name: "read" },
       { name: "automations" },
       { name: "exec" },
+    ]);
+  });
+
+  it("merges host-projected native authority into the cron creator cap", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("automations"),
+      hoisted.makeTool("message"),
+    ]);
+
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      nativeCronCreatorToolAllowlist: ["read", "write", "edit", "apply_patch", "exec", "process"],
+    });
+
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
+      { name: "automations" },
+      { name: "message" },
+      { name: "read" },
+      { name: "write" },
+      { name: "edit" },
+      { name: "apply_patch" },
+      { name: "exec", execTarget: { host: "gateway" } },
+      { name: "process" },
     ]);
   });
 });

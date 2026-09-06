@@ -73,5 +73,17 @@ describe("LLM synchronous stream transport host", () => {
       message,
     ]);
     expect(providerStream).toHaveBeenCalledTimes(2);
+
+    providerStream.mockImplementation(() => {
+      throw Object.assign(new Error("private native detail"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+      });
+    });
+    await expect(stream(boundModel, { messages: [] }).result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorCode: "SQLITE_BUSY",
+      errorMessage: "private native detail",
+    });
   });
 });

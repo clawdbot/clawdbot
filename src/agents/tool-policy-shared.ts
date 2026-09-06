@@ -16,12 +16,12 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-const TOOL_NAME_ALIASES: Record<string, string> = {
-  bash: "exec",
-  "apply-patch": "apply_patch",
+const TOOL_NAME_ALIASES = new Map<string, string>([
+  ["bash", "exec"],
+  ["apply-patch", "apply_patch"],
   // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
-  cron: "automations",
-};
+  ["cron", "automations"],
+]);
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
 type ToolAllowlistWithIntersection = string[] & {
@@ -54,19 +54,26 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
-/** Normalizes a tool name or alias to the policy id used for matching. */
 /** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
 export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.";
+  "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.";
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
 }
 
-export function normalizeToolPolicyName(name: string) {
+/** Snapshot exact names for one synchronous batch; never retain this matcher across awaits. */
+export function createToolExecutionMatcher(allowNames: readonly string[]) {
+  const allowed = new Set<string>();
+  allowNames.forEach((name) => allowed.add(normalizeToolPolicyName(name)));
+  return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
+}
+
+/** Normalizes a tool name or alias to the policy id used for matching. */
+export function normalizeToolPolicyName(name: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(name);
-  return TOOL_NAME_ALIASES[normalized] ?? normalized;
+  return TOOL_NAME_ALIASES.get(normalized) ?? normalized;
 }
 
 /** Checks whether an in-progress prefix can still resolve to an allowed tool or alias. */
@@ -81,8 +88,8 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
 
   const allowed = new Set<string>();
   for (const toolName of allowedToolNames) {
-    const normalizedToolName = normalizeToolPolicyName(toolName);
     const foldedToolName = normalizeLowercaseStringOrEmpty(toolName);
+    const normalizedToolName = TOOL_NAME_ALIASES.get(foldedToolName) ?? foldedToolName;
     if (normalizedToolName) {
       allowed.add(normalizedToolName);
     }
@@ -97,7 +104,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  const resolvedPrefix = normalizeToolPolicyName(normalizedPrefix);
+  const resolvedPrefix = TOOL_NAME_ALIASES.get(normalizedPrefix) ?? normalizedPrefix;
   if (resolvedPrefix !== normalizedPrefix) {
     for (const toolName of allowed) {
       if (toolName.startsWith(resolvedPrefix)) {
@@ -106,7 +113,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  for (const [alias, toolName] of Object.entries(TOOL_NAME_ALIASES)) {
+  for (const [alias, toolName] of TOOL_NAME_ALIASES) {
     if (alias.startsWith(normalizedPrefix) && allowed.has(toolName)) {
       return true;
     }
@@ -127,7 +134,7 @@ export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];
   for (const value of normalized) {
-    const group = TOOL_GROUPS[value];
+    const group = Object.hasOwn(TOOL_GROUPS, value) ? TOOL_GROUPS[value] : undefined;
     if (group) {
       expanded.push(...group);
       continue;

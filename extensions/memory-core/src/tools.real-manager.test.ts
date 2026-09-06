@@ -28,11 +28,56 @@ describe("memory_search real manager", () => {
     testing.resetMemorySearchToolCooldowns();
   });
 
+  it("reports current invalid config after replacing the config of a retained tool", async () => {
+    const cases = [
+      {
+        provider: "openai-compatible",
+        fallback: "none",
+        error:
+          "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+      },
+      {
+        provider: "none",
+        fallback: "gemini",
+        error:
+          'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+      },
+    ] as const;
+    let config = fixture.createConfig({});
+    const tool = createMemorySearchTool({ getConfig: () => config, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+
+    for (const testCase of cases) {
+      config = fixture.createConfig({
+        provider: testCase.provider,
+        fallback: testCase.fallback,
+        multimodal: { enabled: true, modalities: ["image"] },
+      });
+      const result = await tool.execute("invalid-config", { query: "alpha" });
+
+      expect(result.details).toMatchObject({
+        results: [],
+        disabled: true,
+        unavailable: true,
+        error: testCase.error,
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(
+          "Check embedding provider configuration and retry memory_search.",
+        ),
+      });
+      expect(fixture.provider.providerCalls).toEqual([]);
+    }
+  });
+
   it("attributes a persisted provenance mismatch to OpenClaw", async () => {
     const cfg = fixture.createConfig({
       provider: "none",
       vectorEnabled: false,
-      onSearch: false,
     });
     const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ reason: "cli", force: true });
@@ -68,7 +113,7 @@ describe("memory_search real manager", () => {
 
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
     const manager = await fixture.getFreshManager(
-      fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
+      fixture.createConfig({ model: "old-embed", vectorEnabled: false }),
     );
     await manager.sync({ reason: "cli", force: true });
     await manager.close();
@@ -88,7 +133,6 @@ describe("memory_search real manager", () => {
         config: fixture.createConfig({
           model: "new-embed",
           vectorEnabled: false,
-          onSearch: false,
         }),
         agentId: "main",
       });
@@ -134,7 +178,6 @@ describe("memory_search real manager", () => {
       sessionMemory: true,
       minScore: 0,
       vectorEnabled: false,
-      onSearch: true,
     });
     const sessionKey = "agent:main:telegram:direct:refresh-proof";
     await fixture.seedSessionTranscript({
@@ -253,10 +296,12 @@ describe("memory_search real manager", () => {
       minScore: 0,
       sources: ["sessions"],
     });
-    expect(ranked.slice(0, 2).map((hit) => hit.path)).toEqual([
-      expect.stringContaining("hidden-a"),
-      expect.stringContaining("hidden-b"),
-    ]);
+    expect(
+      ranked
+        .slice(0, 2)
+        .map((hit) => hit.path)
+        .toSorted(),
+    ).toEqual([expect.stringContaining("hidden-a"), expect.stringContaining("hidden-b")]);
     fixture.provider.embedQueryCalls = 0;
     fixture.provider.embeddedQueryTexts = [];
 
@@ -289,7 +334,7 @@ describe("memory_search real manager", () => {
       };
     };
 
-    expect(details.results.map((hit) => hit.snippet)).toEqual([
+    expect(details.results.map((hit) => hit.snippet).toSorted()).toEqual([
       expect.stringContaining("visible private a"),
       expect.stringContaining("visible private b"),
     ]);
@@ -305,6 +350,7 @@ describe("memory_search real manager", () => {
 
   it("preserves canonical-session migration recovery through cooldown", async () => {
     const baseConfig = fixture.createConfig({
+      provider: "none",
       sources: ["sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -314,6 +360,17 @@ describe("memory_search real manager", () => {
       ...baseConfig,
       memory: { ...baseConfig.memory, citations: "off" },
     } satisfies OpenClawConfig;
+    await fixture.seedSessionTranscript({
+      sessionId: "recovery-source",
+      sessionKey: "agent:main:telegram:direct:recovery-source",
+      messages: [
+        {
+          role: "user",
+          content: "Operator recovery instructions.",
+          timestamp: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    });
     const initializedManager = await fixture.getFreshManager(cfg);
     await initializedManager.sync({ reason: "test", force: true });
     await initializedManager.close();
@@ -368,7 +425,6 @@ describe("memory_search real manager", () => {
       sources: ["memory"],
       vectorEnabled: false,
       minScore: 0,
-      onSearch: false,
     });
     const initializedManager = await fixture.getFreshManager(cfg, "cli");
     await initializedManager.sync({ reason: "test", force: true });

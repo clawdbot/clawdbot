@@ -109,18 +109,20 @@ function renderFact(fact: IdentityFact) {
         </span>
       </dt>
       <dd>
-        ${values.length > 0
-          ? html`<dl class="run-inspector__values">
-              ${values.map(
-                (item) => html`
-                  <div>
-                    <dt>${item.label}</dt>
-                    <dd>${renderRunInspectorSafeRef(item.value, item.mono, item.href)}</dd>
-                  </div>
-                `,
-              )}
-            </dl>`
-          : nothing}
+        ${
+          values.length > 0
+            ? html`<dl class="run-inspector__values">
+                ${values.map(
+                  (item) => html`
+                    <div>
+                      <dt>${item.label}</dt>
+                      <dd>${renderRunInspectorSafeRef(item.value, item.mono, item.href)}</dd>
+                    </div>
+                  `,
+                )}
+              </dl>`
+            : nothing
+        }
         ${reason ? html`<p class="run-inspector__reason">${reason}</p>` : nothing}
       </dd>
     </div>
@@ -388,55 +390,63 @@ function renderUnavailableResult(
         ${renderRunInspectorSafeRef(identity.reasonCode, true)}
       </p>
     </div>
-    ${identity.state === "ambiguous"
-      ? html`
-          <ol
-            class="run-inspector__candidate-list"
-            aria-label=${t("activity.runInspector.candidates.listLabel")}
-          >
-            ${identity.candidates.map(
-              (candidate) => html`
-                <li>
-                  <span
-                    >${t("activity.runInspector.candidates.recorded", {
-                      date: new Date(candidate.createdAt).toLocaleString(),
-                    })}</span
-                  >
-                  <a
-                    href=${activityRunInspectorSelectorHref(
-                      { kind: "execution", id: candidate.executionId },
-                      basePath,
-                    )}
-                  >
-                    ${t("activity.runInspector.candidates.executionReference")}
-                    ${renderRunInspectorSafeRef(candidate.executionId, true)}
-                  </a>
-                </li>
-              `,
-            )}
-          </ol>
-          ${result.nextExecutionCursor
-            ? html`<div class="run-inspector__pagination">
-                <span>${t("activity.runInspector.candidates.more")}</span>
-                <button
-                  type="button"
-                  class="btn"
-                  ?disabled=${executionPageStatus === "loading"}
-                  @click=${onLoadMoreExecutions}
-                >
-                  ${executionPageStatus === "loading"
-                    ? t("activity.runInspector.candidates.loadingMore")
-                    : t("activity.runInspector.candidates.loadMore")}
-                </button>
-                ${executionPageStatus === "error"
-                  ? html`<span role="alert">
-                      ${t("activity.runInspector.candidates.loadMoreError")}
-                    </span>`
-                  : nothing}
-              </div>`
-            : nothing}
-        `
-      : nothing}
+    ${
+      identity.state === "ambiguous"
+        ? html`
+            <ol
+              class="run-inspector__candidate-list"
+              aria-label=${t("activity.runInspector.candidates.listLabel")}
+            >
+              ${identity.candidates.map(
+                (candidate) => html`
+                  <li>
+                    <span
+                      >${t("activity.runInspector.candidates.recorded", {
+                        date: new Date(candidate.createdAt).toLocaleString(),
+                      })}</span
+                    >
+                    <a
+                      href=${activityRunInspectorSelectorHref(
+                        { kind: "execution", id: candidate.executionId },
+                        basePath,
+                      )}
+                    >
+                      ${t("activity.runInspector.candidates.executionReference")}
+                      ${renderRunInspectorSafeRef(candidate.executionId, true)}
+                    </a>
+                  </li>
+                `,
+              )}
+            </ol>
+            ${
+              result.nextExecutionCursor
+                ? html`<div class="run-inspector__pagination">
+                    <span>${t("activity.runInspector.candidates.more")}</span>
+                    <button
+                      type="button"
+                      class="btn"
+                      ?disabled=${executionPageStatus === "loading"}
+                      @click=${onLoadMoreExecutions}
+                    >
+                      ${
+                        executionPageStatus === "loading"
+                          ? t("activity.runInspector.candidates.loadingMore")
+                          : t("activity.runInspector.candidates.loadMore")
+                      }
+                    </button>
+                    ${
+                      executionPageStatus === "error"
+                        ? html`<span role="alert">
+                            ${t("activity.runInspector.candidates.loadMoreError")}
+                          </span>`
+                        : nothing
+                    }
+                  </div>`
+                : nothing
+            }
+          `
+        : nothing
+    }
     ${renderRunInspectorMissingEvidence(identity.missingEvidence)}
     ${renderRunInspectorRemediation(identity.remediation)}
   `;
@@ -467,20 +477,25 @@ function renderReady(
         )}
       </span>
     </div>
-    ${result.identity.state === "present"
-      ? html`
-          <section class="run-inspector__section" aria-labelledby="run-inspector-identity-heading">
-            <h3 id="run-inspector-identity-heading">
-              ${t("activity.runInspector.identityHeading")}
-            </h3>
-            <dl class="run-inspector__facts">
-              ${identityFacts(result.identity.context, basePath).map(renderFact)}
-            </dl>
-          </section>
-          ${renderRunInspectorMissingEvidence(result.coverage.missingEvidence)}
-          ${renderRunInspectorDecisions(state, selector, selectorId, basePath, onLoadMoreDecisions)}
-        `
-      : renderUnavailableResult(result, basePath, state.executionPageStatus, onLoadMoreExecutions)}
+    ${
+      result.identity.state === "present"
+        ? html`
+            <section
+              class="run-inspector__section"
+              aria-labelledby="run-inspector-identity-heading"
+            >
+              <h3 id="run-inspector-identity-heading">
+                ${t("activity.runInspector.identityHeading")}
+              </h3>
+              <dl class="run-inspector__facts">
+                ${identityFacts(result.identity.context, basePath).map(renderFact)}
+              </dl>
+            </section>
+            ${renderRunInspectorMissingEvidence(result.coverage.missingEvidence)}
+            ${renderRunInspectorDecisions(state, selector, selectorId, basePath, onLoadMoreDecisions)}
+          `
+        : renderUnavailableResult(result, basePath, state.executionPageStatus, onLoadMoreExecutions)
+    }
   `;
 }
 
@@ -496,11 +511,13 @@ function renderPanel(
     <div class="run-inspector__panel" role=${options.role ?? "status"}>
       <h3>${title}</h3>
       <p>${description}</p>
-      ${options.action
-        ? html`<button type="button" class="btn" @click=${options.action.onClick}>
-            ${options.action.label}
-          </button>`
-        : nothing}
+      ${
+        options.action
+          ? html`<button type="button" class="btn" @click=${options.action.onClick}>
+              ${options.action.label}
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }

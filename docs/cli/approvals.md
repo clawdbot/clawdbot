@@ -198,6 +198,9 @@ openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 ```
 
+Adding an existing pattern or removing a missing one succeeds without writing.
+With `--json`, these commands return the unchanged, redacted approvals snapshot.
+
 ## Common options
 
 `get`, `set`, and `allowlist add|remove` all support:

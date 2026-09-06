@@ -511,7 +511,7 @@ export async function enqueueRun(
   mode?: CronRunMode,
   opts?: { commitGuard?: () => void },
 ) {
-  const disposition = await inspectManualRunDisposition(state, id, mode);
+  const disposition = await inspectManualRunDisposition(state, id, mode, opts);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
   }

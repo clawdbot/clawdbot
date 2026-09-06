@@ -1,15 +1,16 @@
 // @vitest-environment node
 import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it } from "vitest";
+import { activityPersonFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
 import { resolveActivityRouteData, type ActivityRouteData } from "./run-inspector-model.ts";
 
-function loadRoute(search: string): ActivityRouteData {
+function loadRoute(search: string, pathname = "/activity", basePath = ""): ActivityRouteData {
   if (!page.loader) {
     throw new Error("activity route has no loader");
   }
-  const location: RouteLocation = { pathname: "/activity", search, hash: "" };
+  const location: RouteLocation = { pathname, search, hash: "" };
   const loaded = page.loader({} as ApplicationContext, {
     signal: new AbortController().signal,
     shouldRun: () => true,
@@ -18,7 +19,10 @@ function loadRoute(search: string): ActivityRouteData {
     deps: search,
     cause: "navigation",
   } satisfies RouteLoaderOptions);
-  return resolveActivityRouteData(typeof loaded === "string" ? loaded : "");
+  if (!("pathname" in loaded)) {
+    throw new Error("activity route did not return a location");
+  }
+  return resolveActivityRouteData(loaded.search, activityPersonFromPath(loaded.pathname, basePath));
 }
 
 describe("resolveActivityRouteData", () => {
@@ -42,6 +46,20 @@ describe("resolveActivityRouteData", () => {
 
   it("keeps the browser-local tool feed behind its explicit mode", () => {
     expect(loadRoute("?view=live")).toEqual({ mode: "live", selector: null });
+  });
+
+  it("scopes readable person paths independently of query filters and mounted prefixes", () => {
+    expect(
+      loadRoute("?person=ignored&time=30d&q=release", "/ui/activity/ada-12345678", "/ui"),
+    ).toEqual({
+      mode: "sessions",
+      filters: { personId: "12345678", time: "30d", query: "release" },
+      selector: null,
+    });
+    expect(loadRoute("?view=live", "/activity/ada-12345678")).toEqual({
+      mode: "live",
+      selector: null,
+    });
   });
 
   it("decodes one run-inspector query reference without narrowing it", () => {

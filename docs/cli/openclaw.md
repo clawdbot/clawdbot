@@ -108,20 +108,32 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 `import memory` is copy-only rather than a config write. It detects supported local agent homes, lets you choose the available sources, and copies new memory files into the existing default agent workspace without importing config, credentials, or skills. It requires completed onboarding and reports confirmed imports, nothing-to-import results, provider failures, and failures where some files may already have been copied. No Gateway restart is needed. Use the Control UI's [Import Memory page](/web/control-ui#import-assistant-memory) when you need to target another agent or replace an existing import.
 
-Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
+In direct OpenClaw chat, persistent operations require conversational approval (or `--yes` for a one-shot command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
 Changes delegated by a regular agent, including requests from messaging channels,
-require approval in the OpenClaw operator UI. Replying "yes" in that chat cannot
-approve the change. Run `openclaw dashboard` on the Gateway host to review the
-pending approval, or run the change directly with `openclaw setup` there.
-Interactive setup and agent handoffs require a direct operator session;
-delegated chat cannot start a wizard, even when a model proposes it.
+follow the requesting run's effective [session permission policy](/gateway/permission-modes).
+Full Access applies the exact proposed operation automatically, including when
+Full Access comes from the configured default rather than an explicit session
+mode. Restricted runs still require approval in the OpenClaw operator UI. Replying
+"yes" in the delegated chat cannot authorize a change. When approval is required,
+run `openclaw dashboard` on the Gateway host to review it, or run the change
+directly with `openclaw setup` there. Independent filesystem and sandbox boundaries,
+tool policy, and the operation restrictions below still apply. The host also checks
+that the requesting run and verified inference route remain valid. Interactive
+setup and agent handoffs still require a direct operator session; delegated chat
+cannot start a wizard, even when a model proposes it.
+
+While a human reviews the proposal, the requesting tool stays open. **Allow once**
+applies the exact proposal and returns its application outcome; **Deny** or expiry
+returns a non-applied outcome instead of leaving the agent reporting a pending
+change. Stopping the requesting run cancels its approval. A late approval cannot
+restart a closed run: request the change again from an active run if still needed.
 
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
-operator approval flow used by Ask OpenClaw; the approval summary names the
-requesting agent. OpenClaw remains the executor, and approved creation records
-that requesting agent as the new agent's creator.
+host authorization flow; any approval summary names the requesting agent.
+OpenClaw remains the executor, and authorized creation records that requesting
+agent as the new agent's creator.
 
 Delegated creation remains tied to the requesting run. If that run ends or loses
 authority during preparation, OpenClaw stops before starting the next persistent
@@ -171,6 +183,11 @@ and `config-audit` scopes. Each scope retains its latest 50,000 records.
 Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.
+
+Config-write records retain the writer's origin label when supplied. Automatic
+startup config repairs record `origin: "doctor"` even when console output and
+runtime snapshot refresh are suppressed. Existing unlabeled records are not
+backfilled.
 
 Channel, web-search, and local Gateway setup can run as hosted conversations
 until they reach a secret. The local OpenClaw TUI does not accept sensitive wizard answers
@@ -251,6 +268,9 @@ supervision opt-outs remain untouched during inference setup.
 ## AI conversation
 
 Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+
+A failed or timed-out turn ends that setup conversation with a visible error.
+Retrying starts a fresh conversation and live-checks the inference route again.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my

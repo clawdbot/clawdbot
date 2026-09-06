@@ -423,8 +423,6 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 function createAssistantDoneEvent(content: unknown[]) {
-  // Done events include usage/provider metadata because BTW persists the reply
-  // as a normal assistant turn.
   return {
     type: "done",
     reason: "stop",
@@ -497,8 +495,10 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
   return { supported: true as const, priority: 100 };
 }
 
-function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
-  return runBtwSideQuestion({
+function createSideQuestionParams(
+  overrides: Partial<RunBtwSideQuestionParams> = {},
+): RunBtwSideQuestionParams {
+  return {
     cfg: { agents: { entries: { main: { default: true } } } } as never,
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
@@ -512,7 +512,11 @@ function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
     opts: {},
     isNewSession: false,
     ...overrides,
-  });
+  };
+}
+
+function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
+  return runBtwSideQuestion(createSideQuestionParams(overrides));
 }
 
 function runMathSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
@@ -793,6 +797,9 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    resolveModelAsyncMock.mockImplementation(async () => ({
+      model: resolveModelWithRegistryMock(),
+    }));
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockImplementation(async (params: { profileId?: string } = {}) => ({
@@ -903,20 +910,70 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
-  it("returns a final payload when block streaming is unavailable", async () => {
-    mockDoneAnswer("Final answer.");
+  it.each([false, true])(
+    "returns only final text when block streaming is unavailable (thinking: %s)",
+    async (withThinking) => {
+      const onReasoningStream = vi.fn();
+      const onReasoningEnd = vi.fn();
+      streamSimpleMock.mockReturnValue(
+        makeAsyncEvents([
+          createAssistantDoneEvent([
+            ...(withThinking ? [{ type: "thinking", thinking: "Hidden reasoning." }] : []),
+            { type: "text", text: "Final answer." },
+          ]),
+        ]),
+      );
 
-    const result = await runSideQuestion();
+      const result = await runSideQuestion({ opts: { onReasoningStream, onReasoningEnd } });
 
-    expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
-    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
-    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
-    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
-      config: ensureArgs?.[0],
-      workspaceDir: "/tmp/workspace",
-    });
-  });
+      expect(result).toEqual({ text: "Final answer." });
+      expect(onReasoningStream).not.toHaveBeenCalled();
+      expect(onReasoningEnd).not.toHaveBeenCalled();
+      const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
+      expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
+      expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+      expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+        config: ensureArgs?.[0],
+        workspaceDir: "/tmp/workspace",
+      });
+    },
+  );
+
+  it.each(["off", "on", "stream"] as const)(
+    "keeps admitted %s reasoning visibility when caller input changes",
+    async (mode) => {
+      const onReasoningStream = vi.fn();
+      const onReasoningEnd = vi.fn();
+      const input = createSideQuestionParams({
+        resolvedReasoningLevel: mode,
+        opts: {
+          onAssistantMessageStart: async () => {
+            input.resolvedReasoningLevel = mode === "off" ? "on" : "off";
+          },
+          onReasoningStream,
+          onReasoningEnd,
+        },
+      });
+      const done = createDoneEvent("Final answer.");
+      streamSimpleMock.mockReturnValue(
+        makeAsyncEvents([
+          { type: "start", partial: done.message },
+          { type: "thinking_delta", delta: "One " },
+          { type: "thinking_delta", delta: "two" },
+          { type: "thinking_end" },
+          done,
+        ]),
+      );
+
+      await expect(runBtwSideQuestion(input)).resolves.toEqual({ text: "Final answer." });
+      expect(onReasoningStream.mock.calls).toEqual(
+        mode === "off"
+          ? []
+          : [[{ text: "One ", isReasoning: true }], [{ text: "One two", isReasoning: true }]],
+      );
+      expect(onReasoningEnd).toHaveBeenCalledTimes(mode === "off" ? 0 : 1);
+    },
+  );
 
   it.each([
     { harness: "openclaw", sandboxSessionKey: undefined },
@@ -1081,14 +1138,25 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:work"] },
     });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    });
+    resolveModelAsyncMock.mockImplementation(
+      async (
+        _provider: string,
+        _modelId: string,
+        _agentDir: string,
+        _config: unknown,
+        options?: { authProfileMode?: string },
+      ) => ({
+        model:
+          options?.authProfileMode === "token"
+            ? {
+                provider: "openai",
+                id: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+              }
+            : resolveModelWithRegistryMock(),
+      }),
+    );
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: "subscription-token",
       mode: "token",
@@ -2192,7 +2260,7 @@ describe("runBtwSideQuestion", () => {
       resolveModelAsyncMock.mock.calls.map(
         (call) => (call[4] as { authProfileId?: string }).authProfileId,
       ),
-    ).toEqual(["openai:subscription", "openai:platform"]);
+    ).toEqual([undefined, "openai:subscription", "openai:platform"]);
     expectRecordFields(mockArg(streamSimpleMock, 0, 0), {
       name: "Platform model",
       api: "openai-responses",
@@ -2332,6 +2400,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      profileId: "anthropic:api",
       externalCliProviderIds: ["claude-cli"],
       allowKeychainPrompt: false,
     });
@@ -2427,6 +2496,7 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      wrapProviderStream: true,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",

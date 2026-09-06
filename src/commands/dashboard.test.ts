@@ -205,7 +205,7 @@ describe("dashboardCommand bind selection", () => {
       tlsEnabled: false,
     });
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
   });
 
@@ -341,5 +341,9 @@ describe("dashboardCommand bind selection", () => {
       tlsEnabled: true,
     });
     expect(mocks.inspectPortUsage).not.toHaveBeenCalled();
+    const delivered = new URL(mocks.copyToClipboard.mock.calls[0]![0]);
+    expect(new URLSearchParams(delivered.hash.slice(1)).get("gatewayUrl")).toBe(
+      `wss://${params.host}:18789`,
+    );
   });
 });

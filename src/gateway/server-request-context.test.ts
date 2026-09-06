@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -31,7 +32,7 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ function makeContextParams(
     }),
   };
   return {
+    trackExecution: trackAsyncWork,
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
@@ -503,6 +505,54 @@ describe("createGatewayRequestContext", () => {
         false,
       );
     });
+  });
+
+  it("publishes an owner rename to every tab without inventing an email", () => {
+    const ownerClients = [];
+    for (const tab of ["one", "two"]) {
+      ownerClients.push({
+        ...makeGatewayClient({
+          connId: `owner-${tab}`,
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserProfile: {
+          profileId: "profile-owner",
+          displayName: "Ada",
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        presenceKey: `profile-owner-${tab}`,
+        personPresence: { onlineSince: 1_000 },
+      });
+    }
+    const params = makeContextParams({ clients: new Set(ownerClients) as never });
+    createGatewayRequestContext(params).refreshConnectedUserProfile?.({
+      id: "profile-owner",
+      displayName: "Augusta Ada",
+      avatarRevision: "2",
+      hasAvatar: false,
+      updatedAt: 2,
+    });
+
+    for (const client of ownerClients) {
+      expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
+    }
+    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "profile-owner");
+    expect(ownerRows).toHaveLength(2);
+    for (const entry of ownerRows) {
+      expect(entry.user).toEqual({
+        id: "profile-owner",
+        identity: { type: "profile", id: "profile-owner" },
+        name: "Augusta Ada",
+        avatarUrl: "/api/users/profile-owner/avatar?v=2",
+      });
+    }
+    expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      { presence: expect.arrayContaining(ownerRows) },
+      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+    );
   });
 
   it("publishes only server-stamped activity from the exact live client", () => {

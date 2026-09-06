@@ -66,6 +66,16 @@ export function createAgentCommandLifecycle(params: {
         )?.text
       : undefined) ??
     (runResult.meta.error ? "Agent run failed" : undefined);
+  const resolveTerminalError = (
+    runResult: AgentAttemptResult,
+    fallbackExhausted: boolean,
+    terminal: EmbeddedAgentRunEntryTerminal,
+  ) =>
+    params.state.lifecycleError ??
+    (terminal.outcome.status === "timeout"
+      ? terminal.outcome.error
+      : resolveResultError(runResult, fallbackExhausted)) ??
+    (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
   const emitTerminalPhase = (
     phase: "finishing" | "end" | "error",
     terminal: EmbeddedAgentRunEntryTerminal,
@@ -157,6 +167,7 @@ export function createAgentCommandLifecycle(params: {
       emitTerminalPhase("end", terminal);
     },
     resolveResultError,
+    resolveTerminalError,
     emitResultError(
       runResult: AgentAttemptResult,
       fallbackExhausted: boolean,
@@ -166,12 +177,7 @@ export function createAgentCommandLifecycle(params: {
         return;
       }
       params.state.lifecycleEnded = true;
-      const error =
-        params.state.lifecycleError ??
-        (terminal.outcome.status === "timeout"
-          ? terminal.outcome.error
-          : resolveResultError(runResult, fallbackExhausted)) ??
-        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      const error = resolveTerminalError(runResult, fallbackExhausted, terminal);
       emitTerminalPhase("error", terminal, error);
     },
     emitPostTurnError(error: unknown, terminal: EmbeddedAgentRunEntryTerminal) {

@@ -20,8 +20,8 @@ import {
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
-  assignTransportErrorDetails,
-  transportAbortError,
+  failTransportStream,
+  finalizeTransportStream,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -41,8 +41,8 @@ import {
   type FirstStreamEventInternalOptions,
 } from "../utils/stream-first-event-timeout.js";
 import {
+  resolveOpenAIModelReasoningEfforts,
   resolveOpenAIReasoningEffortForModel,
-  supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
@@ -102,18 +102,6 @@ type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
 
 type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-function isResponsesReasoningEffort(
-  effort: string | undefined,
-): effort is ResponsesReasoningEffort {
-  return (
-    effort === "minimal" ||
-    effort === "low" ||
-    effort === "medium" ||
-    effort === "high" ||
-    effort === "xhigh" ||
-    effort === "max"
-  );
-}
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
@@ -168,22 +156,32 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): ResponsesReasoningEffort | undefined {
-  const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
-  if (!clampedReasoning || clampedReasoning === "off") {
+  if (!reasoning) {
     return undefined;
   }
-  if (clampedReasoning === "max") {
-    return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
+  const supportsRequestedEffort =
+    model.reasoning &&
+    model.thinkingLevelMap?.[reasoning] === undefined &&
+    resolveOpenAIModelReasoningEfforts(model)?.includes(reasoning);
+  const clampedReasoning = supportsRequestedEffort
+    ? reasoning
+    : clampThinkingLevel(model, reasoning);
+  return clampedReasoning === "off" ? undefined : clampedReasoning;
+}
+
+export function resolveResponsesRequestReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: ResponsesReasoningEffort | "none" | "off",
+): string | undefined {
+  const mapped = model.thinkingLevelMap?.[reasoning === "none" ? "off" : reasoning];
+  if (mapped !== undefined) {
+    return mapped ?? undefined;
   }
-  if (
-    clampedReasoning === "minimal" &&
-    model.provider === "openai" &&
-    supportsOpenAIReasoningEffort(model, "max")
-  ) {
-    const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
-    return isResponsesReasoningEffort(effort) ? effort : undefined;
-  }
-  return clampedReasoning;
+  return resolveOpenAIModelReasoningEfforts(model) === undefined
+    ? reasoning === "off"
+      ? "none"
+      : reasoning
+    : resolveOpenAIReasoningEffortForModel({ model, effort: reasoning });
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
@@ -212,21 +210,24 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
 
+  const requestedEffort =
+    options?.reasoningEffort ??
+    (options?.reasoningSummary
+      ? "medium"
+      : (config?.setDefaultReasoningOff ?? true)
+        ? "off"
+        : undefined);
+  const effort =
+    requestedEffort === undefined
+      ? undefined
+      : resolveResponsesRequestReasoningEffort(model, requestedEffort);
+  if (effort === undefined) {
+    return;
+  }
+  params.reasoning = { effort: effort as NonNullable<typeof params.reasoning>["effort"] };
   if (options?.reasoningEffort || options?.reasoningSummary) {
-    const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
-    params.reasoning = {
-      effort: effort as NonNullable<typeof params.reasoning>["effort"],
-      summary: options?.reasoningSummary || "auto",
-    };
+    params.reasoning.summary = options?.reasoningSummary || "auto";
     params.include = ["reasoning.encrypted_content"];
-  } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
-    params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
-    };
   }
 }
 
@@ -332,21 +333,15 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       }),
     });
 
-    if (options?.signal?.aborted) {
-      throw transportAbortError(options.signal);
-    }
-
-    if (output.stopReason === "aborted" || output.stopReason === "error") {
-      throw new Error(output.errorMessage ?? "An unknown error occurred");
-    }
-
-    stream.push({ type: "done", reason: output.stopReason, message: output });
-    stream.end();
+    finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
-    const terminal = assignTransportErrorDetails(output, error, options?.signal);
-    cleanStreamingScratchBuffers(output);
-    stream.push({ type: "error", reason: terminal.stopReason, error: output });
-    stream.end();
+    failTransportStream({
+      stream,
+      output,
+      signal: options?.signal,
+      error,
+      cleanup: () => cleanStreamingScratchBuffers(output),
+    });
   } finally {
     firstEventAbort?.dispose();
   }

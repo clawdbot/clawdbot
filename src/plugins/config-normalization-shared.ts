@@ -1,4 +1,5 @@
 // Shares plugin config normalization helpers across control-plane paths.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -256,8 +257,8 @@ export function normalizePluginsConfigWithResolverCore(
 }
 
 /**
- * Reads the operator's `channels.<id>.enabled` decision for a channel plugin id.
- * `true`/`false` are explicit channel-level decisions; `undefined` means no signal.
+ * Enables an owner for any enabled channel; disables it only when all channels are off.
+ * Unspecified channels leave the plugin's own activation policy in control.
  */
 export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
@@ -268,22 +269,16 @@ export function resolveChannelConfigEnablement(
   if (!channels) {
     return undefined;
   }
-  // Manifest-owned channel ids come first: a plugin id can differ from its channel key
-  // (for example `openclaw-qqbot` owning `channels.qqbot`), and the built-in catalog only
-  // resolves ids that match.
-  const candidateIds = [
-    ...channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId),
-    normalizeChatChannelId(pluginId),
-  ];
-  for (const channelId of candidateIds) {
+  // Declared ownership is authoritative; infer from the plugin id only when absent.
+  const candidateIds = channelIds.length
+    ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
+    : [normalizeChatChannelId(pluginId)];
+  const enablement = candidateIds.map((channelId) => {
     const entry = channelId ? channels[channelId] : undefined;
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      continue;
-    }
-    const enabled = (entry as Record<string, unknown>).enabled;
-    if (typeof enabled === "boolean") {
-      return enabled;
-    }
+    return isRecord(entry) ? entry.enabled : undefined;
+  });
+  if (enablement.includes(true)) {
+    return true;
   }
-  return undefined;
+  return enablement.every((enabled) => enabled === false) ? false : undefined;
 }

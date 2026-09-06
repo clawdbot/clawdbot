@@ -9,8 +9,8 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/cont
 import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
+import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
 import type { ModelProvidersRouteData } from "./model-providers/route.ts";
-import type { SessionsRouteData } from "./sessions/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
@@ -201,32 +201,6 @@ afterEach(() => {
 });
 
 describe("gateway source replacement across reconnect with a reused client", () => {
-  it("preserves matching sessions route data on the first bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      sessions: context.sessions,
-      result: { count: 1, sessions: [{ key: "old" }] },
-      loading: false,
-      error: null,
-      expandedSessionKey: null,
-      statusFilter: "active",
-    } as unknown as SessionsRouteData;
-    const page = createPage("openclaw-sessions-page", context) as TestPage & {
-      routeData: SessionsRouteData;
-      result: SessionsRouteData["result"];
-    };
-    page.routeData = routeData;
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.result?.sessions.map((session) => session.key)).toEqual(["old"]);
-    expect(context.sessions.list).not.toHaveBeenCalled();
-  });
-
   it("preserves matching usage route data on the first bind", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
@@ -500,7 +474,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage(
       "openclaw-model-providers-page",
       contextWithClient(client, { connected: true, agentsList, selectedAgentId: "main" }),
-    ) as TestPage & { data: ModelProvidersData | null };
+    ) as TestPage & {
+      data: ModelProvidersData | null;
+      routeData: ModelProvidersRouteData;
+    };
+    page.routeData = createEmptyModelProvidersRouteData(page.context);
     document.body.append(page);
     await waitForFast(() => expect(authCalls).toBe(1));
 

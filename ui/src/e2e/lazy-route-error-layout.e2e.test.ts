@@ -34,7 +34,7 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialSessionKey));
           await page.locator("openclaw-chat-pane").waitFor();
 
-          await gateway.setMethodResponse("sessions.list", {
+          await gateway.setMethodResponse("sessions.resolve", {
             __mockError: { code: "UNAVAILABLE", message: gatewayError },
           });
           const pathname = controlUiSessionPath(failedSessionKey);

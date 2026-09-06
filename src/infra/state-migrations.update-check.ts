@@ -1,5 +1,6 @@
 import path from "node:path";
-import { importConfigMachineState, readConfigMachineState } from "../state/config-machine-state.js";
+import { importConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { migrateLegacyJsonState } from "./state-migrations.runtime-state.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 

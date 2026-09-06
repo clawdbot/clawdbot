@@ -831,8 +831,19 @@ describe("gatherDaemonStatus", () => {
         url: "ws://127.0.0.1:18900",
         error: "connect ECONNREFUSED 127.0.0.1:18900",
       });
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+        whatsapp: {
+          source: "npm",
+          resolvedName: "@openclaw/whatsapp",
+          resolvedVersion: "2026.5.4",
+        },
+      } as never);
 
-      const status = await gatherStatus({ requireRpc: true, deep: true });
+      const status = await gatherStatus({
+        requireRpc: true,
+        deep: true,
+        pluginVersionTarget: "restart",
+      });
 
       expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
       expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe(
@@ -851,6 +862,7 @@ describe("gatherDaemonStatus", () => {
       expect(authInput.cfg).toBe(cliLoadedConfig);
       expect(authInput.env?.OPENCLAW_GATEWAY_PORT).toBe("18900");
       expect(status.service.targetRole).toBe("diagnostic-only");
+      expect(status.pluginVersionRestartReadiness).toBeUndefined();
       expect(inspectGatewayRestart).not.toHaveBeenCalled();
     },
   );
@@ -1699,6 +1711,117 @@ describe("gatherDaemonStatus", () => {
 
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts).toEqual([]);
+  });
+
+  it.each([
+    { name: "running an older version", runtime: "running", probeVersion: "2026.5.4" },
+    { name: "stopped", runtime: "stopped", probeVersion: undefined },
+    { name: "unreachable", runtime: "running", probeVersion: undefined },
+  ])(
+    "compares Doctor plugin readiness with the installed service when the Gateway is $name",
+    async ({ runtime, probeVersion }) => {
+      const packageRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-readiness-")),
+      );
+      try {
+        await fs.mkdir(path.join(packageRoot, "dist"));
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.6.1" }),
+        );
+        const entrypoint = path.join(packageRoot, "dist", "index.js");
+        await fs.writeFile(entrypoint, "gateway");
+        serviceReadCommand.mockResolvedValueOnce({
+          programArguments: [process.execPath, entrypoint, "gateway", "run"],
+          environment: {
+            OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+            OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+          },
+        });
+        serviceReadRuntime.mockResolvedValueOnce({ status: runtime });
+        callGatewayStatusProbe.mockResolvedValueOnce(
+          probeVersion
+            ? {
+                ok: true,
+                server: { version: probeVersion, connId: "c1" },
+              }
+            : { ok: false, error: "connect failed" },
+        );
+        loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+          whatsapp: {
+            source: "npm",
+            resolvedName: "@openclaw/whatsapp",
+            resolvedVersion: "2026.5.4",
+          },
+        } as never);
+
+        const status = await gatherStatus({ pluginVersionTarget: "restart" });
+
+        expect(status.pluginVersionDrift).toBeUndefined();
+        expect(status.pluginVersionRestartReadiness).toEqual({
+          status: "resolved",
+          report: {
+            gatewayVersion: "2026.6.1",
+            drifts: [expect.objectContaining({ pluginId: "whatsapp" })],
+          },
+          ...(probeVersion ? { runningGatewayVersion: probeVersion } : {}),
+        });
+      } finally {
+        await fs.rm(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reports unresolved restart readiness when the service package cannot be identified", async () => {
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.4",
+      },
+    } as never);
+    const status = await gatherStatus({ pluginVersionTarget: "restart" });
+
+    expect(status.pluginVersionRestartReadiness).toEqual({
+      status: "unresolved",
+      reason: expect.stringContaining("package version is unavailable"),
+      runningGatewayVersion: "2026.5.6",
+    });
+  });
+
+  it("omits restart readiness when no managed service target exists", async () => {
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadCommand.mockResolvedValueOnce(null);
+
+    const status = await gatherStatus({ pluginVersionTarget: "restart" });
+
+    expect(status.pluginVersionRestartReadiness).toBeUndefined();
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+  });
+
+  it("reports unresolved restart readiness when a loaded service has no command", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.4",
+      },
+    } as never);
+
+    const status = await gatherStatus({ pluginVersionTarget: "restart" });
+
+    expect(status.pluginVersionRestartReadiness).toEqual({
+      status: "unresolved",
+      reason: expect.stringContaining("service command is unavailable"),
+      runningGatewayVersion: "2026.5.6",
+    });
+  });
+
+  it("omits restart readiness when no active official plugins need a version check", async () => {
+    const status = await gatherStatus({ pluginVersionTarget: "restart" });
+
+    expect(status.pluginVersionRestartReadiness).toBeUndefined();
   });
 
   it("flags drift against the running gateway version when an npm plugin lags behind it", async () => {

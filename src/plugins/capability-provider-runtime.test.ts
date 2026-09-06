@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
@@ -855,6 +855,36 @@ describe("resolvePluginCapabilityProviders", () => {
     expectInitialRuntimeRegistryLookup();
   });
 
+  it.each(["active", "manifest"] as const)(
+    "applies current normalized policy to every %s provider lookup",
+    (source) => {
+      const registry = createEmptyPluginRegistry();
+      addSpeechProvider(registry, "first");
+      addSpeechProvider(registry, "second");
+      setCapabilityManifestPlugins([
+        { id: "first", contracts: { speechProviders: ["first"] } },
+        { id: "second", contracts: { speechProviders: ["second"] } },
+      ]);
+      mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) =>
+        source === "active" || options !== undefined ? registry : undefined,
+      );
+      const plugins = {
+        allow: [" FIRST ", "second"],
+        deny: [] as string[],
+        entries: { " FIRST ": { enabled: true }, second: { enabled: false } },
+      };
+      const cfg: OpenClawConfig = { plugins };
+      const resolve = () => resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+      expect(resolve()).toEqual([registry.speechProviders[0]?.provider]);
+      plugins.entries[" FIRST "].enabled = false;
+      plugins.entries.second.enabled = true;
+      expect(resolve()).toEqual([registry.speechProviders[1]?.provider]);
+      plugins.deny.push(" SECOND ");
+      expect(resolve()).toEqual([]);
+    },
+  );
+
   it("targets enabled external capability plugins without bundled fallback capture", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.imageGenerationProviders.push({
@@ -1646,6 +1676,38 @@ describe("resolvePluginCapabilityProviders", () => {
     expectResolvedCapabilityProviderIds(providers, ["google", "microsoft"]);
     expectActiveRegistryLookup(["google", "microsoft"]);
     expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["partial alias", ["google", "edge"], [], ["google", "microsoft"]],
+    ["unknown alias", ["edge", "unknown"], [], ["google", "microsoft", "elevenlabs"]],
+    ["denied canonical", ["google", "edge"], ["google"], ["microsoft", "elevenlabs"]],
+  ] as const)("preserves cold %s provider coverage", (_name, requested, deny, expected) => {
+    const loaded = createEmptyPluginRegistry();
+    addSpeechProvider(loaded, "google");
+    addSpeechProvider(loaded, "microsoft", { aliases: ["edge"] });
+    addSpeechProvider(loaded, "elevenlabs");
+    setCapabilityManifestPlugins(
+      ["google", "microsoft", "elevenlabs"].map((id) => ({
+        id,
+        contracts: { speechProviders: [id] },
+      })),
+    );
+    mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) =>
+      options === undefined ? undefined : loaded,
+    );
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["google", "microsoft", "elevenlabs"], deny: [...deny] },
+      tts: {
+        provider: requested[0],
+        providers: Object.fromEntries(requested.slice(1).map((id) => [id, {}])),
+      },
+    };
+
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),
+      [...expected],
+    );
   });
 
   it.each([

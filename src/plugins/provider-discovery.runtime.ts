@@ -10,7 +10,15 @@ import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import {
+  prefersBuiltPluginArtifacts,
+  resolvePluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
+import type {
+  ProviderDiscoveryPlan,
+  ResolveRuntimePluginDiscoveryProvidersParams,
+} from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -57,7 +65,7 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
-function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDiscoveryModule {
+function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): ProviderPlugin[] {
   const registry = getPluginRuntimeGenerationRegistry();
   const loadContext = getPluginRuntimeLoadContext(registry);
   // Lightweight entries share the prepared registry's artifact policy, but must
@@ -70,7 +78,11 @@ function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDi
         rootDir: manifest.rootDir,
         origin: manifest.origin,
         packageManifest: manifest.packageManifest,
-        preferBuiltPluginArtifacts: loadContext?.preferBuiltPluginArtifacts === true,
+        preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+          resolvePluginRuntimeArtifactPreference(loadContext?.preferBuiltPluginArtifacts),
+          manifest.origin,
+        ),
+        sourcePreferred: manifest.sourcePreferred,
         registry,
       })
     : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };
@@ -94,10 +106,13 @@ function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDi
     loaderFilename: import.meta.url,
     preferBuiltDist: true,
   });
-  return withProfile(
+  const loaded = withProfile(
     { pluginId: manifest.id, source: modulePath },
     "provider-discovery-entry",
     () => moduleLoader(modulePath) as ProviderDiscoveryModule,
+  );
+  return normalizeDiscoveryModule(loaded).map((provider) =>
+    Object.assign({}, provider, { pluginId: manifest.id }),
   );
 }
 
@@ -245,12 +260,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      const moduleExport = loadProviderDiscoveryModule(manifest);
-      providers.push(
-        ...normalizeDiscoveryModule(moduleExport).map((provider) =>
-          Object.assign({}, provider, { pluginId: manifest.id }),
-        ),
-      );
+      providers.push(...loadProviderDiscoveryProviders(manifest));
     } catch {
       // Entry loading is all-or-nothing: discarded results no longer cover their owners.
       // Keep static manifest coverage for the scope-aware full-loader fallback.
@@ -273,29 +283,21 @@ function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult)
   });
 }
 
-export function resolvePluginDiscoveryProvidersRuntime(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  includeSyntheticAuthProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderPlugin[] {
+export function planPluginDiscoveryRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderDiscoveryPlan {
   const env = params.env ?? process.env;
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   const entryProviders = entryResult.providers.filter(
     (provider) =>
       hasProviderCatalogHook(provider) ||
       (params.includeSyntheticAuthProviders === true &&
-        typeof provider.resolveSyntheticAuth === "function"),
+        (typeof provider.resolveSyntheticAuth === "function" ||
+          typeof provider.prepareSyntheticAuth === "function")),
   );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
-    return entryProviders;
+    return { kind: "entries", providers: entryProviders };
   }
   if (
     entryResult.providers.length > 0 &&
@@ -303,7 +305,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     runtimeEntryProviders.length === entryResult.providers.length &&
     entryResult.runtimeManifestCatalogPluginIds.size === 0
   ) {
-    return runtimeEntryProviders;
+    return { kind: "entries", providers: runtimeEntryProviders };
   }
   let fullPluginIds = params.onlyPluginIds;
   let retainedProviders: ProviderPlugin[] | undefined;
@@ -321,7 +323,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       ...entryResult.runtimeManifestCatalogPluginIds,
     ]);
     if (fullPluginIds.length === 0) {
-      return [...runtimeEntryProviders];
+      return { kind: "entries", providers: runtimeEntryProviders };
     }
     const fullPluginIdSet = new Set(fullPluginIds);
     retainedProviders = runtimeEntryProviders.filter(
@@ -337,10 +339,20 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       fullPluginIds = entryPluginIds;
     }
   }
+  return { kind: "runtime", providers: retainedProviders ?? [], pluginIds: fullPluginIds };
+}
+
+export function resolvePluginDiscoveryProvidersRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderPlugin[] {
+  const plan = planPluginDiscoveryRuntime(params);
+  if (plan.kind === "entries") {
+    return plan.providers;
+  }
   const fullProviders = resolvePluginProvidersCore({
     ...params,
-    env,
-    ...(fullPluginIds ? { onlyPluginIds: fullPluginIds } : {}),
+    env: params.env ?? process.env,
+    ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  return retainedProviders ? [...retainedProviders, ...fullProviders] : fullProviders;
+  return [...plan.providers, ...fullProviders];
 }

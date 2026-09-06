@@ -11,7 +11,7 @@ vi.mock("../../sessions/session-participant-recording.js", () => ({
 }));
 
 const runWaitMocks = vi.hoisted(() => ({
-  waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
+  waitForAgentRunReply: vi.fn(),
 }));
 
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
@@ -19,8 +19,7 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../run-wait.js", () => ({
-  waitForAgentRunAndReadUpdatedAssistantReply:
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
+  waitForAgentRunReply: runWaitMocks.waitForAgentRunReply,
 }));
 
 vi.mock("../agent-bundle-mcp-tools.js", () => ({
@@ -41,7 +40,7 @@ describe("runAgentStep", () => {
       gatewayCalls.push(opts);
       return { runId: "run-nested" } as T;
     };
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
     });
@@ -94,7 +93,7 @@ describe("runAgentStep", () => {
 
   it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
     const callGateway = async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T;
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "timeout",
     });
 
@@ -119,7 +118,7 @@ describe("runAgentStep", () => {
     testing.setDepsForTest({
       agentCommandFromIngress,
     });
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
     });

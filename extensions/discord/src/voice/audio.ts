@@ -1,6 +1,5 @@
 // Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -68,7 +67,7 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-export function createDiscordOpusEncodeStream(): Transform {
+export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
   return new DiscordOpusEncodeStream();
 }
 
@@ -146,6 +145,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 class DiscordOpusEncodeStream extends Transform {
   #buffer = Buffer.alloc(0);
   #encoder!: LibopusEncoder;
+  readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
   constructor() {
     super({ readableObjectMode: true });
@@ -184,16 +184,29 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _flush(done: TransformCallback): void {
     try {
-      if (this.#buffer.length > 0) {
-        const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
-        this.#buffer.copy(frame);
-        this.#buffer = Buffer.alloc(0);
-        this.#encodeFrame(frame);
-      }
+      this.flushPartialFrame();
       done();
     } catch (err) {
       done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
     }
+  }
+
+  flushPartialFrame(): boolean {
+    if (this.destroyed || this.#buffer.length === 0) {
+      return false;
+    }
+    const pcmBytes = this.#buffer.length;
+    const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+    this.#buffer.copy(frame);
+    this.#buffer = Buffer.alloc(0);
+    this.#encodeFrame(frame, pcmBytes);
+    return true;
+  }
+
+  takePcmBytes(packet: Buffer): number {
+    const bytes = this.#packetPcmBytes.get(packet) ?? 0;
+    this.#packetPcmBytes.delete(packet);
+    return bytes;
   }
 
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
@@ -202,8 +215,10 @@ class DiscordOpusEncodeStream extends Transform {
     done(err);
   }
 
-  #encodeFrame(frame: Buffer): void {
-    this.push(Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE })));
+  #encodeFrame(frame: Buffer, pcmBytes = frame.length): void {
+    const packet = Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE }));
+    this.#packetPcmBytes.set(packet, pcmBytes);
+    this.push(packet);
   }
 }
 
@@ -317,24 +332,20 @@ function estimateDurationSeconds(pcm: Buffer): number {
 
 export async function writeVoiceWavFile(
   pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number }> {
+): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
-  scheduleTempCleanup(workspace.dir);
-  const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.write("segment.wav", wav);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
+  try {
+    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    return {
+      path: filePath,
+      durationSeconds: estimateDurationSeconds(pcm),
+      cleanup: () => workspace[Symbol.asyncDispose](),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
 }

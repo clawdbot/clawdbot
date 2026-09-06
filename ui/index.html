@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
-    <script>
+    <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
@@ -85,9 +85,13 @@
               : "dark";
           if (pair) {
             // Script-created links need explicit render blocking before first paint.
-            // The gateway stamps the mount prefix on <html> before this runs.
+            // The gateway stamps the mount prefix and asset version before this runs.
             var base =
               document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var buildId = document.documentElement.getAttribute(
+              "data-openclaw-control-ui-build-id",
+            );
+            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");
@@ -95,7 +99,7 @@
             palette.onerror = function () {
               palette.remove();
             };
-            palette.href = base + "/themes/" + theme + ".css";
+            palette.href = base + "/themes/" + theme + ".css" + version;
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);
@@ -393,7 +397,7 @@
         </div>
       </div>
     </section>
-    <script>
+    <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
@@ -558,6 +562,6 @@
         }
       })();
     </script>
-    <script type="module" src="/src/main.ts"></script>
+    <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>
 </html>

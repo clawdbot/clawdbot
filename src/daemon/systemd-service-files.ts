@@ -252,7 +252,7 @@ async function readSystemdDropInOverrides(
     const content = await fs.readFile(pathname, "utf8");
     let inService = false;
     // Loaded drop-ins own directives even when their current values equal the managed base.
-    for (const rawLine of content.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
+    for (const rawLine of splitSystemdLogicalLines(content)) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#") || line.startsWith(";")) {
         continue;

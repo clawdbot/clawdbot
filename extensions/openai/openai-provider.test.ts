@@ -581,6 +581,7 @@ describe("buildOpenAIProvider", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "gpt-6-astra", object: "model" },
           { id: "gpt-5.6", object: "model" },
           { id: "gpt-5.5", object: "model" },
           { id: "chat-latest", object: "model" },
@@ -606,6 +607,7 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(provider.models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
+        "gpt-6-astra",
         "chat-latest",
         "gpt-5.4",
         "gpt-5.4-pro",
@@ -1005,68 +1007,71 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it("maps direct Codex catalog rows into OpenAI ChatGPT response models", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: Response.json({
-        models: [
-          {
-            slug: "gpt-5.4",
-            display_name: "GPT-5.4",
-            visibility: "list",
-            supported_reasoning_levels: [
-              { effort: "medium", description: "medium" },
-              { effort: "high", description: "high" },
-            ],
-            context_window: 272_000,
-            max_context_window: 1_050_000,
-            max_output_tokens: 128_000,
-          },
-          {
-            slug: "hidden-review-model",
-            display_name: "Hidden Review Model",
-            visibility: "hide",
-          },
-          {
-            slug: "internal-fallback-model",
-            display_name: "Internal Fallback Model",
-            visibility: "none",
-          },
-        ],
-      }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release,
-    }));
+  it.each(["gpt-5.4", "gpt-6-astra"])(
+    "maps discovered %s into a ChatGPT response model",
+    async (modelId) => {
+      const release = vi.fn(async () => undefined);
+      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+        response: Response.json({
+          models: [
+            {
+              slug: modelId,
+              display_name: modelId,
+              visibility: "list",
+              supported_reasoning_levels: [
+                { effort: "medium", description: "medium" },
+                { effort: "high", description: "high" },
+              ],
+              context_window: 272_000,
+              max_context_window: 1_050_000,
+              max_output_tokens: 128_000,
+            },
+            {
+              slug: "hidden-review-model",
+              display_name: "Hidden Review Model",
+              visibility: "hide",
+            },
+            {
+              slug: "internal-fallback-model",
+              display_name: "Internal Fallback Model",
+              visibility: "none",
+            },
+          ],
+        }),
+        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+        release,
+      }));
 
-    const provider = await buildOpenAICodexLiveProviderConfig({
-      discoveryApiKey: "oauth-token",
-      accountId: "acct-openai-workspace",
-      fetchGuard,
-    });
+      const provider = await buildOpenAICodexLiveProviderConfig({
+        discoveryApiKey: "oauth-token",
+        accountId: "acct-openai-workspace",
+        fetchGuard,
+      });
 
-    expect(provider?.api).toBe("openai-chatgpt-responses");
-    expect(provider?.auth).toBe("oauth");
-    expect(provider?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
-    expect(provider?.models[0]).toMatchObject({
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      input: ["text", "image"],
-      reasoning: true,
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-    const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
-    expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
-    const init = fetchParams?.init;
-    const headers = init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    if (!(headers instanceof Headers)) {
-      throw new Error("expected fetch headers");
-    }
-    expect(headers.get("Authorization")).toBe("Bearer oauth-token");
-    expect(headers.get("ChatGPT-Account-ID")).toBe("acct-openai-workspace");
-    expect(release).toHaveBeenCalledOnce();
-  });
+      expect(provider?.api).toBe("openai-chatgpt-responses");
+      expect(provider?.auth).toBe("oauth");
+      expect(provider?.models.map((model) => model.id)).toEqual([modelId]);
+      expect(provider?.models[0]).toMatchObject({
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      });
+      const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+      expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
+      const init = fetchParams?.init;
+      const headers = init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      if (!(headers instanceof Headers)) {
+        throw new Error("expected fetch headers");
+      }
+      expect(headers.get("Authorization")).toBe("Bearer oauth-token");
+      expect(headers.get("ChatGPT-Account-ID")).toBe("acct-openai-workspace");
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects Platform-only aliases while preserving GPT-5.6 ChatGPT capabilities", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
@@ -1192,6 +1197,7 @@ describe("buildOpenAIProvider", () => {
     });
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-6-astra");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(release).toHaveBeenCalledOnce();
   });

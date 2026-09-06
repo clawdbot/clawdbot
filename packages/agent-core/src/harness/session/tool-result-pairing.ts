@@ -17,6 +17,7 @@ type ToolCallOccurrence = {
   name?: string;
   result?: ToolResultMessage;
   sourceResult?: ToolResultMessage;
+  sourceResultIndex?: number;
 };
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
@@ -24,6 +25,7 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 type ToolResultRecord = {
   result: ToolResultMessage;
   sourceResult: ToolResultMessage;
+  index: number;
   id?: string;
 };
 
@@ -40,6 +42,7 @@ type ToolUsePairingClassification = {
   frames: ToolUsePairingFrame[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
+  droppedResults: Array<{ message: ToolResultMessage; index: number }>;
 };
 
 type ToolCallOccurrenceQueue<T> = {
@@ -233,6 +236,7 @@ export function classifyToolUseResultPairing(
   );
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
+  const droppedResults: Array<{ message: ToolResultMessage; index: number }> = [];
   const preserveUnframed = options?.preserveUnframedToolResults === true;
   const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
     frameStartIndexes.map((startIndex, frameIndex) => {
@@ -264,6 +268,7 @@ export function classifyToolUseResultPairing(
         if (occurrence) {
           occurrence.result = normalizeToolResultName(normalized, occurrence.name);
           occurrence.sourceResult = message;
+          occurrence.sourceResultIndex = index;
           if (isSyntheticMissingToolResult(occurrence.result)) {
             const synthetic = syntheticById.get(occurrence.id);
             if (synthetic) {
@@ -275,7 +280,12 @@ export function classifyToolUseResultPairing(
           continue;
         }
         if (!id || !occurrences.some((candidate) => candidate.id === id)) {
-          unclaimedResults.push({ result: normalized, sourceResult: message, id: id ?? undefined });
+          unclaimedResults.push({
+            result: normalized,
+            sourceResult: message,
+            index,
+            id: id ?? undefined,
+          });
           if (preserveUnframed) {
             remainder.push(normalized);
           }
@@ -285,9 +295,21 @@ export function classifyToolUseResultPairing(
         if (!isSyntheticMissingToolResult(normalized)) {
           const replaceable = syntheticById.get(id)?.shift();
           if (replaceable) {
+            const discardedSource = replaceable.sourceResult;
+            if (discardedSource) {
+              droppedResults.push({
+                message: discardedSource,
+                index: replaceable.sourceResultIndex ?? index,
+              });
+            }
             replaceable.result = normalizeToolResultName(normalized, replaceable.name);
             replaceable.sourceResult = message;
+            replaceable.sourceResultIndex = index;
+          } else {
+            droppedResults.push({ message, index });
           }
+        } else {
+          droppedResults.push({ message, index });
         }
       }
       const stopReason = (assistant as { stopReason?: string }).stopReason;
@@ -326,6 +348,9 @@ export function classifyToolUseResultPairing(
         : [];
       if (candidates.length !== 1) {
         droppedOrphanCount += preserveUnframed ? 0 : 1;
+        if (!preserveUnframed) {
+          droppedResults.push({ message: record.sourceResult, index: record.index });
+        }
         continue;
       }
       const candidate = candidates[0];
@@ -333,15 +358,25 @@ export function classifyToolUseResultPairing(
         continue;
       }
       droppedDuplicateCount += candidate.result ? 1 : 0;
+      if (candidate.result && isSyntheticMissingToolResult(candidate.result)) {
+        const discardedSource = candidate.sourceResult;
+        if (discardedSource) {
+          droppedResults.push({
+            message: discardedSource,
+            index: candidate.sourceResultIndex ?? record.index,
+          });
+        }
+      }
       candidate.result = normalizeToolResultName(record.result, candidate.name);
       candidate.sourceResult = record.sourceResult;
+      candidate.sourceResultIndex = record.index;
       if (preserveUnframed) {
         frame.remainder = frame.remainder.filter((message) => message !== record.result);
       }
     }
   }
 
-  return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount };
+  return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount, droppedResults };
 }
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */

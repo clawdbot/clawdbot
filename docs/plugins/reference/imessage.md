@@ -1,5 +1,5 @@
 ---
-summary: "Adds the iMessage channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw iMessage channel plugin using imsg on a signed-in Mac."
 read_when:
   - You are installing, configuring, or auditing the imessage plugin
 title: "iMessage plugin"
@@ -7,7 +7,7 @@ title: "iMessage plugin"
 
 # iMessage plugin
 
-Adds the iMessage channel surface for sending and receiving OpenClaw messages.
+OpenClaw iMessage channel plugin using imsg on a signed-in Mac.
 
 ## Distribution
 

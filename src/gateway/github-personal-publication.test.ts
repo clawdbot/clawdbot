@@ -158,7 +158,13 @@ describe("personal publication authority and recovery", () => {
     },
   );
 
-  it.each(["unbound-admin", "unbound-reader", "reader", "synthetic", "profile-spoof"] as const)(
+  it.each([
+    "unbound-admin",
+    "unbound-reader",
+    "reader",
+    "synthetic",
+    "shared-secret-owner",
+  ] as const)(
     "serves shared options independently of personal eligibility for %s",
     async (caller) => {
       client.connect.scopes = caller === "unbound-admin" ? ["operator.admin"] : ["operator.read"];
@@ -168,14 +174,18 @@ describe("personal publication authority and recovery", () => {
       if (caller === "synthetic") {
         client.internal = { syntheticClient: true };
       }
-      if (caller === "profile-spoof") {
+      if (caller === "shared-secret-owner") {
+        delete client.authenticatedUserId;
         client.internal = { operatorRoleActor: { kind: "system" } };
       }
       const response = await rpc("sessions.github.options");
       expect(response[0]).toBe(true);
       expect(response[1]).toMatchObject({
         shared: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
-        personal: caller === "reader" ? { state: "connected", generation, account } : null,
+        personal:
+          caller === "reader" || caller === "shared-secret-owner"
+            ? { state: "connected", generation, account }
+            : null,
         pendingPersonal: null,
       });
       expect(tableExists(openOpenClawStateDatabase().db, table)).toBe(false);
@@ -287,7 +297,7 @@ describe("personal publication authority and recovery", () => {
       BEGIN SELECT stop_personal_admission(); END`);
     const stopped = preparePersonalGitHubSessionAction(
       { client, context, signal: controller.signal },
-      SESSION_KEY,
+      { sessionKey: SESSION_KEY },
     );
     await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
       "current",
@@ -638,7 +648,7 @@ describe("personal publication authority and recovery", () => {
     ).toBe(false);
     expect((await rpc("sessions.github.publish", request()))[0]).toBe(false);
     client.authenticatedUserProfile = ownProfile;
-    action = preparePersonalGitHubSessionAction({ client, context }, SESSION_KEY);
+    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
     const confirm = {
       sessionKey: SESSION_KEY,
       requestId: discovered[1].pendingPersonal.result.requestId,

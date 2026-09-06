@@ -17,12 +17,14 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
+        beforeCommitInTransaction?: () => void;
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup }) => {
+      appendMessage: async ({ message, idempotencyLookup, beforeCommitInTransaction }) => {
+        beforeCommitInTransaction?.();
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -61,7 +63,12 @@ function catalogReader(items: TranscriptItem[], maxPageSize = Number.POSITIVE_IN
 
 function importHistory(
   items: TranscriptItem[],
-  options: { maxPageSize?: number; read?: ReturnType<typeof catalogReader> } = {},
+  options: {
+    continuationNotice?: string;
+    commitGuard?: () => void;
+    maxPageSize?: number;
+    read?: ReturnType<typeof catalogReader>;
+  } = {},
 ) {
   const read = options.read ?? catalogReader(items, options.maxPageSize);
   return {
@@ -74,6 +81,8 @@ function importHistory(
       sessionKey: "agent:main:catalog-adopt",
       agentId: "main",
       config: {} as OpenClawConfig,
+      continuationNotice: options.continuationNotice,
+      commitGuard: options.commitGuard,
     }),
   };
 }
@@ -270,5 +279,27 @@ describe("importSessionCatalogHistory", () => {
     await expect(importHistory([], { read }).result).rejects.toThrow("catalog read failed");
     expect(transcript.lockCalls).toBe(0);
     expect(transcript.messages).toEqual([]);
+  });
+
+  it("appends one idempotent continuation notice under the caller authority guard", async () => {
+    const commitGuard = vi.fn();
+    const options = {
+      continuationNotice: "Copied snapshot; using openai/gpt-5.6-sol.",
+      commitGuard,
+    };
+
+    await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+    await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+
+    expect(transcript.messages.map(messageText)).toEqual([
+      "Continue",
+      "Copied snapshot; using openai/gpt-5.6-sol.",
+    ]);
+    expect(transcript.messages[1]).toMatchObject({
+      provider: "openclaw",
+      model: "session-catalog",
+      idempotencyKey: "pi-catalog:thread-1:continuation-notice",
+    });
+    expect(commitGuard).toHaveBeenCalledTimes(4);
   });
 });

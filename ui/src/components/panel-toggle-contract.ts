@@ -22,6 +22,7 @@ export type TerminalPanelToggleDetail = {
   dock?: "bottom" | "right";
   open?: boolean;
   terminalSessionId?: string;
+  agentOwned?: boolean;
   catalog?: {
     catalogId: string;
     hostId: string;

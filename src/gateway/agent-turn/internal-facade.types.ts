@@ -12,6 +12,8 @@ export type InternalAgentTurnPrincipalOptions = {
 };
 
 export type InternalAgentTurnDispatchOptions = {
+  // The source owns admission only; accepted children execute under their own lifetime.
+  assertAdmissionCurrent?: () => void;
   cancelOnDeadline?: boolean;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;

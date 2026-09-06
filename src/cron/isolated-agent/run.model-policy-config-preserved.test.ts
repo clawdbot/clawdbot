@@ -111,6 +111,8 @@ describe("resolveCronAgentConfig model policy preservation", () => {
         agentDir: "/tmp/cron-agent",
         workspaceDir: metadataSnapshot.workspaceDir,
         config: cfg,
+        observationConfig: cfg,
+        isCurrent: () => true,
         authModes: {},
         authStore: { version: 1, profiles: {} },
         metadataSnapshot,

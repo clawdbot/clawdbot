@@ -18,7 +18,6 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -42,6 +41,7 @@ import {
 import {
   commandReply as sessionCommandReply,
   defineAuthorizedTextCommand,
+  defineGatewayControlCommand,
   matchCommandPrefix,
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -530,84 +530,61 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unbind at ${expiryLabel}).`,
   );
 };
-export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/restart") {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /restart from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const nonOwner = rejectNonOwnerCommand(params, "/restart");
-  if (nonOwner) {
-    return nonOwner;
-  }
-  if (!isRestartEnabled(params.cfg)) {
-    return sessionCommandReply("⚠️ /restart is disabled (commands.restart=false).");
-  }
-  // Restart tears this process down before the dispatch that carries /restart can
-  // return, so the durable ingress claim would still be held when admission closes.
-  // The drain then releases it without spending retry budget and the successor
-  // replays /restart forever. Adopt here: the command is not idempotent, so losing
-  // the acknowledgement beats an unbounded restart loop. Adoption loss throws,
-  // which correctly aborts the restart because another owner holds the event.
-  await params.opts?.turnAdoptionLifecycle?.onAdopted();
-  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
-  const sentinelPayload = buildRestartCommandSentinel(params);
-  if (hasSigusr1Listener) {
+export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
+  "/restart",
+  async (params) => {
+    const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+    const sentinelPayload = buildRestartCommandSentinel(params);
+    if (hasSigusr1Listener) {
+      let sentinelWritten = false;
+      scheduleGatewaySigusr1Restart({
+        reason: "/restart",
+        // Sibling session-routing guard: /restart writes a session-scoped sentinel
+        // with continuation, so the scheduler must own the pending slot under the
+        // same key to avoid cross-session continuation overwrite (#86742).
+        sessionKey: sentinelPayload?.sessionKey,
+        emitHooks: sentinelPayload
+          ? {
+              beforeEmit: async () => {
+                await writeRestartSentinel(sentinelPayload);
+                sentinelWritten = true;
+              },
+              afterEmitRejected: async () => {
+                if (sentinelWritten) {
+                  await clearRestartSentinel();
+                }
+              },
+            }
+          : undefined,
+      });
+      return sessionCommandReply(
+        "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+      );
+    }
     let sentinelWritten = false;
-    scheduleGatewaySigusr1Restart({
-      reason: "/restart",
-      // Sibling session-routing guard: /restart writes a session-scoped sentinel
-      // with continuation, so the scheduler must own the pending slot under the
-      // same key to avoid cross-session continuation overwrite (#86742).
-      sessionKey: sentinelPayload?.sessionKey,
-      emitHooks: sentinelPayload
-        ? {
-            beforeEmit: async () => {
-              await writeRestartSentinel(sentinelPayload);
-              sentinelWritten = true;
-            },
-            afterEmitRejected: async () => {
-              if (sentinelWritten) {
-                await clearRestartSentinel();
-              }
-            },
-          }
-        : undefined,
-    });
-    return sessionCommandReply(
-      "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
-    );
-  }
-  let sentinelWritten = false;
-  try {
-    if (sentinelPayload) {
-      await writeRestartSentinel(sentinelPayload);
-      sentinelWritten = true;
+    try {
+      if (sentinelPayload) {
+        await writeRestartSentinel(sentinelPayload);
+        sentinelWritten = true;
+      }
+    } catch (err) {
+      logVerbose(`failed to write /restart sentinel: ${String(err)}`);
+      return sessionCommandReply(
+        "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
+      );
     }
-  } catch (err) {
-    logVerbose(`failed to write /restart sentinel: ${String(err)}`);
-    return sessionCommandReply(
-      "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
-    );
-  }
-  const restartMethod = triggerOpenClawRestart();
-  if (!restartMethod.ok) {
-    if (sentinelWritten) {
-      await clearRestartSentinel();
+    const restartMethod = triggerOpenClawRestart();
+    if (!restartMethod.ok) {
+      if (sentinelWritten) {
+        await clearRestartSentinel();
+      }
+      const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+      return sessionCommandReply(`⚠️ Restart failed (${restartMethod.method}).${detail}`);
     }
-    const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
-    return sessionCommandReply(`⚠️ Restart failed (${restartMethod.method}).${detail}`);
-  }
-  return sessionCommandReply(
-    `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
-  );
-};
+    return sessionCommandReply(
+      `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+    );
+  },
+);
 
 export { handleAbortTrigger, handleStopCommand };

@@ -277,6 +277,35 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText.length).toBeLessThan(25_000);
   });
 
+  it.each([
+    [40, "[truncated 369 chars from older context]"],
+    [70, "[truncated 340 chars from older context]\nl [＠pkg](plugin://pkg) suffix"],
+    [77, "[truncated 333 chars from older context]\n＄skill [＠pkg](plugin://pkg) suffix"],
+    [78, "[truncated 332 chars from older context]\n😀 ＄skill [＠pkg](plugin://pkg) suffix"],
+  ])(
+    "preserves the exact history suffix and omission count at a %i-char budget",
+    (cap, expected) => {
+      const messages = [
+        textMessage("assistant", "older $ignored ".repeat(20)),
+        textMessage("user", " "),
+        textMessage("assistant", "prefix 😀 $skill [@pkg](plugin://pkg) suffix"),
+        textMessage("user", "current"),
+      ];
+      const result = projectContextEngineAssemblyForCodex({
+        assembledMessages: messages,
+        originalHistoryMessages: messages,
+        prompt: "current",
+        maxRenderedContextChars: cap,
+      });
+
+      expect(
+        result.promptText.slice(result.promptContextRange?.start, result.promptContextRange?.end),
+      ).toBe(expected);
+      expect(result.assembledMessages).toBe(messages);
+      expect(result.prePromptMessageCount).toBe(messages.length);
+    },
+  );
+
   it("can scale the rendered context cap for larger Codex context windows", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: Array.from({ length: 12 }, (_, index) =>

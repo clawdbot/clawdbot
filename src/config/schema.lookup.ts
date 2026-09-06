@@ -1,3 +1,4 @@
+import type { ConfigSchemaLookupResult as ProtocolConfigSchemaLookupResult } from "../../packages/gateway-protocol/src/schema/config.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import {
@@ -45,18 +46,8 @@ const MAX_LOOKUP_PATH_SEGMENTS = 32;
 const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
 const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
-type ConfigSchemaLookupChild = {
-  key: string;
-  path: string;
-  type?: string | string[];
-  required: boolean;
-  hasChildren: boolean;
-  reloadKind?: ConfigSchemaReloadKind;
-  hint?: ConfigUiHint;
-  hintPath?: string;
-};
-
-type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+type ConfigSchemaLookupChild = ProtocolConfigSchemaLookupResult["children"][number];
+type ConfigSchemaReloadKind = NonNullable<ProtocolConfigSchemaLookupResult["reloadKind"]>;
 
 type ConfigSchemaReloadMetadata = {
   kind: ConfigSchemaReloadKind;
@@ -66,13 +57,8 @@ type ConfigSchemaReloadMetadataResolver = (
   path: string,
 ) => ConfigSchemaReloadMetadata | null | undefined;
 
-type ConfigSchemaLookupResult = {
-  path: string;
+type ConfigSchemaLookupResult = Omit<ProtocolConfigSchemaLookupResult, "schema"> & {
   schema: JsonSchemaNode;
-  reloadKind?: ConfigSchemaReloadKind;
-  hint?: ConfigUiHint;
-  hintPath?: string;
-  children: ConfigSchemaLookupChild[];
 };
 
 function normalizeLookupPath(path: string): string {

@@ -1,8 +1,8 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
-import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
@@ -21,14 +21,6 @@ function installConsoleMethodSpy(method: "log" | "warn" | "error") {
     error: method === "error" ? spy : vi.fn(),
   };
   return spy;
-}
-
-function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected console mock call");
-  }
-  return String(call[0]);
 }
 
 beforeAll(async () => {
@@ -139,7 +131,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
       log.warn("subsystem diagnostic");
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(firstMockArgAsString(warn)).toContain(`[${subsystem ?? "unknown"}]`);
+      expect(String(mockCall(warn)[0])).toContain(`[${subsystem ?? "unknown"}]`);
     },
   );
 
@@ -255,7 +247,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.warn(`token=${secret}`);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(warn);
+    const written = String(mockCall(warn)[0]);
     expect(written).not.toContain(secret);
     expect(written).toMatch(/sk-sup…2345|\*\*\*/);
   });
@@ -269,7 +261,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.error(`Authorization failed: ${bearer}`);
 
     expect(error).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(error);
+    const written = String(mockCall(error)[0]);
     expect(written).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(written).toContain("Bearer ");
   });
@@ -289,7 +281,7 @@ describe("createSubsystemLogger().isEnabled", () => {
         log.info(`provider API_KEY=${secret}`);
 
         expect(logSpy).toHaveBeenCalledTimes(1);
-        const written = firstMockArgAsString(logSpy);
+        const written = String(mockCall(logSpy)[0]);
         expect(written).not.toContain(secret);
         expect(written).toContain("API_KEY=***");
         expect(written).toContain("[auth]");
@@ -307,7 +299,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.raw(`raw token ${secret}`);
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(logSpy);
+    const written = String(mockCall(logSpy)[0]);
     expect(written).not.toContain(secret);
     expect(written).toContain("sk-raw…3456");
   });
@@ -319,7 +311,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     createSubsystemLogger("gateway/auth").raw("raw diagnostic");
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(firstMockArgAsString(logSpy))).toMatchObject({
+    expect(JSON.parse(String(mockCall(logSpy)[0]))).toMatchObject({
       level: "info",
       subsystem: "gateway/auth",
       message: "raw diagnostic",
@@ -344,7 +336,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     createSubsystemLogger("gateway/auth").warn("authentication retry", { attempt: 2 });
 
-    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+    expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
       level: "warn",
       subsystem: "gateway/auth",
       message: "authentication retry",
@@ -371,39 +363,41 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
   });
 
-  it("reuses its file child until logger invalidation advances the generation", () => {
+  it("keeps a retained logger on the new file after reset", async () => {
     const firstFile = logPathTracker.nextPath();
     const secondFile = logPathTracker.nextPath();
-    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstFile });
     const log = createSubsystemLogger("diagnostics");
 
     log.info("first line");
     log.info("second line");
-    expect(getSubLogger).toHaveBeenCalledTimes(1);
 
     resetLogger();
     setLoggerOverride({ level: "info", consoleLevel: "silent", file: secondFile });
     log.info("after reset");
-    expect(getSubLogger).toHaveBeenCalledTimes(2);
+    await testApi.flushFileLogQueueForTests();
+    expect(fs.readFileSync(firstFile, "utf8")).toContain("first line");
+    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("after reset");
+    expect(fs.readFileSync(secondFile, "utf8")).toContain("after reset");
   });
 
-  it("publishes applied config and rebuilds its child for the new generation", () => {
+  it("applies the new file and level to a retained logger", async () => {
     const firstFile = logPathTracker.nextPath();
     const secondFile = logPathTracker.nextPath();
     vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
     applyLoggingConfig({ level: "info", consoleLevel: "silent", file: firstFile });
-    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
     const log = createSubsystemLogger("diagnostics");
 
     log.info("first line");
     log.info("second line");
-    expect(getSubLogger).toHaveBeenCalledTimes(1);
     expect(log.isEnabled("debug", "file")).toBe(false);
 
     applyLoggingConfig({ level: "debug", consoleLevel: "silent", file: secondFile });
     expect(log.isEnabled("debug", "file")).toBe(true);
     log.debug("after applied config");
-    expect(getSubLogger).toHaveBeenCalledTimes(2);
+    await testApi.flushFileLogQueueForTests();
+    expect(fs.readFileSync(firstFile, "utf8")).toContain("first line");
+    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("after applied config");
+    expect(fs.readFileSync(secondFile, "utf8")).toContain("after applied config");
   });
 });

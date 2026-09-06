@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {},
   "sessionRouteStateOwners": [
     {
@@ -17,7 +18,6 @@
       ]
     }
   ],
-  "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
   },

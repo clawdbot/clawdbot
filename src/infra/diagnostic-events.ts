@@ -39,6 +39,33 @@ type DiagnosticBaseEvent = {
   trace?: DiagnosticTraceContext;
 };
 
+/** Payload-free facts from authenticated Gateway WebSocket request owners. */
+type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
+  type: "gateway.rpc";
+  /** Canonical core method name, or a fixed other/unknown bucket. */
+  method: string;
+} & (
+    | { phase: "received" }
+    | {
+        phase: "response";
+        outcome: "ok" | "error" | "unavailable" | "suppressed";
+        durationMs: number;
+      }
+    | {
+        phase: "handler";
+        outcome: "returned" | "threw";
+        durationMs: number;
+        admissionMs: number;
+      }
+    | {
+        phase: "dispatch";
+        outcome: "returned" | "threw" | "rejected" | "cancelled";
+        durationMs: number;
+        queueWaitMs?: number;
+        response: "none" | "sent" | "unavailable" | "suppressed";
+      }
+  );
+
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   type: "model.usage";
   sessionKey?: string;
@@ -408,6 +435,17 @@ type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
   toolCallId?: string;
   itemId?: string;
   firstModelCallStarted?: boolean;
+};
+
+type DiagnosticGatewayEventLoopSampleEvent = DiagnosticBaseEvent & {
+  type: "gateway.event_loop.sample";
+  intervalMs: number;
+  delayMaxMs: number;
+};
+
+type DiagnosticGcEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.gc";
+  durationMs: number;
 };
 
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
@@ -799,6 +837,7 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
 };
 
 export type DiagnosticEventPayload =
+  | DiagnosticGatewayRpcEvent
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
@@ -824,6 +863,8 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticRunExecutionPhaseEvent
+  | DiagnosticGatewayEventLoopSampleEvent
+  | DiagnosticGcEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -971,6 +1012,9 @@ const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "diagnostic.gc",
+  "gateway.event_loop.sample",
+  "gateway.rpc",
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
@@ -1622,7 +1666,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
       }
       listener(event);
     },
-    { exclude: ["log.record"] },
+    { exclude: ["log.record", "gateway.rpc", "gateway.event_loop.sample", "diagnostic.gc"] },
   );
 }
 

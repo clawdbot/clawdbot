@@ -14,8 +14,9 @@ export class SkillLibraryError extends Error {
     readonly code: SkillLibraryErrorCode,
     message: string,
     readonly currentRevision?: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "SkillLibraryError";
   }
 }

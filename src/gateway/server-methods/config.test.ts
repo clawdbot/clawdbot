@@ -205,21 +205,31 @@ afterEach(() => {
 });
 
 describe("config application settlement", () => {
-  it("does not acknowledge a persisted write before its runtime application", async () => {
+  it.each(
+    (["config.patch", "config.apply"] as const).flatMap((method) =>
+      [
+        { name: "hooks", config: { hooks: { enabled: true } } },
+        {
+          name: "new Gateway HTTP settings",
+          config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
+        },
+      ].map(({ name, config }) => ({ method, name, config })),
+    ),
+  )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
     let settleApplication!: (status: "applied") => void;
     const application = new Promise<"applied">((resolve) => {
       settleApplication = resolve;
     });
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => ({
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
       path: "/tmp/openclaw.json",
-      config: { hooks: { enabled: true } },
+      config,
       hash: "settled-hash",
-      application,
+      application: params.awaitRuntimeApplication ? application : undefined,
       queueFollowUp: vi.fn(),
     }));
 
-    const { harness, operation } = startConfigWrite("config.patch", {
-      raw: { hooks: { enabled: true } },
+    const { harness, operation } = startConfigWrite(method, {
+      raw: config,
       baseHash: "base-hash",
     });
     await vi.waitFor(() =>

@@ -2,11 +2,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectSourceCheckoutPluginBuildEntries,
+  mapPluginCatalogEntries,
+} from "./lib/bundled-plugin-build-entries.mjs";
+import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
+  resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
@@ -16,6 +21,7 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const PACKAGE_ICON_PATH = path.join("assets", "icon.png");
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -33,12 +39,8 @@ function rewritePackageExtensions(entries: unknown, extension: string): string[]
   }
 
   return entries
-    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, extension);
-      return `./${rewritten}`;
-    });
+    .map((entry) => rewritePackageEntry(entry, extension))
+    .filter((entry) => entry !== undefined);
 }
 
 function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
@@ -191,33 +193,22 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
-function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string) {
-  const sourceModules = path.join(pluginDir, "node_modules");
-  if (!fs.existsSync(sourceModules)) {
+function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
+  const source = path.join(pluginDir, PACKAGE_ICON_PATH);
+  const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
+  let sourceIsFile = false;
+  try {
+    sourceIsFile = fs.lstatSync(source).isFile();
+  } catch {
+    // Missing or unreadable presentation assets must not invalidate the plugin package.
+  }
+  if (!sourceIsFile) {
+    removePathIfExists(target);
     return;
   }
-  const packages = fs.readdirSync(sourceModules).flatMap((name) => {
-    if (name.startsWith(".") && name !== ".bin") {
-      return [];
-    }
-    return name.startsWith("@")
-      ? fs.readdirSync(path.join(sourceModules, name)).map((child) => path.join(name, child))
-      : [name];
-  });
-  // An outer node_modules junction misresolves pnpm's relative links on Windows.
-  // Link canonical package roots individually; keep scopes real and payloads source-owned.
-  // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
-  for (const name of packages) {
-    const target = path.join(distNodeModules, name);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const canonical = fs.realpathSync(path.join(sourceModules, name));
-    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
-    fs.symlinkSync(
-      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
-      target,
-      "junction",
-    );
-  }
+  removePathIfExists(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
 }
 
 /**
@@ -278,7 +269,9 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
       const mergedManifest = mergeGeneratedChannelConfigs(
-        manifest,
+        mapPluginCatalogEntries(manifest, (entry: string) =>
+          rewritePackageEntry(entry, buildEntry.runtimeExtension),
+        ),
         pluginId ? generatedChannelConfigsByPlugin.get(pluginId) : undefined,
       );
       // Generated skill assets live under a dedicated dist-owned directory.
@@ -293,18 +286,26 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         ? { ...mergedManifest, skills: copiedSkills }
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+      copyPackageIcon(pluginDir, distPluginDir);
     } else {
       removeFileIfExists(distManifestPath);
+      removeFileIfExists(path.join(distPluginDir, PACKAGE_ICON_PATH));
     }
 
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-    if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+    if (packageJson && isRecord(packageJson.openclaw)) {
       const extension = buildEntry.runtimeExtension;
+      const channel = resolvePluginRuntimeChannelMetadata(packageJson.openclaw.channel, {
+        pluginDir: dirent.name,
+        runtimeBuildOutputs: rewritePackageExtensions(buildEntry.sourceEntries, extension) ?? [],
+        runtimeRoot: ".",
+      });
       packageJson.openclaw = {
         ...packageJson.openclaw,
+        ...(channel ? { channel } : {}),
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
           ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }

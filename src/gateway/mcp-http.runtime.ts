@@ -117,6 +117,7 @@ function resolveMcpLoopbackTools(
   } = params;
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
+    nativeCronCreatorToolAllowlist: params.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",

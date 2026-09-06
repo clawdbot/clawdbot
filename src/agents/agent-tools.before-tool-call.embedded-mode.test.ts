@@ -4,6 +4,7 @@
  * plugin hook decisions.
  */
 
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +21,13 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
+import { proposeUpdateSkill } from "../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  resolveBeforeToolCallApprovalOutcome,
+  resolveSkillWorkshopApprovalForFinalParams,
+} from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -85,7 +92,7 @@ function requireBeforeToolCall(
 }
 
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
-  let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
+  let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall" | "runSkillProposalChanged">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
@@ -94,6 +101,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
       runBeforeToolCall: runBeforeToolCallMock,
+      runSkillProposalChanged: vi.fn<HookRunner["runSkillProposalChanged"]>(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as HookRunner);
     mockCallGatewayTool.mockReset();
@@ -644,9 +652,9 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("skill_workshop approval request");
     expect(approvalCall.request.pluginId).toBeUndefined();
-    expect(approvalCall.request.title).toBe("Apply workspace skill proposal");
+    expect(approvalCall.request.title).toBe("Apply Skill Workshop proposal");
     expect(approvalCall.request.description).toBe(
-      "Apply a pending workspace skill proposal into live workspace skills.",
+      "Apply a pending proposal inside your agent's Workshop directory.",
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
@@ -690,10 +698,68 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       const adjustedApprovalCall = requireApprovalRequestCall(
         "skill_workshop adjusted approval request",
       );
-      expect(adjustedApprovalCall.request.title).toBe("Apply workspace skill proposal");
+      expect(adjustedApprovalCall.request.title).toBe("Apply Skill Workshop proposal");
       expect(adjustedApprovalCall.request.toolName).toBe("skill_workshop");
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("does not expose another agent's proposal metadata in final approval", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-agent-approval-scope-",
+    });
+    try {
+      const config = {
+        skills: { workshop: { approvalPolicy: "pending" as const } },
+      };
+      const skillsRoot = resolveWorkshopSkillsDir(config, "agent-a", testState.env);
+      const skillDir = `${skillsRoot}/agent-a-private-procedure`;
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        `${skillDir}/SKILL.md`,
+        "---\nname: agent-a-private-procedure\ndescription: Agent A private description\n---\n\n# Agent A private body\n",
+        "utf8",
+      );
+      const proposal = await proposeUpdateSkill({
+        config,
+        agentId: "agent-a",
+        workspaceDir: testState.workspaceDir,
+        env: testState.env,
+        skillName: "agent-a-private-procedure",
+        description: "Agent A private description",
+        content: "# Agent A private body\n",
+      });
+      mockCallGatewayTool.mockResolvedValueOnce({
+        id: "agent-b-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+
+      const result = await resolveSkillWorkshopApprovalForFinalParams({
+        toolName: "skill_workshop",
+        params: { action: "apply", proposal_id: proposal.record.id },
+        toolCallId: "call-agent-b-apply",
+        ctx: {
+          agentId: "agent-b",
+          workspaceDir: testState.workspaceDir,
+          config,
+        },
+      });
+
+      expect(result).toMatchObject({
+        blocked: false,
+        approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+      const approvalCall = requireApprovalRequestCall(
+        "agent-b final skill_workshop approval request",
+      );
+      expect(approvalCall.request.description).toBe(
+        "Apply a pending proposal inside your agent's Workshop directory.",
+      );
+      expect(approvalCall.request.description).not.toContain("Agent A private");
+    } finally {
+      await testState.cleanup();
     }
   });
 
@@ -729,7 +795,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request).toMatchObject({
       title: "Restore previous skill collection",
       description:
-        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
       severity: "warning",
       toolName: "skill_workshop",
       toolCallId: "call-skill-restore",

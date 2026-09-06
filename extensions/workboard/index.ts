@@ -10,6 +10,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -23,6 +24,7 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    const changeEvents = createWorkboardChangeEventService(store);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
       gateway: api.runtime.gateway,
@@ -32,6 +34,11 @@ export default definePluginEntry({
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+    });
+    registerWorkboardStoreLifecycle(api, store, () => {
+      changeEvents.stop();
+      automationNudge.stop();
+      lifecycleSync.stop();
     });
     api.session.controls.registerControlUiDescriptor({
       surface: "tab",
@@ -62,27 +69,31 @@ export default definePluginEntry({
     });
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
-    api.registerService(createWorkboardChangeEventService(store));
+    api.registerService(changeEvents);
     api.registerService(automationNudge);
     api.registerService(lifecycleSync);
     api.on("gateway_start", () => lifecycleSync.onGatewayStart());
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
-    api.on("subagent_ended", async (event) => {
-      await syncWorkboardSubagentEnded({
-        store,
-        worktrees: api.runtime.worktrees,
-        event,
-        onMatched: automationNudge.nudge,
-      });
-    });
-    api.on("agent_end", async (event, context) => {
-      await syncWorkboardAgentEnded({
-        store,
-        event,
-        context,
-        onMatched: automationNudge.nudge,
-      });
-    });
+    api.on("subagent_ended", (event) =>
+      store.runOperation(async () => {
+        await syncWorkboardSubagentEnded({
+          store,
+          worktrees: api.runtime.worktrees,
+          event,
+          onMatched: automationNudge.nudge,
+        });
+      }),
+    );
+    api.on("agent_end", (event, context) =>
+      store.runOperation(async () => {
+        await syncWorkboardAgentEnded({
+          store,
+          event,
+          context,
+          onMatched: automationNudge.nudge,
+        });
+      }),
+    );
     api.registerCli(
       async ({ program }) => {
         const { registerWorkboardCli } = await import("./src/cli.js");
@@ -101,7 +112,7 @@ export default definePluginEntry({
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(
-          createWorkboardTools({ api, context, store }),
+          createWorkboardTools({ context, store }),
           context,
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),

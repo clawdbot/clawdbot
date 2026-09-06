@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the real CI development binary, without installing or connecting.
+"""Exercise the real CI development binary with isolated first-run state.
 
 Run as a non-root user with python3-gi, gir1.2-atspi-2.0, at-spi2-core,
 libatk-adaptor, xvfb, xauth and dbus-x11 installed:
@@ -7,6 +7,7 @@ libatk-adaptor, xvfb, xauth and dbus-x11 installed:
 
 Use the unbundled 0.1.0 development build: local setup on a release build
 intentionally starts installation instead of showing the channel chooser.
+--local-start-failure uses a fixture CLI to exercise failed local startup.
 """
 
 import argparse
@@ -20,8 +21,20 @@ import tempfile
 import time
 
 
-def exercise(app, Atspi, GLib):
+START_FAILURE = "Fixture: systemd user service is unavailable."
+
+
+def exercise(app, Atspi, GLib, *, remote_only, local_start_failure):
     last_headings = set()
+
+    def text_content(node):
+        text = node.get_text_iface()
+        if text is None:
+            return None
+        # Ubuntu 24's GI bindings dispatch text.get_text(...) back through
+        # Accessible.get_text(). Calling the interface method is stable on both
+        # the Ubuntu 22 and 24 AT-SPI API shapes.
+        return Atspi.Text.get_text(text, 0, -1)
 
     def nodes():
         desktop = Atspi.get_desktop(0)
@@ -61,8 +74,7 @@ def exercise(app, Atspi, GLib):
                     if actual_role == "heading":
                         last_headings.add(name)
                     if role is None:
-                        text = node.get_text_iface()
-                        matches = text is not None and text.get_text(0, -1) == label
+                        matches = text_content(node) == label
                     else:
                         matches = actual_role == role and (
                             name.startswith(label) if prefix else name == label
@@ -94,10 +106,27 @@ def exercise(app, Atspi, GLib):
 
     def empty_entry(label):
         node = wait(label, "entry")
-        if node.get_text_iface().get_text(0, -1):
+        if text_content(node):
             raise RuntimeError(f"Expected an empty {label!r}; refusing a remote connection")
 
     wait("Welcome to OpenClaw", "heading")
+    if local_start_failure:
+        for attempt in range(2):
+            click("Get started")
+            wait("Where should your assistant live?", "heading")
+            click("On this computer", "toggle button", prefix=True)
+            click("Continue")
+            wait("OpenClaw needs attention", "heading")
+            wait(START_FAILURE)
+            wait("Try again", "push button")
+            if attempt == 0:
+                click("Try again")
+                wait("Welcome to OpenClaw", "heading")
+        calls = Path("cli-calls.log").read_text().splitlines()
+        if calls.count("gateway install --json") != 2:
+            raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
+        print("PASS: failed local startup reports its error and stays retryable", flush=True)
+        return
     click("Get started")
     wait("Where should your assistant live?", "heading")
     click("On another computer", "toggle button", prefix=True)
@@ -111,6 +140,9 @@ def exercise(app, Atspi, GLib):
     wait("Gateway port", "entry")
     click("Connect to Gateway")
     wait("Enter an SSH target to continue.")
+    if remote_only:
+        print("PASS: native first-run remote choices", flush=True)
+        return
     click("Back")
     wait("Welcome to OpenClaw", "heading")
     click("Get started")
@@ -118,10 +150,11 @@ def exercise(app, Atspi, GLib):
     click("Continue")
     # Keeping missingCli (not unconfigured) is what preserves local installation.
     wait("Choose a release channel", "heading")
-    wait("RELEASE CHANNEL", "combo box")
+    click("RELEASE CHANNEL", "combo box")
+    # WebKit exposes native options as menu items or table cells across distros.
+    # Their visible text and selected state express the channel choice directly.
     wait(
         "Development",
-        "menu item",
         predicate=lambda node: node.get_state_set().contains(Atspi.StateType.SELECTED),
     )
     wait("Install OpenClaw", "push button")
@@ -132,7 +165,7 @@ def interrupted(signum, _frame):
     raise RuntimeError(f"Native first-run smoke interrupted by signal {signum}")
 
 
-def drive(binary):
+def drive(binary, *, remote_only, local_start_failure, artifacts_dir):
     try:
         import gi
 
@@ -145,6 +178,32 @@ def drive(binary):
     desktop = Atspi.get_desktop(0)
     if desktop is None or desktop.get_child_count():
         raise RuntimeError("AT-SPI needs an empty private accessibility session")
+
+    def capture(outcome):
+        if artifacts_dir is None:
+            return
+        scenario = "local-start-failure" if local_start_failure else "choices"
+        screenshot = artifacts_dir / f"{scenario}-{outcome}.png"
+        started = time.monotonic()
+        while True:
+            subprocess.run(
+                ["/usr/bin/import", "-window", "root", str(screenshot)],
+                check=True, timeout=10,
+            )
+            colors = int(subprocess.check_output(
+                ["/usr/bin/identify", "-format", "%k", str(screenshot)],
+                text=True, timeout=10,
+            ))
+            elapsed = time.monotonic() - started
+            # AT-SPI runs ahead of painting, including a stale first frame.
+            # Allow one second to settle; black-root/blank-window frames have two colors.
+            if elapsed >= 1 and colors > 2:
+                print(f"Screenshot: {screenshot} (captured after {elapsed:.2f}s)", flush=True)
+                return
+            if elapsed >= 5:
+                raise RuntimeError("Native window remained blank while capturing proof")
+            time.sleep(0.1)
+
     with Path("app.log").open("wb") as log:
         app = subprocess.Popen(
             [str(binary)],
@@ -153,7 +212,19 @@ def drive(binary):
             stderr=subprocess.STDOUT,
         )
         try:
-            exercise(app, Atspi, GLib)
+            exercise(
+                app, Atspi, GLib,
+                remote_only=remote_only,
+                local_start_failure=local_start_failure,
+            )
+        except BaseException:
+            try:
+                capture("failed")
+            except (OSError, subprocess.SubprocessError) as error:
+                print(f"Could not capture failed native state: {error}", file=sys.stderr)
+            raise
+        else:
+            capture("passed")
         finally:
             if app.poll() is None:
                 app.terminate()
@@ -169,6 +240,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
     parser.add_argument("--driver", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--artifacts-dir", type=Path,
+        help="Retain a screenshot of the final native state (requires ImageMagick)",
+    )
+    scenarios = parser.add_mutually_exclusive_group()
+    scenarios.add_argument(
+        "--remote-only",
+        action="store_true",
+        help="Stop after validating release-safe remote setup choices",
+    )
+    scenarios.add_argument(
+        "--local-start-failure",
+        action="store_true",
+        help="Verify failed startup with an installed CLI remains visible and retryable",
+    )
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() == 0:
         parser.error("Run on Linux as a non-root user; do not disable the WebKit sandbox")
@@ -180,9 +266,19 @@ def main():
         parser.error("The native app binary must be executable")
     if shutil.which("openclaw", path="/usr/bin:/bin"):
         parser.error("The minimal system PATH must not contain an OpenClaw CLI")
+    if args.artifacts_dir:
+        args.artifacts_dir = args.artifacts_dir.resolve()
+        args.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        if not all(os.access(f"/usr/bin/{tool}", os.X_OK) for tool in ("import", "identify")):
+            parser.error("Screenshot capture requires ImageMagick's import and identify")
 
     if args.driver:
-        drive(binary)
+        drive(
+            binary,
+            remote_only=args.remote_only,
+            local_start_failure=args.local_start_failure,
+            artifacts_dir=args.artifacts_dir,
+        )
         return
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -216,10 +312,38 @@ def main():
             path = root / relative
             path.mkdir(mode=0o700, parents=True)
             env[variable] = str(path)
+        if args.local_start_failure:
+            cli = root / ".openclaw/bin/openclaw"
+            cli.parent.mkdir(mode=0o700, parents=True)
+            cli.write_text(
+                "#!/usr/bin/python3\n"
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "command = ' '.join(sys.argv[1:])\n"
+                "with Path('cli-calls.log').open('a') as log: log.write(command + '\\n')\n"
+                "if command == '--version':\n"
+                "    print('OpenClaw fixture')\n"
+                "elif command == 'gateway status --json':\n"
+                "    print(json.dumps({'service': {'loaded': False}, 'rpc': {'ok': False}}))\n"
+                "elif command == 'gateway install --json':\n"
+                f"    print({START_FAILURE!r}, file=sys.stderr)\n"
+                "    sys.exit(1)\n"
+                "else:\n"
+                "    raise RuntimeError('Unexpected CLI command: ' + command)\n"
+            )
+            cli.chmod(0o700)
         # Native AT-SPI calls can block Python signal handlers. Keep the deadline
         # and cleanup outside that process, with its app in the same owned group.
+        command = [sys.executable, str(Path(__file__).resolve()), "--driver"]
+        if args.remote_only:
+            command.append("--remote-only")
+        if args.local_start_failure:
+            command.append("--local-start-failure")
+        if args.artifacts_dir:
+            command.extend(["--artifacts-dir", str(args.artifacts_dir)])
+        command.append(str(binary))
         worker = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--driver", str(binary)],
+            command,
             cwd=root,
             env=env,
             stdin=subprocess.DEVNULL,

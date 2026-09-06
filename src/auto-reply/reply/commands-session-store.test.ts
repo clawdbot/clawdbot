@@ -301,6 +301,71 @@ describe("commands session store persistence", () => {
     });
   });
 
+  it("keeps the legacy pending-reset marker through a command snapshot write", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:tombstone-command";
+      const persistedEntry: SessionEntry = {
+        sessionId: "tombstone-session",
+        updatedAt: 0,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, { ...persistedEntry });
+      const entry: SessionEntry = { ...persistedEntry, sendPolicy: "allow" };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+
+      await expect(
+        persistCommandSession({
+          initialSessionEntry: { ...persistedEntry },
+          sessionEntry: entry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["sendPolicy"],
+        }),
+      ).resolves.toBe(true);
+
+      const persisted = loadSessionEntry({ storePath, sessionKey });
+      expect(persisted).toMatchObject({
+        sessionId: "tombstone-session",
+        sendPolicy: "allow",
+        updatedAt: 0,
+      });
+      expect(sessionStore[sessionKey]?.updatedAt).toBe(0);
+    });
+  });
+
+  it("keeps the legacy pending-reset marker through abort persistence", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:tombstone-abort";
+      const persistedEntry: SessionEntry = {
+        sessionId: "tombstone-abort-session",
+        updatedAt: 0,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, { ...persistedEntry });
+      const entry: SessionEntry = { ...persistedEntry };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+
+      await expect(
+        persistAbortTargetEntry({
+          entry,
+          key: sessionKey,
+          sessionStore,
+          storePath,
+          abortCutoff: { messageSid: "77", timestamp: 456 },
+        }),
+      ).resolves.toBe(true);
+
+      const persisted = loadSessionEntry({ storePath, sessionKey });
+      expect(persisted).toMatchObject({
+        sessionId: "tombstone-abort-session",
+        abortedLastRun: true,
+        abortCutoffMessageSid: "77",
+        abortCutoffTimestamp: 456,
+        updatedAt: 0,
+      });
+      expect(entry.updatedAt).toBe(0);
+    });
+  });
+
   it("falls back to the supplied abort target when the persisted row is missing", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:abort-target";

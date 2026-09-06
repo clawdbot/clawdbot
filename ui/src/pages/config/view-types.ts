@@ -117,8 +117,8 @@ export type ConfigProps = {
   setFontUi: (font: TypefaceId | undefined) => void;
   setFontChat: (font: TypefaceId | undefined) => void;
   accent: string | undefined;
-  accentOverridden: boolean;
   accentProvenance: ServerUiPrefProvenance;
+  accentResetValue: string | undefined;
   systemLocale: Locale;
   localeOverride?: Locale;
   localeOverridden: boolean;

@@ -1,6 +1,6 @@
 // Database-bound delivery queue serialization and mutations used by shared transactions.
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
@@ -41,16 +42,10 @@ const deliveryQueueRowColumns = [
   "recovery_state",
 ] as const;
 
-export type DeliveryQueueSqliteRow = {
-  id: string;
-  entry_json: string;
-  enqueued_at: number | bigint;
-  retry_count: number | bigint;
-  last_attempt_at: number | bigint | null;
-  last_error: string | null;
-  platform_send_started_at: number | bigint | null;
-  recovery_state: string | null;
-};
+type DeliveryQueueSqliteRow = Pick<
+  Selectable<DeliveryQueueTable>,
+  (typeof deliveryQueueRowColumns)[number]
+>;
 
 type DeliveryQueueRowMetadata = {
   entryKind?: string;
@@ -116,47 +111,46 @@ export function terminalizeBoundDeliveryQueueEntry(
   now: number,
   expectedStatus: "pending" | "failed" = "pending",
 ): boolean {
-  if (!failedEntry) {
-    return (
-      // sqlite-allow-raw: Exact JSON CAS keeps deletion atomic on the caller's transaction.
-      db
-        .prepare(
-          `DELETE FROM delivery_queue_entries
-          WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
-        )
-        .run(queueName, id, expectedStatus, expectedJson).changes === 1
-    );
-  }
-  return (
-    // sqlite-allow-raw: Exact JSON CAS keeps compaction atomic on the caller's transaction.
-    db
-      .prepare(
-        `UPDATE delivery_queue_entries SET status = 'failed', entry_kind = NULL,
-        session_key = NULL, channel = NULL, target = NULL, account_id = NULL,
-        last_attempt_at = NULL, last_error = NULL, platform_send_started_at = NULL,
-        recovery_state = ?, entry_json = ?, enqueued_at = ?, updated_at = ?, failed_at = ?
-      WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
-      )
-      .run(
-        failedEntry.recoveryState ?? null,
-        JSON.stringify(failedEntry),
-        now,
-        now,
-        now,
-        queueName,
-        id,
-        expectedStatus,
-        expectedJson,
-      ).changes === 1
-  );
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(db);
+  const expected = { queue_name: queueName, id, status: expectedStatus, entry_json: expectedJson };
+  const query = failedEntry
+    ? queueDb
+        .updateTable("delivery_queue_entries")
+        .where((eb) => eb.and(expected))
+        .set({
+          status: "failed",
+          entry_kind: null,
+          session_key: null,
+          channel: null,
+          target: null,
+          account_id: null,
+          last_attempt_at: null,
+          last_error: null,
+          platform_send_started_at: null,
+          recovery_state: failedEntry.recoveryState ?? null,
+          entry_json: JSON.stringify(failedEntry),
+          enqueued_at: now,
+          updated_at: now,
+          failed_at: now,
+        })
+    : queueDb.deleteFrom("delivery_queue_entries").where((eb) => eb.and(expected));
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
 function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
-  // sqlite-allow-raw: This bounded age delete runs on the caller's existing database handle.
-  db.prepare(`DELETE FROM delivery_queue_entries WHERE status = 'completed'
-    AND enqueued_at < ? AND (recovery_state IS NULL OR recovery_state NOT IN (
-      'completed_permanent', 'completed_bounded'
-    ))`).run(now - COMPLETED_TOMBSTONE_RETENTION_MS);
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(db)
+      .deleteFrom("delivery_queue_entries")
+      .where("status", "=", "completed")
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+        ]),
+      ),
+  );
 }
 
 type BoundDeliveryQueueEntry = {
@@ -178,13 +172,13 @@ export function inflateDeliveryQueueRow(
   return {
     ...parsed,
     id: row.id,
-    enqueuedAt: Number(row.enqueued_at),
-    retryCount: Number(row.retry_count),
-    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: Number(row.last_attempt_at) }),
+    enqueuedAt: sqliteNumber(row.enqueued_at),
+    retryCount: sqliteNumber(row.retry_count),
+    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: sqliteNumber(row.last_attempt_at) }),
     ...(row.last_error == null ? {} : { lastError: row.last_error }),
     ...(row.platform_send_started_at == null
       ? {}
-      : { platformSendStartedAt: Number(row.platform_send_started_at) }),
+      : { platformSendStartedAt: sqliteNumber(row.platform_send_started_at) }),
     ...(row.recovery_state == null ? {} : { recoveryState: row.recovery_state }),
   };
 }
@@ -315,8 +309,6 @@ export function loadDeliveryQueueEntryInDatabase(
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
   const query = deliveryQueueEntriesQuery(database, [queueName], mode).where("id", "=", id);
-  const row = executeSqliteQueryTakeFirstSync(database.db, query) as
-    | DeliveryQueueSqliteRow
-    | undefined;
+  const row = executeSqliteQueryTakeFirstSync(database.db, query);
   return row ? inflateDeliveryQueueRow(row) : null;
 }

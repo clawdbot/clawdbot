@@ -364,6 +364,17 @@ describe("chat transcript rendering", () => {
       "Archived by profile-bob",
     );
 
+    sessions.sessions[0] = {
+      ...archivedSession,
+      archivedBy: undefined,
+      archiveReason: "active-session-cap",
+    };
+    props.selectedSession = sessions.sessions[0];
+    rerender();
+    expect(requireElement(container, ".chat-notice").textContent).toContain(
+      "Automatically archived because the active-session limit was reached",
+    );
+
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
     props.selectedSession = sessions.sessions[0];
     rerender();

@@ -7,7 +7,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { describe, expect, vi } from "vitest";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+import { parseCLI } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
   isVitestWorkerDeclaration,
@@ -778,13 +779,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: false },
+    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
     { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
-  ])("classifies metadata requests for $args", ({ args, metadata }) => {
-    expect(isVitestWorkerMetadataRequest(args)).toBe(metadata);
+    { args: ["--browser.headless", "run", "--version"], metadata: false },
+    { args: ["--browser.headless", "--version"], metadata: true },
+  ])("classifies native execution requests for $args", ({ args, metadata }) => {
+    const execution = parseVitestExecutionArgs(args, parseCLI);
+    expect(execution === null).toBe(metadata);
+    if (!metadata) {
+      expect(execution?.filter).toEqual(parseCLI(["vitest", ...args]).filter);
+    }
   });
 
   it("shares one lazy build across projects and supports Promise config factories with the runner loader", ({
@@ -797,16 +804,36 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           workerArtifacts.fixtureLifetime.run(async () => {
             const directory = workerArtifacts.fixtureDirectory();
             const { config } = workerProbe(directory);
-            const result = await node([
-              "scripts/run-vitest.mjs",
-              "run",
-              ...(configForm === "separate" ? ["--config", config] : [`--config=${config}`]),
-              "--configLoader",
-              "runner",
-              "--",
-              path.join(directory, "child.test.ts"),
-            ]);
+            const budgetReceipt = path.join(directory, "compiler-budget.json");
+            const preload = writeFixture(
+              directory,
+              "compiler-budget.mjs",
+              `import fs from "node:fs";
+if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
+  fs.writeFileSync(${JSON.stringify(budgetReceipt)}, JSON.stringify([process.env.RAYON_NUM_THREADS, process.env.TOKIO_WORKER_THREADS]));
+}`,
+            );
+            const result = await node(
+              [
+                "scripts/run-vitest.mjs",
+                "run",
+                ...(configForm === "separate" ? ["--config", config] : [`--config=${config}`]),
+                "--configLoader",
+                "runner",
+                "--",
+                path.join(directory, "child.test.ts"),
+              ],
+              root,
+              {
+                ...process.env,
+                OPENCLAW_VITEST_MAX_WORKERS: "2",
+                RAYON_NUM_THREADS: "",
+                TOKIO_WORKER_THREADS: "",
+                NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${pathToFileURL(preload).href}`,
+              },
+            );
             expect(result.code, result.stderr + result.stdout).toBe(0);
+            expect(JSON.parse(fs.readFileSync(budgetReceipt, "utf8"))).toEqual(["2", "2"]);
             expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
             const generations = fs
               .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
@@ -1183,7 +1210,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default {plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
     `,
       );
       const handle = spawnWatchedVitestProcess({

@@ -60,12 +60,11 @@ const defaults: Record<string, string> = {
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
   HOSTED_RUNNER_STRIPES: "false",
   RUNNER_PROFILE: "github",
-  PR_BASE_SHA: base,
-  DIFF_BASE_SHA: base,
   PROTOCOL_SINCE_BASE_SHA: base,
   RATCHET_PR_HEAD_SHA: candidate,
 };
@@ -136,6 +135,7 @@ export async function runCiGitStep(options: {
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
+  checkoutBeforeStep?: boolean;
   cancelDuringCleanup?: boolean;
   cleanupCancelMatch?: string;
   startupDelay?: { tree: number };
@@ -398,7 +398,7 @@ def main():`,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: Boolean(options.prepare || externalOwner),
+          consumers: Boolean(options.prepare || options.checkoutBeforeStep || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           cleanupCancelMatch: options.cleanupCancelMatch,
           baseAvailableAfter: options.baseAvailableAfter,
@@ -447,6 +447,11 @@ ${run}`;
         writeFileSync(path.join(root, "prepare.sh"), renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      if (options.checkoutBeforeStep) {
+        const checkout = readCiCheckoutStep(options.job ?? "checks-fast-core");
+        writeFileSync(path.join(root, "bootstrap.sh"), renderGitTestClock(checkout.run, clock));
+        run = `bash --noprofile --norc -eo pipefail "$TMPDIR/bootstrap.sh"\n${run}`;
       }
       if (options.performance) {
         const mapfileShim =

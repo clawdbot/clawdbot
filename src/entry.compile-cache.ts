@@ -110,17 +110,12 @@ type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
-  env?: NodeJS.ProcessEnv;
-  execArgv?: string[];
-  execPath?: string;
   installRoot: string;
-  argv?: string[];
   compileCacheDir?: string;
-  platform?: NodeJS.Platform;
 }): OpenClawCompileCacheRespawnPlan | undefined {
-  const env = params.env ?? process.env;
-  const argv = params.argv ?? process.argv;
-  const platform = params.platform ?? process.platform;
+  const env = process.env;
+  const argv = process.argv;
+  const platform = process.platform;
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
@@ -140,8 +135,8 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
-    command: params.execPath ?? process.execPath,
-    args: [...(params.execArgv ?? process.execArgv), params.currentFile, ...argv.slice(2)],
+    command: process.execPath,
+    args: [...process.execArgv, params.currentFile, ...argv.slice(2)],
     env: nextEnv,
     detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
@@ -212,14 +207,4 @@ export function enableOpenClawCompileCache(params: {
   } catch {
     // Best-effort only; never block startup.
   }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
-    buildOpenClawCompileCacheRespawnPlan,
-    isSourceCheckoutInstallRoot,
-    resolveOpenClawCompileCacheDirectory,
-    runOpenClawCompileCacheRespawnPlan,
-    shouldEnableOpenClawCompileCache,
-  };
 }

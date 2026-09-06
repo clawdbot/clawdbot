@@ -28,7 +28,9 @@ export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   if (issue) {
     throw new Error(`invalid frontmatter: ${issue.code}: ${issue.message}`);
   }
-  return parsed.frontmatter;
+  // Cached metadata must not retain the discarded SKILL.md through parser slices.
+  // The normalized record contains only strings; copy its keys and values together.
+  return structuredClone(parsed.frontmatter);
 }
 
 const BREW_FORMULA_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;

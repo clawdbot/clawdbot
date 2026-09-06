@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
@@ -15,12 +16,17 @@ import {
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  appendSessionTranscriptReport,
+  patchSessionEntryCore,
+  type SessionTranscriptWriteScope,
+} from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { boundedWorkerError } from "./worker-environments/worker-error.js";
 
 const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
 
@@ -77,6 +83,7 @@ type PersistedLifecycleSessionShape = Pick<
 type GatewaySessionLifecycleSnapshot = Partial<Pick<SessionEntry, keyof LifecycleSessionShape>>;
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
+const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -125,6 +132,41 @@ function resolveSettledLifecycleTerminalOutcome(
     : outcome;
 }
 
+function sanitizeSessionRunError(error: unknown): string {
+  return renderUserFacingText(error, { errorContext: true }).replace(/\s+/g, " ").trim();
+}
+
+/** Shared transcript outcome for owners that already committed a failed run. */
+export async function recordGatewaySessionRunFailure(params: {
+  target: SessionTranscriptWriteScope & { sessionId: string };
+  runId: string;
+  error: unknown;
+  assertCommitAllowed?: () => void;
+}): Promise<void> {
+  const { runId } = params;
+  const error = boundedWorkerError(sanitizeSessionRunError(params.error), 512);
+  const result = await appendSessionTranscriptReport(params.target, {
+    kind: "custom",
+    customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+    suppressWhenAssistantRun: runId,
+    selectReport: (latest) => {
+      params.assertCommitAllowed?.();
+      if (isRecord(latest?.details) && latest.details.runId === runId) {
+        return undefined;
+      }
+      return {
+        customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+        content: `This turn did not run: ${error}.`,
+        display: true,
+        details: { runId, error },
+      };
+    },
+  });
+  if (!result.ok) {
+    throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
+  }
+}
+
 function resolveSessionRunError(
   outcome: AgentRunTerminalOutcome,
   status: SessionRunStatus,
@@ -132,9 +174,7 @@ function resolveSessionRunError(
   if ((status !== "failed" && status !== "timeout") || !outcome.error) {
     return undefined;
   }
-  const sanitized = renderUserFacingText(outcome.error, { errorContext: true })
-    .replace(/\s+/g, " ")
-    .trim();
+  const sanitized = sanitizeSessionRunError(outcome.error);
   return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;
 }
 
@@ -360,6 +400,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
+  let failedRun: { runId: string; error: unknown } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -367,6 +408,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     },
     async (storedEntry) => {
       terminalRecovery = undefined;
+      failedRun = undefined;
       const entry = storedEntry as SessionEntry;
       if (
         exactCronRun &&
@@ -406,6 +448,17 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         entry,
         event: params.event,
       });
+      if (
+        phase === "error" &&
+        params.event.data?.aborted !== true &&
+        eventRunId &&
+        (patch.status === "failed" || patch.status === "timeout")
+      ) {
+        failedRun = {
+          runId: eventRunId,
+          error: resolveTerminalOutcome(params.event).error,
+        };
+      }
       const recoveryTerminalRunId = normalizeLifecycleRunId(params.event.runId);
       const recoveryTerminalIsCurrent =
         params.event.mainSessionRestartRecovery === true &&
@@ -435,4 +488,21 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   lifecyclePersistenceVersion += 1;
+  if (persisted && failedRun) {
+    const { runId, error } = failedRun;
+    // Only accepted errors pay for branch navigation; assistant detection and
+    // report deduplication share the appender's authoritative write snapshot.
+    await recordGatewaySessionRunFailure({
+      target: {
+        agentId: sessionEntry.agentId,
+        storePath: sessionEntry.storePath,
+        sessionKey: sessionEntry.canonicalKey,
+        sessionId: persisted.sessionId,
+        expectedLifecycleRevision: persisted.lifecycleRevision,
+      },
+      runId,
+      error,
+      assertCommitAllowed: params.assertCommitAllowed,
+    });
+  }
 }

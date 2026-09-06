@@ -8,8 +8,10 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import type {
   ReplyBackendQueueMessageOptions,
+  ReplyToolAuthorityOverlay,
   ReplyBackendQueueMessageResult,
   ReplyBackendMessageInjection,
+  ReplyBackendMessageInjectionV2,
 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -61,6 +63,7 @@ export type EmbeddedAgentQueueHandle = {
     options?: EmbeddedAgentQueueMessageOptions,
   ) => Promise<void | EmbeddedAgentQueueMessageResult>;
   messageInjection?: ReplyBackendMessageInjection;
+  messageInjectionV2?: ReplyBackendMessageInjectionV2;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
@@ -88,7 +91,21 @@ export type ActiveEmbeddedRunSnapshot = {
   inFlightPrompt?: string;
 };
 
+/** Host-private binding consumed before publishing one actual backend handle. */
+export type EmbeddedRunToolAuthorityBinding = (registration: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  agentId?: string;
+  handle: EmbeddedAgentQueueHandle;
+}) => {
+  source: "reply" | "attempt";
+  project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
+  assertActive: () => void;
+};
+
 export type EmbeddedRunRegistration = {
+  toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -105,10 +122,12 @@ export type EmbeddedRunWaiter = {
 
 export type AbandonedEmbeddedRun = {
   sessionId: string;
+  runId?: string;
   sessionKey?: string;
   sessionFile?: string;
   abandonedAtMs: number;
-  reason: "timeout";
+  reason: "timeout" | "recovering_timeout";
+  recoveryToken?: symbol;
 };
 
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");

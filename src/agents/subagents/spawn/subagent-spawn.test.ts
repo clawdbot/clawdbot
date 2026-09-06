@@ -103,7 +103,6 @@ type InheritedSpawnPreferenceCase = {
   agentDefaults?: Readonly<Record<string, unknown>>;
   requesterAgent?: Readonly<Record<string, unknown>>;
   requesterPreferenceReadFails?: boolean;
-  swarmEnabled?: boolean;
   collect?: boolean;
   requesterRunId?: string;
   requesterThinkingLevel?: ThinkLevel;
@@ -149,17 +148,15 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     requesterState: { fastMode: "auto" },
     preferenceKey: "fastMode",
     expected: "auto",
-    swarmEnabled: true,
     collect: true,
     requesterRunId: "parent-run",
   },
   {
-    name: "inherits requester fast mode for ordinary children when Swarm is enabled",
+    name: "inherits requester fast mode for ordinary children with default Swarm config",
     task: "inherit ordinary fast mode",
     requesterState: { fastMode: true },
     preferenceKey: "fastMode",
     expected: true,
-    swarmEnabled: true,
   },
   {
     name: "persists inherited requester thinking off",
@@ -283,6 +280,7 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: false } });
     const result = await spawnSubagentDirect(
       { task: "collect", collect: true },
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
@@ -1268,6 +1266,7 @@ describe("spawnSubagentDirect seam flow", () => {
       label: "",
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: controllerSessionKey,
         completionOwnerKey: "agent:main:main",
@@ -1540,7 +1539,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledOnce();
     expect(persistedStore?.[childSessionKey]).toMatchObject({
       sessionId: expect.any(String),
       lifecycleRevision: expect.any(String),
@@ -1820,23 +1819,17 @@ describe("spawnSubagentDirect seam flow", () => {
       agentDefaults,
       requesterAgent,
       requesterPreferenceReadFails,
-      swarmEnabled,
       collect,
       requesterRunId,
       requesterThinkingLevel,
       thinkingOverride,
     }) => {
-      if (agentDefaults || requesterAgent || swarmEnabled) {
+      if (agentDefaults || requesterAgent) {
         hoisted.configOverride = createConfigOverride({
-          ...(agentDefaults || requesterAgent
-            ? {
-                agents: {
-                  defaults: { workspace: os.tmpdir(), ...agentDefaults },
-                  list: [{ id: "main", workspace: "/tmp/workspace-main", ...requesterAgent }],
-                },
-              }
-            : {}),
-          ...(swarmEnabled ? { tools: { swarm: true } } : {}),
+          agents: {
+            defaults: { workspace: os.tmpdir(), ...agentDefaults },
+            list: [{ id: "main", workspace: "/tmp/workspace-main", ...requesterAgent }],
+          },
         });
       }
       hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
@@ -2376,8 +2369,10 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.message).toContain("[Subagent Task]");
     expect(params.message).toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
     expect(params.message).toContain("  keep indentation");
-    expect(params.message).not.toContain("**Your Role**");
-    expect(params.extraSystemPrompt).toBe("system-prompt");
+    expect(params.message).not.toContain("## Your Role");
+    expect(params.message?.match(/UNIQUE_LONG_SUBAGENT_TASK_TOKEN/g)).toHaveLength(1);
+    expect(params.extraSystemPrompt).toContain("completion event");
+    expect(params.extraSystemPrompt).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
   });
 
   it.each([

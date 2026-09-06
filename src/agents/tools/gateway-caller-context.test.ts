@@ -173,6 +173,22 @@ describe("gateway caller context wrapper", () => {
     });
   });
 
+  it.each([
+    [undefined, true, true],
+    [true, undefined, true],
+    [true, false, false],
+    [false, true, false],
+  ])("narrows same-run Full Access from %s and %s to %s", async (outer, inner, expected) => {
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:session", fullPermission: outer },
+      () =>
+        withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: "agent:main:session", fullPermission: inner },
+          () => expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(expected),
+        ),
+    );
+  });
+
   it("starts a new authority root for a nested admitted run", async () => {
     const outerRun = { instanceId: "outer-instance", runId: "outer-run" };
     const childRun = { instanceId: "child-instance", runId: "child-run" };
@@ -184,6 +200,7 @@ describe("gateway caller context wrapper", () => {
         agentId: "outer",
         sessionKey: "agent:outer:session",
         operationalRunInstance: outerRun,
+        fullPermission: true,
         executionIdentityToken: createExecutionIdentityAdmissionToken("outer-run"),
         cronSelfManagementJobId: "outer-job",
         turnSourceChannel: "telegram",
@@ -212,6 +229,7 @@ describe("gateway caller context wrapper", () => {
       turnSourceChannel: "discord",
     });
     expect(nestedIdentity?.cronSelfManagementJobId).toBeUndefined();
+    expect(nestedIdentity?.fullPermission).toBeUndefined();
   });
 
   it("composes same-run receipt authority without dropping either closure", async () => {

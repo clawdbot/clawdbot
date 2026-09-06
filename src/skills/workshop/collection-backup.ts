@@ -1,142 +1,44 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
-import type {
-  SkillCollectionPlanEntry,
-  WritableSkillCollectionEntry,
-} from "./collection-contracts.js";
-import {
-  canonicalSkillCollectionWorkspace,
-  resolveSkillCollectionBackupRoot,
-} from "./collection-paths.js";
+import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 
-const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
+const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v2";
+
 export type CollectionBackupManifest = {
   schema: typeof BACKUP_SCHEMA;
   id: string;
   createdAt: string;
-  workspaceDir: string;
   skillDirs: string[];
   resultSkillDirs: string[];
   resultSkillHashes: Record<string, string>;
+  restoreUnavailableReason?: string;
 };
-
-export async function createCollectionBackup(params: {
-  workspaceDir: string;
-  current: readonly WritableSkillCollectionEntry[];
-  plan: readonly SkillCollectionPlanEntry[];
-  env?: NodeJS.ProcessEnv;
-}): Promise<{
-  backupDir: string;
-  committedBackupDir: string;
-  backupRoot: string;
-  manifest: CollectionBackupManifest;
-}> {
-  const backupRoot = resolveSkillCollectionBackupRoot(params.workspaceDir, params.env);
-  const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
-  const backupDir = path.join(backupRoot, `.pending-${id}`);
-  const committedBackupDir = path.join(backupRoot, id);
-  const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));
-  // A restore must never rewrite an unlisted, externally owned skill. Back up only paths
-  // this transaction may mutate; newly created result paths are removed on restore.
-  const skillDirs = [
-    ...new Set(
-      params.plan.flatMap((entry) => {
-        const existing = currentByName.get(entry.name);
-        return existing ? [path.relative(params.workspaceDir, existing.baseDir)] : [];
-      }),
-    ),
-  ].toSorted();
-  const manifest: CollectionBackupManifest = {
-    schema: BACKUP_SCHEMA,
-    id,
-    createdAt: new Date().toISOString(),
-    workspaceDir: params.workspaceDir,
-    skillDirs,
-    resultSkillDirs: params.plan
-      .filter((entry) => entry.action === "write")
-      .map((entry) => {
-        const existing = currentByName.get(entry.name);
-        return path.relative(
-          params.workspaceDir,
-          existing?.baseDir ?? path.join(params.workspaceDir, "skills", entry.name),
-        );
-      }),
-    resultSkillHashes: {},
-  };
-  await fs.mkdir(path.join(backupDir, "workspace"), { recursive: true });
-  for (const relativeDir of skillDirs) {
-    await fs.cp(
-      path.join(params.workspaceDir, relativeDir),
-      path.join(backupDir, "workspace", relativeDir),
-      {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-        preserveTimestamps: true,
-      },
-    );
-  }
-  await fs.writeFile(path.join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-  return { backupDir, committedBackupDir, backupRoot, manifest };
-}
-
-export async function commitCollectionBackup(
-  workspaceDir: string,
-  backup: Awaited<ReturnType<typeof createCollectionBackup>>,
-): Promise<void> {
-  for (const relativeDir of backup.manifest.resultSkillDirs) {
-    backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
-      path.join(workspaceDir, relativeDir),
-    );
-  }
-  await fs.writeFile(
-    path.join(backup.backupDir, "manifest.json"),
-    JSON.stringify(backup.manifest, null, 2),
-  );
-  await fs.rename(backup.backupDir, backup.committedBackupDir);
-}
-
-export async function discardPendingCollectionBackup(
-  backup: Awaited<ReturnType<typeof createCollectionBackup>>,
-): Promise<void> {
-  if (!(await pathExists(backup.backupDir))) {
-    return;
-  }
-  await removePathWithinRoot({
-    rootDir: backup.backupRoot,
-    relativePath: path.basename(backup.backupDir),
-    recursive: true,
-    force: true,
-  });
-}
 
 export async function readCollectionBackupManifest(params: {
   backupDir: string;
   backupId: string;
-  workspaceDir: string;
+  skillsRoot: string;
 }): Promise<CollectionBackupManifest> {
   const record = asNullableRecord(
     JSON.parse(await fs.readFile(path.join(params.backupDir, "manifest.json"), "utf8")),
   );
-  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs", params.workspaceDir);
+  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs", params.skillsRoot);
   const resultSkillDirs = readBackupSkillDirs(
     record?.resultSkillDirs,
     "resultSkillDirs",
-    params.workspaceDir,
+    params.skillsRoot,
   );
   const resultSkillHashes = asNullableRecord(record?.resultSkillHashes);
+  const restoreUnavailableReason = record?.restoreUnavailableReason;
   if (
     record?.schema !== BACKUP_SCHEMA ||
     record.id !== params.backupId ||
     typeof record.createdAt !== "string" ||
-    typeof record.workspaceDir !== "string" ||
-    canonicalSkillCollectionWorkspace(record.workspaceDir) !== params.workspaceDir ||
     !resultSkillHashes ||
+    (restoreUnavailableReason !== undefined && typeof restoreUnavailableReason !== "string") ||
     Object.keys(resultSkillHashes).some((relativeDir) => !resultSkillDirs.includes(relativeDir))
   ) {
     throw new Error(`Invalid skill collection backup: ${params.backupId}`);
@@ -150,44 +52,46 @@ export async function readCollectionBackupManifest(params: {
     parsedResultSkillHashes[relativeDir] = hash;
   }
   for (const relativeDir of skillDirs) {
-    if (!(await pathExists(path.join(params.backupDir, "workspace", relativeDir)))) {
+    const savedSkillDir = path.join(params.backupDir, "skills", relativeDir);
+    if (!(await pathExists(savedSkillDir))) {
       throw new Error(`Skill collection backup is incomplete: ${relativeDir}`);
+    }
+    // Legacy hashes omitted deep content. Verify retained originals too, or deleting
+    // an omitted subtree from the result could let restore resurrect it unnoticed.
+    if (resultSkillDirs.includes(relativeDir)) {
+      await readSkillProposalTargetTreeSha256(savedSkillDir);
     }
   }
   return {
     schema: BACKUP_SCHEMA,
     id: params.backupId,
     createdAt: record.createdAt,
-    workspaceDir: params.workspaceDir,
     skillDirs,
     resultSkillDirs,
     resultSkillHashes: parsedResultSkillHashes,
+    ...(typeof restoreUnavailableReason === "string" ? { restoreUnavailableReason } : {}),
   };
 }
 
-function readBackupSkillDirs(value: unknown, label: string, workspaceDir: string): string[] {
+function readBackupSkillDirs(value: unknown, label: string, skillsRoot: string): string[] {
   if (
     !Array.isArray(value) ||
     !value.every((entry): entry is string => typeof entry === "string")
   ) {
     throw new Error(`Invalid skill collection backup ${label}.`);
   }
-  const skillRoots = [
-    path.join(workspaceDir, "skills"),
-    path.join(workspaceDir, ".agents", "skills"),
-  ];
+  const resolvedRoot = path.resolve(skillsRoot);
   for (const relativeDir of value) {
-    const absoluteDir = path.resolve(workspaceDir, relativeDir);
-    const insideWritableRoot = skillRoots.some((rootDir) => {
-      const relativeToRoot = path.relative(rootDir, absoluteDir);
-      return (
-        relativeToRoot &&
-        !path.isAbsolute(relativeToRoot) &&
-        !relativeToRoot.startsWith(`..${path.sep}`)
+    const resolvedDir = path.resolve(resolvedRoot, relativeDir);
+    if (
+      !relativeDir ||
+      path.isAbsolute(relativeDir) ||
+      relativeDir !== path.normalize(relativeDir) ||
+      !isPathStrictlyInside(resolvedRoot, resolvedDir)
+    ) {
+      throw new Error(
+        `Skill collection backup path is outside the Skill Workshop directory: ${relativeDir}`,
       );
-    });
-    if (!insideWritableRoot) {
-      throw new Error(`Skill collection backup path is outside the workspace: ${relativeDir}`);
     }
   }
   return [...new Set(value)];

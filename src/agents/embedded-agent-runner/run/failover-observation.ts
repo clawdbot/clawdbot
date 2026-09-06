@@ -43,20 +43,6 @@ type FailoverDecisionLoggerInput = {
 type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
 /**
- * Derives timeout failure reasons for logs that were built from timeout state
- * before the normal provider error classifier had a raw error to inspect.
- */
-function normalizeFailoverDecisionObservationBase(
-  base: FailoverDecisionLoggerBase,
-): FailoverDecisionLoggerBase {
-  return {
-    ...base,
-    failoverReason: base.failoverReason ?? (base.timedOut ? "timeout" : null),
-    profileFailureReason: base.profileFailureReason ?? (base.timedOut ? "timeout" : null),
-  };
-}
-
-/**
  * Captures sanitized failover context and returns a decision logger. The closure
  * keeps prompt/assistant failover branches consistent while still allowing the
  * final decision and HTTP status to be supplied at the action point.
@@ -67,7 +53,11 @@ export function createFailoverDecisionLogger(
   decision: FailoverDecisionLoggerInput["decision"],
   extra?: Pick<FailoverDecisionLoggerInput, "status" | "retryCount" | "profileRotationCount">,
 ) => void {
-  const normalizedBase = normalizeFailoverDecisionObservationBase(base);
+  const normalizedBase = {
+    ...base,
+    failoverReason: base.failoverReason ?? (base.timedOut ? "timeout" : null),
+    profileFailureReason: base.profileFailureReason ?? (base.timedOut ? "timeout" : null),
+  };
   const safeProfileId = normalizedBase.profileId
     ? redactIdentifier(normalizedBase.profileId, { len: 12 })
     : undefined;
@@ -80,6 +70,12 @@ export function createFailoverDecisionLogger(
   const reasonText = normalizedBase.failoverReason ?? "none";
   const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
   return (decision, extra) => {
+    const level = decision === "continue_normal" ? "debug" : "warn";
+    // Keep normal continuation in diagnostics; avoid per-decision formatting
+    // and log transport when neither sink requests those diagnostics.
+    if (level === "debug" && !log.isEnabled(level)) {
+      return;
+    }
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     // Some provider/runtime failure kinds already have normalized detail fields.
@@ -92,7 +88,7 @@ export function createFailoverDecisionLogger(
         : "";
     const retryCount = extra?.retryCount ?? normalizedBase.retryCount;
     const profileRotationCount = extra?.profileRotationCount ?? normalizedBase.profileRotationCount;
-    log.warn("embedded run failover decision", {
+    log[level]("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
       runId: normalizedBase.runId,

@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
-  addQueryToken,
   applySuggestionToQuery,
   buildQuerySuggestions,
   buildSessionsCsv,
@@ -14,12 +13,17 @@ describe("usage query token mutations", () => {
   const quotedLabel = 'label:"Team  Planning"';
 
   it("preserves quoted phrases when adding or replacing categorical tokens", () => {
-    expect(addQueryToken(`${quotedLabel} provider:openai`, "provider:anthropic")).toBe(
-      `${quotedLabel} provider:openai provider:anthropic `,
+    const query = `${quotedLabel} PROVIDER:"OpenAI"`;
+    expect(setQueryTokensForKey(query, "provider", ["openai", "anthropic"])).toBe(
+      `${query} provider:anthropic `,
     );
-    expect(setQueryTokensForKey(`${quotedLabel} provider:openai`, "provider", ["anthropic"])).toBe(
+    expect(setQueryTokensForKey(query, "provider", ["anthropic"])).toBe(
       `${quotedLabel} provider:anthropic `,
     );
+    expect(setQueryTokensForKey(`${quotedLabel} PROVIDER:`, "provider", ["openai"])).toBe(
+      `${quotedLabel} provider:openai `,
+    );
+    expect(setQueryTokensForKey(query, "provider", [])).toBe(`${quotedLabel} `);
   });
 
   it("removes an entire quoted term without leaving phrase fragments", () => {

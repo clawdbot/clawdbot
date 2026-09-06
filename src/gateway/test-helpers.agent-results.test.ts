@@ -22,7 +22,7 @@ describe("extractPayloadText", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          content: [{ type: "text", text: "CLI backend OK ABC123." }],
+          content: [{ type: "text", text: "CLI backend draft before completion." }],
         },
       }),
       JSON.stringify({

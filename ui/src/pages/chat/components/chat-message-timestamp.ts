@@ -81,20 +81,24 @@ export function renderChatTimestamp(timestamp: number, metadata: TemplateResult[
       ?open-on-click=${metadata.length > 0}
       content=${metadata.length ? "" : display.label}
     >
-      ${metadata.length
-        ? html`<button
-            type="button"
-            class="msg-meta__summary"
-            aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
-          >
-            ${time}
-          </button>`
-        : time}
-      ${metadata.length
-        ? html`<span slot="content" class="msg-meta__details">
-            <span class="msg-meta__time">${display.label}</span>${metadata}
-          </span>`
-        : nothing}
+      ${
+        metadata.length
+          ? html`<button
+              type="button"
+              class="msg-meta__summary"
+              aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
+            >
+              ${time}
+            </button>`
+          : time
+      }
+      ${
+        metadata.length
+          ? html`<span slot="content" class="msg-meta__details">
+              <span class="msg-meta__time">${display.label}</span>${metadata}
+            </span>`
+          : nothing
+      }
     </openclaw-tooltip>
   `;
 }

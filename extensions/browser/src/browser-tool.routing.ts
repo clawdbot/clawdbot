@@ -117,6 +117,7 @@ const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "focus",
   "close",
 ]);
+const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
 
 function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
   return Object.keys(resolved.profiles).some((name) => {
@@ -129,18 +130,30 @@ export function resolveBrowserToolTimeoutMs({
   requestedTimeoutMs,
   action,
   isUserBrowserProfile,
+  usesPersistentPlaywright,
+  isNodeProxy,
   resolvedBrowser,
 }: {
   requestedTimeoutMs?: number;
   action: string;
   isUserBrowserProfile: boolean;
+  usesPersistentPlaywright: boolean;
+  isNodeProxy: boolean;
   resolvedBrowser: ReturnType<typeof resolveBrowserConfig>;
 }) {
-  return (
-    requestedTimeoutMs ??
-    (EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
+  if (requestedTimeoutMs !== undefined) {
+    return requestedTimeoutMs;
+  }
+  if (
+    EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
     (isUserBrowserProfile || (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
-      ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
-      : undefined)
-  );
+  ) {
+    return DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS;
+  }
+  // A node proxy resolves the profile on its execution host, so the Gateway
+  // must budget tab operations for the possible persistent Playwright path.
+  if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
+    return resolvedBrowser.actionTimeoutMs;
+  }
+  return undefined;
 }

@@ -24,8 +24,11 @@ import {
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
+  PreparedModelRuntimeOwnerNotPublishedError,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -239,6 +242,76 @@ describe("prepared catalog owner lifecycle", () => {
 });
 
 describe("prepared build candidate lifetime", () => {
+  describe.each([
+    { provenance: "run", acquire: acquireAgentRunPreparedModelRuntime, readOnly: false },
+    { provenance: "ephemeral", acquire: acquireReadOnlyPreparedModelRuntime, readOnly: true },
+  ])("unpublished $provenance owners", ({ acquire, readOnly }) => {
+    it("retires failed lease acquisition and permits a fresh retry", async () => {
+      const input = { config: {}, agentDir: state.agentDir("failed-admission"), readOnly };
+      const failure = new Error("catalog preparation failed");
+      mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
+        throw failure;
+      });
+
+      await expect(acquire(input)).rejects.toBe(failure);
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+        PreparedModelRuntimeOwnerNotPublishedError,
+      );
+      const lease = await acquire(input);
+      try {
+        expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
+      } finally {
+        lease.release();
+      }
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+        PreparedModelRuntimeOwnerNotPublishedError,
+      );
+    });
+
+    it("retires a timeout while fencing late work ahead of the retry", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+      const input = { config: {}, agentDir: state.agentDir("timed-out-admission"), readOnly };
+      const started = createDeferred();
+      const finish = createDeferred();
+      mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
+        started.resolve();
+        await finish.promise;
+        return {};
+      });
+      const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
+      const first = acquire(input);
+      const timedOut = expect(first).rejects.toThrow(
+        "prepared model runtime publication timed out",
+      );
+      let retry: ReturnType<typeof acquire> | undefined;
+      try {
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(1);
+        await timedOut;
+        await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+          PreparedModelRuntimeOwnerNotPublishedError,
+        );
+        retry = acquire(input);
+        expect(builds).toHaveBeenCalledTimes(2);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledOnce();
+
+        finish.resolve();
+        const lease = await retry;
+        expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+        // The retired build must stop after its held preparation, before discovery or publication.
+        expect(mocks.discoverModels).toHaveBeenCalledOnce();
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([first, retry?.then((lease) => lease.release())]);
+        await Promise.all(builds.mock.results.map((result) => result.value.completion));
+        builds.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("fails a timed-out publication without overlapping its late build with a retry", async () => {
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
     const source = createDeferred<{ agentDir: string; wrote: false }>();

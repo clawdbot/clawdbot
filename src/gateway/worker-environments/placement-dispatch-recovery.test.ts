@@ -4,6 +4,7 @@ import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
@@ -13,37 +14,87 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
-import { createHarness } from "./placement-dispatch-test-harness.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  const createRecoveryService = (
-    placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-    environments: ReturnType<typeof support.createService>,
-  ) =>
-    createWorkerPlacementDispatchService({
-      placements,
-      environments,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
-    });
+  describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
+    it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(
+      "reclaims only a clean idle stale-build placement: %s",
+      async (scenario) => {
+        const placements = createWorkerSessionPlacementStore({
+          database: support.testState.stateDb,
+          now: () => 1_000,
+        });
+        const harness = createHarness(placements, { workspacePath: support.testState.root });
+        const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+        if (active.state !== "active") {
+          throw new Error("retirement fixture did not produce an active placement");
+        }
+        const error =
+          scenario === "provider loss" ? "provider lost worker" : STALE_WORKER_BUILD_REASON;
+        vi.mocked(harness.environments.get).mockReturnValue({
+          ...harness.attached,
+          state: "failed",
+          leaseId: null,
+          sshEndpoint: null,
+          bootstrapReceipt: null,
+          sharedHost: null,
+          tunnelStatus: "stopped",
+          lastError: error,
+          error,
+        });
+        if (scenario === "claimed turn" || scenario === "pending result") {
+          const claim = placements.claimTurn({
+            ...REQUEST,
+            claimId: "retirement-claim",
+            runId: "retirement-run",
+            owner: {
+              kind: "worker",
+              environmentId: active.environmentId,
+              ownerEpoch: active.activeOwnerEpoch,
+            },
+          });
+          if (scenario === "pending result") {
+            placements.markWorkspaceResultPending(claim);
+            placements.handoffWorkspaceResultRecovery(claim);
+          }
+        }
+
+        if (mode === "startup") {
+          await harness.service.reconcile("startup");
+        } else {
+          await harness.service.reconcileActive();
+        }
+
+        if (scenario === "idle") {
+          expect(placements.get(REQUEST.sessionId)).toMatchObject({
+            state: "reclaimed",
+            terminalReason: null,
+            recoveryError: null,
+            turnClaim: null,
+          });
+          expect(harness.environments.destroy).not.toHaveBeenCalled();
+        } else {
+          const expectedError =
+            scenario === "claimed turn" && mode === "startup"
+              ? "Active worker turn claim cannot be proven live after gateway restart"
+              : `cloud worker disappeared: ${error}`;
+          expect(placements.get(REQUEST.sessionId)).toMatchObject({
+            state: "failed",
+            terminalReason: expectedError,
+            recoveryError: expectedError,
+            turnClaim: null,
+          });
+        }
+        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      },
+    );
+  });
 
   it.each(["startup", "active"] as const)(
     "does not report successful reclaim while provider-loss teardown is pending during %s recovery",
@@ -91,7 +142,7 @@ describe("worker placement restart recovery", () => {
         leaseId: ready.leaseId,
         destroyRequestedAtMs: support.testState.nowMs,
       });
-      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("cleanup is still pending");
+      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("provider deletion unavailable");
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "failed",
         environmentId: ready.environmentId,

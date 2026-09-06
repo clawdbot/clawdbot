@@ -2272,8 +2272,10 @@ describe("Anthropic provider", () => {
             description: "healthy schema",
             parameters: {
               type: "object",
-              properties: { query: { type: "string" } },
+              properties: { query: { $ref: "#/$defs/Query" } },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           } as Tool,
         ],
@@ -2286,9 +2288,12 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
-    expect(payload.tools?.[0]?.input_schema).toMatchObject({
-      properties: { query: { type: "string" } },
+    expect(payload.tools?.[0]?.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
       required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -2394,7 +2399,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2404,7 +2409,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "volatile current-turn metadata",
+            content: "retained current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2414,13 +2419,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    // Deepest breakpoint anchors on the stable user turn (converted to a block
-    // array with cache_control) so it stays a cacheable prefix next turn...
-    expect(messages[0]?.content).toEqual([
-      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    expect(messages[0]?.content).toBe("stable question");
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "text",
+        text: "retained current-turn metadata",
+        cache_control: { type: "ephemeral" },
+      },
     ]);
-    // ...and NOT on the trailing volatile carrier, which is left uncached.
-    expect(messages[1]?.content).toBe("volatile current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
