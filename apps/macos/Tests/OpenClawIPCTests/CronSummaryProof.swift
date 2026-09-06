@@ -5,7 +5,7 @@ import Testing
 
 /// Temporary before/after proof; remove after both CI images have been exported.
 @MainActor
-func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [String] {
+func cronSummaryProofTexts(in row: NSView, title: String, fixtureEvents: [[String: String]]) async throws -> [String] {
     var repository = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
     for _ in 0..<5 {
         repository.deleteLastPathComponent()
@@ -19,6 +19,11 @@ func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [Stri
     let hadWindowAtCapture = row.window != nil
     let bitmap = try #require(row.bitmapImageRepForCachingDisplay(in: row.bounds))
     row.cacheDisplay(in: row.bounds, to: bitmap)
+    // The row draws text over a transparent canvas. Preserve its pixels over a light proof background.
+    let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+    context.cgContext.setBlendMode(.destinationOver)
+    context.cgContext.setFillColor(NSColor.white.cgColor)
+    context.cgContext.fill(CGRect(x: 0, y: 0, width: CGFloat(bitmap.pixelsWide), height: CGFloat(bitmap.pixelsHigh)))
     let png = try #require(bitmap.representation(using: .png, properties: [:]))
     try png.write(to: output.appendingPathComponent("summary.png"), options: .withoutOverwriting)
 
@@ -34,7 +39,7 @@ func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [Stri
     let maximumDepth = 8
     let maximumTextLength = 256
     var elements: [[String: Any]] = []
-    var labels: [String] = []
+    var texts: [String] = []
     var visited = Set<ObjectIdentifier>()
     var truncations = Set<String>()
     var repeatedObjects = 0
@@ -89,12 +94,14 @@ func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [Stri
         let subviews = view?.subviews ?? []
         let children = element.accessibilityChildren?()
         let label = element.accessibilityLabel?()
-        if let label { labels.append(label) }
+        let role = element.accessibilityRole?()
+        let value = element.accessibilityValue?()
+        if role == .staticText, let text = value as? String { texts.append(text) }
         elements.append([
             "path": path, "depth": depth, "isView": view != nil,
-            "role": attribute(element.accessibilityRole?()?.rawValue),
+            "role": attribute(role?.rawValue),
             "label": attribute(label), "title": attribute(element.accessibilityTitle?()),
-            "value": attribute(element.accessibilityValue?()),
+            "value": attribute(value),
             "viewChildren": attribute(view.map { _ in subviews.count }),
             "accessibilityChildren": attribute(children?.count),
         ])
@@ -110,7 +117,10 @@ func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [Stri
     }
     visit(row, path: "row", depth: 0)
     let observation: [String: Any] = [
-        "schemaVersion": 1, "mode": "owned-row-diagnostic", "title": attribute(title),
+        "schemaVersion": 2, "mode": "owned-row-diagnostic", "title": attribute(title),
+        "textSource": "AXStaticText.accessibilityValue", "captureBackground": "opaque-white",
+        "fixtureEvents": fixtureEvents,
+        "fixtureResponseMeaning": "emitted by test socket; not a delivery acknowledgement",
         "lookupPrefix": attribute("\(title), "), "rowBounds": NSStringFromRect(row.bounds),
         "rowHadWindowAtCapture": hadWindowAtCapture, "rowHasWindow": row.window != nil,
         "materializationStatus": materialization.rawValue,
@@ -126,5 +136,5 @@ func cronSummaryProofLabels(in row: NSView, title: String) async throws -> [Stri
     try JSONSerialization.data(withJSONObject: observation, options: [.prettyPrinted, .sortedKeys]).write(
         to: output.appendingPathComponent("summary-label.txt"), options: .withoutOverwriting)
     try #require(materialization == .success)
-    return labels
+    return texts
 }
