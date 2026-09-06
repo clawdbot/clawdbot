@@ -19,6 +19,8 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const cleanupFailedAcpSpawnMock = vi.fn();
+  const closeRuntimeOnFailureMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const listAcpSessionEntriesMock = vi.fn();
@@ -44,6 +46,8 @@ const hoisted = vi.hoisted(() => {
   const doctorMock = vi.fn();
   return {
     callGatewayMock,
+    cleanupFailedAcpSpawnMock,
+    closeRuntimeOnFailureMock,
     requireAcpRuntimeBackendMock,
     getAcpRuntimeBackendMock,
     listAcpSessionEntriesMock,
@@ -91,6 +95,10 @@ function createAcpCommandSessionBindingService() {
     unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
   };
 }
+
+vi.mock("../../acp/control-plane/spawn.js", () => ({
+  cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (args: unknown) => hoisted.callGatewayMock(args),
@@ -682,10 +690,6 @@ function gatewayRequests(): Array<Record<string, unknown>> {
   return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function expectGatewayMethodCalled(method: string): void {
-  expect(gatewayRequests().some((request) => request.method === method)).toBe(true);
-}
-
 function expectGatewayMethodNotCalled(method: string): void {
   expect(gatewayRequests().some((request) => request.method === method)).toBe(false);
 }
@@ -907,6 +911,8 @@ describe("/acp command", () => {
     configureInMemoryTaskRegistryStoreForTests();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
+    hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue({
       sessionId: "session-1",
@@ -1024,11 +1030,13 @@ describe("/acp command", () => {
               }
             : {}),
         };
-        await hoisted.upsertAcpSessionMetaMock({
+        const sessionEntry = await hoisted.upsertAcpSessionMetaMock({
           sessionKey: input.sessionKey,
           mutate: () => meta,
         });
         return {
+          sessionEntry,
+          closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
           runtime: backend.runtime,
           handle: {
             backend: meta.backend,
@@ -1622,8 +1630,14 @@ describe("/acp command", () => {
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
     expect(result?.reply?.text).toContain("spawnSessions=true");
-    expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
-    expectGatewayMethodCalled("sessions.delete");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      sessionKey: expect.stringContaining("agent:codex:acp:"),
+      agentId: "codex",
+      sessionEntry: expect.objectContaining({ sessionId: "session-1" }),
+      deleteTranscript: false,
+      closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
+    });
     expectGatewayMethodNotCalled("sessions.patch");
   });
 

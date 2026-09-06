@@ -16,6 +16,7 @@ import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -820,6 +821,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
+    resolveDebounceMs: (entry) => resolveInboundDebounceMs({ cfg: entry.cfg, channel: "signal" }),
     buildKey: (entry) => resolveSignalInboundDebounceKey(deps.accountId, entry),
     shouldDebounce: (entry) =>
       shouldDebounceTextInbound({

@@ -12,7 +12,7 @@ import { formatLookupMiss } from "../cli/error-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
@@ -85,10 +85,6 @@ function formatTaskTimestamp(value: number | undefined): string {
   return timestampMsToIsoString(value) ?? "n/a";
 }
 
-async function loadTaskCancelConfig() {
-  return getRuntimeConfig();
-}
-
 type GatewayTaskCancelSummary = {
   id?: string;
   taskId?: string;
@@ -106,15 +102,13 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime === "cli") {
-    return null;
-  }
   try {
     const { callGateway } = await import("../gateway/call.js");
     return await callGateway<GatewayTaskCancelResult>({
       method: "tasks.cancel",
       params: { taskId: task.taskId },
-      timeoutMs: 5_000,
+      // Ordinary agent cancellation waits for its real execution to settle.
+      timeoutMs: task.runtime === "cli" ? 15_000 : 5_000,
     });
   } catch (error) {
     if (task.runtime === "cron") {
@@ -384,34 +378,12 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
-  if (gatewayResult) {
-    if (!gatewayResult.found) {
-      runtime.error(
-        sanitizeTerminalText(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup)),
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!gatewayResult.cancelled) {
-      runtime.error(
-        sanitizeTerminalText(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`),
-      );
-      runtime.exit(1);
-      return;
-    }
-    const updated = gatewayResult.task;
-    runtime.log(
-      sanitizeTerminalText(
-        `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
-      ),
-    );
-    return;
-  }
-  const result = await cancelDetachedTaskRunById({
-    cfg: await loadTaskCancelConfig(),
-    taskId: task.taskId,
-  });
+  const result: GatewayTaskCancelResult =
+    (await tryCancelGatewayOwnedTaskViaGateway(task)) ??
+    (await cancelDetachedTaskRunById({
+      cfg: getRuntimeConfig(),
+      taskId: task.taskId,
+    }));
   if (!result.found) {
     runtime.error(sanitizeTerminalText(result.reason ?? formatTaskLookupMiss(opts.lookup)));
     runtime.exit(1);
@@ -422,10 +394,10 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const updated = getTaskById(task.taskId);
+  const updated = result.task;
   runtime.log(
     sanitizeTerminalText(
-      `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+      `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
     ),
   );
 }

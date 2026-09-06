@@ -308,6 +308,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
+- Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
 - Discord guild/channel metadata is added to the model prompt as untrusted context, not as a user-visible reply prefix. If a model copies that envelope back, OpenClaw strips the copied metadata from outbound replies and from future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
 - Guild channels are isolated session keys (`agent:<agentId>:discord:channel:<channelId>`).
@@ -1712,6 +1713,7 @@ openclaw logs --follow
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    In `"mentions"` mode, reply-ping metadata alone does not count. Bot replies need an active native mention or a configured text/transcript mention outside Markdown code.
 
     OpenClaw also ships shared [bot loop protection](/channels/bot-loop-protection). Whenever `allowBots` lets bot-authored messages reach dispatch, Discord maps the inbound event to `(account, channel, bot pair)` facts and the generic pair guard suppresses the pair after it crosses the configured event budget. The guard prevents runaway two-bot loops that previously had to be stopped by Discord rate limits; it does not affect single-bot deployments or one-shot bot replies that stay under the budget.
 

@@ -505,7 +505,7 @@ describe("createSlackMessageHandler", () => {
 
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
       account: { accountId: "default" } as Parameters<
         typeof createSlackMessageHandler
       >[0]["account"],
@@ -539,7 +539,7 @@ describe("createSlackMessageHandler", () => {
 
   it("flushes buffered text before a table-bearing message", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
       account: { accountId: "default" } as Parameters<
         typeof createSlackMessageHandler
       >[0]["account"],
@@ -581,7 +581,7 @@ describe("createSlackMessageHandler", () => {
 
   it("retires a buffered key when replay filtering drops every entry", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
       account: { accountId: "default" } as Parameters<
         typeof createSlackMessageHandler
       >[0]["account"],

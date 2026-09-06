@@ -25,6 +25,7 @@ import {
   installInstanceBindingProbeCoordinator,
   writeChannelBindingProbePlugin,
   writeInstanceBindingProbePlugin,
+  withPluginServiceStopDeadline,
   type ChannelBindingMonitor,
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
@@ -777,7 +778,9 @@ describe("gateway plugin instance bindings", () => {
 
       const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       sockets.push(socket);
-      const reload = await patchInstanceBindingTestConfig(socket);
+      const reload = await withPluginServiceStopDeadline(coordinator, () =>
+        patchInstanceBindingTestConfig(socket),
+      );
       expect(reload).toMatchObject({
         ok: false,
         error: {
@@ -999,6 +1002,17 @@ describe("Gateway plugin replacement channel ownership", () => {
       expect(restarted.ok).toBe(false);
       expect(restarted.error?.message).toContain("plugins are reloading; retry");
       expect(starts.get("active")).toBe(1);
+      expect(await probe("active")).toEqual({
+        status: 503,
+        body: "plugin route is restarting; retry",
+        registry: null,
+      });
+      expect((await probe("parked")).status).toBe(404);
+      const stoppedAfterFailure = await rpcReq(socket, "channels.stop", {
+        channel: channelId,
+        accountId: "active",
+      });
+      expect(stoppedAfterFailure.ok, stoppedAfterFailure.error?.message).toBe(true);
       expect((await probe("active")).status).toBe(404);
       return;
     }

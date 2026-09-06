@@ -17,6 +17,7 @@ import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventLookup,
   readSessionTranscriptHistoryEventPage,
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
@@ -277,6 +278,24 @@ export async function readSessionMessageByIdAsync(
     });
   }
   return { found: false, oversized: false };
+}
+
+/** Read exact membership while retaining full-history validity and empty-only archive fallback. */
+export async function readSessionMessagesMatchingIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+): Promise<unknown[]> {
+  const target = resolveTranscriptReadTarget(scope);
+  const lookup = readSessionTranscriptHistoryEventLookup(toTranscriptReadScope(target), messageId);
+  const messages = lookup.hasDisplayMessages
+    ? projectSqliteHistoryEvents(lookup.events)
+    : await archivedTranscriptReader(target).readMessageCandidatesById(messageId, {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      });
+  return messages.filter(
+    (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
+  );
 }
 
 /** Visits raw message payloads within the SQLite read snapshot. */

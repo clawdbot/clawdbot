@@ -7,8 +7,6 @@ import {
   resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -342,20 +340,6 @@ export async function runSetupModelAuthStep(params: {
       validateCatalog: false,
     });
     break;
-  }
-  if (authChoice !== "skip" && !isKeepCurrentAuthChoice?.(authChoice)) {
-    const { resolveDefaultModelForAgent } = await import("../agents/model-selection-config.js");
-    const selected = resolveDefaultModelForAgent({ cfg: nextConfig, agentId: target.agentId });
-    // The picker can replace the auth provider's model. Stage its final tool surface
-    // before verification, preserving ownership from the unreplaced source config.
-    nextConfig = applyAutoLocalModelLean({
-      config: nextConfig,
-      providerId: selected.provider,
-      modelRef: `${selected.provider}/${selected.model}`,
-      previousModelRef: resolveAgentModelPrimaryValue(
-        prepareAgentModelDefaults(params.config, target).agents?.defaults?.model,
-      ),
-    }).config;
   }
   return { config: nextConfig, authProfiles, persistAuthProfiles };
 }

@@ -76,6 +76,11 @@ describe("test runtime prerequisites", () => {
       ["src/commands/doctor-config-preflight.v17-atomicity.process.test.ts"],
       "runtime",
     ],
+    [
+      "Doctor retired plugin config",
+      ["src/commands/doctor-plugin-install-config.process.test.ts"],
+      "runtime",
+    ],
     ["commands directory", ["src/commands"], "runtime"],
     ["commands config", ["test/vitest/vitest.commands.config.ts"], "runtime"],
     ["ordinary Doctor unit test", ["src/commands/doctor-config-preflight.test.ts"], undefined],
@@ -642,11 +647,12 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
     expectChangedTargets(
-      ["patches/vitest@4.1.11.patch"],
+      ["patches/vitest@5.0.0.patch"],
       [
         "test/scripts/run-vitest-profile.test.ts",
         "test/scripts/run-vitest-state-cleanup.test.ts",
         "test/scripts/vitest-fork-shutdown.test.ts",
+        "test/scripts/vitest-runner-task-updates.test.ts",
       ],
     );
     expectChangedTargets(
@@ -1147,6 +1153,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-tooling-bootstrap.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
@@ -1218,7 +1225,7 @@ describe("scripts/test-projects changed-target routing", () => {
           ? [
               "test/scripts/ci-workflow-guards.test.ts",
               "test/scripts/ci-changed-node-test-plan.test.ts",
-              "test/scripts/labeler-size-label.test.ts",
+              "test/scripts/labeler-label-cap.test.ts",
             ]
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
@@ -1935,6 +1942,16 @@ describe("scripts/test-projects changed-target routing", () => {
     (testFile) => {
       expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
         config: "test/vitest/vitest.agents-core-isolated.config.ts",
+        includePatterns: [testFile],
+      });
+    },
+  );
+
+  it.each(agentVitestProjectOwners.spawnProductionBoundary.include)(
+    "routes production-boundary agent test %s to its dedicated shard",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.agents-spawn-production-boundary.config.ts",
         includePatterns: [testFile],
       });
     },

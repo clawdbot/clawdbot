@@ -99,11 +99,7 @@ function currentGatewayLaunchAgentLabel(
     resolveLaunchAgentLabel(targetEnv),
     ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
   ]);
-  return [...candidates].find((label) =>
-    isCurrentProcessLaunchdServiceLabel(label, process.env, {
-      allowConfiguredLabelFallback: false,
-    }),
-  );
+  return [...candidates].find((label) => isCurrentProcessLaunchdServiceLabel(label, process.env));
 }
 
 function assertExternalLaunchAgentMutation(

@@ -797,6 +797,9 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    resolveModelAsyncMock.mockImplementation(async () => ({
+      model: resolveModelWithRegistryMock(),
+    }));
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockImplementation(async (params: { profileId?: string } = {}) => ({
@@ -1135,14 +1138,25 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:work"] },
     });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    });
+    resolveModelAsyncMock.mockImplementation(
+      async (
+        _provider: string,
+        _modelId: string,
+        _agentDir: string,
+        _config: unknown,
+        options?: { authProfileMode?: string },
+      ) => ({
+        model:
+          options?.authProfileMode === "token"
+            ? {
+                provider: "openai",
+                id: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+              }
+            : resolveModelWithRegistryMock(),
+      }),
+    );
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: "subscription-token",
       mode: "token",
@@ -2246,7 +2260,7 @@ describe("runBtwSideQuestion", () => {
       resolveModelAsyncMock.mock.calls.map(
         (call) => (call[4] as { authProfileId?: string }).authProfileId,
       ),
-    ).toEqual(["openai:subscription", "openai:platform"]);
+    ).toEqual([undefined, "openai:subscription", "openai:platform"]);
     expectRecordFields(mockArg(streamSimpleMock, 0, 0), {
       name: "Platform model",
       api: "openai-responses",
@@ -2482,6 +2496,7 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      wrapProviderStream: true,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",

@@ -455,6 +455,16 @@ Paths can be absolute or workspace-relative. Directories are scanned recursively
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
 file entries are indexed exactly. The builtin engine skips symlinks.
 
+For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
+canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+migration through a symlink.
+
+If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and
+permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
+contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
+workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
+the workspace root itself is supported; symlinks below that root are refused by this migration.
+
 ---
 
 ## Multimodal memory (Gemini)

@@ -1013,26 +1013,34 @@ describe("admitFollowupTurn", () => {
     });
   });
 
-  it("uses admitted verbosity when formatting a preflight failure", async () => {
-    const operation = createOperation();
-    const admittedEntry: SessionEntry = {
-      sessionId: "queued-session",
-      updatedAt: 2,
-      verboseLevel: "off",
-    };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
-    state.loadEntry.mockReturnValue(admittedEntry);
-    state.preflight.mockRejectedValue(new Error("preflight failed"));
-    const queued = createRun();
-    queued.run.verboseLevel = "full";
+  it.each([undefined, "full"] as const)(
+    "uses turn verbosity %s or admitted fallback for a preflight failure",
+    async (override) => {
+      const operation = createOperation();
+      const admittedEntry: SessionEntry = {
+        sessionId: "queued-session",
+        updatedAt: 2,
+        verboseLevel: "off",
+      };
+      state.admitReply.mockResolvedValue({
+        status: "owned",
+        operation,
+        sessionEntry: admittedEntry,
+      });
+      state.loadEntry.mockReturnValue(admittedEntry);
+      state.preflight.mockRejectedValue(new Error("preflight failed"));
+      const queued = createRun();
+      queued.run.verboseLevel = "full";
+      queued.run.verboseLevelOverride = override;
 
-    await admitFollowupTurn({
-      queued,
-      defaults: createDefaults({ sessionEntry: admittedEntry }),
-    });
+      await admitFollowupTurn({
+        queued,
+        defaults: createDefaults({ sessionEntry: admittedEntry }),
+      });
 
-    expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
-      includeDetails: false,
-    });
-  });
+      expect(state.buildPreflightFailureText).toHaveBeenCalledWith("preflight failed", {
+        includeDetails: override === "full",
+      });
+    },
+  );
 });

@@ -4,6 +4,7 @@ import { state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type {
+  NativeChromeExtensionSetupResult,
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
   SettingKey,
@@ -42,24 +43,24 @@ function retainCookieSyncEdits(capability: NativeDeviceSettingsCapability): Cook
   }
   const edits: CookieSyncEdits = { domains: null, targetProfile: null };
   pendingCookieSyncEdits.set(capability, edits);
-  // Pending writes outlive pages. Only an actual matching publication acknowledges
-  // them; reading a snapshot on navigation could mistake old state for an ACK.
-  const unsubscribe = capability.subscribe(({ browser: { cookieSync } }) => {
-    if (
-      edits.domains?.length === cookieSync.domains.length &&
-      edits.domains.every((domain, index) => domain === cookieSync.domains[index])
-    ) {
-      edits.domains = null;
-    }
-    if (edits.targetProfile?.sent && edits.targetProfile.value === cookieSync.targetProfile) {
-      edits.targetProfile = null;
-    }
-    if (edits.domains === null && edits.targetProfile === null) {
-      unsubscribe();
-      pendingCookieSyncEdits.delete(capability);
-    }
-  });
   return edits;
+}
+
+function settleCookieSyncEdit(
+  capability: NativeDeviceSettingsCapability,
+  key: keyof CookieSyncEdits,
+  edit: CookieSyncEdits[keyof CookieSyncEdits],
+) {
+  const edits = pendingCookieSyncEdits.get(capability);
+  if (!edits || edits[key] !== edit) {
+    return;
+  }
+  // Completion belongs to this exact edit, including Cancel and native normalization.
+  // A newer edit can have the same value and must survive the older reply.
+  edits[key] = null;
+  if (edits.domains === null && edits.targetProfile === null) {
+    pendingCookieSyncEdits.delete(capability);
+  }
 }
 
 class DevicePage extends OpenClawLightDomElement {
@@ -67,6 +68,9 @@ class DevicePage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private newDomain = "";
+  @state() private extensionSetupRunning = false;
+  @state() private extensionSetupResult: NativeChromeExtensionSetupResult | null = null;
+  @state() private extensionSetupFailed = false;
   private targetProfileTimer: {
     capability: NativeDeviceSettingsCapability;
     timer: ReturnType<typeof setTimeout>;
@@ -130,7 +134,9 @@ class DevicePage extends OpenClawLightDomElement {
     const profile = pendingCookieSyncEdits.get(pending.capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      pending.capability.set("browser.cookieSync.targetProfile", profile.value);
+      pending.capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+        settleCookieSyncEdit(pending.capability, "targetProfile", profile);
+      });
     }
   }
 
@@ -154,7 +160,9 @@ class DevicePage extends OpenClawLightDomElement {
     ];
     retainCookieSyncEdits(capability).domains = values;
     this.requestUpdate();
-    capability.set("browser.cookieSync.domains", values);
+    capability.set("browser.cookieSync.domains", values, () => {
+      settleCookieSyncEdit(capability, "domains", values);
+    });
   }
 
   private renderBrowser(snapshot: NativeDeviceSettingsSnapshot) {
@@ -167,6 +175,52 @@ class DevicePage extends OpenClawLightDomElement {
       this.newDomain = "";
     };
     return html`
+      ${renderSettingsSection(
+        { title: t("configPage.deviceSettings.chromeExtension") },
+        renderSettingsRow({
+          title: t("configPage.deviceSettings.chromeExtensionSetup"),
+          description: t("configPage.deviceSettings.chromeExtensionHint"),
+          stacked: true,
+          control: html`
+            <div class="device-extension-setup">
+              <div class="device-extension-setup__actions">
+                <button
+                  type="button"
+                  class="btn"
+                  ?disabled=${this.extensionSetupRunning}
+                  @click=${() => this.installChromeExtension()}
+                >
+                  ${t(this.extensionSetupRunning ? "configPage.deviceSettings.chromeExtensionPreparing" : "configPage.deviceSettings.chromeExtensionSetup")}
+                </button>
+                <a
+                  href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >${t("appsPage.ctaChromeWebStore")}</a
+                >
+                ${renderLearnMoreLink("https://docs.openclaw.ai/tools/chrome-extension")}
+              </div>
+              <p role="status">
+                ${
+                  this.extensionSetupFailed
+                    ? t("configPage.deviceSettings.chromeExtensionFailed")
+                    : this.extensionSetupResult
+                      ? t(
+                          this.extensionSetupResult.nativeHostRegistered
+                            ? this.extensionSetupResult.discoveredProfiles > 0
+                              ? "configPage.deviceSettings.chromeExtensionInstalled"
+                              : this.extensionSetupResult.installRequested
+                                ? "configPage.deviceSettings.chromeExtensionPending"
+                                : "configPage.deviceSettings.chromeExtensionStoreRequired"
+                            : "configPage.deviceSettings.chromeExtensionFailed",
+                        )
+                      : nothing
+                }
+              </p>
+            </div>
+          `,
+        }),
+      )}
       ${
         snapshot.browser.importAvailable || !sync.available
           ? renderSettingsSection(
@@ -290,6 +344,28 @@ class DevicePage extends OpenClawLightDomElement {
     `;
   }
 
+  private async installChromeExtension() {
+    const capability = this.context.nativeDeviceSettings;
+    if (!capability || this.extensionSetupRunning) {
+      return;
+    }
+    this.extensionSetupRunning = true;
+    this.extensionSetupFailed = false;
+    this.extensionSetupResult = null;
+    try {
+      const result = await capability.installChromeExtension();
+      if (this.isConnected && this.context.nativeDeviceSettings === capability) {
+        this.extensionSetupResult = result;
+      }
+    } catch {
+      if (this.isConnected && this.context.nativeDeviceSettings === capability) {
+        this.extensionSetupFailed = true;
+      }
+    } finally {
+      this.extensionSetupRunning = false;
+    }
+  }
+
   private renderSettings(snapshot: NativeDeviceSettingsSnapshot) {
     const { app, capabilities } = snapshot;
     const capability = this.context.nativeDeviceSettings;
@@ -298,6 +374,34 @@ class DevicePage extends OpenClawLightDomElement {
         { title: t("configPage.deviceSettings.app") },
         html`
           ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
+          ${
+            app.iconStyle
+              ? renderSettingsRow({
+                  title: t("configPage.deviceSettings.iconStyle"),
+                  description: t("configPage.deviceSettings.iconStyleHint"),
+                  control: html`<select
+                    class="settings-select"
+                    aria-label=${t("configPage.deviceSettings.iconStyle")}
+                    .value=${live(app.iconStyle.selectedId)}
+                    ?disabled=${app.iconStyle.available.length === 0}
+                    @change=${(event: Event) => {
+                      // SAFETY: This handler is bound directly to the Dock icon select.
+                      const value = (event.currentTarget as HTMLSelectElement).value;
+                      capability?.set("app.iconStyle", value);
+                    }}
+                  >
+                    ${app.iconStyle.available.map(
+                      (style) => html`<option
+                        value=${style.id}
+                        ?selected=${style.id === app.iconStyle?.selectedId}
+                      >
+                        ${style.name}
+                      </option>`,
+                    )}
+                  </select>`,
+                })
+              : nothing
+          }
           ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
           ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable ? undefined : t("configPage.deviceSettings.launchAtLoginUnavailable"), !app.launchAtLoginAvailable)}
           ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}

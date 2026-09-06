@@ -129,16 +129,21 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return undefined;
       }
       const activation = this.firstRun.beginActivation(intent ?? { kind: "provider-auth" });
-      return (result) => {
+      return (result, admissionRejected) => {
         if (result.status === "done" && result.modelActivation) {
           this.firstRun.recordActivation(activation, { ok: true, ...result.modelActivation });
-          return () => this.firstRun.ownsActivation(activation);
-        } else if (result.status === "cancelled" || result.status === "error") {
+        } else if (
+          result.status === "cancelled" ||
+          admissionRejected ||
+          (result.status === "error" &&
+            result.activationRejection?.disposition === "rejected-before-promotion")
+        ) {
+          // A terminal error can follow committed settings. Only the owning
+          // Gateway's rejection or non-admission makes replacement setup safe.
           this.firstRun.recordActivation(activation, { ok: false });
           this.requestUpdate();
-          return () => this.firstRun.ownsActivation(activation);
         }
-        return undefined;
+        return () => this.firstRun.ownsActivation(activation);
       };
     },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),

@@ -160,30 +160,27 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
-    "does not offer machine-owned %s in search",
-    (key) => {
-      expect(
-        findSettingsSearchBlocks({
-          query: "internal bookkeeping",
-          schema: {
-            type: "object",
-            properties: {
-              wizard: {
-                type: "object",
-                properties: {
-                  [key]: { type: "string", title: "Internal Bookkeeping" },
-                  accessMode: { type: "string" },
-                },
+  it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "internal bookkeeping",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                [key]: { type: "string", title: "Internal Bookkeeping" },
+                accessMode: { type: "string" },
               },
             },
           },
-          value: { wizard: { [key]: "internal bookkeeping" } },
-          uiHints: {},
-        }),
-      ).toEqual([]);
-    },
-  );
+        },
+        value: { wizard: { [key]: "internal bookkeeping" } },
+        uiHints: {},
+      }),
+    ).toEqual([]);
+  });
 
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({

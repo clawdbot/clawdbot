@@ -160,6 +160,7 @@ export async function runCliFallbackCandidate(
         ) {
           throw createAgentRunSupersededAbortError();
         }
+        const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
@@ -311,6 +312,7 @@ export async function runCliFallbackCandidate(
               : undefined,
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
+            diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,
             sessionTarget,

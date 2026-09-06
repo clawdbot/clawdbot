@@ -1,4 +1,3 @@
-// Matrix plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { matrixConfigAdapter } from "./config-adapter.js";
@@ -31,7 +30,7 @@ export const matrixPluginBase = {
     threads: true,
     media: true,
   },
-  reload: { configPrefixes: ["channels.matrix"] },
+  reload: { configPrefixes: ["channels.matrix"], noopPrefixes: ["messages.ackReactionScope"] },
   configSchema: MatrixChannelConfigSchema,
   config: {
     ...matrixConfigAdapter,

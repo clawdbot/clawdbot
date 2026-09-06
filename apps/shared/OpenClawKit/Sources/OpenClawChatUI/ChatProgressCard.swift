@@ -84,9 +84,9 @@ struct ChatProgressCard: View {
                     .padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 9) {
                     if let markdown {
-                        OpenClawChatMarkdownView(
+                        ChatMarkdownRenderer(
                             text: markdown,
-                            isUserMessage: false,
+                            context: .assistant,
                             variant: .compact,
                             textColor: OpenClawChatTheme.assistantText)
                     }

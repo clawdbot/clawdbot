@@ -190,8 +190,8 @@ if (process.send) {
       runner,
       `
 import fs from "node:fs";
-import Runner from ${JSON.stringify(pathToFileURL(path.join(repo, "test/non-isolated-runner.ts")).href)};
-export default class extends Runner {
+import { TestRunner } from "vitest";
+export default class extends TestRunner {
   constructor(config) {
     super(config);
     this.onCleanupWorkerContext(() => {

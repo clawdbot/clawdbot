@@ -37,6 +37,7 @@ import {
   type TaskRegistryDeliveryRuntime,
   type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
@@ -451,6 +452,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+  getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
   resetTaskRegistryRuntimeForTests();

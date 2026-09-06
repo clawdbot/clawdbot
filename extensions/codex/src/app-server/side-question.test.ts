@@ -1,6 +1,7 @@
 // Codex tests cover side question plugin behavior.
 import path from "node:path";
 import {
+  invokeNativeHookRelay,
   nativeHookRelayTesting,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -9,6 +10,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -141,8 +143,11 @@ function createFakeClient(options: { completeTurn?: boolean } = {}) {
     emit: (notification: CodexServerNotification) => {
       void fixture.notify(notification);
     },
-    handleRequest: (request: Parameters<typeof fixture.handleServerRequest>[0]) =>
-      fixture.handleServerRequest(request),
+    handleRequest: (
+      request: Parameters<typeof fixture.handleServerRequest>[0],
+      signal?: AbortSignal,
+    ) => fixture.handleServerRequest(request, signal),
+    close: fixture.close,
   });
   client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
     if (method === "thread/read") {
@@ -167,7 +172,11 @@ function createFakeClient(options: { completeTurn?: boolean } = {}) {
       }
       return turnStartResult("turn-1");
     }
-    if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")));
+      return {};
+    }
+    if (method === "thread/unsubscribe") {
       return {};
     }
     throw new Error(`unexpected request: ${method}`);
@@ -344,7 +353,12 @@ function agentDelta(threadId: string, turnId: string, delta: string): CodexServe
   };
 }
 
-function turnCompleted(threadId: string, turnId: string, text: string): CodexServerNotification {
+function turnCompleted(
+  threadId: string,
+  turnId: string,
+  text: string,
+  status: "completed" | "interrupted" = "completed",
+): CodexServerNotification {
   return {
     method: "turn/completed",
     params: {
@@ -352,7 +366,7 @@ function turnCompleted(threadId: string, turnId: string, text: string): CodexSer
       turn: {
         id: turnId,
         threadId,
-        status: "completed",
+        status,
         items: [{ id: "agent-1", type: "agentMessage", text }],
         error: null,
         startedAt: null,
@@ -688,6 +702,77 @@ describe("runCodexAppServerSideQuestion", () => {
       expect(persistedBindings.read(current)).toEqual(parent);
     },
   );
+
+  it("rejects a waiting side question when its app-server client closes", async () => {
+    const client = createFakeClient({ completeTurn: false });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const controller = new AbortController();
+    let outcome: unknown;
+    const run = runCodexAppServerSideQuestion(
+      sideParams({ opts: { abortSignal: controller.signal } }),
+    ).catch((error: unknown) => {
+      outcome = error;
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      );
+      client.close(new Error("app-server transport disconnected"));
+      await vi.waitFor(
+        () =>
+          expect(outcome).toEqual(
+            expect.objectContaining({
+              message: expect.stringContaining("closed"),
+            }),
+          ),
+        { timeout: 200 },
+      );
+    } finally {
+      controller.abort("test cleanup");
+      await run;
+    }
+  });
+
+  it("cancels an active side tool when its app-server request is cancelled", async () => {
+    const client = createFakeClient({ completeTurn: false });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    let toolSignal: AbortSignal | undefined;
+    toolExecuteMock.mockImplementation((_callId: string, _args: unknown, signal?: AbortSignal) => {
+      toolSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("tool cancelled")), {
+          once: true,
+        });
+      });
+    });
+    const run = runCodexAppServerSideQuestion(sideParams());
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+    );
+    const requestController = new AbortController();
+    const request = client.handleRequest(
+      {
+        id: "cancelled-side-tool",
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: {},
+        },
+      },
+      requestController.signal,
+    );
+    try {
+      await vi.waitFor(() => expect(toolSignal).toBeDefined());
+      requestController.abort(new Error("app-server request deadline"));
+      await vi.waitFor(() => expect(toolSignal?.aborted).toBe(true), { timeout: 200 });
+    } finally {
+      client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
+      await run;
+      await request;
+    }
+  });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
@@ -1107,15 +1192,11 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it("rebinds side-question handlers when selection retry replaces the client", async () => {
+  it("routes a side question only through the client selected for its fork", async () => {
     const initialClient = createFakeClient();
     const replacementClient = createFakeClient();
     replacementClient.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
-        expect(initialClient.notifications).toHaveLength(1);
-        expect(initialClient.requests).toHaveLength(1);
-        expect(replacementClient.notifications).toHaveLength(2);
-        expect(replacementClient.requests).toHaveLength(2);
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {
@@ -1123,6 +1204,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }
       if (method === "turn/start") {
         queueMicrotask(() => {
+          initialClient.emit(turnCompleted("side-thread", "turn-1", "Stale client answer."));
           replacementClient.emit(agentDelta("side-thread", "turn-1", "Replacement answer."));
           replacementClient.emit(turnCompleted("side-thread", "turn-1", "Replacement answer."));
         });
@@ -1151,11 +1233,22 @@ describe("runCodexAppServerSideQuestion", () => {
       text: "Replacement answer.",
     });
 
-    // Only the physical-client runtime observers remain after side-question cleanup.
-    expect(initialClient.notifications).toHaveLength(1);
-    expect(initialClient.requests).toHaveLength(1);
-    expect(replacementClient.notifications).toHaveLength(1);
-    expect(replacementClient.requests).toHaveLength(1);
+    // A finished route cannot dispatch retained tool requests on either physical client.
+    for (const client of [initialClient, replacementClient]) {
+      await expect(
+        client.handleRequest({
+          id: "late-side-tool",
+          method: "item/tool/call",
+          params: {
+            ...codexTestTurnIds("side-thread"),
+            callId: "late-tool",
+            tool: "wiki_status",
+            arguments: {},
+          },
+        }),
+      ).resolves.toBeUndefined();
+    }
+    expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2041,6 +2134,75 @@ describe("runCodexAppServerSideQuestion", () => {
 
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
+
+  it.each(["answer", "caller cancellation"] as const)(
+    "revokes native hook authority on close while projecting the final %s",
+    async (outcome) => {
+      const client = createFakeClient({ completeTurn: false });
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      const projecting = createDeferred<void>();
+      const finishProjection = createDeferred<void>();
+      const controller = new AbortController();
+      const run = runCodexAppServerSideQuestion(
+        sideLoopRelayParams({
+          opts: {
+            abortSignal: controller.signal,
+            onAssistantMessageStart: async () => {
+              projecting.resolve();
+              await finishProjection.promise;
+            },
+          },
+        }),
+        { nativeHookRelay: { enabled: true } },
+      );
+      let runError: unknown;
+      const settled = run.catch((error: unknown) => {
+        runError = error;
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+        );
+        const fork = client.request.mock.calls.find(([method]) => method === "thread/fork")?.[1];
+        const relayId = extractRelayIdFromThreadConfig(
+          (fork as { config?: Record<string, unknown> }).config,
+        );
+        client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+        await projecting.promise;
+        client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        client.close();
+
+        await expect(
+          invokeNativeHookRelay({
+            provider: "codex",
+            relayId,
+            event: "pre_tool_use",
+            rawPayload: {
+              tool_name: "Bash",
+              tool_input: { command: "echo synthetic" },
+              tool_use_id: "late-native-tool",
+            },
+          }),
+        ).rejects.toThrow("native hook relay not found");
+        if (outcome === "caller cancellation") {
+          controller.abort("caller stopped while draining");
+          await vi.waitFor(
+            () =>
+              expect(runError).toEqual(
+                expect.objectContaining({ message: "Codex /btw was aborted." }),
+              ),
+            { timeout: 200 },
+          );
+        } else {
+          finishProjection.resolve();
+          await expect(run).resolves.toEqual({ text: "Side answer." });
+        }
+      } finally {
+        finishProjection.resolve();
+        await settled;
+      }
+    },
+  );
 
   it("installs native hook relay config for opted-in side threads", async () => {
     const client = createFakeClient();
@@ -3637,7 +3799,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3710,7 +3878,13 @@ describe("runCodexAppServerSideQuestion", () => {
         }, 0);
         return turnStartResult("turn-1");
       }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -3874,7 +4048,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const client = createFakeClient();
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
-        await client.requests[0]?.({
+        await client.handleRequest({
           id: 1,
           method: "account/chatgptAuthTokens/refresh",
         });
@@ -3977,12 +4151,6 @@ describe("runCodexAppServerSideQuestion", () => {
     { label: "after its request is written", written: true, interruptFails: false },
     { label: "before its request is written", written: false, interruptFails: false },
     {
-      label: "when Codex proves its native turn already ended",
-      written: true,
-      interruptFails: false,
-      alreadyTerminal: true,
-    },
-    {
       label: "when its native thread cannot unsubscribe",
       written: true,
       interruptFails: false,
@@ -3997,7 +4165,7 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   ])(
     "scopes side-turn abort cleanup $label",
-    async ({ written, interruptFails, retirementFails, alreadyTerminal, unsubscribeFails }) => {
+    async ({ written, interruptFails, retirementFails, unsubscribeFails }) => {
       const controller = new AbortController();
       const harness = createClientHarness();
       if (retirementFails) {
@@ -4038,14 +4206,9 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
         harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
         harness.send(
-          alreadyTerminal
-            ? {
-                id: interrupt.id,
-                error: { code: -32_600, message: "no active turn to interrupt" },
-              }
-            : interruptFails
-              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
-              : { id: interrupt.id, result: {} },
+          interruptFails
+            ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+            : { id: interrupt.id, result: {} },
         );
       } else {
         controller.abort("side-start-cancelled");
@@ -4093,7 +4256,13 @@ describe("runCodexAppServerSideQuestion", () => {
         queueMicrotask(() => controller.abort());
         return turnStartResult("turn-1");
       }
-      if (method === "turn/interrupt" || method === "thread/unsubscribe") {
+      if (method === "turn/interrupt") {
+        queueMicrotask(() =>
+          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
+        );
+        return {};
+      }
+      if (method === "thread/unsubscribe") {
         return {};
       }
       throw new Error(`unexpected request: ${method}`);
@@ -4107,12 +4276,14 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       ),
     ).rejects.toThrow("Codex /btw was aborted.");
-    expect(client.request.mock.calls.filter(([method]) => method === "turn/interrupt")).toEqual([
-      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }, { timeoutMs: 60_000 }],
+    expect(
+      client.request.mock.calls
+        .filter(([method]) => method === "turn/interrupt" || method === "thread/unsubscribe")
+        .map(([method, params]) => [method, params]),
+    ).toEqual([
+      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }],
+      ["thread/unsubscribe", { threadId: "side-thread" }],
     ]);
-    expect(client.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual(
-      [["thread/unsubscribe", { threadId: "side-thread" }, { timeoutMs: 60_000 }]],
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

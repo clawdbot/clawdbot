@@ -1008,6 +1008,9 @@ Report facts from the execution boundary:
 
 - Pass the protocol call id when one exists, the canonical tool name, and the
   arguments that actually reached the tool after preparation or hook rewrites.
+- Pass the original host tool result or thrown error as `result`. Core reads
+  private effect provenance from that object; serialized fields cannot provide
+  this proof. Preserve internal result state when projecting a host result.
 - Set `executionStarted: false` when validation, approval, or another guard
   stopped the call before the tool implementation began. Once dispatch may
   have happened, report `true` conservatively.

@@ -363,6 +363,7 @@ describe("mcp connection resolver helpers", () => {
           return new Map();
         },
         async stopChannel() {},
+        releaseChannelRouteHandoffs() {},
         pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());

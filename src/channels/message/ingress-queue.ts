@@ -1517,6 +1517,7 @@ export function createChannelIngressQueue<
           }
           const batchSize = 500;
           const protectedSet = new Set(protectIds);
+          // Page before filtering protected IDs; they still occupy their retention slots.
           while (true) {
             const rowsToDelete = executeSqliteQuerySync(
               tx.db,
@@ -1527,8 +1528,9 @@ export function createChannelIngressQueue<
                 .where("status", "=", status)
                 .orderBy("updated_at", "desc")
                 .orderBy("event_id", "desc")
-                .limit(maxEntries + batchSize),
-            ).rows.slice(maxEntries);
+                .limit(batchSize)
+                .offset(maxEntries),
+            ).rows;
             const ids = rowsToDelete
               .map((row) => row.event_id)
               .filter((id) => !protectedSet.has(id));

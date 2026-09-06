@@ -309,6 +309,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     cwd: params.cwd,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
+    requireWritableSandbox: params.requireWritableSandbox,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,

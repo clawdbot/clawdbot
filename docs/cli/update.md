@@ -61,8 +61,10 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
-Interactive updates show the current step and elapsed time. When output is
-piped or captured in a log, each step prints its progress without animation.
+Interactive updates show phase transitions, the current step, and elapsed time.
+The phases match the Control UI: requested, staging, validating, optional
+repairing, activating, restarting, verifying, and finished. When output is
+piped or captured in a log, progress prints without animation.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
@@ -170,10 +172,10 @@ reason. CLI invocations rejected before admission leave state untouched. The sam
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome.
 
-`openclaw update --json` includes `runId`. `openclaw update status --json`
+`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
-Human output, chat completion notices, and the `openclaw status` update line use
-the same report. The report shows recorded facts; an absent verification fact
+Human output, chat completion notices, the Control UI update view, and the
+`openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
 
 Gateway clients with `operator.admin` can inspect history:
@@ -222,6 +224,9 @@ openclaw update repair --accept-capabilities
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+Configured runtime plugins whose versions follow OpenClaw are checked against
+the newly installed core during post-update repair, even when the updater process
+started on the previous version.
 It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.

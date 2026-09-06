@@ -14,6 +14,7 @@ import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-c
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import {
   advancePreparedModelRuntimeConfig,
+  loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
@@ -854,6 +855,75 @@ describe("gateway chat metadata lifecycle composition", () => {
     await vi.waitFor(
       async () => await expectAvailable(lifecycle, false, orderedConfig, orderedContext),
     );
+  });
+
+  it("retains a settled metadata failure during a later independent auth publication", async () => {
+    mocks.configuredAgentIds = ["main", "worker"];
+    await publishOwner();
+    const lifecycle = await createLifecycle();
+    const ownedSidecars: GatewayPostReadySidecarHandle[] = [];
+    const failure = new Error("worker auth publication failed");
+    const phases: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      phases.push(event.phase);
+    });
+    let failedDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let healthyDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let metadataRead: Promise<void> | undefined;
+    try {
+      await lifecycle.attachContext(context, ownedSidecars);
+      await expectAvailable(lifecycle);
+      mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(failure);
+      expect(mocks.mutationListener).toBeTypeOf("function");
+      mocks.mutationListener!({
+        agentDir: state.agentDir("worker"),
+        affectsInheritedStores: false,
+      });
+      failedDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+      await expect(failedDispatch).rejects.toBe(failure);
+      await expect(lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
+      // Drain the completed publication's promise continuations before starting a new
+      // transaction; this must not exercise two components of one queued transaction.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(phases).toEqual(["invalidated", "failed"]);
+      phases.length = 0;
+
+      mocks.mutationListener!({
+        agentDir: state.agentDir("main"),
+        affectsInheritedStores: false,
+      });
+      healthyDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
+      let metadataOutcome: unknown = Symbol("pending");
+      metadataRead = lifecycle.read({ agentId: "main" }).then(
+        (value) => {
+          metadataOutcome = value;
+        },
+        (error: unknown) => {
+          metadataOutcome = error;
+        },
+      );
+      await expect(healthyDispatch).resolves.toMatchObject({ agentId: "main" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(phases).toContain("invalidated");
+      expect(phases).not.toContain("published");
+      expect(getPreparedModelCatalogOwnerSnapshot({ agentId: "worker", config })).toBeUndefined();
+      // The healthy component can admit work, but it cannot make the failed global
+      // metadata generation ready or turn its recorded failure into an endless wait.
+      expect(metadataOutcome).toBe(failure);
+
+      await publishOwner();
+      await expectAvailable(lifecycle);
+    } finally {
+      unregister();
+      for (const sidecar of ownedSidecars) {
+        await sidecar.stop();
+      }
+      await Promise.allSettled([failedDispatch, healthyDispatch, metadataRead]);
+    }
   });
 
   it("recovers a failed catch-up when the prepared owner publishes after attachment", async () => {

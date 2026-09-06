@@ -41,6 +41,7 @@ export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength
 
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
@@ -111,13 +112,18 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
   SessionGitHubPublicationNeedsConfirmationSchema,
 ]);
 
-export const SessionGitHubOptionsParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const SessionGitHubOptionsParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
 export const SessionGitHubStatusParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
 });
 export const SessionGitHubConfirmParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
   generation: PersonalGitHubGenerationSchema,
   account: PersonalGitHubAccountSchema,

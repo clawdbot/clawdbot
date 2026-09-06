@@ -7,9 +7,11 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
+const authorize = vi.hoisted(() => vi.fn(async () => ({ error: null })));
+const envelope = vi.hoisted(() => vi.fn(async (run: () => Promise<unknown>) => await run()));
 
 vi.mock("../server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
+  authorizeGatewayRequestPreDispatch: authorize,
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
   }),
@@ -17,7 +19,7 @@ vi.mock("../server-methods.js", () => ({
     _method: string,
     _client: unknown,
     run: () => Promise<unknown>,
-  ) => await run(),
+  ) => await envelope(run),
 }));
 
 vi.mock("./agent-request-preflight.js", () => ({
@@ -56,14 +58,60 @@ function createFacade(context = createContext()) {
 describe("createInternalAgentTurnFacade", () => {
   beforeEach(() => {
     startTurn.mockReset();
+    authorize.mockReset().mockResolvedValue({ error: null });
+    envelope.mockReset().mockImplementation(async (run) => await run());
   });
 
+  it.each(["authorization", "envelope"] as const)(
+    "rejects a source closed during %s before starting a turn",
+    async (boundary) => {
+      let current = true;
+      const assertAdmissionCurrent = () => {
+        if (!current) {
+          throw new Error("source closed");
+        }
+      };
+      if (boundary === "authorization") {
+        authorize.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          current = false;
+          return { error: null };
+        });
+      } else {
+        envelope.mockImplementationOnce(async (run) => {
+          await Promise.resolve();
+          current = false;
+          return await run();
+        });
+      }
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, { runId: "stale-source", status: "accepted" }, undefined]);
+      });
+
+      await expect(
+        createFacade().dispatchRaw(
+          { message: "test", idempotencyKey: "stale-source" },
+          { assertAdmissionCurrent },
+        ),
+      ).rejects.toThrow("source closed");
+      expect(startTurn).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves accepted/final ordering and acceptance metadata without frames", async () => {
+    let sourceCurrent = true;
+    const assertAdmissionCurrent = vi.fn(() => {
+      if (!sourceCurrent) {
+        throw new Error("source closed");
+      }
+    });
     let emitFinal!: () => void;
     const finalGate = new Promise<void>((resolve) => {
       emitFinal = resolve;
     });
-    startTurn.mockImplementation(async ({ io }) => {
+    startTurn.mockImplementation(async ({ io, assertAdmissionCurrent: admissionGuard }) => {
+      expect(admissionGuard).toBe(assertAdmissionCurrent);
+      admissionGuard();
       io.emitAcceptance([true, { runId: "run-1", status: "accepted" }, undefined], {
         runId: "run-1",
       });
@@ -77,7 +125,7 @@ describe("createInternalAgentTurnFacade", () => {
 
     const result = createFacade().dispatchRaw(
       { message: "test", idempotencyKey: "run-1" },
-      { expectFinal: true, onAccepted },
+      { expectFinal: true, onAccepted, assertAdmissionCurrent },
     );
     await vi.waitFor(() =>
       expect(onAccepted).toHaveBeenCalledWith({
@@ -85,6 +133,8 @@ describe("createInternalAgentTurnFacade", () => {
         status: "accepted",
       }),
     );
+    sourceCurrent = false;
+    const checksAtAcceptance = assertAdmissionCurrent.mock.calls.length;
     emitFinal();
 
     await expect(result).resolves.toEqual({
@@ -93,6 +143,7 @@ describe("createInternalAgentTurnFacade", () => {
       error: undefined,
       meta: { runId: "run-1", terminal: true },
     });
+    expect(assertAdmissionCurrent).toHaveBeenCalledTimes(checksAtAcceptance);
   });
 
   it("preserves post-acceptance Error identity", async () => {

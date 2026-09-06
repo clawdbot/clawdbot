@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
@@ -493,7 +493,9 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       changed: staged.changed,
     };
   }
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
+  const stagingRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-staged-result-"),
+  );
   try {
     for (const entry of staged.changedEntries) {
       const object = staged.objectsByPath.get(entry.path)!;

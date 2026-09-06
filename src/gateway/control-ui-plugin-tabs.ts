@@ -1,3 +1,4 @@
+import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
 // Descriptors come from the process-root registry installed by the gateway.
@@ -35,10 +36,10 @@ type ControlUiPluginWidgetKind = {
   label: string;
 };
 
-// `session` is a core-reserved widget-kind namespace. Core owns progress cards,
-// so their availability is scope-gated rather than plugin-gated.
+// `session` is core-reserved; its widgets are scope-gated rather than plugin-gated.
 const CORE_CONTROL_UI_WIDGET_KINDS: readonly ControlUiPluginWidgetKind[] = [
   { pluginId: "session", kind: "session:progress", label: "Session progress" },
+  { pluginId: "session", kind: BOARD_REPORT_WIDGET_KIND, label: "Report" },
 ];
 
 function findControlUiTabGatewayRoute(

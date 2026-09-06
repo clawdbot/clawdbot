@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import {
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvFilePath,
@@ -130,6 +131,10 @@ vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout: mocks.child,
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-processes.js")>()),

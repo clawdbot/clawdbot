@@ -1,7 +1,10 @@
 // Check Cli Bootstrap Imports tests cover check cli bootstrap imports script behavior.
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import fs, { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { performance } from "node:perf_hooks";
+import { build } from "tsdown";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
@@ -9,6 +12,11 @@ import {
   collectWorkerDeployArtifactErrors,
   listStaticImportSpecifiers,
 } from "../../scripts/check-cli-bootstrap-imports.mts";
+import {
+  createGatewayRunChunkMetadataPlugin,
+  GATEWAY_RUN_CHUNK_METADATA_PATH,
+  readGatewayRunChunks,
+} from "../../scripts/lib/gateway-run-chunk-metadata.mts";
 
 const tempRoots: string[] = [];
 
@@ -25,17 +33,27 @@ function writeFixture(root: string, relativePath: string, source: string): void 
   writeFileSync(target, source, "utf8");
 }
 
-function writeGatewayRunChunk(root: string, source = ""): void {
-  writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
+function writeGatewayRunChunk(root: string, source = "", distDir = "dist"): void {
+  writeFixture(root, `${distDir}/string-coerce.js`, "export const normalize = true;");
+  const chunkSource = [
+    'import "./string-coerce.js";',
+    "const GATEWAY_AUTH_MODES = [];",
+    "function addGatewayRunCommand(cmd) { return cmd; }",
+    source,
+  ].join("\n");
+  writeFixture(root, `${distDir}/run-gateway.js`, chunkSource);
   writeFixture(
     root,
-    "dist/run-gateway.js",
-    [
-      'import "./string-coerce.js";',
-      "const GATEWAY_AUTH_MODES = [];",
-      "function addGatewayRunCommand(cmd) { return cmd; }",
-      source,
-    ].join("\n"),
+    `${distDir}/cli/gateway-run-chunk.json`,
+    JSON.stringify({
+      version: 1,
+      chunks: [
+        {
+          fileName: "run-gateway.js",
+          sha256: createHash("sha256").update(chunkSource).digest("hex"),
+        },
+      ],
+    }),
   );
 }
 
@@ -88,13 +106,121 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("reports missing gateway run chunk", () => {
+  it("requires build-owned gateway metadata for current builds", () => {
     const root = makeTempRoot();
-
+    writeGatewayRunChunk(root);
+    rmSync(join(root, "dist/cli/gateway-run-chunk.json"));
     expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+      expect.stringMatching(
+        /^CLI bootstrap import guard could not read gateway run chunk metadata: .*Run pnpm build first\.$/u,
+      ),
+    ]);
+    expect(
+      collectGatewayRunChunkBudgetErrors({ rootDir: root, legacyGatewayChunkDiscovery: true }),
+    ).toEqual([]);
+  });
+
+  it("reports missing gateway chunks in frozen legacy targets", () => {
+    const root = makeTempRoot();
+    expect(
+      collectGatewayRunChunkBudgetErrors({ rootDir: root, legacyGatewayChunkDiscovery: true }),
+    ).toEqual([
       "CLI bootstrap import guard could not find the bundled gateway run chunk. Run pnpm build first.",
     ]);
   });
+
+  it.each(["dist", "custom-output"])("reads only the owned gateway graph under %s", (distDir) => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root, "", distDir);
+    const unrelatedPath = join(root, distDir, "plugins/unrelated.js");
+    writeFixture(root, `${distDir}/plugins/unrelated.js`, "export const unrelated = true;");
+    const reads: string[] = [];
+    const observedFs = new Proxy(fs, {
+      get(target, property, receiver) {
+        if (property !== "readFileSync") {
+          return Reflect.get(target, property, receiver);
+        }
+        return (...args: Parameters<typeof fs.readFileSync>) => {
+          reads.push(String(args[0]));
+          return Reflect.apply(target.readFileSync, target, args);
+        };
+      },
+    });
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root, distDir, fs: observedFs })).toEqual(
+      [],
+    );
+    expect(reads).not.toContain(unrelatedPath);
+  });
+
+  it("records bounded reads alongside legacy discovery", () => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root);
+    for (let index = 0; index < 128; index += 1) {
+      writeFixture(
+        root,
+        `dist/plugins/unrelated-${index}.js`,
+        `export const fixture = "${"x".repeat(4096)}";`,
+      );
+    }
+    let unrelatedReads = 0;
+    const observedFs = new Proxy(fs, {
+      get(target, property, receiver) {
+        if (property !== "readFileSync") {
+          return Reflect.get(target, property, receiver);
+        }
+        return (...args: Parameters<typeof fs.readFileSync>) => {
+          if (String(args[0]).includes(`${join("dist", "plugins")}${sep}`)) {
+            unrelatedReads += 1;
+          }
+          return Reflect.apply(target.readFileSync, target, args);
+        };
+      },
+    });
+    const start = performance.now();
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root, fs: observedFs })).toEqual([]);
+    const metadataMs = performance.now() - start;
+    expect(unrelatedReads).toBe(0);
+    const legacyStart = performance.now();
+    expect(
+      collectGatewayRunChunkBudgetErrors({
+        rootDir: root,
+        fs: observedFs,
+        legacyGatewayChunkDiscovery: true,
+      }),
+    ).toEqual([]);
+    const legacyMs = performance.now() - legacyStart;
+    expect(unrelatedReads).toBe(128);
+    console.log(
+      JSON.stringify({
+        proof: "gateway-locator-check-work",
+        metadataMs,
+        legacyMs,
+        removedUnrelatedReads: unrelatedReads,
+      }),
+    );
+  });
+
+  it.each(["invalid JSON", "empty locator", "changed chunk"])(
+    "rejects %s without scanning for a replacement",
+    (condition) => {
+      const root = makeTempRoot();
+      writeGatewayRunChunk(root);
+      if (condition === "changed chunk") {
+        writeFixture(root, "dist/run-gateway.js", "export const changed = true;");
+      } else {
+        writeFixture(
+          root,
+          "dist/cli/gateway-run-chunk.json",
+          condition === "invalid JSON" ? "not-json" : '{"version":1,"chunks":[]}',
+        );
+      }
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+        expect.stringMatching(
+          /^CLI bootstrap import guard could not read gateway run chunk metadata: .*Run pnpm build first\.$/u,
+        ),
+      ]);
+    },
+  );
 
   it("reports cold static imports in the gateway run chunk", () => {
     const root = makeTempRoot();
@@ -212,4 +338,82 @@ describe("check-cli-bootstrap-imports", () => {
       );
     },
   );
+});
+
+function createGatewayBuildFixture() {
+  const root = fs.realpathSync(makeTempRoot());
+  fs.mkdirSync(join(root, "src/cli/gateway-cli"), { recursive: true });
+  fs.writeFileSync(join(root, "package.json"), '{"name":"locator-fixture","type":"module"}');
+  // Deliberately no source-text markers: the module identity owns this locator.
+  fs.writeFileSync(
+    join(root, "src/cli/gateway-cli/run-command.ts"),
+    "export function register() { return 42; }",
+  );
+  fs.writeFileSync(
+    join(root, "entry.ts"),
+    'export const run = () => import("./src/cli/gateway-cli/run-command.ts");',
+  );
+  return root;
+}
+
+// Real emission protects filename, minification and source-map behavior together.
+describe("gateway run chunk metadata", () => {
+  it.each([false, true])("binds emitted bytes with sourcemap=%s", async (sourcemap) => {
+    const root = createGatewayBuildFixture();
+    const plugin = createGatewayRunChunkMetadataPlugin(root);
+    let producerMs = 0;
+    const handler = plugin.generateBundle.handler;
+    plugin.generateBundle.handler = function (...args) {
+      const start = performance.now();
+      try {
+        return handler.apply(this, args);
+      } finally {
+        producerMs += performance.now() - start;
+      }
+    };
+    const bundles = await build({
+      config: false,
+      cwd: root,
+      entry: { "cli/run-main": "entry.ts" },
+      outDir: "dist",
+      dts: false,
+      minify: true,
+      sourcemap,
+      plugins: [plugin],
+      logLevel: "silent",
+    });
+    try {
+      const chunks = readGatewayRunChunks(join(root, "dist"));
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]?.source).not.toContain("GATEWAY_AUTH_MODES");
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
+      fs.appendFileSync(chunks[0]!.filePath, "\n// changed after emission\n");
+      expect(() => readGatewayRunChunks(join(root, "dist"))).toThrow(
+        "does not match its build metadata",
+      );
+      // Evidence only, not a timing threshold that would depend on the runner.
+      console.log(JSON.stringify({ proof: "gateway-locator-producer", sourcemap, producerMs }));
+    } finally {
+      for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+    }
+  });
+
+  it("permits subset builds that do not include the gateway command", async () => {
+    const root = createGatewayBuildFixture();
+    fs.writeFileSync(join(root, "entry.ts"), "export const unrelated = 1;");
+    const bundles = await build({
+      config: false,
+      cwd: root,
+      entry: "entry.ts",
+      outDir: "dist",
+      dts: false,
+      plugins: [createGatewayRunChunkMetadataPlugin(root)],
+      logLevel: "silent",
+    });
+    try {
+      expect(fs.existsSync(join(root, "dist", GATEWAY_RUN_CHUNK_METADATA_PATH))).toBe(false);
+    } finally {
+      for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+    }
+  });
 });

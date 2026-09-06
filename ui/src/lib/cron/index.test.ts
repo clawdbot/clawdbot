@@ -1187,6 +1187,26 @@ describe("cron controller", () => {
     expect(state.cronForm.timeoutSeconds).toBe("0");
   });
 
+  it("loads declared Workshop review jobs as locked rows", async () => {
+    const legacyJob = createCronJob({
+      id: "skill-review",
+      name: "Skill review",
+      declarationKey: "skill-collection-review:main",
+      payload: { kind: "agentTurn", message: "Review the Workshop collection." },
+    });
+    const request = createMethodRequest({
+      "cron.list": cronJobsListResponse([legacyJob]),
+    });
+    const state = createStateWithRequest(request);
+
+    await loadCronJobsPage(state);
+    expect(state.cronJobs).toEqual([legacyJob]);
+
+    startCronEdit(state, legacyJob);
+    expect(state.cronForm.payloadKind).toBe("agentTurn");
+    expect(state.cronForm.payloadLocked).toBe(true);
+  });
+
   it("preserves command payloads when editing Control UI metadata", async () => {
     const job = createCronJob({
       id: "job-command",

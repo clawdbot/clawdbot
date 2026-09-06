@@ -34,6 +34,7 @@ import {
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
+import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import {
@@ -130,6 +131,8 @@ function evaluateWorkflowExpression(
     dispatchId?: string;
     draft?: boolean;
     eventName: "pull_request" | "push" | "workflow_dispatch" | "repository_dispatch" | "schedule";
+    failed?: boolean;
+    env?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -173,6 +176,7 @@ function evaluateWorkflowExpression(
   }
   return runInNewContext(source, {
     always: () => true,
+    failure: () => context.failed ?? false,
     cancelled: () => context.cancelled ?? false,
     // GitHub expression builtins the runner-routing clauses use.
     contains: (haystack: unknown, needle: unknown) =>
@@ -221,6 +225,7 @@ function evaluateWorkflowExpression(
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
     },
+    env: context.env ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: context.steps ?? {},
@@ -5710,7 +5715,10 @@ setImmediate(() => {
     const prepareFallback = step("Prepare dependency cache miss fallback");
     const setupPnpm = step("Setup pnpm");
     const install = step("Install dependencies");
-    const installScript = expectDefined(install.run, "Install dependencies script");
+    const installScript = readFileSync(
+      ".github/actions/setup-node-env/install-dependencies.sh",
+      "utf8",
+    );
     const cachePaths =
       "node_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
 
@@ -5765,6 +5773,7 @@ setImmediate(() => {
     expect(setupPnpm.with?.["cache-mode"]).toContain("'restore' || 'off'");
     expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(setupPnpm));
 
+    expect(install.run).toBe('bash "$GITHUB_ACTION_PATH/install-dependencies.sh"');
     expect(installScript).toContain("export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink");
     expect(installScript).toContain("run_pnpm_install --offline");
     expect(installScript).toContain("run_pnpm_install --prefer-offline");
@@ -5940,6 +5949,188 @@ setImmediate(() => {
       },
     });
     expect(dependencySave.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    {
+      name: "uncached frozen",
+      cache: false,
+      frozen: "true",
+      exits: [0],
+      modes: ["--prefer-offline"],
+      status: 0,
+    },
+    {
+      name: "uncached mutable",
+      cache: false,
+      frozen: "false",
+      exits: [0],
+      modes: ["--prefer-offline"],
+      status: 0,
+    },
+    {
+      name: "invalid frozen policy",
+      cache: false,
+      frozen: "invalid",
+      exits: [],
+      modes: [],
+      status: 2,
+    },
+    {
+      name: "uncached failure",
+      cache: false,
+      frozen: "true",
+      exits: [23],
+      modes: ["--prefer-offline"],
+      status: 23,
+    },
+    {
+      name: "cached success",
+      cache: true,
+      frozen: "true",
+      exits: [0],
+      modes: ["--offline"],
+      status: 0,
+    },
+    {
+      name: "cached relink",
+      cache: true,
+      frozen: "true",
+      exits: [23, 0],
+      modes: ["--offline", "--offline"],
+      status: 0,
+    },
+    {
+      name: "cached store rebuild",
+      cache: true,
+      frozen: "true",
+      exits: [23, 23, 0],
+      modes: ["--offline", "--offline", "--prefer-offline"],
+      status: 0,
+    },
+    {
+      name: "cached terminal failure",
+      cache: true,
+      frozen: "true",
+      exits: [23, 23, 23],
+      modes: ["--offline", "--offline", "--prefer-offline"],
+      status: 23,
+    },
+  ])("executes the dependency install recipe: $name", ({ cache, frozen, exits, modes, status }) => {
+    const root = tempDirs.make("openclaw-install-recipe-");
+    const workspace = path.join(root, "workspace");
+    const bin = path.join(root, "bin");
+    const store = path.join(root, "store");
+    const log = path.join(root, "calls.jsonl");
+    const githubEnv = path.join(root, "github.env");
+    const payload = path.join(root, "payload");
+    for (const directory of [
+      bin,
+      store,
+      ...["", "ui", "packages", "extensions", "examples"].map((entry) =>
+        path.join(workspace, entry),
+      ),
+    ]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    mkdirSync(path.join(workspace, "node_modules"));
+    writeFileSync(path.join(workspace, "node_modules", "before"), "");
+    writeFileSync(path.join(store, "before"), "");
+    symlinkSync(process.execPath, path.join(bin, "node"));
+    const pnpm = path.join(bin, "pnpm");
+    writeFileSync(
+      pnpm,
+      "#!" +
+        process.execPath +
+        "\n" +
+        String.raw`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "-v") { console.log("fixture"); process.exit(0); }
+const log = process.env.RECIPE_LOG;
+const count = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").length : 0;
+fs.appendFileSync(log, JSON.stringify({ args, cwd: process.cwd(), importMethod: process.env.PNPM_CONFIG_PACKAGE_IMPORT_METHOD }) + "\n");
+process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
+`,
+    );
+    chmodSync(pnpm, 0o755);
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const step: WorkflowStep = expectDefined(
+      action.runs.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Install dependencies",
+      ),
+      "Install dependencies",
+    );
+    const run = expectDefined(step.run, "Install dependencies script");
+    const config = {
+      PNPM_CONFIG_CACHE_DIR: path.join(root, "metadata"),
+      PNPM_CONFIG_CHILD_CONCURRENCY: "3",
+      PNPM_CONFIG_NETWORK_CONCURRENCY: "4",
+      PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "copy",
+      PNPM_CONFIG_STORE_DIR: store,
+      PNPM_CONFIG_VIRTUAL_STORE_DIR: path.join(root, "virtual"),
+    };
+    const result = spawnSync(
+      "bash",
+      ["-c", run.trimEnd() + ' && printf reached > "$RECIPE_PAYLOAD"'],
+      {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          NODE_BIN: bin,
+          GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
+          GITHUB_WORKSPACE: workspace,
+          GITHUB_ENV: githubEnv,
+          CI: "true",
+          DEPENDENCY_CACHE: String(cache),
+          DEPENDENCY_CACHE_HIT: String(cache),
+          FROZEN_LOCKFILE: frozen,
+          RECIPE_LOG: log,
+          RECIPE_PAYLOAD: payload,
+          RECIPE_EXITS: JSON.stringify(exits),
+          ...config,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(status);
+    expect(existsSync(payload)).toBe(status === 0);
+    const calls: Array<{ args: string[]; cwd: string; importMethod: string }> = existsSync(log)
+      ? readFileSync(log, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [];
+    const expectedArgs = [
+      "install",
+      "--config.ignore-scripts=false",
+      "--config.engine-strict=false",
+      "--config.enable-pre-post-scripts=true",
+      "--config.side-effects-cache=true",
+      ...(frozen === "true" ? ["--frozen-lockfile"] : []),
+      "--config.cache-dir=" + config.PNPM_CONFIG_CACHE_DIR,
+      "--config.child-concurrency=3",
+      "--config.network-concurrency=4",
+      "--config.package-import-method=" + (cache ? "hardlink" : "copy"),
+      "--config.store-dir=" + store,
+      "--config.virtual-store-dir=" + config.PNPM_CONFIG_VIRTUAL_STORE_DIR,
+    ];
+    expect(calls).toEqual(
+      modes.map((mode) => ({
+        args: [...expectedArgs, mode],
+        cwd: workspace,
+        importMethod: cache ? "hardlink" : "copy",
+      })),
+    );
+    expect(existsSync(path.join(workspace, "node_modules", "before"))).toBe(modes.length < 2);
+    expect(existsSync(path.join(store, "before"))).toBe(modes.length < 3);
+    expect(existsSync(githubEnv)).toBe(cache && status === 0);
+    if (cache && status === 0) {
+      expect(readFileSync(githubEnv, "utf8")).toBe(
+        "OPENCLAW_BUILD_ALL_NO_PNPM=1\npnpm_config_verify_deps_before_run=false\n",
+      );
+    }
   });
 
   it.skipIf(process.platform === "win32")(
@@ -6138,7 +6329,13 @@ server.listen(0, "127.0.0.1", () => {
             }),
           );
         writeConsumerManifest("1.0.0");
-        const installArgs = ["install", "--ignore-scripts", "--config.engine-strict=false"];
+        // The fixture registry serves only its test package, not the preserved project pnpm pin.
+        const installArgs = [
+          "install",
+          "--ignore-scripts",
+          "--config.engine-strict=false",
+          "--pm-on-fail=ignore",
+        ];
         const onlineArgs = [...installArgs, `--registry=${registryUrl}`];
         const seeded = runPnpm([...onlineArgs, "--lockfile-only"], workspace);
         expect(seeded.status, `${seeded.stdout}${seeded.stderr}`).toBe(0);
@@ -6550,6 +6747,7 @@ server.listen(0, "127.0.0.1", () => {
 
       for (const relativePath of [
         "node-version.mjs",
+        ".github/actions/setup-node-env/install-dependencies.sh",
         "scripts/prepare-git-hooks.mjs",
         "scripts/lib/package-lifecycle-marker.mjs",
       ]) {
@@ -9237,6 +9435,37 @@ server.listen(0, "127.0.0.1", () => {
       expect(existsSync(marker)).toBe(testCase.helperPresent);
     },
   );
+
+  it.each([
+    { historical: false, hasWatchRtc: true, expected: true },
+    { historical: false, hasWatchRtc: false, expected: true },
+    { historical: true, hasWatchRtc: true, expected: true },
+    { historical: true, hasWatchRtc: false, expected: false },
+  ])("prepares Watch RTC by source capability: %j", ({ historical, hasWatchRtc, expected }) => {
+    const workflow = readCiWorkflow();
+    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+      const install = workflow.jobs[jobName].steps.find(
+        (step: WorkflowStep) => step.name === "Install Watch Rust toolchain",
+      );
+      const engine = workflow.jobs["ios-build"].steps.find(
+        (step: WorkflowStep) => step.name === "Test Watch RTC engine",
+      );
+      for (const phase of ["tests", "release"]) {
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          env: { HISTORICAL_TARGET: String(historical) },
+          matrix: { phase },
+          fileHashes: hasWatchRtc ? { "apps/shared/OpenClawWatchRTC/Cargo.toml": "present" } : {},
+        };
+        expect(evaluateWorkflowExpression(`\${{ ${install.if} }}`, context)).toBe(expected);
+        expect(evaluateWorkflowExpression(`\${{ ${engine.if} }}`, context)).toBe(
+          expected && phase === "tests",
+        );
+      }
+    }
+  });
 
   it("retries macOS release builds only when Sparkle metadata is incomplete", () => {
     const workflow = readCiWorkflow();
@@ -12305,6 +12534,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
     expect(helperPrivateServerFiles.toSorted()).toEqual([
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
@@ -12890,17 +13120,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       realGatewaySteps[0],
       "combined real-Gateway Control UI E2E suite",
     );
-    expect(
-      realGatewayStep.run.startsWith(
-        "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ",
-      ),
-    ).toBe(true);
-    expect(
-      realGatewayStep.run
-        .split(" ")
-        .filter((argument: string) => argument.endsWith(".e2e.test.ts"))
-        .toSorted(),
-    ).toEqual(uiE2eRealGatewayTestFiles.toSorted());
     expect(realGatewayStep.run).not.toContain("--retry");
     expect(realGatewayStep.run).not.toContain("--hookTimeout");
     expect(realGatewayStep.run).not.toContain("--testTimeout");
@@ -12923,12 +13142,124 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayBuildIndex).toBeGreaterThan(uiE2eRealGateway.steps.indexOf(realGatewaySetup));
     expect(realGatewayBuildIndex).toBeLessThan(realGatewayIndex);
     expect(realGatewayStep.env).toEqual({
+      FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
       OPENCLAW_CAPTURE_UI_PROOF:
         "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",
       OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
     });
     expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
   });
+
+  it.each([
+    { failed: false, captured: false },
+    { failed: false, captured: true },
+    { failed: true, captured: false },
+    { failed: true, captured: true },
+  ])("uploads only captured synthetic widget failures: %j", ({ failed, captured }) => {
+    const artifactRoot = ".artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*";
+    const timeline = `${artifactRoot}/widget-prompt-failure.json`;
+    for (const job of [
+      readCiWorkflow().jobs["checks-ui-e2e"],
+      readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml").jobs.test,
+    ]) {
+      const upload = expectDefined(
+        job.steps.find(
+          (step: WorkflowStep) => step.name === "Upload synthetic widget prompt failure evidence",
+        ),
+        "synthetic widget upload",
+      );
+      expect(
+        evaluateWorkflowExpression(`\${{ ${upload.if} }}`, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+          fileHashes: captured ? { [timeline]: "present" } : {},
+        }),
+      ).toBe(failed && captured);
+      expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+      expect(upload.with.path.trim().split("\n")).toEqual([
+        timeline,
+        `${artifactRoot}/*.png`,
+        `${artifactRoot}/*.webm`,
+      ]);
+      expect(upload.with["retention-days"]).toBe(7);
+      expect(upload.with["if-no-files-found"]).toBe("error");
+    }
+  });
+
+  it.each([
+    { frozen: false, prebuilt: true, childExit: 0 },
+    { frozen: true, prebuilt: true, childExit: 0 },
+    { frozen: true, prebuilt: false, childExit: 0 },
+    { frozen: false, prebuilt: false, childExit: 0 },
+    { frozen: true, prebuilt: true, childExit: 42 },
+  ])(
+    "selects the complete real-Gateway command without retrying failures (frozen: $frozen, prebuilt: $prebuilt, exit: $childExit)",
+    ({ frozen, prebuilt, childExit }) => {
+      const step = expectDefined(
+        readCiWorkflow().jobs["checks-ui-e2e-real-gateway"].steps.find(
+          (candidate: WorkflowStep) =>
+            candidate.name === "Test Control UI suites with a real Gateway",
+        ),
+        "real-Gateway command",
+      );
+      const directory = tempDirs.make("openclaw-real-gateway-command-");
+      const bin = path.join(directory, "bin");
+      const argsPath = path.join(directory, "args");
+      const callsPath = path.join(directory, "calls");
+      const prebuiltConfig = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
+      const serialConfig = "test/vitest/vitest.ui-e2e.config.ts";
+      mkdirSync(bin);
+      mkdirSync(path.join(directory, "test/vitest"), { recursive: true });
+      writeFileSync(path.join(directory, serialConfig), "export default {};\n");
+      if (prebuilt) {
+        writeFileSync(path.join(directory, prebuiltConfig), "export default {};\n");
+      }
+      writeFileSync(
+        path.join(bin, "node"),
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$REAL_GATEWAY_COMMAND_ARGS"\nprintf "called\\n" >> "$REAL_GATEWAY_COMMAND_CALLS"\nexit "$REAL_GATEWAY_COMMAND_EXIT"\n',
+        { mode: 0o755 },
+      );
+      const result = runWorkflowShellScript(expectDefined(step.run, "real-Gateway script"), {
+        cwd: directory,
+        env: {
+          ...process.env,
+          FROZEN_TARGET: String(frozen),
+          REAL_GATEWAY_COMMAND_ARGS: argsPath,
+          REAL_GATEWAY_COMMAND_CALLS: callsPath,
+          REAL_GATEWAY_COMMAND_EXIT: String(childExit),
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+      const missingCurrentConfig = !prebuilt && !frozen;
+      expect(result.status, result.stdout + result.stderr).toBe(
+        missingCurrentConfig ? 1 : childExit,
+      );
+      if (missingCurrentConfig) {
+        expect(result.stderr).toContain(`Current target is missing ${prebuiltConfig}`);
+        expect(existsSync(callsPath)).toBe(false);
+        return;
+      }
+      expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual(["called"]);
+      const args = readFileSync(argsPath, "utf8").trim().split("\n");
+      expect(args.slice(0, 6)).toEqual([
+        "scripts/run-vitest.mjs",
+        "run",
+        "--config",
+        prebuilt ? prebuiltConfig : serialConfig,
+        "--configLoader",
+        "runner",
+      ]);
+      expect(args.slice(6).toSorted()).toEqual(uiE2eRealGatewayTestFiles.toSorted());
+      expect(
+        resolveRunVitestSpawnEnv(
+          { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },
+          args.slice(1),
+        ).OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+      ).toBe("300000");
+    },
+  );
 
   it("builds artifacts once and smoke-tests the built CLI with Node and Bun", () => {
     const workflow = readCiWorkflow();
@@ -17611,7 +17942,9 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
   }
   expect(workflow.on.schedule).toEqual([{ cron: "11 5 * * *" }]);
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual([
+    "mode",
     "target_ref",
+    "baseline_ref",
     "profile",
     "repeat",
     "deep_profile",

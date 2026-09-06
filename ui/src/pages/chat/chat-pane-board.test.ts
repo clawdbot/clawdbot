@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { html, render, type nothing, type TemplateResult } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
@@ -13,10 +14,12 @@ import {
   type BoardProvider,
 } from "../../lib/board/provider.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   closeSlot,
@@ -26,6 +29,14 @@ import {
   sidebarActivePanel,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
+
+// These shell tests isolate board data and presentation; board rendering has its own suite.
+vi.mock("../../components/board/board-view.ts", () => {
+  if (!customElements.get("openclaw-board-view")) {
+    customElements.define("openclaw-board-view", class extends HTMLElement {});
+  }
+  return {};
+});
 
 const swarmModuleImport = vi.hoisted(() => {
   let markStarted!: () => void;
@@ -57,6 +68,8 @@ type TestChatPane = HTMLElement & {
   createSession: () => Promise<boolean>;
   paneId: string;
   presented: boolean;
+  visuallyPresented: boolean;
+  readonly conversationPresented: boolean;
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmationOpen: boolean;
@@ -72,21 +85,14 @@ type TestChatPane = HTMLElement & {
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
+  renderBoardPanel: (
+    board: ResolvedBoardView,
+    layout: ChatPageHost["sidebarLayout"],
+  ) => TemplateResult | typeof nothing;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
   requestUpdate: () => void;
 };
-
-type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
-
-function mockBoardProvider(sessionKey: string): MockProvider {
-  return boardProviderForSession({ sessionKey }) as MockProvider;
-}
-
-function nullBoardProvider(sessionKey: string): BoardProvider {
-  window.history.replaceState({}, "", "/");
-  return boardProviderForSession({ sessionKey });
-}
 
 let theme: ReturnType<typeof createApplicationTheme>;
 
@@ -100,6 +106,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
   pane.state = {
+    ...createInitialChatRealtimeState(),
     chatError: null,
     chatLoading: false,
     chatMessages: [],
@@ -139,7 +146,6 @@ function createGatewayBoardPane(params: {
   capabilities?: readonly string[];
   lifecycleConnected?: boolean;
 }) {
-  window.history.replaceState({}, "", "/");
   const pane = createTestPane();
   const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
   const removeListener = vi.fn();
@@ -173,10 +179,22 @@ function createGatewayBoardPane(params: {
   return { pane, snapshot, client, request, addEventListener, removeListener };
 }
 
+function configureGatewayMainSession(pane: TestChatPane, defaultAgentId: string, mainKey: string) {
+  pane.context.gateway.snapshot.hello = {
+    snapshot: {
+      sessionDefaults: {
+        defaultAgentId,
+        mainKey,
+        mainSessionKey: `agent:${defaultAgentId}:${mainKey}`,
+      },
+    },
+  } as ApplicationContext["gateway"]["snapshot"]["hello"];
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
-  window.history.replaceState({}, "", "/?mockBoard=1");
+  window.history.replaceState({}, "", "/");
   const settings = loadSettings();
   theme = createApplicationTheme(settings, createGatewayStoreTestStore({ settings }).gateway);
 });
@@ -230,7 +248,7 @@ describe("chat pane board shell", () => {
 
   it("keeps side-panel presentation independent from persisted Board data", () => {
     const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:current");
+    const provider = createMockBoardProvider("agent:main:current");
     const applyOps = vi.spyOn(provider, "applyOps");
     pane.boardProvider = provider;
     pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
@@ -240,7 +258,7 @@ describe("chat pane board shell", () => {
 
   it("opens split view once when the current task first gains a dashboard", async () => {
     const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:first-dashboard");
+    const provider = createMockBoardProvider("agent:main:first-dashboard");
     pane.state.sessionKey = "agent:main:first-dashboard";
     pane.sessionKey = "agent:main:first-dashboard";
     pane.boardProvider = provider;
@@ -270,11 +288,38 @@ describe("chat pane board shell", () => {
     expect(pane.onFaceChange).toHaveBeenCalledOnce();
   });
 
+  it("publishes conversation presentation per pane without overwriting shared session state", () => {
+    const first = createTestPane();
+    const second = createTestPane();
+    second.state = first.state;
+    const provider = createMockBoardProvider(first.state.sessionKey);
+    first.boardProvider = provider;
+    second.boardProvider = provider;
+    const changed = vi.fn();
+    first.addEventListener("openclaw-chat-pane-lifecycle-changed", changed);
+    first.updated();
+    second.updated();
+    expect(first.conversationPresented).toBe(true);
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledOnce();
+
+    first.visuallyPresented = false;
+    expect(first.conversationPresented).toBe(false);
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    first.presented = false;
+    first.visuallyPresented = true;
+    expect(first.conversationPresented).toBe(false);
+    first.updated();
+    expect(second.conversationPresented).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["terminal", "dashboard"] as const)(
     "applies a focused dashboard link over saved %s main only once",
     (slot) => {
       const pane = createTestPane();
-      pane.boardProvider = mockBoardProvider("agent:main:expanded-route");
+      pane.boardProvider = createMockBoardProvider("agent:main:expanded-route");
       pane.state.sessionKey = "agent:main:expanded-route";
       pane.sessionKey = "agent:main:expanded-route";
       pane.routeFace = "dashboard";
@@ -286,7 +331,8 @@ describe("chat pane board shell", () => {
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
-      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      pane.updated();
+      expect(pane.conversationPresented).toBe(false);
       expect(pane.state.sidebarLayout.expanded).toBe(true);
       expect(pane.state.sidebarLayout.open).toBe(true);
       expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
@@ -295,8 +341,9 @@ describe("chat pane board shell", () => {
       );
 
       pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
-      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      pane.updated();
       expect(pane.state.sidebarLayout.expanded).toBe(false);
+      expect(pane.conversationPresented).toBe(slot === "dashboard");
     },
   );
 
@@ -306,7 +353,7 @@ describe("chat pane board shell", () => {
       const pane = createTestPane();
       pane.state.sessionKey = "agent:main:saved-dashboard-layout";
       pane.sessionKey = pane.state.sessionKey;
-      pane.boardProvider = mockBoardProvider(pane.sessionKey);
+      pane.boardProvider = createMockBoardProvider(pane.sessionKey);
       pane.routeFace = "dashboard";
       pane.onFaceChange = vi.fn();
       const savedLayout = {
@@ -331,7 +378,7 @@ describe("chat pane board shell", () => {
 
   it("opens a dashboard route in split view only once", () => {
     const pane = createTestPane();
-    pane.boardProvider = mockBoardProvider("agent:main:dashboard-route");
+    pane.boardProvider = createMockBoardProvider("agent:main:dashboard-route");
     pane.state.sessionKey = "agent:main:dashboard-route";
     pane.sessionKey = "agent:main:dashboard-route";
     pane.routeFace = "dashboard";
@@ -444,7 +491,7 @@ describe("chat pane board shell", () => {
       create: vi.fn(async () => "agent:main:new"),
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -476,7 +523,7 @@ describe("chat pane board shell", () => {
       gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -498,7 +545,7 @@ describe("chat pane board shell", () => {
       auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["sessions.reset"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -521,7 +568,7 @@ describe("chat pane board shell", () => {
       reset,
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -539,7 +586,7 @@ describe("chat pane board shell", () => {
       reset: vi.fn(async () => "completed" as const),
     } as unknown as SessionCapability;
     const pane = createTestPane(sessions);
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
 
     const pending = pane.createSession();
     await Promise.resolve();
@@ -554,12 +601,12 @@ describe("chat pane board shell", () => {
 
   it("does not share reset confirmation across sessions", async () => {
     const pane = createTestPane();
-    pane.boardProvider = mockBoardProvider("agent:main:first");
+    pane.boardProvider = createMockBoardProvider("agent:main:first");
     pane.state.sessionKey = "agent:main:first";
 
     const first = pane.confirmConversationReset();
     pane.state.sessionKey = "agent:main:second";
-    pane.boardProvider = mockBoardProvider("agent:main:second");
+    pane.boardProvider = createMockBoardProvider("agent:main:second");
     const second = pane.confirmConversationReset();
 
     await expect(first).resolves.toBe(false);
@@ -596,7 +643,7 @@ describe("chat pane board shell", () => {
 
   it("keeps chat-only reset confirmation disabled", async () => {
     const pane = createTestPane();
-    pane.boardProvider = nullBoardProvider("agent:main:current");
+    pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
     expect(pane.resetConfirmationOpen).toBe(false);
@@ -604,7 +651,7 @@ describe("chat pane board shell", () => {
 
   it("maps transient Board presentation commands onto the dashboard panel", () => {
     const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:current");
+    const provider = createMockBoardProvider("agent:main:current");
     pane.boardProvider = provider;
     pane.onFaceChange = vi.fn();
     const unsubscribe = provider.events.subscribe((event) => pane.handleBoardCommand(event));
@@ -631,30 +678,13 @@ describe("chat pane board shell", () => {
 
   it("restores one board view across equivalent main session keys", () => {
     const pane = createTestPane();
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          ...pane.context.gateway.snapshot,
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "agent:main:main",
-              },
-            },
-          } as never,
-        },
-      },
-    };
+    configureGatewayMainSession(pane, "main", "main");
     pane.state.sessionKey = "agent:main:main";
-    pane.boardProvider = mockBoardProvider("main");
+    pane.boardProvider = createMockBoardProvider("main");
     pane.routeFace = "dashboard";
     pane.persistBoardSessionView({ activeTabId: "research" });
 
-    pane.boardProvider = mockBoardProvider("agent:main:main");
+    pane.boardProvider = createMockBoardProvider("agent:main:main");
 
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "research",
@@ -677,7 +707,7 @@ describe("chat pane board shell", () => {
   it("uses in-memory tab preferences while the route owns the face", () => {
     const pane = createTestPane();
     pane.routeFace = "dashboard";
-    pane.boardProvider = mockBoardProvider("agent:main:current");
+    pane.boardProvider = createMockBoardProvider("agent:main:current");
     vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
     });
@@ -709,24 +739,24 @@ describe("chat pane board shell", () => {
     firstPane.routeFace = "dashboard";
     firstPane.state.sessionKey = "agent:main:first";
     firstPane.state.settings = initialSettings;
-    firstPane.boardProvider = mockBoardProvider("agent:main:first");
+    firstPane.boardProvider = createMockBoardProvider("agent:main:first");
     const secondPane = createTestPane();
     secondPane.routeFace = "dashboard";
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.state.settings = initialSettings;
-    secondPane.boardProvider = mockBoardProvider("agent:main:second");
+    secondPane.boardProvider = createMockBoardProvider("agent:main:second");
 
     firstPane.persistBoardSessionView({ activeTabId: "research" });
 
     secondPane.state.sessionKey = "agent:main:first";
-    secondPane.boardProvider = mockBoardProvider("agent:main:first");
+    secondPane.boardProvider = createMockBoardProvider("agent:main:first");
     expect(secondPane.resolveBoardView()).toMatchObject({
       face: "dashboard",
       activeTabId: "research",
     });
 
     secondPane.state.sessionKey = "agent:main:second";
-    secondPane.boardProvider = mockBoardProvider("agent:main:second");
+    secondPane.boardProvider = createMockBoardProvider("agent:main:second");
     secondPane.persistBoardSessionView({ activeTabId: "main" });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
@@ -738,27 +768,68 @@ describe("chat pane board shell", () => {
   it("resolves configured main aliases before selecting a provider", () => {
     const pane = createTestPane();
     pane.state.sessionKey = "primary";
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          ...pane.context.gateway.snapshot,
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "work",
-                mainKey: "primary",
-                mainSessionKey: "agent:work:primary",
-              },
-            },
-          } as never,
-        },
-      },
-    };
+    configureGatewayMainSession(pane, "work", "primary");
 
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
   });
+
+  it.each([
+    { key: "notes", acknowledged: "agent:research:notes", globalScope: false },
+    { key: "global", acknowledged: "agent:research:global", globalScope: true },
+    { key: "agent:research:global", acknowledged: "agent:research:global", globalScope: false },
+  ])(
+    "passes the admitted board owner to widgets while retaining $key",
+    async ({ key, acknowledged, globalScope }) => {
+      const { pane, request } = createGatewayBoardPane({ sessionKey: key });
+      pane.state.assistantAgentId = "research";
+      pane.state.agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: globalScope ? "global" : "per-sender",
+        agents: [],
+      };
+      const snapshot = { sessionKey: acknowledged, revision: 1, tabs: [], widgets: [] };
+      request.mockResolvedValue(snapshot);
+      const container = document.createElement("div");
+      const layout = openSlot({ columns: [] }, "dashboard");
+      const draw = () => render(pane.renderBoardPanel(pane.resolveBoardView(), layout), container);
+      const target = () =>
+        (
+          container.querySelector("openclaw-board-view") as
+            | (HTMLElement & { session: { sessionKey: string; agentId?: string } })
+            | null
+        )?.session;
+      try {
+        const provider = pane.resolveBoardProvider();
+        await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+        draw();
+        expect(target()).toEqual({ sessionKey: key, agentId: "research" });
+        expect(request).toHaveBeenCalledWith("board.get", {
+          sessionKey: key,
+          ...(key === "notes" ? {} : { agentId: "research" }),
+        });
+        if (key === "notes") {
+          let complete!: (value: typeof snapshot) => void;
+          request.mockReturnValueOnce(
+            new Promise((resolve) => {
+              complete = resolve;
+            }),
+          );
+          pane.state.sessionKey = "replacement-notes";
+          const replacement = pane.resolveBoardProvider();
+          draw();
+          expect(target()).toBeUndefined();
+          complete({ ...snapshot, sessionKey: "agent:work:replacement-notes" });
+          await vi.waitFor(() => expect(replacement.hasLoadedSnapshot).toBe(true));
+          draw();
+          expect(target()).toEqual({ sessionKey: "replacement-notes", agentId: "work" });
+        }
+      } finally {
+        render(html``, container);
+        (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
+      }
+    },
+  );
 
   it("keeps global board leases scoped through owner switches, second panes, and acknowledgments", async () => {
     const { pane, client, request, addEventListener, removeListener } = createGatewayBoardPane({
