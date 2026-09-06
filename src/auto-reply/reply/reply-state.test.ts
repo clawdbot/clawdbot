@@ -423,11 +423,11 @@ describe("shouldRunPreflightCompaction", () => {
     ).toBe(false);
   });
 
-  it("triggers from a versioned stale persisted total at the safety factor during a provider outage", () => {
-    // #138871: with no fresh total and no projected count, a *versioned* stale
-    // persisted total (478k, version 1, fresh=false — a frozen snapshot from
-    // before the outage) * 0.8 = 382k still clears the 140k threshold, so the
-    // gate no longer goes blind during provider outages.
+  it("triggers from a stale persisted total at the safety factor during a provider outage", () => {
+    // #138871: with no fresh total and no projected count, a stale persisted
+    // total (478k, version 1, fresh=false — a frozen snapshot from before
+    // the outage) * 0.8 = 382k still clears the 140k threshold, so the gate
+    // no longer goes blind during provider outages.
     expect(
       shouldRunPreflightCompaction({
         entry: { totalTokens: 478_000, totalTokensFresh: false, totalTokensVersion: 1 },
@@ -436,16 +436,18 @@ describe("shouldRunPreflightCompaction", () => {
     ).toBe(true);
   });
 
-  it("ignores unversioned legacy cumulative totals even when they cross the threshold", () => {
-    // Legacy CLI cumulative totals (no totalTokensVersion) historically
-    // over-count retries and are not comparable to a fresh context snapshot;
-    // the stale fallback does not apply to them.
+  it("triggers from an unversioned stale persisted total at the safety factor", () => {
+    // After #138871 the stale fallback no longer requires a version match —
+    // persistSessionUsageUpdate clears totalTokensVersion during ordinary
+    // increments, so gating on the version would make the fallback dead code
+    // in production. An unversioned stale total (478k) * 0.8 = 382k still
+    // clears the 140k threshold, so the gate keeps its eyes during outages.
     expect(
       shouldRunPreflightCompaction({
         entry: { totalTokens: 478_000, totalTokensFresh: false },
         threshold: 140_000,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not trigger when no persisted total is available", () => {
