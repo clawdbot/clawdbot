@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 // Lobster tests cover lobster tool plugin behavior.
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
+import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 import { createLobsterTool } from "./lobster-tool.js";
 import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
@@ -32,6 +36,7 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {
@@ -64,6 +69,45 @@ describe("lobster plugin tool", () => {
     expect(details.output).toEqual([{ hello: "world" }]);
     expect(details.requiresApproval).toBeNull();
   });
+
+  it.each(["inline", "workflow", "resume"])(
+    "bounds the model-visible result for an embedded %s request",
+    async (requestKind) => {
+      const runtimeResult = {
+        ok: true,
+        protocolVersion: 1,
+        status: "ok" as const,
+        output: Array.from({ length: 115 }, () => ({ a: 1 })),
+        requiresApproval: null,
+        requiresInput: null,
+      };
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+        resumeToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+      const tempDir = tempDirs.make("openclaw-lobster-limit-");
+      const workflowPath = path.join(tempDir, "workflow.lobster");
+      await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+      const params =
+        requestKind === "resume"
+          ? { action: "resume", token: "resume-token", approve: false }
+          : {
+              action: "run",
+              pipeline: requestKind === "workflow" ? workflowPath : "exec --json=true echo bounded",
+            };
+
+      await expect(
+        createLobsterTool(fakeApi(), { runner }).execute("limit", {
+          ...params,
+          timeoutMs: 2000,
+          maxStdoutBytes: 1024,
+        }),
+      ).rejects.toThrow("lobster runtime result exceeded maxStdoutBytes");
+    },
+  );
 
   it("supports approval envelopes without changing the tool contract", async () => {
     const runner = {
@@ -282,12 +326,8 @@ describe("lobster plugin tool", () => {
       "flowId required when using managed TaskFlow resume mode",
     ],
     [
-      { action: "resume", approve: true, flowId: "flow-1", flowExpectedRevision: 1 },
-      "token or approvalId required when using managed TaskFlow resume mode",
-    ],
-    [
       { action: "resume", token: "resume-token-1", flowId: "flow-1", flowExpectedRevision: 1 },
-      "approve required when using managed TaskFlow resume mode",
+      "approve, responseJson, or cancel:true required when using managed TaskFlow resume mode",
     ],
   ])("requires managed TaskFlow fields", async (params, error) => {
     const runner = { run: vi.fn() };
@@ -418,6 +458,7 @@ describe("lobster plugin tool", () => {
     expect(taskFlow.createManaged).toHaveBeenCalledWith({
       controllerId: "tests/lobster",
       goal: "Run Lobster workflow",
+      status: "running",
       currentStep: "run_lobster",
       stateJson: { lane: "email" },
     });
@@ -427,6 +468,7 @@ describe("lobster plugin tool", () => {
       currentStep: "await_review",
       waitJson: {
         kind: "lobster_approval",
+        cwd: process.cwd(),
         prompt: "Approve this?",
         items: [{ id: "item-1" }],
         resumeToken: "resume-1",
@@ -465,6 +507,7 @@ describe("lobster plugin tool", () => {
     expect(taskFlow.createManaged).toHaveBeenCalledWith({
       controllerId: "tests/lobster",
       goal: "Run Lobster workflow",
+      status: "running",
       currentStep: "run_lobster",
       stateJson: {},
     });
@@ -474,6 +517,7 @@ describe("lobster plugin tool", () => {
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
   });
 
@@ -539,11 +583,12 @@ describe("lobster plugin tool", () => {
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "resume",
-      approvalId: "approval-1",
+      token: "resume-1",
       approve: true,
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
     const details = requireRecord(res.details, "managed resume lobster tool details");
     expect(details.ok).toBe(true);
@@ -566,7 +611,7 @@ describe("lobster plugin tool", () => {
 
     await tool.execute("call-managed-resume-string-revision", {
       action: "resume",
-      token: " resume-token-1 ",
+      token: " resume-1 ",
       approve: true,
       flowId: "flow-1",
       flowExpectedRevision: "1",
@@ -581,11 +626,12 @@ describe("lobster plugin tool", () => {
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "resume",
-      token: " resume-token-1 ",
+      token: "resume-1",
       approve: true,
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
   });
 

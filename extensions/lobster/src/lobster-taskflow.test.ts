@@ -77,6 +77,7 @@ describe("runManagedLobsterFlow", () => {
     expect(taskFlow.createManaged).toHaveBeenCalledWith({
       controllerId: "tests/lobster",
       goal: "Run Lobster workflow",
+      status: "running",
       currentStep: "run_lobster",
     });
     expect(taskFlow.finish).toHaveBeenCalledWith({
@@ -134,6 +135,7 @@ describe("runManagedLobsterFlow", () => {
       currentStep: "await_lobster_approval",
       waitJson: {
         kind: "lobster_approval",
+        cwd: process.cwd(),
         prompt: "Approve this?",
         items: [
           {
@@ -279,6 +281,7 @@ describe("resumeManagedLobsterFlow", () => {
         prompt: "Approve this too?",
         items: [{ id: "item-2" }],
         resumeToken: "resume-2",
+        cwd: process.cwd(),
       },
     });
   });
@@ -305,6 +308,12 @@ describe("cancelled managed Lobster flows", () => {
           controllerId: "tests/lobster",
           goal: "Resume Lobster workflow",
           status: "waiting",
+          waitJson: {
+            kind: "lobster_approval",
+            prompt: "Continue?",
+            items: [],
+            resumeToken: "resume-1",
+          },
         });
         result = await resumeManagedLobsterFlow({
           ...createResumeFlowParams(taskFlow, runner),

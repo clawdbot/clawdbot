@@ -5,11 +5,31 @@ import { Readable, Writable } from "node:stream";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
+type LobsterInputRequest = {
+  type: "input_request";
+  prompt: string;
+  responseSchema: unknown;
+  defaults?: unknown;
+  subject?: unknown;
+  resumeToken: string;
+};
+
+export class LobsterRunnerError extends Error {
+  constructor(
+    message: string,
+    readonly type?: string,
+  ) {
+    super(message);
+    this.name = "LobsterRunnerError";
+  }
+}
+
 export type LobsterEnvelope =
   | {
       ok: true;
-      status: "ok" | "needs_approval" | "cancelled";
+      status: "ok" | "needs_approval" | "needs_input" | "cancelled";
       output: unknown[];
+      requiresInput?: LobsterInputRequest;
       requiresApproval: null | {
         type: "approval_request";
         prompt: string;
@@ -30,6 +50,12 @@ export type LobsterRunnerParams = {
   token?: string;
   approvalId?: string;
   approve?: boolean;
+  response?: unknown;
+  cancel?: boolean;
+  /** Cancellation from the calling agent turn or direct tool request. */
+  signal?: AbortSignal;
+  /** Revalidate a managed flow's claim after async preparation, before runtime I/O. */
+  beforeExecute?: () => void;
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
@@ -59,7 +85,9 @@ type EmbeddedToolEnvelope = {
     resumeToken?: string;
     approvalId?: string;
   } | null;
+  requiresInput?: Omit<LobsterInputRequest, "type"> | null;
   error?: {
+    type?: string;
     message: string;
   };
 };
@@ -75,6 +103,8 @@ type EmbeddedToolRuntime = {
     token?: string;
     approvalId?: string;
     approved?: boolean;
+    response?: unknown;
+    cancel?: boolean;
     ctx?: EmbeddedToolContext;
   }) => Promise<EmbeddedToolEnvelope>;
 };
@@ -112,20 +142,28 @@ function createLimitedSink(maxBytes: number, label: "stdout" | "stderr") {
   });
 }
 
-function normalizeEnvelope(
-  envelope: EmbeddedToolEnvelope,
-  maxStdoutBytes: number,
-): Extract<LobsterEnvelope, { ok: true }> {
+function normalizeEnvelope(envelope: EmbeddedToolEnvelope): Extract<LobsterEnvelope, { ok: true }> {
   if (!envelope.ok) {
-    throw new Error(envelope.error?.message ?? "lobster runtime failed");
+    throw new LobsterRunnerError(
+      envelope.error?.message ?? "lobster runtime failed",
+      envelope.error?.type,
+    );
   }
-  if (envelope.status === "needs_input") {
-    throw new Error("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
+  if (
+    envelope.status === "needs_input" &&
+    (!envelope.requiresInput?.resumeToken ||
+      typeof envelope.requiresInput.prompt !== "string" ||
+      envelope.requiresInput.responseSchema === undefined)
+  ) {
+    throw new Error("Lobster returned an incomplete input checkpoint");
   }
-  const normalized: Extract<LobsterEnvelope, { ok: true }> = {
+  return {
     ok: true,
     status: envelope.status ?? "ok",
     output: Array.isArray(envelope.output) ? envelope.output : [],
+    ...(envelope.status === "needs_input" && envelope.requiresInput
+      ? { requiresInput: { ...envelope.requiresInput, type: "input_request" as const } }
+      : {}),
     requiresApproval: envelope.requiresApproval
       ? {
           type: "approval_request",
@@ -140,10 +178,6 @@ function normalizeEnvelope(
         }
       : null,
   };
-  if (Buffer.byteLength(JSON.stringify(normalized, null, 2), "utf8") > maxStdoutBytes) {
-    throw new Error("lobster runtime result exceeded maxStdoutBytes");
-  }
-  return normalized;
 }
 
 function isMissingPathError(error: unknown) {
@@ -192,10 +226,15 @@ function createEmbeddedToolContext(
 
 async function withTimeout<T>(
   timeoutMs: number,
-  fn: (signal?: AbortSignal) => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
   const timeout = Math.max(200, timeoutMs);
   const controller = new AbortController();
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
+  signal.throwIfAborted();
   return await new Promise<T>((resolve, reject) => {
     const onTimeout = () => {
       const error = new Error("lobster runtime timed out");
@@ -204,7 +243,7 @@ async function withTimeout<T>(
     };
 
     const timer = setTimeout(onTimeout, timeout);
-    void fn(controller.signal).then(
+    void fn(signal).then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -232,51 +271,68 @@ export function createEmbeddedLobsterRunner(options?: {
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
   return {
     async run(params) {
+      params.signal?.throwIfAborted();
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
-      return await withTimeout(params.timeoutMs, async (signal) => {
-        const ctx = createEmbeddedToolContext(params, signal);
-        let envelope: EmbeddedToolEnvelope;
+      return await withTimeout(
+        params.timeoutMs,
+        async (signal) => {
+          const ctx = createEmbeddedToolContext(params, signal);
+          let envelope: EmbeddedToolEnvelope;
 
-        if (params.action === "run") {
-          const pipeline = params.pipeline?.trim() ?? "";
-          if (!pipeline) {
-            throw new Error("pipeline required");
-          }
-
-          const filePath = await detectWorkflowFile(pipeline, params.cwd);
-          if (filePath) {
-            const parsedArgsJson = params.argsJson?.trim() ?? "";
-            let args: Record<string, unknown> | undefined;
-            if (parsedArgsJson) {
-              try {
-                args = JSON.parse(parsedArgsJson) as Record<string, unknown>;
-              } catch {
-                throw new Error("run --args-json must be valid JSON");
-              }
+          if (params.action === "run") {
+            const pipeline = params.pipeline?.trim() ?? "";
+            if (!pipeline) {
+              throw new Error("pipeline required");
             }
-            envelope = await runtime.runToolRequest({ filePath, args, ctx });
+
+            const filePath = await detectWorkflowFile(pipeline, params.cwd);
+            if (filePath) {
+              const parsedArgsJson = params.argsJson?.trim() ?? "";
+              let args: Record<string, unknown> | undefined;
+              if (parsedArgsJson) {
+                try {
+                  args = JSON.parse(parsedArgsJson) as Record<string, unknown>;
+                } catch {
+                  throw new Error("run --args-json must be valid JSON");
+                }
+              }
+              signal.throwIfAborted();
+              params.beforeExecute?.();
+              envelope = await runtime.runToolRequest({ filePath, args, ctx });
+            } else {
+              signal.throwIfAborted();
+              params.beforeExecute?.();
+              envelope = await runtime.runToolRequest({ pipeline, ctx });
+            }
           } else {
-            envelope = await runtime.runToolRequest({ pipeline, ctx });
+            const token = params.token?.trim() ?? "";
+            const approvalId = params.approvalId?.trim() ?? "";
+            if (!token && !approvalId) {
+              throw new Error("token or approvalId required");
+            }
+            const decisions =
+              Number(typeof params.approve === "boolean") +
+              Number(params.response !== undefined) +
+              Number(params.cancel === true);
+            if (decisions !== 1) {
+              throw new Error("Exactly one of approve, response, or cancel required");
+            }
+            signal.throwIfAborted();
+            params.beforeExecute?.();
+            envelope = await runtime.resumeToolRequest({
+              ...(token ? { token } : {}),
+              ...(approvalId ? { approvalId } : {}),
+              ...(params.approve !== undefined ? { approved: params.approve } : {}),
+              ...(params.response !== undefined ? { response: params.response } : {}),
+              ...(params.cancel === true ? { cancel: true } : {}),
+              ctx,
+            });
           }
-        } else {
-          const token = params.token?.trim() ?? "";
-          const approvalId = params.approvalId?.trim() ?? "";
-          if (!token && !approvalId) {
-            throw new Error("token or approvalId required");
-          }
-          if (typeof params.approve !== "boolean") {
-            throw new Error("approve required");
-          }
-          envelope = await runtime.resumeToolRequest({
-            ...(token ? { token } : {}),
-            ...(approvalId ? { approvalId } : {}),
-            approved: params.approve,
-            ctx,
-          });
-        }
-        return normalizeEnvelope(envelope, Math.max(1024, params.maxStdoutBytes));
-      });
+          return normalizeEnvelope(envelope);
+        },
+        params.signal,
+      );
     },
   };
 }

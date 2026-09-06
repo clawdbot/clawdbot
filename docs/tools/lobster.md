@@ -325,32 +325,145 @@ run returned. `approve` is required.
 
 Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
 `flowExpectedRevision` on `resume`) drives the call through the plugin
-runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record and applies
-the Lobster outcome to it (`waiting` on approval, `succeeded`/`failed`/`cancelled`
-on completion). The tool returns the envelope fields at the top level, alongside
-`flow` and `mutation`. Check `mutation.applied` for a successful state transition
-and carry forward **`mutation.flow.revision`**; top-level `flow` is the snapshot
-from before that transition. Cancellation instead reports `mutation.cancelled`.
-A workflow error is surfaced as a tool error after an attempted flow failure;
-inspect the persisted flow rather than assuming the failure write succeeded.
+runtime's managed [Task Flow](/automation/taskflow) API. The tool returns the
+Lobster envelope with `flow` and `mutation` fields. `flow.revision` is the
+persisted revision after a successful mutation, not the revision before
+execution. Check `mutation.applied` for a state transition or
+`mutation.cancelled` for cancellation. On errors, inspect the persisted flow
+rather than assuming a failure write succeeded.
 
 This mode requires a non-sandboxed tool context with a bound session. It records
-a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
-persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
-also remain available for resume. After a restart, the controller must inspect
-the latest flow and explicitly resume it with the matching approval token or ID.
-Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
-[Task Flow](/automation/taskflow) for the runnable examples and child-linking
-contract.
+a managed flow, not detached ACP/subagent tasks for each shell step. Neither
+Task Flow nor a skill automatically replays arbitrary JavaScript. See
+[Task Flow](/automation/taskflow) for runnable examples and child-linking.
+
+Use this mode for workflows that pause for structured input. OpenClaw saves the
+question, response schema, defaults, subject, working directory, and Lobster
+resume token in the flow's `waitJson`. The existing Lobster runtime still owns
+the executable checkpoint and validates answers; Task Flow stores its durable
+reference. No separate input registry is required.
+
+The plugin's included Lobster skill guides the agent to choose managed mode for
+structured questions and recoverable reviews from the initial run. You do not
+need to name Task Flow in the request. Ordinary pipelines remain available for
+immediate work; do not rerun a started workflow just to switch modes, since that
+can repeat effects.
+
+For example, a workflow file can contain this input step:
+
+```yaml
+steps:
+  - id: review
+    input:
+      prompt: Publish or revise the draft?
+      responseSchema:
+        type: object
+        properties:
+          decision:
+            type: string
+            enum: [publish, revise]
+        required: [decision]
+        additionalProperties: false
+      defaults:
+        decision: revise
+```
+
+Start it with a controller name and goal:
+
+```json
+{
+  "action": "run",
+  "pipeline": "review.lobster",
+  "flowControllerId": "draft-review",
+  "flowGoal": "Review the prepared draft"
+}
+```
+
+When the result is `needs_input`, present `requiresInput.prompt` and collect
+the user's answer. Defaults are suggestions, not consent. Do not invent an
+answer or treat the schema as permission to perform an action.
+
+#### Rediscover and answer a saved question
+
+Call `status` without a flow ID to list this session's pending Lobster flows:
+
+```json
+{ "action": "status" }
+```
+
+The list contains up to 20 summaries. If `nextOffset` is returned, pass it as
+`flowOffset` for the next page. Read the full question and current revision:
+
+```json
+{ "action": "status", "flowId": "<flowId>" }
+```
+
+Then answer using the revision just read:
+
+```json
+{
+  "action": "resume",
+  "flowId": "<flowId>",
+  "flowExpectedRevision": 2,
+  "responseJson": "{\"decision\":\"publish\"}"
+}
+```
+
+`2` is illustrative; always use the returned `flow.revision`. Managed resume
+reads the saved token and working directory, so neither needs to remain in the
+conversation. For an approval wait, send `approve: true` or `approve: false`
+instead of `responseJson`. To cancel an input wait, send `cancel: true` instead.
+Send exactly one decision. If a token or approval ID is supplied, it must match
+the saved checkpoint.
+
+A schema-invalid answer leaves the flow waiting at a new revision. Read the
+returned flow or call `status`, then submit the corrected answer. Stale managed,
+concurrent, cancelled, and terminal resumes are rejected before dispatch.
+
+#### Ownership, retention, and execution limits
+
+- This mode requires a session-bound Task Flow runtime. Ownership follows the
+  existing session key, not a browser tab or physical transcript file. Context
+  compaction or reset with the same session key does not discard the wait; a
+  different session key does not gain access by knowing the flow ID.
+- Waiting flows have no seven-day expiry. Existing Task Flow maintenance may
+  prune terminal flows after seven days. Both OpenClaw's state database and
+  Lobster's checkpoint files must remain available to resume.
+- A checkpoint in `waitJson` is ordinary authorized Task Flow state, not a
+  secret vault. This does not add per-person reviewer assignment, a central
+  Inbox item, a form UI, or notification routing.
+- Task Flow claims govern managed calls, not direct Lobster CLI/runtime calls
+  or legacy token-only approval resumes. Keep managed approvals on the managed
+  resume path; resuming their raw tokens through ordinary mode bypasses Task
+  Flow bookkeeping.
+- `responseJson` is limited to 64 KiB. `status` uses `maxStdoutBytes` (default
+  `512000`) and omits arbitrary `flowStateJson`. For larger saved questions,
+  retry `status` with a larger `maxStdoutBytes`; schemas are never truncated.
+  Managed runs and resumes persist complete checkpoints before limiting the
+  tool reply. If the reply is too large, it returns an error with the flow ID,
+  revision, and status so the saved question can be retrieved without replaying
+  earlier steps. This does not bypass stdout/stderr limits while steps execute.
+- Revision checks prevent duplicate managed dispatch and revalidate after
+  asynchronous runner preparation. They do not make workflow effects and
+  SQLite writes atomic. A crash after claiming a resume can leave a flow
+  `running`, even if dispatch had not yet started. There is no durable dispatch
+  receipt to distinguish that case from effects that ran before a crash. Inspect
+  the flow by ID and reconcile effects manually; this adapter does not
+  automatically reclaim or replay a claimed flow. Timeouts and runtime failures
+  can also leave effects uncertain. Cancellation cannot undo effects or
+  guarantee immediate interruption of already-running steps.
+- Ordinary token-based approval mode is unchanged. Structured input requires
+  managed mode from the initial `run`; it is not added to ordinary mode.
 
 ## Output envelope
 
-Lobster returns a JSON envelope with one of three statuses:
+Lobster returns a JSON envelope with these statuses:
 
 - `ok` - finished successfully
 - `needs_approval` - paused; `requiresApproval` carries a `resumeToken` and a
   short `approvalId`, either of which can resume the run
+- `needs_input` - paused in managed mode; `requiresInput` carries the prompt,
+  response schema, optional defaults and subject, and resume token
 - `cancelled` - explicitly denied or cancelled
 
 The tool surfaces the envelope in both `content` (pretty JSON) and `details`
