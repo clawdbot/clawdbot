@@ -74,9 +74,9 @@ describe("symlink extra-path root real-behavior proof", () => {
             issues: inspection.issues,
           },
         ],
-      };
+      } as unknown as Parameters<typeof scanMemoryManagerSources>[0];
 
-      const scan = await scanMemoryManagerSources(status)!;
+      const scan = (await scanMemoryManagerSources(status))!;
 
       // 3. The CLI Issues section would render these.
       const renderedIssues = scan.issues;
