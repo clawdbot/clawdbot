@@ -32,8 +32,24 @@ enum GatewayLaunchAgentManager {
     }
 
     static func plistURL(homeDirectory: URL, profile: AppProfile) -> URL {
-        homeDirectory.appendingPathComponent(
+        LaunchAgentPlist.launchAgentHomeDirectory(homeDirectory: homeDirectory).appendingPathComponent(
             "Library/LaunchAgents/\(profile.gatewayLaunchAgentLabel).plist")
+    }
+
+    static func launchAgentHomeDirectories(
+        homeDirectory: URL,
+        resolvedHomeDirectory: URL) -> [URL]
+    {
+        var seen = Set<String>()
+        return [resolvedHomeDirectory, homeDirectory].filter { directory in
+            seen.insert(directory.standardizedFileURL.path).inserted
+        }
+    }
+
+    private static func launchAgentHomeDirectories(homeDirectory: URL) -> [URL] {
+        self.launchAgentHomeDirectories(
+            homeDirectory: homeDirectory,
+            resolvedHomeDirectory: LaunchAgentPlist.launchAgentHomeDirectory(homeDirectory: homeDirectory))
     }
 
     static func conflictingProfileClaimOwner(
@@ -41,35 +57,54 @@ enum GatewayLaunchAgentManager {
         excludingLabel: String,
         homeDirectory: URL) -> String?
     {
-        let directory = homeDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil)
-        else {
-            return "installed profile Gateway claims cannot be inspected"
-        }
-        for url in entries {
-            guard url.pathExtension == "plist" else { continue }
-            let label = url.deletingPathExtension().lastPathComponent
-            guard label != excludingLabel,
-                  let profile = self.profile(forLaunchAgentLabel: label)
-            else { continue }
-            let owner = profile.name ?? "default"
-            let artifacts = self.generatedEnvironmentArtifacts(
-                directory: profile.stateDirectoryURL(homeDirectory: homeDirectory)
-                    .appendingPathComponent("service-env", isDirectory: true),
-                profile: profile)
-            guard let snapshot = LaunchAgentPlist.snapshot(
-                url: url,
-                generatedEnvironmentFileURL: artifacts.environment,
-                generatedEnvironmentWrapperURL: artifacts.wrapper),
-                self.isCanonicalGatewayClaim(snapshot)
-            else { continue }
-            guard let claimedPort = snapshot.port else {
-                return "profile \"\(owner)\" has an unreadable Gateway reservation"
+        self.conflictingProfileClaimOwner(
+            port: port,
+            excludingLabel: excludingLabel,
+            homeDirectory: homeDirectory,
+            launchAgentHomeDirectories: self.launchAgentHomeDirectories(
+                homeDirectory: homeDirectory))
+    }
+
+    static func conflictingProfileClaimOwner(
+        port: Int,
+        excludingLabel: String,
+        homeDirectory: URL,
+        launchAgentHomeDirectories: [URL]) -> String?
+    {
+        var scanned = Set<String>()
+        for home in launchAgentHomeDirectories
+            where scanned.insert(home.standardizedFileURL.path).inserted
+        {
+            let directory = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            guard FileManager.default.fileExists(atPath: directory.path) else { continue }
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil)
+            else {
+                return "installed profile Gateway claims cannot be inspected"
             }
-            if claimedPort == port { return "profile \"\(owner)\" already reserves it" }
+            for url in entries {
+                guard url.pathExtension == "plist" else { continue }
+                let label = url.deletingPathExtension().lastPathComponent
+                guard label != excludingLabel,
+                      let profile = self.profile(forLaunchAgentLabel: label)
+                else { continue }
+                let owner = profile.name ?? "default"
+                let artifacts = self.generatedEnvironmentArtifacts(
+                    directory: profile.stateDirectoryURL(homeDirectory: homeDirectory)
+                        .appendingPathComponent("service-env", isDirectory: true),
+                    profile: profile)
+                guard let snapshot = LaunchAgentPlist.snapshot(
+                    url: url,
+                    generatedEnvironmentFileURL: artifacts.environment,
+                    generatedEnvironmentWrapperURL: artifacts.wrapper),
+                    self.isCanonicalGatewayClaim(snapshot)
+                else { continue }
+                guard let claimedPort = snapshot.port else {
+                    return "profile \"\(owner)\" has an unreadable Gateway reservation"
+                }
+                if claimedPort == port { return "profile \"\(owner)\" already reserves it" }
+            }
         }
         return nil
     }

@@ -7,6 +7,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
+import { resolveLaunchAgentPlistPathForLabel } from "../../daemon/launchd-service-files.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
@@ -151,13 +152,14 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
     return [`Restart the container or the service that manages it for ${container}.`];
   }
   const profile = env.OPENCLAW_PROFILE;
+  const label = resolveGatewayLaunchAgentLabel(profile);
   const installHint =
     resolveDaemonInstallBlockMessage("gateway", env) ??
     formatCliCommand("openclaw gateway install", env);
   return buildPlatformServiceStartHints({
     installHint,
     startCommand: formatCliCommand("openclaw gateway start", env),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
+    launchAgentPlistPath: resolveLaunchAgentPlistPathForLabel({ ...process.env, ...env }, label),
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });

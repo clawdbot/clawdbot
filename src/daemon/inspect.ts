@@ -13,7 +13,7 @@ import {
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { parseLaunchdPlistLabel } from "./launchd-plist.js";
 import { readLaunchDaemonPlistLabel } from "./launchd-system.js";
-import { resolveDaemonHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveLaunchAgentHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
 
@@ -476,13 +476,18 @@ export async function findExtraGatewayServices(
 
   if (process.platform === "darwin") {
     try {
-      const home = resolveDaemonHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
-      for (const svc of await scanLaunchdDir({
-        dir: userDir,
-        scope: "user",
-      })) {
-        push(svc);
+      const userDirs = new Set(
+        [resolveLaunchAgentHomeDir(env), resolveDaemonHomeDir(env)].map((home) =>
+          path.resolve(home, "Library", "LaunchAgents"),
+        ),
+      );
+      for (const userDir of userDirs) {
+        for (const svc of await scanLaunchdDir({
+          dir: userDir,
+          scope: "user",
+        })) {
+          push(svc);
+        }
       }
       if (opts.deep) {
         for (const svc of await scanLaunchdDir({

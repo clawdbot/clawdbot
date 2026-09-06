@@ -7,6 +7,7 @@ import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import type { ExecResult } from "./exec-file.js";
+import { readRelocatedLaunchAgentForInstall } from "./launchd-install.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -33,6 +34,8 @@ import {
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
+import { readGatewayServiceCommandForMutation } from "./service.js";
+import { createMockGatewayService } from "./service.test-helpers.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
@@ -70,6 +73,9 @@ const state = vi.hoisted(() => ({
   fileWrites: [] as Array<{ path: string; data: string }>,
   cleanupProtectedPids: [] as Array<number | undefined>,
   realExecFile: false,
+  externalHome: undefined as string | undefined,
+  loginUsername: "test",
+  canonicalHomeDevice: 1 as number | undefined,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdMaintenancePark: vi.fn<
@@ -644,7 +650,7 @@ vi.mock("node:fs/promises", async () => {
     readFile: vi.fn(async (p: string) => {
       const key = p;
       const data = state.files.get(key);
-      if (data !== undefined) {
+      if (data !== undefined && data !== "dangling-launchagent-symlink") {
         return data;
       }
       throw Object.assign(new Error(`ENOENT: no such file or directory, open '${key}'`), {
@@ -682,6 +688,35 @@ vi.mock("node:fs/promises", async () => {
 });
 
 afterEach(() => vi.unstubAllEnvs());
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (state.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === state.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === `/Users/${state.loginUsername}`) {
+        if (state.canonicalHomeDevice === undefined) {
+          throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${target}'`), {
+            code: "ENOENT",
+          });
+        }
+        return { dev: state.canonicalHomeDevice };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: state.loginUsername });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
+});
 
 beforeEach(() => {
   state.launchctlCalls.length = 0;
@@ -718,6 +753,9 @@ beforeEach(() => {
   state.fileWrites.length = 0;
   state.cleanupProtectedPids.length = 0;
   state.realExecFile = false;
+  state.externalHome = undefined;
+  state.loginUsername = "test";
+  state.canonicalHomeDevice = 1;
   state.serviceStates.clear();
   launchdConstantsState.legacyGatewayLabels.length = 0;
   launchctlSpawnSync.mockReset();
@@ -1675,6 +1713,54 @@ describe("launchd uninstall", () => {
 
     await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
     await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("fails before mutation when a pre-migration LaunchAgent cannot be inspected", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    state.externalHome = externalHome;
+    vi.mocked(fs.lstat)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("canonical missing"), {
+          code: "ENOENT",
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("external path denied"), {
+          code: "EACCES",
+        }),
+      );
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "LaunchAgent removal failed (EACCES)",
+    );
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("fails before mutation when canonical exists but pre-migration inspection is denied", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const bootPlist = `/Users/test/Library/LaunchAgents/${label}.plist`;
+    state.externalHome = externalHome;
+    state.files.set(bootPlist, "canonical");
+    vi.mocked(fs.lstat)
+      .mockResolvedValueOnce({ isSymbolicLink: () => false } as Awaited<
+        ReturnType<typeof fs.lstat>
+      >)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("external path denied"), {
+          code: "EACCES",
+        }),
+      );
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "LaunchAgent removal failed (EACCES)",
+    );
+    expect(state.launchctlCalls).toEqual([]);
+    expect(fs.rename).not.toHaveBeenCalled();
+    expect(state.files.get(bootPlist)).toBe("canonical");
   });
 
   it("keeps missing LaunchAgent removal idempotent", async () => {
@@ -1693,6 +1779,84 @@ describe("launchd uninstall", () => {
     await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
     expect(state.files.has(plistPath)).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+  });
+
+  it.each([
+    { loadState: "loaded", loaded: true },
+    { loadState: "unloaded", loaded: false },
+  ])("uninstalls a $loadState pre-migration LaunchAgent from external HOME", async ({ loaded }) => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+    const bootPlist = `/Users/test/Library/LaunchAgents/${label}.plist`;
+    const trashedPlist = `${externalHome}/.Trash/${label}.plist`;
+    state.externalHome = externalHome;
+    state.files.set(externalPlist, "RunAtLoad=true");
+    state.serviceLoaded = loaded;
+    state.serviceRunning = loaded;
+
+    await uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(state.files.has(externalPlist)).toBe(false);
+    expect(state.files.has(bootPlist)).toBe(false);
+    expect(state.files.has(trashedPlist)).toBe(true);
+    expect(state.launchctlCalls.filter((call) => call[0] === "bootout")).toEqual(
+      loaded ? [["bootout", `${domain}/${label}`]] : [],
+    );
+  });
+
+  it("removes canonical and pre-migration plists with one bootout", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+    const bootPlist = `/Users/test/Library/LaunchAgents/${label}.plist`;
+    const externalContents = createTestLaunchAgentPlist({
+      label,
+      programArguments: ["/external/bin/node", "/external/openclaw/dist/index.js", "gateway"],
+    });
+    const canonicalContents = createTestLaunchAgentPlist({
+      label,
+      programArguments: ["/usr/bin/node", "/Users/test/openclaw/dist/index.js", "gateway"],
+    });
+    state.externalHome = externalHome;
+    state.files.set(externalPlist, externalContents);
+    state.files.set(bootPlist, canonicalContents);
+
+    await uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(state.files.has(externalPlist)).toBe(false);
+    expect(state.files.has(bootPlist)).toBe(false);
+    expect(state.files.get(`${externalHome}/.Trash/${label}.plist`)).toBe(externalContents);
+    expect(state.files.get(`/Users/test/.Trash/${label}.plist`)).toBe(canonicalContents);
+    expect(vi.mocked(fs.rename).mock.calls).toEqual([
+      [externalPlist, `${externalHome}/.Trash/${label}.plist`],
+      [bootPlist, `/Users/test/.Trash/${label}.plist`],
+    ]);
+    expect(state.launchctlCalls.filter((call) => call[0] === "bootout")).toHaveLength(1);
+  });
+
+  it("boots out a loaded plistless legacy job by service target and remains idempotent", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    let output = "";
+    state.externalHome = externalHome;
+
+    await uninstallLaunchAgent({
+      env,
+      stdout: capturePassThroughOutput((text) => {
+        output += text;
+      }),
+    });
+
+    expect(state.launchctlCalls).toContainEqual(["bootout", `${domain}/${label}`]);
+    expect(output).toContain(
+      `LaunchAgent not found at /Users/test/Library/LaunchAgents/${label}.plist`,
+    );
   });
 
   it("removes dangling LaunchAgent symlinks instead of treating their targets as missing", async () => {
@@ -1784,46 +1948,122 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
-  it("restores an external legacy-label owner when canonical bootstrap fails", async () => {
-    const env = createDefaultLaunchdEnv();
+  it.each(["/Users/test", "/Volumes/MainDataDrive"])(
+    "restores a legacy-label owner from %s when canonical bootstrap fails",
+    async (home) => {
+      const env = { ...createDefaultLaunchdEnv(), HOME: home };
+      if (home.startsWith("/Volumes/")) {
+        state.externalHome = home;
+      }
+      const legacyLabel = "ai.openclaw.legacy-gateway";
+      const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
+      const targetPlistPath = resolveLaunchAgentPlistPath(env);
+      const previousLegacy = createTestLaunchAgentPlist({
+        label: legacyLabel,
+        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+      });
+      launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
+      state.files.set(legacyPlistPath, previousLegacy);
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
+      state.bootstrapError = "Operation not permitted";
+      state.bootstrapTransient = true;
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+      expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
+      expect(state.files.has(targetPlistPath)).toBe(false);
+      expect(state.serviceLoaded).toBe(true);
+      expect(state.serviceRunning).toBe(true);
+      expect(launchctlCommandNames()).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "unload",
+        "enable",
+        "bootstrap",
+        "print",
+        "enable",
+        "bootstrap",
+      ]);
+    },
+  );
+
+  it("retires a loaded legacy label from an external home after canonical activation", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
+    state.externalHome = externalHome;
     const legacyLabel = "ai.openclaw.legacy-gateway";
-    const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
-    const targetPlistPath = resolveLaunchAgentPlistPath(env);
-    const previousLegacy = createTestLaunchAgentPlist({
-      label: legacyLabel,
-      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-    });
+    const legacyPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
     launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-    state.files.set(legacyPlistPath, previousLegacy);
+    state.files.set(
+      legacyPlist,
+      createTestLaunchAgentPlist({
+        label: legacyLabel,
+        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+      }),
+    );
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
 
-    await expect(
-      installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+    await installLaunchAgent(defaultLaunchAgentFixture(env));
 
-    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
-    expect(state.files.has(targetPlistPath)).toBe(false);
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
-      "bootout",
-      "unload",
-      "enable",
+    expect(state.files.has(legacyPlist)).toBe(false);
+    expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(true);
+    expect(state.launchctlCalls).toContainEqual(["bootout", domain, legacyPlist]);
+    expect(state.launchctlCalls).toContainEqual([
       "bootstrap",
-      "print",
-      "enable",
-      "bootstrap",
+      domain,
+      resolveLaunchAgentPlistPath(env),
     ]);
   });
+
+  it.each([
+    { legacy: true, loaded: false },
+    { legacy: true, loaded: true },
+    { legacy: false, loaded: false },
+    { legacy: false, loaded: true },
+  ])(
+    "handles duplicate definitions with legacy=$legacy loaded=$loaded",
+    async ({ legacy, loaded }) => {
+      const externalHome = "/Volumes/MainDataDrive";
+      const env = { ...createDefaultLaunchdEnv(), HOME: externalHome };
+      state.externalHome = externalHome;
+      const legacyLabel = legacy ? "ai.openclaw.legacy-gateway" : "ai.openclaw.gateway";
+      const externalPlist = `${externalHome}/Library/LaunchAgents/${legacyLabel}.plist`;
+      const bootPlist = `/Users/test/Library/LaunchAgents/${legacyLabel}.plist`;
+      const contents = createTestLaunchAgentPlist({
+        label: legacyLabel,
+        programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+      });
+      if (legacy) {
+        launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
+      }
+      state.files.set(externalPlist, contents);
+      state.files.set(bootPlist, contents);
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      state.serviceStates.set(`${domain}/${legacyLabel}`, loaded ? "running" : "not-loaded");
+      if (loaded) {
+        await expect(installLaunchAgent(defaultLaunchAgentFixture(env))).rejects.toThrow(
+          "multiple prior definitions",
+        );
+        expect(state.files.get(externalPlist)).toBe(contents);
+        expect(state.files.get(bootPlist)).toBe(contents);
+        expect(state.fileWrites).toEqual([]);
+        expect(launchctlCommandNames().every((command) => command === "print")).toBe(true);
+      } else {
+        await installLaunchAgent(defaultLaunchAgentFixture(env));
+        expect(state.files.has(externalPlist)).toBe(false);
+        expect(state.files.has(bootPlist)).toBe(!legacy);
+      }
+    },
+  );
 
   it("stages a canonical plist without retiring a legacy LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
@@ -3862,6 +4102,255 @@ describe("resolveLaunchAgentPlistPath", () => {
         OPENCLAW_LAUNCHD_LABEL: "../evil/label",
       }),
     ).toThrow("Invalid launchd label");
+  });
+});
+
+describe("external APFS LaunchAgent placement", () => {
+  it("prefers the effective OS login identity over spoofed environment names", () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    state.externalHome = externalHome;
+    state.loginUsername = "test";
+
+    expect(
+      resolveLaunchAgentPlistPath({
+        HOME: externalHome,
+        USER: "spoofed-user",
+        LOGNAME: "spoofed-logname",
+      }),
+    ).toBe("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist");
+  });
+
+  it.each([
+    ["is missing", undefined],
+    ["is on another device", 3],
+  ])("keeps external HOME when the canonical login home %s", (_, canonicalHomeDevice) => {
+    const externalHome = "/Volumes/MainDataDrive";
+    state.externalHome = externalHome;
+    state.canonicalHomeDevice = canonicalHomeDevice;
+
+    expect(resolveLaunchAgentPlistPath({ HOME: externalHome, USER: "test" })).toBe(
+      `${externalHome}/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+    );
+  });
+
+  it("installs the plist on the boot volume while preserving external-home state", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = {
+      HOME: externalHome,
+      USER: "test",
+      OPENCLAW_PROFILE: "default",
+    };
+    state.externalHome = externalHome;
+
+    await installLaunchAgent(
+      defaultLaunchAgentFixture(env, {
+        environment: { HOME: externalHome, PATH: "/usr/bin:/bin" },
+      }),
+    );
+
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/ai.openclaw.gateway.plist`;
+    expect(resolveLaunchAgentPlistPath(env)).toBe(bootPlist);
+    expect(state.files.has(bootPlist)).toBe(true);
+    expect(state.files.has(externalPlist)).toBe(false);
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+      bootPlist,
+    ]);
+
+    const plist = state.files.get(bootPlist) ?? "";
+    expect(plist).toContain(`${externalHome}/Library/Logs/openclaw/gateway.log`);
+    expect(
+      state.files.has(`${externalHome}/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh`),
+    ).toBe(true);
+  });
+
+  it("moves the boot-volume plist to the boot-volume Trash on uninstall", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = {
+      HOME: externalHome,
+      USER: "test",
+      OPENCLAW_PROFILE: "default",
+    };
+    state.externalHome = externalHome;
+    let output = "";
+    const stdout = capturePassThroughOutput((text) => {
+      output += text;
+    });
+
+    await installLaunchAgent(defaultLaunchAgentFixture(env));
+    await uninstallLaunchAgent({ env, stdout });
+
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    const trashedPlist = "/Users/test/.Trash/ai.openclaw.gateway.plist";
+    expect(state.files.has(bootPlist)).toBe(false);
+    expect(state.files.has(trashedPlist)).toBe(true);
+    expect(output).toContain(trashedPlist);
+    expect(output).not.toContain(`${externalHome}/.Trash`);
+  });
+
+  it("migrates a loaded same-label plist from external HOME to the boot volume", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+    const bootPlist = `/Users/test/Library/LaunchAgents/${label}.plist`;
+    const previousContents = createTestLaunchAgentPlist({
+      label,
+      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+    });
+    state.externalHome = externalHome;
+    state.files.set(externalPlist, previousContents);
+    state.serviceStates.set(`${domain}/${label}`, "running");
+
+    await installLaunchAgent(defaultLaunchAgentFixture(env));
+
+    expect(state.files.has(externalPlist)).toBe(false);
+    expect(state.files.has(bootPlist)).toBe(true);
+    expect(state.launchctlCalls).toContainEqual(["bootout", domain, externalPlist]);
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, bootPlist]);
+  });
+
+  it("strict mutation inspection accepts relocation but rejects dangling canonical plists and loaded orphans", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const externalHome = "/Volumes/MainDataDrive";
+      const env = { HOME: externalHome, OPENCLAW_PROFILE: "default" };
+      const label = "ai.openclaw.gateway";
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+      const programArguments = ["/legacy/node", "/legacy/openclaw.mjs", "gateway"];
+      state.externalHome = externalHome;
+      state.files.set(externalPlist, createTestLaunchAgentPlist({ label, programArguments }));
+      state.serviceStates.set(`${domain}/${label}`, "running");
+      const service = createMockGatewayService({ readCommand: readLaunchAgentProgramArguments });
+      await expect(
+        readGatewayServiceCommandForMutation(service, env, { requireEffective: true }),
+      ).resolves.toMatchObject({
+        kind: "relocated",
+        command: { programArguments, sourcePath: externalPlist },
+      });
+      const canonicalPlist = resolveLaunchAgentPlistPath(env);
+      state.files.set(canonicalPlist, "dangling-launchagent-symlink");
+      await expect(
+        readGatewayServiceCommandForMutation(service, env, { requireEffective: true }),
+      ).rejects.toThrow();
+      state.files.delete(canonicalPlist);
+      state.files.delete(externalPlist);
+      await expect(
+        readGatewayServiceCommandForMutation(service, env, { requireEffective: true }),
+      ).rejects.toThrow("Effective LaunchAgent service command could not be inspected");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("reads pre-migration generated environment and wrapper values for install", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+    const envFile = `${externalHome}/.openclaw/service-env/${label}.env`;
+    const generatedWrapper = `${externalHome}/.openclaw/service-env/${label}-env-wrapper.sh`;
+    const serviceWrapper = "/usr/local/bin/openclaw-doppler";
+    state.externalHome = externalHome;
+    state.files.set(
+      externalPlist,
+      createTestLaunchAgentPlist({
+        label,
+        programArguments: [
+          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+          generatedWrapper,
+          envFile,
+          serviceWrapper,
+          "gateway",
+          "run",
+        ],
+      }),
+    );
+    state.files.set(
+      envFile,
+      [
+        "export NODE_EXTRA_CA_CERTS='/opt/openclaw/corporate-ca.pem'",
+        `export OPENCLAW_WRAPPER='${serviceWrapper}'`,
+        "",
+      ].join("\n"),
+    );
+    state.files.set(generatedWrapper, "#!/bin/sh\n");
+
+    await expect(readRelocatedLaunchAgentForInstall(env)).resolves.toEqual({
+      plistPath: externalPlist,
+      command: {
+        programArguments: [serviceWrapper, "gateway", "run"],
+        environment: {
+          NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
+          OPENCLAW_WRAPPER: serviceWrapper,
+        },
+        environmentValueSources: {
+          NODE_EXTRA_CA_CERTS: "file",
+          OPENCLAW_WRAPPER: "file",
+        },
+        sourcePath: externalPlist,
+      },
+    });
+  });
+
+  it("fails closed when a pre-migration definition cannot be parsed for install", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const externalPlist = `${externalHome}/Library/LaunchAgents/ai.openclaw.gateway.plist`;
+    state.externalHome = externalHome;
+    state.files.set(externalPlist, "not a LaunchAgent plist");
+
+    await expect(readRelocatedLaunchAgentForInstall(env)).rejects.toThrow(
+      "pre-migration LaunchAgent definition cannot be safely inspected",
+    );
+  });
+
+  it("does not treat an external plist as relocatable when the canonical plist exists", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    state.externalHome = externalHome;
+    state.files.set(
+      `/Users/test/Library/LaunchAgents/${label}.plist`,
+      createTestLaunchAgentPlist({ label, programArguments: ["canonical"] }),
+    );
+    state.files.set(
+      `${externalHome}/Library/LaunchAgents/${label}.plist`,
+      createTestLaunchAgentPlist({ label, programArguments: ["external"] }),
+    );
+
+    await expect(readRelocatedLaunchAgentForInstall(env)).resolves.toBeNull();
+  });
+
+  it("restores a loaded external same-label plist when boot-volume bootstrap fails", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    const env = { HOME: externalHome, USER: "test", OPENCLAW_PROFILE: "default" };
+    const label = "ai.openclaw.gateway";
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const externalPlist = `${externalHome}/Library/LaunchAgents/${label}.plist`;
+    const bootPlist = `/Users/test/Library/LaunchAgents/${label}.plist`;
+    const previousContents = createTestLaunchAgentPlist({
+      label,
+      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
+    });
+    state.externalHome = externalHome;
+    state.files.set(externalPlist, previousContents);
+    state.serviceStates.set(`${domain}/${label}`, "running");
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapTransient = true;
+
+    await expect(installLaunchAgent(defaultLaunchAgentFixture(env))).rejects.toThrow(
+      "launchctl bootstrap failed",
+    );
+
+    expect(state.files.get(externalPlist)).toBe(previousContents);
+    expect(state.files.has(bootPlist)).toBe(false);
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, externalPlist]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -33,6 +33,79 @@ struct GatewayLaunchAgentManagerTests {
         #expect(workArtifacts.wrapper.path == "/state/service-env/ai.openclaw.work-env-wrapper.sh")
     }
 
+    @Test func `launch agent home stays unchanged when home shares the boot volume`() {
+        let home = URL(fileURLWithPath: "/Users/TestUser", isDirectory: true)
+
+        let resolved = LaunchAgentPlist.launchAgentHomeDirectory(
+            homeDirectory: home,
+            rootFileSystemNumber: 1,
+            homeFileSystemNumber: 1,
+            username: "ignored",
+            canonicalHomeFileSystemNumber: nil)
+
+        #expect(resolved == home)
+    }
+
+    @Test func `launch agent home moves to the boot volume when home is external`() {
+        let externalHome = URL(fileURLWithPath: "/Volumes/MainDataDrive", isDirectory: true)
+
+        let resolved = LaunchAgentPlist.launchAgentHomeDirectory(
+            homeDirectory: externalHome,
+            rootFileSystemNumber: 1,
+            homeFileSystemNumber: 2,
+            username: "TestUser",
+            canonicalHomeFileSystemNumber: 1)
+
+        #expect(resolved.path == "/Users/TestUser")
+    }
+
+    @Test func `launch agent home fails safe when the login name is invalid`() {
+        let externalHome = URL(fileURLWithPath: "/Volumes/MainDataDrive", isDirectory: true)
+
+        let resolved = LaunchAgentPlist.launchAgentHomeDirectory(
+            homeDirectory: externalHome,
+            rootFileSystemNumber: 1,
+            homeFileSystemNumber: 2,
+            username: "../TestUser",
+            canonicalHomeFileSystemNumber: nil)
+
+        #expect(resolved == externalHome)
+    }
+
+    @Test(arguments: [nil, 3] as [NSNumber?])
+    func `launch agent home fails safe when the canonical login home is unavailable`(
+        _ canonicalHomeFileSystemNumber: NSNumber?)
+    {
+        let externalHome = URL(fileURLWithPath: "/Volumes/MainDataDrive", isDirectory: true)
+
+        let resolved = LaunchAgentPlist.launchAgentHomeDirectory(
+            homeDirectory: externalHome,
+            rootFileSystemNumber: 1,
+            homeFileSystemNumber: 2,
+            username: "TestUser",
+            canonicalHomeFileSystemNumber: canonicalHomeFileSystemNumber)
+
+        #expect(resolved == externalHome)
+    }
+
+    @Test func `effective OS login identity wins over environment names`() {
+        #expect(LaunchAgentPlist.loginUsername(
+            osUsername: "TestUser",
+            environment: ["USER": "spoofed-user", "LOGNAME": "spoofed-logname"]) == "TestUser")
+    }
+
+    @Test func `launch agent filesystem lookup follows a symlink target`() throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+
+        #expect(LaunchAgentPlist._testFileSystemNumber(forPath: alias.path) ==
+            LaunchAgentPlist._testFileSystemNumber(forPath: target.path))
+    }
+
     @Test func `gateway daemon command selects named profile at the root`() async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -120,6 +193,56 @@ struct GatewayLaunchAgentManagerTests {
             port: 18789,
             excludingLabel: "ai.openclaw.qa",
             homeDirectory: home)?.contains("default") == true)
+    }
+
+    @Test func `external home profile scan keeps canonical and raw LaunchAgent paths`() throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let canonicalHome = root.appendingPathComponent("canonical", isDirectory: true)
+        let externalHome = root.appendingPathComponent("external", isDirectory: true)
+        let homes = GatewayLaunchAgentManager.launchAgentHomeDirectories(
+            homeDirectory: externalHome,
+            resolvedHomeDirectory: canonicalHome)
+        #expect(homes.map(\.path) == [canonicalHome.path, externalHome.path])
+        #expect(GatewayLaunchAgentManager.launchAgentHomeDirectories(
+            homeDirectory: externalHome,
+            resolvedHomeDirectory: externalHome).map(\.path) == [externalHome.path])
+
+        let agents = externalHome.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway", "--port", "55636"],
+                "EnvironmentVariables": [
+                    "OPENCLAW_SERVICE_MARKER": "openclaw",
+                    "OPENCLAW_SERVICE_KIND": "gateway",
+                ],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
+
+        let claim = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.p2380",
+            homeDirectory: externalHome,
+            launchAgentHomeDirectories: homes)
+
+        #expect(claim?.contains("p1402") == true)
+    }
+
+    @Test func `unreadable profile LaunchAgent directory still fails closed`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let library = home.appendingPathComponent("Library", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(
+            to: library.appendingPathComponent("LaunchAgents"))
+
+        #expect(GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.p2380",
+            homeDirectory: home) == "installed profile Gateway claims cannot be inspected")
     }
 
     @Test func `reads Gateway service ownership command directly from launchd`() throws {

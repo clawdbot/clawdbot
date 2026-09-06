@@ -1,4 +1,5 @@
 // Daemon shared tests cover shared daemon CLI helpers and validation.
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
@@ -8,6 +9,27 @@ import {
   renderGatewayServiceStartHints,
   resolveRuntimeStatusColor,
 } from "./shared.js";
+
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === `/Users/${os.userInfo().username}`) {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
 
 describe("resolveRuntimeStatusColor", () => {
   it("maps known runtime states to expected theme colors", () => {
@@ -85,6 +107,29 @@ describe("renderGatewayServiceStartHints", () => {
     ).toEqual([
       "Restart the container or the service that manages it for openclaw-demo-container.",
     ]);
+  });
+
+  it("uses the boot-volume plist in the runnable macOS repair hint", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fsState.externalHome = "/Volumes/MainDataDrive";
+    try {
+      expect(
+        renderGatewayServiceStartHints({
+          HOME: fsState.externalHome,
+          USER: "test",
+          OPENCLAW_PROFILE: "work",
+        }),
+      ).toContain(
+        `launchctl bootstrap gui/$UID /Users/${os.userInfo().username}/Library/LaunchAgents/ai.openclaw.work.plist`,
+      );
+    } finally {
+      fsState.externalHome = undefined;
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
   });
 });
 

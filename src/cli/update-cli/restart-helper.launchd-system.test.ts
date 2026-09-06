@@ -1,15 +1,41 @@
-// Update restart handoff tests cover system-domain ownership checks at execution time.
+// Update restart handoff tests cover macOS launchd path and ownership handling.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareRestartScript } from "./restart-helper.js";
 
 const execFileAsync = promisify(execFile);
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
 
-describe("macOS update restart system ownership", () => {
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
+});
+
+describe("macOS update restart", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   const originalGetuid = process.getuid;
 
@@ -18,6 +44,37 @@ describe("macOS update restart system ownership", () => {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
     process.getuid = originalGetuid;
+    fsState.externalHome = undefined;
+  });
+
+  it("bootstraps the boot-volume plist when HOME is on an external volume", async () => {
+    Object.defineProperty(process, "platform", {
+      ...originalPlatformDescriptor,
+      value: "darwin",
+    });
+    process.getuid = () => 501;
+    fsState.externalHome = "/Volumes/MainDataDrive";
+
+    const scriptPath = await prepareRestartScript({
+      HOME: fsState.externalHome,
+      USER: "test",
+      OPENCLAW_PROFILE: "default",
+    });
+    if (!scriptPath) {
+      throw new Error("expected restart script path");
+    }
+    try {
+      const content = await fs.readFile(scriptPath, "utf8");
+      expect(content).toContain(
+        "openclaw_launch_agent_plist='/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist'",
+      );
+      expect(content).toContain(`launchctl bootstrap 'gui/501' "$openclaw_launch_agent_plist"`);
+      expect(content).not.toContain(
+        "/Volumes/MainDataDrive/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      );
+    } finally {
+      await fs.rm(path.dirname(scriptPath), { recursive: true, force: true });
+    }
   });
 
   it("refuses the detached handoff before user activation when a system owner appears", async () => {

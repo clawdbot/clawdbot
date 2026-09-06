@@ -1,13 +1,13 @@
 /** Detached macOS launchd restart handoff for restarting from inside the service. */
 import { spawn } from "node:child_process";
 import os from "node:os";
-import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
+import { resolveLaunchAgentPlistPathForLabel } from "./launchd-service-files.js";
 import { renderSystemLaunchDaemonOwnershipShellProbe } from "./launchd-system.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
@@ -45,7 +45,7 @@ function resolveLaunchdRestartTarget(
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const home = normalizeOptionalString(env.HOME) || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const plistPath = resolveLaunchAgentPlistPathForLabel({ ...env, HOME: home }, label);
   return {
     domain,
     label,

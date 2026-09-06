@@ -36,6 +36,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeGatewayServiceRestart,
   formatGatewayServiceStartRepairIssues,
+  readGatewayServiceCommandForMutation,
   resolveGatewayService,
   startGatewayService,
 } from "../daemon/service.js";
@@ -461,7 +462,10 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const existingCommand = await service.readCommand(process.env).catch(() => null);
+          const { command: existingCommand } = await readGatewayServiceCommandForMutation(
+            service,
+            process.env,
+          );
           const { programArguments, workingDirectory, environment, environmentValueSources } =
             await buildGatewayInstallPlan({
               env: process.env,

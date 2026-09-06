@@ -6,6 +6,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
+import { readRelocatedLaunchAgentForInstall } from "./launchd-install.js";
+import {
+  readExistingLaunchAgentPlist,
+  resolveLaunchAgentPlistPath,
+} from "./launchd-service-files.js";
 import {
   installLaunchAgent,
   isLaunchAgentEnabled,
@@ -106,6 +111,57 @@ export type GatewayService = {
     opts?: GatewayServiceReadOptions,
   ) => Promise<GatewayServiceRuntime>;
 };
+
+type GatewayServiceCommandForMutation =
+  | { kind: "current"; command: GatewayServiceCommandConfig }
+  | { kind: "relocated"; command: GatewayServiceCommandConfig; plistPath: string }
+  | { kind: "missing"; command: null };
+
+/**
+ * Authority-bearing pre-mutation ownership/routing read. On Darwin this includes a verified
+ * pre-canonical LaunchAgent only when the canonical definition is absent.
+ */
+export async function readGatewayServiceCommandForMutation(
+  service: GatewayService,
+  env: GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
+): Promise<GatewayServiceCommandForMutation> {
+  // A loaded pre-migration job has no canonical plist yet. Discover its verified
+  // definition before strict runtime inspection would classify it as an orphan.
+  if (
+    process.platform === "darwin" &&
+    opts?.requireEffective &&
+    (await readExistingLaunchAgentPlist(resolveLaunchAgentPlistPath(env))) === null
+  ) {
+    const relocated = await readRelocatedLaunchAgentForInstall(env, opts);
+    if (relocated !== null) {
+      return { kind: "relocated", ...relocated };
+    }
+  }
+  const mustFailClosedOnCommandRead =
+    process.platform === "darwin" || opts?.requireEffective === true;
+  const command = mustFailClosedOnCommandRead
+    ? await service.readCommand(env, opts)
+    : await service.readCommand(env, opts).catch(() => null);
+  if (command !== null) {
+    return { kind: "current", command };
+  }
+  if (process.platform !== "darwin") {
+    return { kind: "missing", command: null };
+  }
+
+  // The steady-state parser returns null for both ENOENT and read/parse failures.
+  // A managed mutation must distinguish those cases before it can replace the definition.
+  const canonicalPlistPath = resolveLaunchAgentPlistPath(env);
+  if ((await readExistingLaunchAgentPlist(canonicalPlistPath)) !== null) {
+    throw new Error("The current LaunchAgent definition cannot be safely inspected.");
+  }
+  const relocated = await readRelocatedLaunchAgentForInstall(env, opts);
+  if (relocated === null) {
+    return { kind: "missing", command: null };
+  }
+  return { kind: "relocated", ...relocated };
+}
 
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
   requireEffective?: boolean;
@@ -219,7 +275,12 @@ export async function readGatewayServiceState(
     };
   }
   const command = args.requireEffective
-    ? await service.readCommand(baseEnv, { timeoutMs, requireEffective: true })
+    ? (
+        await readGatewayServiceCommandForMutation(service, baseEnv, {
+          timeoutMs,
+          requireEffective: true,
+        })
+      ).command
     : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Reject persisted selector drift before invoking the native service manager.

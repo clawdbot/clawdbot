@@ -12,6 +12,7 @@ const execFileMock = vi.hoisted(() =>
 );
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -22,6 +23,31 @@ vi.mock("node:child_process", async () => {
       spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
     } as Partial<typeof import("node:child_process")>,
   );
+});
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
 });
 
 vi.mock("./ports-lsof.js", () => ({
@@ -50,6 +76,7 @@ beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
+  fsState.externalHome = undefined;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
   vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
@@ -263,6 +290,42 @@ describe("triggerOpenClawRestart", () => {
             `launchctl kickstart gui/${uid}/ai.openclaw.gateway`,
           ],
         });
+      },
+    );
+  });
+
+  it("bootstraps the boot-volume plist when HOME is on an external volume", () => {
+    setPlatform("darwin");
+    fsState.externalHome = "/Volumes/MainDataDrive";
+    withEnv(
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: fsState.externalHome,
+        USER: "test",
+        OPENCLAW_PROFILE: "default",
+      },
+      () => {
+        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "/usr/sbin/lsof") {
+            return { error: undefined, status: 1, stdout: "" };
+          }
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 113, stderr: "service not loaded" };
+          }
+          if (command === "launchctl" && args[0] === "bootstrap") {
+            return { error: undefined, status: 0, stderr: "" };
+          }
+          return { error: undefined, status: 1, stdout: "" };
+        });
+
+        const result = triggerOpenClawRestart();
+
+        expect(result.tried).toContain(
+          `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+        );
+        expect(result.tried?.join("\n")).not.toContain("/Volumes/");
       },
     );
   });

@@ -111,6 +111,14 @@ vi.mock("../daemon/service.js", async () => {
     await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
+    readGatewayServiceCommandForMutation: async (
+      service: { readCommand: (...args: unknown[]) => Promise<unknown> },
+      env: NodeJS.ProcessEnv,
+      opts?: unknown,
+    ) => {
+      const command = await service.readCommand(env, opts);
+      return command ? { kind: "current", command } : { kind: "missing", command: null };
+    },
     resolveGatewayService: () => ({
       label: "LaunchAgent",
       loadedText: "loaded",

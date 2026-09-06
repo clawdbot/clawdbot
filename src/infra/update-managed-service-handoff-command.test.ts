@@ -11,6 +11,7 @@ import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-ha
 const spawnMock = vi.hoisted(() => vi.fn());
 const getFileLockProcessStartTimeMock = vi.hoisted(() => vi.fn((_pid: number) => 17));
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
 const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
@@ -52,7 +53,33 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
   forceKillChildProcessTree: forceKillChildProcessTreeMock,
 }));
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
+});
+
 beforeEach(() => {
+  fsState.externalHome = undefined;
   getFileLockProcessStartTimeMock.mockReset();
   getFileLockProcessStartTimeMock.mockReturnValue(17);
   forceKillChildProcessTreeMock.mockReset();
@@ -76,6 +103,7 @@ async function startHandoffAndReadCommand(params: {
   acceptCapabilities?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
+  supervisor?: "launchd";
   restartDelayMs?: number;
   restartDrainTimeoutMs?: number;
 }): Promise<{
@@ -84,6 +112,7 @@ async function startHandoffAndReadCommand(params: {
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
+  serviceRecovery: { kind?: string; plistPath?: string } | undefined;
 }> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const result = await startManagedServiceUpdateHandoff({
@@ -100,6 +129,7 @@ async function startHandoffAndReadCommand(params: {
     meta: {},
     ...(params.devTarget ? { devTarget: params.devTarget } : {}),
     ...(params.env ? { env: params.env } : {}),
+    ...(params.supervisor ? { supervisor: params.supervisor } : {}),
   });
   expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
   const spawnCall = spawnMock.mock.calls[0] as unknown as
@@ -114,6 +144,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv?: string[];
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
+    serviceRecovery?: { kind?: string; plistPath?: string };
   };
   const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
   const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
@@ -129,6 +160,7 @@ async function startHandoffAndReadCommand(params: {
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
+    serviceRecovery: helperParams.serviceRecovery,
   };
 }
 
@@ -219,5 +251,22 @@ describe("managed service update handoff command", () => {
         upstreamSha: "frozen-sha",
       },
     });
+  });
+
+  it("serializes the boot-volume plist for launchd recovery with an external home", async () => {
+    const externalHome = "/Volumes/MainDataDrive";
+    fsState.externalHome = externalHome;
+
+    const result = await startHandoffAndReadCommand({
+      channel: "beta",
+      supervisor: "launchd",
+      env: { HOME: externalHome, USER: "test" },
+    });
+
+    expect(result.serviceRecovery).toMatchObject({
+      kind: "launchd",
+      plistPath: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    });
+    expect(result.serviceRecovery?.plistPath).not.toContain("/Volumes/");
   });
 });

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct LaunchAgentPlistSnapshot: Equatable {
@@ -13,6 +14,84 @@ struct LaunchAgentPlistSnapshot: Equatable {
 }
 
 enum LaunchAgentPlist {
+    static func launchAgentHomeDirectory(homeDirectory: URL) -> URL {
+        let username = self.loginUsername()
+        let canonicalHomeDirectory = self.normalizeLoginUsername(username).map {
+            URL(fileURLWithPath: "/Users", isDirectory: true)
+                .appendingPathComponent($0, isDirectory: true)
+        }
+        return self.launchAgentHomeDirectory(
+            homeDirectory: homeDirectory,
+            rootFileSystemNumber: self.fileSystemNumber(forPath: "/"),
+            homeFileSystemNumber: self.fileSystemNumber(forPath: homeDirectory.path),
+            username: username,
+            canonicalHomeFileSystemNumber: canonicalHomeDirectory.flatMap {
+                self.fileSystemNumber(forPath: $0.path)
+            })
+    }
+
+    static func launchAgentHomeDirectory(
+        homeDirectory: URL,
+        rootFileSystemNumber: NSNumber?,
+        homeFileSystemNumber: NSNumber?,
+        username: String?,
+        canonicalHomeFileSystemNumber: NSNumber?) -> URL
+    {
+        guard let rootFileSystemNumber,
+              let homeFileSystemNumber,
+              rootFileSystemNumber != homeFileSystemNumber,
+              let username = self.normalizeLoginUsername(username),
+              let canonicalHomeFileSystemNumber,
+              canonicalHomeFileSystemNumber == rootFileSystemNumber
+        else {
+            return homeDirectory
+        }
+        return URL(fileURLWithPath: "/Users", isDirectory: true)
+            .appendingPathComponent(username, isDirectory: true)
+    }
+
+    private static func loginUsername() -> String? {
+        self.loginUsername(
+            osUsername: NSUserName(),
+            environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func loginUsername(osUsername: String?, environment: [String: String]) -> String? {
+        for candidate in [osUsername, environment["USER"], environment["LOGNAME"]] {
+            if let username = self.normalizeLoginUsername(candidate) {
+                return username
+            }
+        }
+        return nil
+    }
+
+    private static func normalizeLoginUsername(_ value: String?) -> String? {
+        guard let username = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !username.isEmpty,
+              username != ".",
+              username != "..",
+              !username.contains("/"),
+              !username.contains("\\"),
+              !username.contains("\0")
+        else {
+            return nil
+        }
+        return username
+    }
+
+    private static func fileSystemNumber(forPath path: String) -> NSNumber? {
+        // Item identity follows stat(2) across macOS's firmlinked system/data
+        // volume pair. File-system attributes report those paired volumes as
+        // different and would misclassify every normal /Users home as external.
+        var information = stat()
+        guard stat(path, &information) == 0 else { return nil }
+        return NSNumber(value: UInt64(truncatingIfNeeded: information.st_dev))
+    }
+
+    static func _testFileSystemNumber(forPath path: String) -> NSNumber? {
+        self.fileSystemNumber(forPath: path)
+    }
+
     static func snapshot(
         url: URL,
         generatedEnvironmentFileURL: URL? = nil,

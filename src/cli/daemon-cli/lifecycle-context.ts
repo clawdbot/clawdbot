@@ -6,7 +6,10 @@ import {
 } from "../../config/config.js";
 import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceCommandForMutation,
+  resolveGatewayService,
+} from "../../daemon/service.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { ensureCliPluginRegistryLoaded } from "../plugin-registry-loader.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
@@ -16,7 +19,11 @@ export async function resolveGatewayLifecycleContext(
   requireEffective = false,
 ) {
   const command = requireEffective
-    ? await service.readCommand(process.env, { requireEffective: true })
+    ? (
+        await readGatewayServiceCommandForMutation(service, process.env, {
+          requireEffective: true,
+        })
+      ).command
     : await service.readCommand(process.env).catch(() => null);
   if (requireEffective && !command) {
     throw new Error(

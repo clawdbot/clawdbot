@@ -85,6 +85,7 @@ const gatewayServiceRestart = vi.hoisted(() =>
     outcome: "completed",
   })),
 );
+const readGatewayServiceCommandForMutation = vi.hoisted(() => vi.fn());
 const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
 const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
@@ -225,6 +226,7 @@ vi.mock("../daemon/service.js", () => ({
   ),
   formatGatewayServiceStartRepairIssues: (issues: Array<{ message: string }>) =>
     issues.map((issue) => issue.message).join("; "),
+  readGatewayServiceCommandForMutation,
   startGatewayService,
   resolveGatewayService: vi.fn(() => ({
     label: "Mock Platform Service",
@@ -472,6 +474,11 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceIsLoaded.mockResolvedValue(false);
     gatewayServiceReadCommand.mockReset();
     gatewayServiceReadCommand.mockResolvedValue(null);
+    readGatewayServiceCommandForMutation.mockReset();
+    readGatewayServiceCommandForMutation.mockImplementation(async () => {
+      const command = await gatewayServiceReadCommand();
+      return command === null ? { kind: "missing", command: null } : { kind: "current", command };
+    });
     startGatewayService.mockReset();
     gatewayServiceRestart.mockReset();
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
@@ -1614,48 +1621,71 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
-  it("passes the existing service intact to the reinstall owner", async () => {
-    let installed = true;
-    gatewayServiceIsLoaded.mockImplementation(async () => installed);
-    gatewayServiceUninstall.mockImplementationOnce(async () => {
-      installed = false;
-    });
-    gatewayServiceInstall.mockImplementationOnce(async () => {
-      expect(installed).toBe(true);
-    });
-    const managedDefinition = {
-      programArguments: [
-        "/usr/bin/node",
-        "--max-old-space-size=24576",
-        "--require=/tmp/service-preload.js",
-        "/usr/local/bin/openclaw",
-        "gateway",
-      ],
-      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
-    };
-    const existingCommand = {
-      programArguments: ["/operator/drop-in-wrapper", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
-    gatewayServiceReadCommand.mockResolvedValue(existingCommand);
-    const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
+  it.each(["current systemd", "relocated LaunchAgent"] as const)(
+    "passes a %s service command intact to the reinstall owner",
+    async (definitionKind) => {
+      let installed = true;
+      gatewayServiceIsLoaded.mockImplementation(async () => installed);
+      gatewayServiceUninstall.mockImplementationOnce(async () => {
+        installed = false;
+      });
+      gatewayServiceInstall.mockImplementationOnce(async () => {
+        expect(installed).toBe(true);
+      });
+      const managedDefinition = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "--require=/tmp/service-preload.js",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+      };
+      const currentSystemdCommand = {
+        programArguments: ["/operator/drop-in-wrapper", "gateway"],
+        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
+      const relocatedLaunchAgentCommand = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "" },
+      };
+      const existingCommand =
+        definitionKind === "current systemd" ? currentSystemdCommand : relocatedLaunchAgentCommand;
+      if (definitionKind === "current systemd") {
+        gatewayServiceReadCommand.mockResolvedValue(existingCommand);
+      } else {
+        readGatewayServiceCommandForMutation.mockResolvedValue({
+          kind: "relocated",
+          plistPath: "/external/Library/LaunchAgents/ai.openclaw.gateway.plist",
+          command: existingCommand,
+        });
+      }
+      const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
 
-    const result = await ensureGatewayServiceForOnboarding(
-      createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
-    );
+      const result = await ensureGatewayServiceForOnboarding(
+        createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
+      );
 
-    expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingCommand,
-      }),
-    );
-    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
-    expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-    expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-  });
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommand,
+        }),
+      );
+      expect(readGatewayServiceCommandForMutation).toHaveBeenCalledOnce();
+      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
+      expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["skip", "restart"])("does not turn %s into an implicit reinstall", async (action) => {
     gatewayServiceIsLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);

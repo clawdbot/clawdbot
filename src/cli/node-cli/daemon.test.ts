@@ -13,6 +13,32 @@ import {
 } from "./daemon.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
+});
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -80,13 +106,18 @@ vi.mock("../daemon-cli/lifecycle-core.js", () => ({
   runServiceUninstall: mocks.runServiceUninstall,
 }));
 
-vi.mock("../../daemon/runtime-hints.js", () => ({
-  buildPlatformRuntimeLogHints: () => [
-    "Logs: node service log",
-    "Restart attempts: node restart log",
-  ],
-  buildPlatformServiceStartHints: () => ["openclaw node install", "openclaw node start"],
-}));
+vi.mock("../../daemon/runtime-hints.js", async () => {
+  const actual = await vi.importActual<typeof import("../../daemon/runtime-hints.js")>(
+    "../../daemon/runtime-hints.js",
+  );
+  return {
+    ...actual,
+    buildPlatformRuntimeLogHints: () => [
+      "Logs: node service log",
+      "Restart attempts: node restart log",
+    ],
+  };
+});
 
 vi.mock("../../daemon/systemd.js", async () => {
   const actual =
@@ -133,6 +164,8 @@ function useLinuxPlatform(): void {
 }
 
 afterEach(() => {
+  fsState.externalHome = undefined;
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -503,6 +536,24 @@ describe("node daemon lifecycle adapters", () => {
       );
     },
   );
+
+  it("renders the boot-volume LaunchAgent path for an external home", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    fsState.externalHome = "/Volumes/MainDataDrive";
+    vi.stubEnv("HOME", fsState.externalHome);
+    vi.stubEnv("USER", "test");
+
+    await runNodeDaemonStart({ json: true });
+
+    const call = mocks.runServiceStart.mock.calls[0]?.[0] as
+      | { renderStartHints?: () => string[] }
+      | undefined;
+    const hints = call?.renderStartHints?.() ?? [];
+    expect(hints).toContain(
+      "launchctl bootstrap gui/$UID /Users/test/Library/LaunchAgents/ai.openclaw.node.plist",
+    );
+    expect(hints.join("\n")).not.toContain(fsState.externalHome);
+  });
 });
 
 describe("runNodeDaemonStatus", () => {

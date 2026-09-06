@@ -559,6 +559,7 @@ export async function finishUpdate(params: {
             serviceState.env,
             gatewayPort,
             serviceState.command?.programArguments,
+            serviceState.command?.sourcePath,
           );
         }
       } catch (err) {

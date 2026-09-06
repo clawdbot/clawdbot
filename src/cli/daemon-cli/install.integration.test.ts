@@ -57,6 +57,14 @@ const serviceMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../daemon/service.js", () => ({
+  readGatewayServiceCommandForMutation: async (
+    service: { readCommand: (...args: unknown[]) => Promise<unknown> },
+    env: NodeJS.ProcessEnv,
+    opts?: unknown,
+  ) => {
+    const command = await service.readCommand(env, opts);
+    return command ? { kind: "current", command } : { kind: "missing", command: null };
+  },
   resolveGatewayService: () => serviceMock,
 }));
 

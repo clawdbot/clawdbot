@@ -13,6 +13,32 @@ import {
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
 }));
+const fsState = vi.hoisted(() => ({ externalHome: undefined as string | undefined }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const statSync = ((target: string) => {
+    if (fsState.externalHome) {
+      if (target === "/") {
+        return { dev: 1 };
+      }
+      if (target === fsState.externalHome) {
+        return { dev: 2 };
+      }
+      if (target === "/Users/test") {
+        return { dev: 1 };
+      }
+    }
+    return actual.statSync(target);
+  }) as typeof actual.statSync;
+  return { ...actual, statSync, default: { ...actual, statSync } };
+});
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  const userInfo = () => ({ ...actual.userInfo(), username: "test" });
+  return { ...actual, userInfo, default: { ...actual, userInfo } };
+});
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
@@ -389,6 +415,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
   });
 
   afterEach(() => {
+    fsState.externalHome = undefined;
     Object.defineProperty(process, "platform", {
       configurable: true,
       value: originalPlatform,
@@ -473,6 +500,69 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
       "launchctl bootout gui/$UID/com.example.openclaw-gateway",
       `rm ${plistPath}`,
     ]);
+  });
+
+  it("scans boot-volume and raw external LaunchAgents directories when HOME is external", async () => {
+    fsState.externalHome = "/Volumes/MainDataDrive";
+    const canonicalPlist = "/Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist";
+    const rawPlist = "/Volumes/MainDataDrive/Library/LaunchAgents/com.clawdbot.gateway.plist";
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+      const directory = String(args[0]);
+      if (directory === "/Users/test/Library/LaunchAgents") {
+        return ["com.example.openclaw-gateway.plist"];
+      }
+      if (directory === "/Volumes/MainDataDrive/Library/LaunchAgents") {
+        return ["com.clawdbot.gateway.plist"];
+      }
+      throw new Error(`unexpected LaunchAgents directory: ${directory}`);
+    }) as typeof fs.readdir);
+    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (filePath) => {
+      if (filePath === canonicalPlist) {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>com.example.openclaw-gateway</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/openclaw</string><string>gateway</string></array>
+</dict></plist>`;
+      }
+      if (filePath === rawPlist) {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>com.clawdbot.gateway</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/clawdbot</string><string>gateway</string></array>
+</dict></plist>`;
+      }
+      throw new Error("unexpected LaunchAgent plist path");
+    });
+    try {
+      const result = await findExtraGatewayServices({
+        HOME: fsState.externalHome,
+        USER: "test",
+      });
+
+      expect(result).toEqual([
+        {
+          platform: "darwin",
+          label: "com.example.openclaw-gateway",
+          detail: `plist: ${canonicalPlist}`,
+          scope: "user",
+          marker: "openclaw",
+          legacy: false,
+        },
+        {
+          platform: "darwin",
+          label: "com.clawdbot.gateway",
+          detail: `plist: ${rawPlist}`,
+          scope: "user",
+          marker: "clawdbot",
+          legacy: true,
+        },
+      ]);
+      expect(renderGatewayServiceCleanupHints(result)).toContain(`rm ${canonicalPlist}`);
+      expect(renderGatewayServiceCleanupHints(result)).toContain(`rm ${rawPlist}`);
+    } finally {
+      readdir.mockRestore();
+      readFile.mockRestore();
+    }
   });
 });
 

@@ -13,9 +13,14 @@ import {
 } from "./launchd-plist.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
-import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
+import { resolveGatewayStateDir, resolveLaunchAgentHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceInstallArgs,
+  GatewayServiceReadOptions,
+} from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 // launchd rejects user LaunchAgent plists without group/other read access on
@@ -30,7 +35,7 @@ export function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveLaunchAgentHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -198,6 +203,18 @@ export function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv,
   };
 }
 
+export async function readLaunchAgentProgramArgumentsAtPath(
+  env: GatewayServiceEnv,
+  label: string,
+  plistPath: string,
+  options?: GatewayServiceReadOptions,
+): Promise<GatewayServiceCommandConfig | null> {
+  return readLaunchAgentProgramArgumentsFromFile(plistPath, {
+    ...resolveLaunchAgentEnvironmentReadOptions(env, label),
+    ...options,
+  });
+}
+
 function buildLaunchAgentPlist({
   label = GATEWAY_LAUNCH_AGENT_LABEL,
   comment,
@@ -234,7 +251,15 @@ export async function readExistingLaunchAgentPlist(plistPath: string): Promise<B
     return await fs.readFile(plistPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
+      try {
+        await fs.lstat(plistPath);
+      } catch (statError) {
+        // SAFETY: Node filesystem rejections expose errno-compatible codes when present.
+        if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw statError;
+      }
     }
     throw error;
   }
@@ -334,7 +359,7 @@ export async function writeLaunchAgentPlist({
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveLaunchAgentHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
