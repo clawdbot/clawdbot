@@ -245,10 +245,12 @@ function buildExecApprovalPromptGuidance(params: {
     params.inlineButtonsEnabled ||
     hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
     isKnownNativeApprovalPromptChannel(runtimeChannel);
+  const policyGuidance =
+    "For task-authorized commands, make the execution request through the available tool and let its current policy decide whether approval is needed. Request exec approval only from an actual approval-pending result; never invent approval IDs or ask for a bare /approve.";
   if (usesNativeApprovalUi) {
-    return 'exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.';
+    return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
   }
-  return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
+  return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
 }
 
 function buildSkillsSection(params: {
@@ -1297,7 +1299,7 @@ export function buildAgentSystemPrompt(params: {
               "Narrate only complex, sensitive/destructive, or requested steps.",
               "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
               "/approve is user command; never execute via shell/tool.",
-              "allow-once = one command. Another elevated command needs fresh /approve.",
+              "allow-once covers only that exact command; later commands need their own exec policy decision.",
               "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
               "",
             ],
