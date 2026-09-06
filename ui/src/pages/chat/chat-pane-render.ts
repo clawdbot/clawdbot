@@ -64,6 +64,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { realtimeTalkStatusDetail } from "./realtime-talk-shared.ts";
 import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
@@ -437,7 +438,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
+      realtimeTalkDetail: realtimeTalkStatusDetail(
+        state.realtimeTalkStatus,
+        state.realtimeTalkDetail,
+        state.realtimeTalkSession?.activeIdentity,
+      ),
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,

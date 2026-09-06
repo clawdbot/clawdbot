@@ -19,7 +19,7 @@ import {
   renderVoiceWakeEditor,
   type VoiceWakeEditorState,
 } from "./talk-device.ts";
-import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
+import type { TalkRealtimeSelection } from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
 export type TalkRealtimeProviderOption = {
@@ -30,6 +30,8 @@ export type TalkRealtimeProviderOption = {
   models: readonly string[];
   voices: readonly string[];
   voicesByModel?: Record<string, readonly string[]>;
+  authMethods?: readonly { id: string; label: string }[];
+  selectedAuthMethod?: string;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
   defaultModel: string | null;
@@ -58,6 +60,7 @@ type TalkViewProps = {
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
+  onAuthMethodChange?: (method: string) => void;
   /** Embedded schema editor for the full `talk` section. */
   editor: TemplateResult;
 };
@@ -258,26 +261,31 @@ function renderVoiceRow(props: TalkViewProps) {
   });
 }
 
-/**
- * GPT-Live is the one model family whose auth differs from the rest of the
- * provider (ChatGPT OAuth works, no Platform key needed), so it gets its own
- * explainer row instead of a footnote in the provider description.
- */
-function renderGptLiveRow(props: TalkViewProps) {
+function renderAuthRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
-  const { model } = effectiveTalkValues(props.selection, provider);
-  if (provider?.id !== "openai" || !isTalkGptLiveModel(model)) {
+  if (!provider?.authMethods?.length) {
     return nothing;
   }
-  // `configured` is a generic readiness boolean: false can also mean a broken
-  // configured API key or an unavailable broker, so the badge stays neutral and
-  // the description carries the sign-in guidance.
-  return renderSettingsRow({
-    title: t("talkPage.gptLive.title"),
-    description: t("talkPage.gptLive.hint"),
-    control: provider.configured
-      ? renderSettingsStatus({ kind: "ok", label: t("talkPage.gptLive.ready") })
-      : renderSettingsStatus({ kind: "warn", label: t("talkPage.status.notReady") }),
+  const selected =
+    talkProviderConfigKeys(props.selection, provider)
+      .map((key) => props.selection.providerEntries[key]?.authMethod)
+      .find((method) => method != null) ??
+    provider.selectedAuthMethod ??
+    "";
+  return renderSettingsSelectRow({
+    title: t("talkPage.auth.title"),
+    description: t("talkPage.auth.description"),
+    value: selected,
+    options: [
+      ...(!selected ? [{ value: "", label: t("talkPage.auth.choose") }] : []),
+      ...provider.authMethods.map(({ id, label }) => ({ value: id, label })),
+    ],
+    disabled: props.configBusy,
+    onChange: (method) => {
+      if (method) {
+        props.onAuthMethodChange?.(method);
+      }
+    },
   });
 }
 
@@ -294,7 +302,7 @@ export function renderTalk(props: TalkViewProps) {
           },
           html`
             ${renderStatusRow(props)} ${renderProviderRow(props)} ${renderModelRow(props)}
-            ${renderVoiceRow(props)} ${renderGptLiveRow(props)}
+            ${renderVoiceRow(props)} ${renderAuthRow(props)}
           `,
         )}
       </div>

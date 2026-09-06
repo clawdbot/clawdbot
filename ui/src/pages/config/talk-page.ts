@@ -63,6 +63,8 @@ function toProviderOption(
     models: provider.models ?? [],
     voices: provider.voices ?? [],
     voicesByModel: provider.voicesByModel,
+    authMethods: provider.authMethods,
+    selectedAuthMethod: provider.selectedAuthMethod,
     transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,
   };
@@ -485,6 +487,28 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     }
   }
 
+  private changeAuthMethod(method: string) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    const selection = this.liveSelection();
+    const provider = selectedTalkProviderOption(this.catalog, selection);
+    if (!provider?.authMethods?.some((choice) => choice.id === method)) {
+      return;
+    }
+    // Patch only the Talk policy; unrelated STT/API keys and global auth order stay intact.
+    const key = this.selectedProviderConfigKeys()[0] ?? provider.id;
+    // A strict method selected from Auto also selects its provider; otherwise a
+    // missing credential could make automatic discovery choose another provider.
+    if (!selection.provider) {
+      this.context.runtimeConfig.patchForm(["talk", "realtime", "provider"], key);
+    }
+    this.context.runtimeConfig.patchForm(
+      ["talk", "realtime", "providers", key, "authMethod"],
+      method,
+    );
+  }
+
   private changeVoice(voice: string | null) {
     if (this.mutationDisabled) {
       return;
@@ -532,8 +556,16 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     }
     const runtimeConfig = this.context.runtimeConfig;
     const selection = this.liveSelection();
+    const previousProviderKeys = this.selectedProviderConfigKeys();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
+    }
+    // A strict method belongs to the selected provider identity. Switching the
+    // provider or returning to Auto must not leave that old lock active.
+    if (providerId === null || providerId !== selection.provider) {
+      for (const key of previousProviderKeys) {
+        runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "authMethod"]);
+      }
     }
     if (providerId === null) {
       // Auto keeps the current transport: it was valid for the configuration
@@ -601,6 +633,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       onProviderChange: (providerId) => this.changeProvider(providerId),
       onModelChange: (model) => this.changeModel(model),
       onVoiceChange: (voice) => this.changeVoice(voice),
+      onAuthMethodChange: (method) => this.changeAuthMethod(method),
       editor: this.buildEditor(),
     });
   }

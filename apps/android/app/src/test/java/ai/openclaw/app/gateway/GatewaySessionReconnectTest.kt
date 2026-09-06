@@ -2,6 +2,10 @@ package ai.openclaw.app.gateway
 
 import ai.openclaw.app.NotificationNodeEventOutbox
 import ai.openclaw.app.PendingNotificationNodeEvent
+import ai.openclaw.app.voice.RealtimeAgentClientTransport
+import ai.openclaw.app.voice.RealtimeAgentCoordinator
+import ai.openclaw.app.voice.RealtimeAgentSession
+import ai.openclaw.app.voice.TalkRealtimeClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -14,6 +18,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -1906,6 +1913,154 @@ class GatewaySessionReconnectTest {
         assertEquals("operator.questions", result.error?.missingScope())
       } finally {
         shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  fun talkCallAuthorityFencesTranscriptAndTransportWaitsBeforeWebSocketSend() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val rejectedScenarios = mutableListOf<String>()
+      Dispatchers.setMain(UnconfinedTestDispatcher())
+      try {
+        for (scenario in listOf("active", "transcript-drain", "transport-lock")) {
+          val connected = CompletableDeferred<Unit>()
+          val consults = AtomicInteger()
+          val server =
+            startGatewayServer(json = json) { socket, id, method ->
+              if (method == "connect") {
+                socket.send(connectResponseFrame(id))
+              } else {
+                if (method == "talk.client.toolCall") consults.incrementAndGet()
+                socket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              }
+            }
+          val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+          val clientJob = SupervisorJob()
+          var client: TalkRealtimeClient? = null
+          val drain = CompletableDeferred<Unit>()
+          var writeLock: Mutex? = null
+          val lockOwner = Any()
+          try {
+            connectNodeSession(harness.session, server.port)
+            withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+            val lease = checkNotNull(harness.session.captureRequestLease())
+            val call = TalkRealtimeClient(RuntimeEnvironment.getApplication(), CoroutineScope(clientJob + Dispatchers.Default), lease, "main", {}, { _, _, _ -> }, {})
+            client = call
+            call.javaClass
+              .getDeclaredField("voiceSessionId")
+              .apply { isAccessible = true }
+              .set(call, "voice-fixture")
+            call.javaClass
+              .getDeclaredField("transcriptTail")
+              .apply { isAccessible = true }
+              .set(call, drain)
+            val transport =
+              call.javaClass
+                .getDeclaredMethod("clientTransport")
+                .apply { isAccessible = true }
+                .invoke(call) as RealtimeAgentClientTransport
+            if (scenario != "transcript-drain") drain.complete(Unit)
+            if (scenario == "transport-lock") {
+              writeLock = readField<Mutex>(harness.session, "writeLock")
+              writeLock.lock(lockOwner)
+            }
+            // UNDISTPATCHED reaches the real drain or transport mutex before returning.
+            val attempt =
+              async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { transport.request("talk.client.toolCall", """{"sessionKey":"main","voiceSessionId":"voice-fixture","callId":"call-fixture","name":"openclaw_agent_consult","args":{}}""", LIFECYCLE_TEST_TIMEOUT_MS) }
+              }
+            val stopping = if (scenario != "active") async(start = CoroutineStart.UNDISPATCHED) { call.close() } else null
+            if (!drain.isCompleted) drain.complete(Unit)
+            writeLock?.unlock(lockOwner)
+            writeLock = null
+            val outcome = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { attempt.await() }
+            stopping?.let { withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { it.await() } }
+            // An acknowledged barrier drains earlier frames on the same real local WebSocket.
+            lease.request("test.barrier", "{}", LIFECYCLE_TEST_TIMEOUT_MS)
+            val expectedOutcome = if (scenario == "active") outcome.isSuccess else outcome.exceptionOrNull() is GatewayRequestNotEnqueued
+            if (!expectedOutcome || consults.get() != if (scenario == "active") 1 else 0) rejectedScenarios += scenario
+            println("talk-authority scenario=$scenario serverConsultFrames=" + consults.get())
+          } finally {
+            if (!drain.isCompleted) drain.complete(Unit)
+            writeLock?.takeIf { it.holdsLock(lockOwner) }?.unlock(lockOwner)
+            client?.close()
+            clientJob.cancelAndJoin()
+            shutdownReconnectHarness(harness, server)
+          }
+        }
+        assertTrue("Rejected scenarios: $rejectedScenarios", rejectedScenarios.isEmpty())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  fun stoppedEnqueuedTalkConsultRetainsAcknowledgementAndAbortCleanup() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      Dispatchers.setMain(UnconfinedTestDispatcher())
+      val connected = CompletableDeferred<Unit>()
+      val accepted = CompletableDeferred<Pair<WebSocket, String>>()
+      val aborted = CompletableDeferred<Unit>()
+      val consults = AtomicInteger()
+      val aborts = AtomicInteger()
+      val server =
+        startGatewayServer(json = json) { socket, id, method ->
+          when (method) {
+            "connect" -> {
+              socket.send(connectResponseFrame(id))
+            }
+
+            "talk.client.toolCall" -> {
+              consults.incrementAndGet()
+              accepted.complete(socket to id)
+            }
+
+            else -> {
+              if (method == "chat.abort") {
+                aborts.incrementAndGet()
+                aborted.complete(Unit)
+              }
+              socket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+            }
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+      val clientJob = SupervisorJob()
+      var client: TalkRealtimeClient? = null
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val lease = checkNotNull(harness.session.captureRequestLease())
+        val call = TalkRealtimeClient(RuntimeEnvironment.getApplication(), CoroutineScope(clientJob + Dispatchers.Default), lease, "main", {}, { _, _, _ -> }, {})
+        client = call
+        call.javaClass
+          .getDeclaredField("voiceSessionId")
+          .apply { isAccessible = true }
+          .set(call, "voice-fixture")
+        val transport =
+          call.javaClass
+            .getDeclaredMethod("clientTransport")
+            .apply { isAccessible = true }
+            .invoke(call) as RealtimeAgentClientTransport
+        val agent = readField<RealtimeAgentCoordinator>(call, "agent")
+        agent.beginSession(RealtimeAgentSession("voice-fixture", "main", transport))
+        assertTrue(agent.handleToolCall("call-fixture", "openclaw_agent_consult", JsonObject(emptyMap()), false))
+        val (socket, requestId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { accepted.await() }
+        call.close()
+        socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"runId":"run-fixture","agentSessionKey":"main"}}""")
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { aborted.await() }
+        assertEquals(1, consults.get())
+        assertEquals(1, aborts.get())
+        println("talk-authority scenario=already-enqueued serverConsultFrames=1 serverAbortFrames=1")
+      } finally {
+        client?.close()
+        clientJob.cancelAndJoin()
+        shutdownReconnectHarness(harness, server)
+        Dispatchers.resetMain()
       }
     }
 

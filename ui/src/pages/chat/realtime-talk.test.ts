@@ -51,9 +51,81 @@ function transportContext(transport: object | undefined): RealtimeTalkTransportC
   return (transport as { ctx: RealtimeTalkTransportContext }).ctx;
 }
 
+function talkRequests(responses: Record<string, () => unknown>) {
+  const handlers = new Map(Object.entries(responses));
+  return vi.fn(async (method: string) => {
+    const respond = handlers.get(method);
+    if (!respond) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return respond();
+  });
+}
+
+function relaySession(provider: string) {
+  return {
+    provider,
+    transport: "gateway-relay",
+    relaySessionId: "relay-1",
+    audio: {
+      inputEncoding: "pcm16",
+      inputSampleRateHz: 24000,
+      outputEncoding: "pcm16",
+      outputSampleRateHz: 24000,
+    },
+  };
+}
+
+function configWithGoogleAuth(provider?: string) {
+  return {
+    talk: {
+      realtime: {
+        ...(provider ? { provider } : {}),
+        providers: { google: { authMethod: "api-key" }, openai: {} },
+      },
+    },
+  };
+}
+
 useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession", () => {
+  it.each([
+    { model: "gpt-live-1-codex", authMethod: "oauth" },
+    { model: "gpt-realtime-2.1", authMethod: "api-key" },
+  ])(
+    "displays confirmed $model/$authMethod identity only for its active call",
+    async ({ model, authMethod }) => {
+      const ready = createDeferred<"ready">();
+      webRtcStart.mockImplementationOnce(() => ready.promise);
+      const payload = {
+        provider: "openai",
+        model,
+        authMethod,
+        voice: "test-voice",
+        transport: "webrtc",
+        voiceSessionId: "identity-call",
+        clientSecret: "do-not-display-ephemeral",
+      };
+      const request = vi.fn(async () => payload);
+      const session = new RealtimeTalkSession({ request } as never, "main");
+      const starting = session.start();
+      await vi.waitFor(() => expect(webRtcInstances).toHaveLength(1));
+      expect(session.activeIdentity).toBeNull();
+      ready.resolve("ready");
+      await starting;
+      expect(session.activeIdentity).toContain(model);
+      expect(session.activeIdentity).toContain(authMethod);
+      expect(session.activeIdentity).toContain("test-voice");
+      expect(session.activeIdentity).toContain("webrtc");
+      expect(session.activeIdentity).not.toContain(payload.clientSecret);
+      payload.model = "next-call-model";
+      expect(session.activeIdentity).toContain(model);
+      session.stop();
+      expect(session.activeIdentity).toBeNull();
+    },
+  );
+
   beforeEach(() => {
     googleStart.mockClear();
     googleStop.mockClear();
@@ -388,22 +460,13 @@ describe("RealtimeTalkSession", () => {
   });
 
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error("talk.client.create is client-owned; use talk.session.create"),
-      )
-      .mockResolvedValueOnce({
-        provider: "example",
-        transport: "gateway-relay",
-        relaySessionId: "relay-1",
-        audio: {
-          inputEncoding: "pcm16",
-          inputSampleRateHz: 24000,
-          outputEncoding: "pcm16",
-          outputSampleRateHz: 24000,
-        },
-      });
+    const request = talkRequests({
+      "talk.catalog": () => ({ realtime: { activeProvider: "xai", providers: [{ id: "xai" }] } }),
+      "talk.client.create": () => {
+        throw new Error("talk.client.create is client-owned; use talk.session.create");
+      },
+      "talk.session.create": () => relaySession("example"),
+    });
     const session = new RealtimeTalkSession(
       { request } as never,
       "main",
@@ -414,7 +477,7 @@ describe("RealtimeTalkSession", () => {
     await session.start();
 
     expect(request).toHaveBeenNthCalledWith(
-      1,
+      2,
       "talk.client.create",
       {
         sessionKey: "main",
@@ -425,7 +488,7 @@ describe("RealtimeTalkSession", () => {
       requestTimeoutOptions,
     );
     expect(request).toHaveBeenNthCalledWith(
-      2,
+      3,
       "talk.session.create",
       {
         sessionKey: "main",
@@ -724,28 +787,37 @@ describe("RealtimeTalkSession", () => {
     expect(onVideoCapability).toHaveBeenCalledWith(false);
   });
 
-  it("does not fall back to Gateway relay when config selects a client transport", async () => {
+  it.each([
+    [
+      "a configured client transport",
+      { config: { talk: { realtime: { transport: "provider-websocket" } } } },
+    ],
+    [
+      "an invalid transport",
+      { config: { talk: { realtime: { transport: "invalid-transport" } } } },
+    ],
+    ["unreadable configuration", new Error("config unavailable")],
+    ["a missing config payload", {}],
+  ] as const)("does not recover through relay with %s", async (_name, configResult) => {
     const clientError = new Error("browser session unavailable");
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
+    const request = talkRequests({
+      "talk.catalog": () => ({
+        realtime: { activeProvider: "openai", providers: [{ id: "openai" }] },
+      }),
+      "talk.client.create": () => {
         throw clientError;
-      }
-      if (method === "talk.config") {
-        return {
-          config: {
-            talk: {
-              realtime: { transport: "provider-websocket" },
-            },
-          },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
+      "talk.config": () => {
+        if (configResult instanceof Error) {
+          throw configResult;
+        }
+        return configResult;
+      },
     });
     const session = new RealtimeTalkSession({ request } as never, "main");
-
     await expect(session.start()).rejects.toBe(clientError);
-
     expect(request.mock.calls).toEqual([
+      ["talk.catalog", {}, requestTimeoutOptions],
       [
         "talk.client.create",
         { sessionKey: "main", capabilities: ["voice-transcript"] },
@@ -756,12 +828,34 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(0);
   });
 
+  it("never replaces an explicit per-call client transport with saved relay config", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = talkRequests({
+      "talk.client.create": () => {
+        throw clientError;
+      },
+    });
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      { transport: "webrtc" },
+    );
+
+    await expect(session.start()).rejects.toBe(clientError);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "talk.catalog",
+      "talk.client.create",
+    ]);
+    expect(relayInstances).toHaveLength(0);
+  });
+
   it("falls back to Gateway relay when config selects Gateway relay", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
+    const request = talkRequests({
+      "talk.client.create": () => {
         throw new Error("browser session unavailable");
-      }
-      if (method === "talk.config") {
+      },
+      "talk.config": () => {
         return {
           config: {
             talk: {
@@ -769,28 +863,15 @@ describe("RealtimeTalkSession", () => {
             },
           },
         };
-      }
-      if (method === "talk.session.create") {
-        return {
-          provider: "example",
-          transport: "gateway-relay",
-          relaySessionId: "relay-1",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24000,
-          },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
+      "talk.session.create": () => relaySession("example"),
     });
     const session = new RealtimeTalkSession({ request } as never, "main");
 
     await session.start();
 
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "talk.session.create",
       {
         sessionKey: "main",
@@ -804,95 +885,134 @@ describe("RealtimeTalkSession", () => {
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to Gateway relay when a successful config read resolves Auto", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        throw new Error("browser session unavailable");
+  it.each([
+    ["empty configuration", {}, undefined, "openai"],
+    ["inactive legacy strict auth", configWithGoogleAuth("openai"), undefined, "openai"],
+    ["providerless Auto", configWithGoogleAuth(), undefined, "openai"],
+    ["a canonical per-call provider override", configWithGoogleAuth("google"), "openai", "google"],
+    [
+      "a normalized per-call provider alias",
+      configWithGoogleAuth("google"),
+      " TEST-OPENAI ",
+      "google",
+    ],
+  ] as const)(
+    "recovers a failed Auto client call with %s through Gateway relay",
+    async (_name, config, provider, activeProvider) => {
+      const request = talkRequests({
+        "talk.catalog": () => {
+          return {
+            realtime: {
+              activeProvider,
+              providers: [
+                { id: "google", aliases: ["test-google"] },
+                { id: "openai", aliases: ["test-openai"] },
+              ],
+            },
+          };
+        },
+        "talk.client.create": () => {
+          throw new Error("browser session unavailable");
+        },
+        "talk.config": () => ({ config }),
+        "talk.session.create": () => relaySession("openai"),
+      });
+      const session = new RealtimeTalkSession(
+        { request } as never,
+        "main",
+        { onVideoCapability: vi.fn() },
+        { provider },
+      );
+      try {
+        await session.start();
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "talk.catalog",
+          "talk.client.create",
+          "talk.config",
+          "talk.session.create",
+        ]);
+        expect(request).toHaveBeenNthCalledWith(
+          3,
+          "talk.config",
+          provider ? { realtimeProvider: provider.trim() } : {},
+          requestTimeoutOptions,
+        );
+        expect(relayInstances).toHaveLength(1);
+        expect(relayStart).toHaveBeenCalledOnce();
+      } finally {
+        session.stop();
       }
-      if (method === "talk.config") {
-        return { config: {} };
-      }
-      if (method === "talk.session.create") {
-        return {
-          provider: "example",
-          transport: "gateway-relay",
-          relaySessionId: "relay-1",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24000,
-          },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const session = new RealtimeTalkSession({ request } as never, "main");
+    },
+  );
 
-    await session.start();
+  it.each([
+    ["oauth", "openai", undefined, "openai"],
+    ["api-key", "openai", undefined, "openai"],
+    ["oauth", "test-openai", undefined, "openai"],
+    ["oauth", "openai", " TEST-OPENAI ", "google"],
+    ["oauth", "google", undefined, "openai"],
+  ] as const)(
+    "keeps %s auth for configured %s and requested %s strict (catalog active %s)",
+    async (authMethod, provider, requestedProvider, activeProvider) => {
+      const clientError = new Error("browser session unavailable");
+      const request = talkRequests({
+        "talk.catalog": () => {
+          return {
+            realtime: {
+              activeProvider,
+              providers: [{ id: "google" }, { id: "openai", aliases: ["test-openai"] }],
+            },
+          };
+        },
+        "talk.client.create": () => {
+          throw clientError;
+        },
+        "talk.config": () => {
+          const canonical = provider === "google" ? "google" : "openai";
+          return {
+            config: {
+              talk: { realtime: { provider, providers: { [canonical]: { authMethod } } } },
+            },
+          };
+        },
+      });
+      const session = new RealtimeTalkSession(
+        { request } as never,
+        "main",
+        {},
+        { provider: requestedProvider },
+      );
+      await expect(session.start()).rejects.toBe(clientError);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+        "talk.config",
+      ]);
+      expect(relayInstances).toHaveLength(0);
+    },
+  );
 
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "talk.session.create",
-      {
-        sessionKey: "main",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
+  it("keeps unknown catalog selection fail-closed when projected auth is explicit", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = talkRequests({
+      "talk.catalog": () => {
+        throw new Error("catalog unavailable");
       },
-      requestTimeoutOptions,
-    );
-    expect(relayInstances).toHaveLength(1);
-  });
-
-  it("does not fall back when the effective config cannot be read", async () => {
-    const clientError = new Error("browser session unavailable");
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
+      "talk.client.create": () => {
         throw clientError;
-      }
-      if (method === "talk.config") {
-        throw new Error("config unavailable");
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
+      "talk.config": () => {
+        return {
+          config: { talk: { realtime: { providers: { openai: { authMethod: "oauth" } } } } },
+        };
+      },
     });
     const session = new RealtimeTalkSession({ request } as never, "main");
-
     await expect(session.start()).rejects.toBe(clientError);
-
-    expect(request.mock.calls).toEqual([
-      [
-        "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript"] },
-        requestTimeoutOptions,
-      ],
-      ["talk.config", {}, requestTimeoutOptions],
-    ]);
-    expect(relayInstances).toHaveLength(0);
-  });
-
-  it("does not fall back when the effective config payload is missing", async () => {
-    const clientError = new Error("browser session unavailable");
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        throw clientError;
-      }
-      if (method === "talk.config") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await expect(session.start()).rejects.toBe(clientError);
-
-    expect(request.mock.calls).toEqual([
-      [
-        "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript"] },
-        requestTimeoutOptions,
-      ],
-      ["talk.config", {}, requestTimeoutOptions],
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "talk.catalog",
+      "talk.client.create",
+      "talk.config",
     ]);
     expect(relayInstances).toHaveLength(0);
   });

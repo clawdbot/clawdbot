@@ -116,7 +116,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     createBrowserSession: (
       request: OpenAIQuicksilverSessionRequest,
       auth: OpenAIQuicksilverAuth,
-    ) => Promise<RealtimeVoiceBrowserSession>;
+    ) => Promise<Extract<RealtimeVoiceBrowserSession, { transport: "webrtc" }>>;
     cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
   };
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -213,7 +213,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     createBrowserSession: async (
       request: OpenAIQuicksilverSessionRequest,
       auth: OpenAIQuicksilverAuth,
-    ): Promise<RealtimeVoiceBrowserSession> => {
+    ): Promise<Extract<RealtimeVoiceBrowserSession, { transport: "webrtc" }>> => {
       if (cleanedUp || shutdownController.signal.aborted) {
         throw new Error("OpenAI GPT-Live sessions are stopping; restart Gateway and try again");
       }

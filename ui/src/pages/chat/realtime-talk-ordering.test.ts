@@ -364,7 +364,12 @@ describe("browser Talk provider item ordering", () => {
       call.requests
         .filter(({ method }) => method !== "talk.client.create")
         .map(({ method }) => method),
-    ).toEqual(["talk.client.transcript", "talk.client.transcript", "talk.client.toolCall"]);
+    ).toEqual([
+      "talk.catalog",
+      "talk.client.transcript",
+      "talk.client.transcript",
+      "talk.client.toolCall",
+    ]);
   });
 
   it.each(["failed", "empty"])(
@@ -520,7 +525,7 @@ describe("browser Talk provider item ordering", () => {
       call.requests
         .filter(({ method }) => method !== "talk.client.create")
         .map(({ method }) => method),
-    ).toEqual(["talk.client.transcript", "talk.client.close"]);
+    ).toEqual(["talk.catalog", "talk.client.transcript", "talk.client.close"]);
     expect(call.writes()[0]?.params.text).toBe("known answer");
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("unfinished transcript"));
     final(call.peer, "u1", "user", "too late");

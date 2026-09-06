@@ -128,7 +128,9 @@ suite.define(() => {
       await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
       await expect
         .poll(() => page.locator('[role="status"].agent-chat__voice-status').textContent())
-        .toBe("Listening...");
+        .toBe(
+          "Listening... — Provider: google · Model: Unknown · Auth: Unknown · Voice: Unknown · Transport: provider-websocket",
+        );
       const reducedMotionTransform = await page
         .locator(".agent-chat__voice-activity-bar")
         .first()

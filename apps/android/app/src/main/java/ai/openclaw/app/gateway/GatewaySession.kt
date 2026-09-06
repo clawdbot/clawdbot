@@ -381,9 +381,12 @@ class GatewaySession(
     val endpointStableId: String,
     private val isCurrentImpl: () -> Boolean = { true },
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
+    private val offerRouteImpl: ((String) -> GatewayRealtimeOffer)? = null,
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
+
+    fun realtimeOfferRoute(url: String): GatewayRealtimeOffer = checkNotNull(offerRouteImpl) { "Realtime HTTP transport unavailable" }(url)
 
     fun commitIfCurrent(block: () -> Unit): Boolean {
       commitIfCurrentImpl?.let { return it(block) }
@@ -834,6 +837,7 @@ class GatewaySession(
       val conn = readyConnection(expectedEndpointStableId) ?: return@synchronized null
       RequestLease(
         endpointStableId = conn.target.endpoint.stableId,
+        offerRouteImpl = { url -> conn.realtimeOfferRoute(url) },
         isCurrentImpl = { currentConnection === conn && conn.isReady() },
         commitIfCurrentImpl = { block ->
           synchronized(lifecycleLock) {
@@ -1066,6 +1070,21 @@ class GatewaySession(
         mimeType = mimeType,
         retryPreparingPlayback = playbackRendition,
       )
+    }
+
+    fun realtimeOfferRoute(rawUrl: String): GatewayRealtimeOffer {
+      val uri = URI(rawUrl)
+      check(uri.rawUserInfo == null && uri.rawFragment == null) { "Invalid realtime offer URL" }
+      val relative = !uri.isAbsolute && uri.rawAuthority == null && rawUrl.startsWith("/") && !rawUrl.startsWith("//")
+      val isCurrent = { currentConnection === this && isReady() }
+      if (relative) {
+        val scheme = if (tlsConfig != null) "https" else "http"
+        val url = "$scheme://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}${target.endpoint.contextPath}$rawUrl"
+        return GatewayRealtimeOffer(url, client, mediaTransportHeaders(), isCurrent)
+      }
+      check(uri.scheme == "https" && uri.host != null) { "Realtime provider offer must use HTTPS" }
+      // Provider endpoints never inherit Gateway certificate pins or proxy headers.
+      return GatewayRealtimeOffer(rawUrl, OkHttpClient(), emptyMap(), isCurrent)
     }
 
     fun bufferedMedia(

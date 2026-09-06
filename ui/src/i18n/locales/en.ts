@@ -2742,6 +2742,14 @@ export const en: TranslationMap & {
     mtls: "mTLS",
   },
   talkPage: {
+    activeIdentity:
+      "Provider: {provider} · Model: {model} · Auth: {auth} · Voice: {voice} · Transport: {transport}",
+    auth: {
+      title: "Talk authentication",
+      description:
+        "Use only the selected authentication method. Missing or failed credentials stop the call; no other method is used. Changes apply to the next call on all clients.",
+      choose: "Choose authentication",
+    },
     intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
       title: "Realtime voice",

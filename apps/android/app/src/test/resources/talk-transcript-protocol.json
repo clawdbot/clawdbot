@@ -1,0 +1,72 @@
+{
+  "events": [
+    {
+      "type": "input_audio_buffer.committed",
+      "item_id": "provider:item/ü_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "previous_item_id": null
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "item_id": "provider:item/ü_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "transcript": "hello"
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "item_id": "provider:item/ü_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "transcript": "hello"
+    },
+    {
+      "type": "conversation.item.created",
+      "previous_item_id": "provider:item/ü_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "item": {
+        "id": "assistant-item",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "audio"
+          }
+        ]
+      }
+    },
+    {
+      "type": "response.output_audio_transcript.done",
+      "item_id": "assistant-item",
+      "response_id": "response-fixture",
+      "transcript": "answer"
+    },
+    {
+      "type": "input_audio_buffer.committed",
+      "item_id": "next-item",
+      "previous_item_id": "assistant-item"
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "item_id": "next-item",
+      "transcript": "next"
+    }
+  ],
+  "requests": [
+    {
+      "sessionKey": "main",
+      "voiceSessionId": "voice-fixture",
+      "entryId": "1",
+      "role": "user",
+      "text": "hello"
+    },
+    {
+      "sessionKey": "main",
+      "voiceSessionId": "voice-fixture",
+      "entryId": "2",
+      "role": "assistant",
+      "text": "answer"
+    },
+    {
+      "sessionKey": "main",
+      "voiceSessionId": "voice-fixture",
+      "entryId": "3",
+      "role": "user",
+      "text": "next"
+    }
+  ]
+}

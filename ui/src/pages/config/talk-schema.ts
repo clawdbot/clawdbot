@@ -8,6 +8,7 @@ import { normalizeNullableString as readTrimmedString } from "@openclaw/normaliz
 type TalkProviderEntryValues = {
   model: string | null;
   speakerVoice: string | null;
+  authMethod?: string | null;
 };
 
 export type TalkRealtimeSelection = {
@@ -43,6 +44,7 @@ export function resolveTalkRealtimeSelection(
     }
     providerEntries[key] = {
       model: readTrimmedString(entry.model),
+      authMethod: readTrimmedString(entry.authMethod),
       // Provider-level `voice` is a provider-owned legacy alias for
       // speakerVoice (each provider normalizes it); read both for display.
       speakerVoice: readTrimmedString(entry.speakerVoice) ?? readTrimmedString(entry.voice),

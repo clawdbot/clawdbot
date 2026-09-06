@@ -21,6 +21,41 @@ class RealtimeAgentCoordinatorTest {
   private lateinit var calls: MutableList<GatewayCall>
 
   @Test
+  fun clientSteeringUsesTheClosedSessionScopedGatewayContract() =
+    runTest {
+      val requests = mutableListOf<Pair<String, JsonObject>>()
+      val results = mutableListOf<String>()
+      val coordinator = RealtimeAgentCoordinator(this, requestGateway = { _, _, _ -> error("Client must use its captured transport") })
+      coordinator.beginSession(
+        RealtimeAgentSession(
+          "voice-fixture",
+          "main",
+          RealtimeAgentClientTransport(
+            request = { method, params, _ ->
+              requests.add(method to Json.parseToJsonElement(checkNotNull(params)).jsonObject)
+              """{"ok":true,"message":"Updated"}"""
+            },
+            submit = { callId, _ -> results.add(callId) },
+          ),
+        ),
+      )
+      coordinator.handleToolCall("control-call", "openclaw_agent_control", Json.parseToJsonElement("""{"text":"change direction","mode":"steer"}"""), false)
+      runCurrent()
+      assertEquals("talk.client.steer", requests.single().first)
+      assertEquals(setOf("sessionKey", "text", "mode"), requests.single().second.keys)
+      assertEquals(
+        "main",
+        requests
+          .single()
+          .second
+          .getValue("sessionKey")
+          .jsonPrimitive.content,
+      )
+      assertEquals(listOf("control-call"), results)
+      coordinator.endSession()
+    }
+
+  @Test
   fun `keyless duplicate stays quarantined when an owned completion is claimed or stopped`() =
     runTest {
       for (stopped in listOf(false, true)) {

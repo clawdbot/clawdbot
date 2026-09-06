@@ -1,11 +1,14 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
 import { readResponseTextWithLimit } from "../../lib/response-body.ts";
-import type {
-  RealtimeTalkTranscriptItem,
-  RealtimeTalkWebRtcSdpSessionResult,
+import {
+  isBoundedRealtimeTalkId,
+  type RealtimeTalkTranscriptItem,
+  type RealtimeTalkWebRtcSdpSessionResult,
 } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
+
+export const REALTIME_TALK_RESPONSE_LIMIT_ERROR = "Realtime response session limit exceeded";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
@@ -92,12 +95,19 @@ export class RealtimeTalkResponseOutcomeOwner {
 
   constructor(private readonly maxSettledResponses: number) {}
 
-  start(responseId: string | undefined): void {
+  start(responseId: string | undefined): boolean {
+    if (responseId !== undefined && !isBoundedRealtimeTalkId(responseId)) {
+      return false;
+    }
     this.activeResponseId = responseId;
     this.unkeyedSettled = false;
+    return true;
   }
 
   finish(event: RealtimeServerEvent) {
+    if (event.response?.id !== undefined && !isBoundedRealtimeTalkId(event.response.id)) {
+      return { error: REALTIME_TALK_RESPONSE_LIMIT_ERROR };
+    }
     const outcome =
       event.type === "response.cancelled"
         ? ({

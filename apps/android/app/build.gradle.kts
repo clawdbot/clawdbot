@@ -150,7 +150,7 @@ android {
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {
-      // Support all major ABIs — native libs are tiny (~47 KB per ABI)
+      // WebRTC ships all four ABIs; keep emulator and physical-device support.
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
     }
   }
@@ -352,6 +352,7 @@ dependencies {
   ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
+  implementation(libs.webrtc)
   implementation(libs.media3.datasource.okhttp)
   implementation(libs.media3.exoplayer)
   implementation(libs.media3.session)

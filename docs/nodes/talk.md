@@ -13,12 +13,54 @@ Talk mode covers these runtime shapes:
 - **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
 - **Apple Watch standalone Talk**: native WebRTC/Opus over UDP with Gateway-owned call control (`gateway-control-v1`). The Watch uses the Gateway's configured realtime provider and keeps tools and transcript ownership on the Gateway; unsupported configurations fail visibly without a relay fallback.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model passes the Android client gate; it never opens a client-owned WebRTC session. The Gateway now supports `gpt-live-*` relay sessions, but Android intentionally keeps those models on native speech recognition, Gateway chat, and `talk.speak` until the relay path is proven live from an Android device.
+- **Android Talk (realtime)**: Android uses client-owned WebRTC through `talk.client.create`, including the OpenAI OAuth offer broker. An explicitly configured `gateway-relay` uses the existing Gateway relay. Native speech recognition and TTS require explicit `stt-tts` mode; selecting GPT-Live does not fall back to that loop.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio` and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
+
+## Select realtime Talk authentication
+
+In Gateway **Settings → Talk**, choose the provider, model, and authentication method. The OpenAI plugin offers **ChatGPT OAuth only** and **OpenAI Platform API key only** for both `gpt-live-1-codex` and `gpt-realtime-2.1`. The selection is stored in `talk.realtime.providers.openai.authMethod` as `oauth` or `api-key`. It does not remove stored API keys, change dictation/STT settings, or reorder agent authentication profiles.
+
+Missing or failed credentials for the selected method stop the call. OAuth never falls back to a Platform key, and Platform-key selection never uses OAuth. Existing configurations that omit this setting retain their previous credential selection; choose a method explicitly to lock the authentication policy.
+
+Web and Android calls inherit the Gateway defaults. Changes apply on the next call; an active call retains the credentials, model, and voice resolved at its creation. When `authMethod` is explicit, a client request for a different saved provider or model is rejected rather than substituting another route. Legacy/Auto configurations keep deliberate per-call provider/model overrides and may recover a failed client-owned call through the Gateway relay; the saved Gateway values remain defaults, not an identity lock. WebRTC session responses report the resolved `authMethod`, `model`, `voice`, and `transport`; readiness is not inferred from an offer URL or a login badge. Android uses a provider data channel, not `gateway-control-v1`. Native GPT-Live delegation remains Gateway-owned. Its frameless protocol has no client response-cancel command; Android ends that call when output cancellation is requested, instead of sending an unsupported GA command.
+
+For a per-call provider override, clients read
+`talk.config({ realtimeProvider: "<provider-or-alias>" })` before deciding whether
+relay recovery is allowed. This read-only projection uses the same canonical/alias
+precedence as session creation, preserves the Gateway's strict authentication lock,
+and retains the existing `includeSecrets` request and Talk secret-scope checks.
+Omitting the parameter projects the saved/default selection. Stopped or replaced
+Browser calls never start a new relay recovery.
+
+With a strict-auth Talk row, a saved provider key must select an auth-bearing
+row; selecting a non-auth row alongside it fails instead of silently changing
+the selected model. Multiple strict-auth rows must refer to the same registered
+provider and auth method. Per-call aliases cannot change that saved
+authentication or model selection.
+
+Browser and Android Talk limit provider-supplied response, tool-call and
+item identifiers stored for duplicate detection or transcript ordering to 1024
+UTF-16 code units. IDs that exceed these budgets are rejected, not truncated;
+the affected call fails rather than weakening duplicate detection. Transcript
+content and tool arguments keep their separate limits.
+
+When an older Gateway omits the output-control metadata, Android determines
+GA versus native control from unambiguous provider events, not the model name
+or offer URL. Cancelling before that protocol is known ends the call visibly;
+it does not send a guessed GA command. Known GA calls retain output cancellation.
+
+After Android releases its audio device and drains captured callbacks, accepted
+final transcripts share one 10-second persistence-drain budget rather than a
+new budget for every queued utterance. Remaining jobs are cancelled before the
+logical close request. Unconfirmed persistence is reported once; a redacted
+Logcat warning remains even when an ended call can no longer update the UI.
+The existing logical close acknowledgment uses its separate five-second request
+budget. Physical audio release itself is still awaited, never assumed complete
+because a timer elapsed.
 
 ## Choose a Talk voice from chat
 
@@ -372,19 +414,20 @@ denied` response does not identify the cause by itself; check the selected
 account, model, and voice. ChatGPT OAuth with `spruce` has current speech
 roundtrip verification; Platform GPT-Live verification requires API access.
 
-| Consumer                    | GPT-Live status                                                            |
-| --------------------------- | -------------------------------------------------------------------------- |
-| Browser Talk                | Supported with client WebRTC and Gateway-owned sideband                    |
-| Gateway-relay Talk          | Supported with Gateway-owned WebRTC and sideband                           |
-| Discord bidirectional voice | Supported with the Platform-key backend WebSocket                          |
-| Voice Call and telephony    | Supported with the Platform-key backend WebSocket                          |
-| iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                     |
-| Apple Watch standalone Talk | Gateway-controlled WebRTC implemented; physical Watch verification pending |
-| Android realtime Talk       | Pending an Android device live-proof flip; Android stays on native Talk    |
+| Consumer                    | GPT-Live status                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| Browser Talk                | Supported with client WebRTC and Gateway-owned sideband                                   |
+| Gateway-relay Talk          | Supported with Gateway-owned WebRTC and sideband                                          |
+| Discord bidirectional voice | Supported with the Platform-key backend WebSocket                                         |
+| Voice Call and telephony    | Supported with the Platform-key backend WebSocket                                         |
+| iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                                    |
+| Apple Watch standalone Talk | Gateway-controlled WebRTC implemented; physical Watch verification pending                |
+| Android realtime Talk       | Client-owned WebRTC implemented; final integrated entitlement/device proof remains scoped |
 
 These rows describe implemented transport paths, not account entitlement or a
-successful live call on every device. iOS implements frameless transcripts and
-the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
+successful live call on every device. iOS and Android implement client-owned
+WebRTC and the Gateway offer exchange. The user-supplied Pixel GA OAuth result
+does not certify GPT-Live entitlement or the final signed/minified candidate.
 For model capability limits, see [Discord voice policies](/channels/discord#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
@@ -402,37 +445,37 @@ broker, so the OAuth token never reaches the browser. A configured Platform
 credential that cannot be resolved fails closed instead of silently falling
 through to OAuth.
 
-iOS client-owned WebRTC, Voice Call, GA Gateway relay, provider WebSocket
-transports, Discord realtime voice, and Android realtime remain
-Platform-key-only. GA browser Talk keeps the existing client-owned data channel
-and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
-change under OAuth. GPT-Live Gateway relay prefers ChatGPT OAuth and falls back
+Voice Call, backend provider WebSocket transports, and Discord realtime voice
+remain Platform-key paths. Browser, iOS, and Android client-owned OpenAI WebRTC
+support the explicit OAuth/API-key selection described above. Their GA data-channel
+and `talk.client.toolCall` loop remains client-owned; only credential ownership and
+the SDP exchange path change under OAuth. GPT-Live Gateway relay prefers ChatGPT OAuth and falls back
 to waitlist-enabled Platform access.
 
-| Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                        |
-| ---------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agentId`                                | configured default agent                   | Owns Talk sessions created without an explicit agent-scoped session key.                                                                                                                                                                                     |
-| `provider`                               | -                                          | Active Talk TTS provider. Use `elevenlabs`, `mlx`, or `system` for macOS-local playback paths.                                                                                                                                                               |
-| `providers.<id>.voiceId`                 | -                                          | ElevenLabs falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`, or the first available voice with an API key.                                                                                                                                               |
-| `speechLocale`                           | device default                             | BCP 47 locale for Android, iOS, and macOS native speech recognition, plus the iOS system-voice fallback. Apple Speech may use network services; Android also forwards the language component to realtime input transcription.                                |
-| `providers.elevenlabs.modelId`           | `eleven_multilingual_v2`                   |                                                                                                                                                                                                                                                              |
-| `providers.mlx.modelId`                  | `mlx-community/Soprano-80M-bf16`           |                                                                                                                                                                                                                                                              |
-| `providers.mlx.referenceAudioPath`       | -                                          | Optional client-local reference recording for MLX models that support voice cloning. The path is resolved on the native macOS app host.                                                                                                                      |
-| `providers.mlx.referenceText`            | -                                          | Exact transcript of `referenceAudioPath`; Fish S2 Pro uses both values for local voice cloning.                                                                                                                                                              |
-| `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                  |
-| `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                               |
-| `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                              |
-| `providers.<id>.outputFormat`            | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                          |
-| `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                    |
-| `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                              |
-| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                       |
-| `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                   |
-| `realtime.providers.openai.speakerVoice` | `alloy` for GA; `cove` for GPT-Live        | Built-in OpenAI realtime voice id (the older `voice` key still works but is deprecated). GA voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`. GPT-Live uses the separate Codex V3 voices listed above.        |
-| `realtime.model`                         | provider default                           | Realtime voice model. Overrides `realtime.providers.<id>.model` when both are set — the same precedence `talk.client.create` applies at session time.                                                                                                        |
-| `realtime.transport`                     | -                                          | `webrtc`: OpenAI WebRTC on iOS, in the browser, and on Watch with Gateway control. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport. |
-| `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                   |
-| `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                            |
-| `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                          |
+| Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                        |
+| ---------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentId`                                | configured default agent                   | Owns Talk sessions created without an explicit agent-scoped session key.                                                                                                                                                                                                     |
+| `provider`                               | -                                          | Active Talk TTS provider. Use `elevenlabs`, `mlx`, or `system` for macOS-local playback paths.                                                                                                                                                                               |
+| `providers.<id>.voiceId`                 | -                                          | ElevenLabs falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`, or the first available voice with an API key.                                                                                                                                                               |
+| `speechLocale`                           | device default                             | BCP 47 locale for Android, iOS, and macOS native speech recognition, plus the iOS system-voice fallback. Apple Speech may use network services; Android also forwards the language component to realtime input transcription.                                                |
+| `providers.elevenlabs.modelId`           | `eleven_multilingual_v2`                   |                                                                                                                                                                                                                                                                              |
+| `providers.mlx.modelId`                  | `mlx-community/Soprano-80M-bf16`           |                                                                                                                                                                                                                                                                              |
+| `providers.mlx.referenceAudioPath`       | -                                          | Optional client-local reference recording for MLX models that support voice cloning. The path is resolved on the native macOS app host.                                                                                                                                      |
+| `providers.mlx.referenceText`            | -                                          | Exact transcript of `referenceAudioPath`; Fish S2 Pro uses both values for local voice cloning.                                                                                                                                                                              |
+| `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                  |
+| `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                               |
+| `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                                              |
+| `providers.<id>.outputFormat`            | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                          |
+| `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                    |
+| `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                              |
+| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                       |
+| `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                   |
+| `realtime.providers.openai.speakerVoice` | `alloy` for GA; `cove` for GPT-Live        | Built-in OpenAI realtime voice id (the older `voice` key still works but is deprecated). GA voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`. GPT-Live uses the separate Codex V3 voices listed above.                        |
+| `realtime.model`                         | provider default                           | Realtime voice model. Overrides `realtime.providers.<id>.model` when both are set — the same precedence `talk.client.create` applies at session time.                                                                                                                        |
+| `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS, Android, and browsers; Watch uses Gateway control. `provider-websocket`: browser-owned and relayed on native clients. `gateway-relay`: keeps provider audio on the Gateway and remains the explicit/fallback native relay path. |
+| `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                   |
+| `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                            |
+| `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                                          |
 
 `talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 
@@ -467,13 +510,20 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   a voice-note attachment. Start continuous Talk from the Talk waveform.
 - Dictation, voice-note recording, and Talk are mutually exclusive microphone
   paths; starting one stops or blocks the others.
-- Realtime Talk prefers a connected Bluetooth Classic or BLE headset
-  microphone; if it disconnects, the app requests another headset input or
-  falls back to the default microphone, restoring the default preference once
-  capture stops.
+- Realtime Talk uses the saved microphone preference when available; Automatic
+  prioritizes connected Bluetooth Classic or BLE microphones. Settings distinguishes
+  **Requested** from a route confirmed by native capture; the WebRTC SDK does not
+  expose its actual recorder route, so a request is not displayed as verified.
+  Preference changes apply to the next Talk session.
+- If an input disappears, Talk requests another available headset. Gateway-relay
+  capture can clear its preference and return to the default microphone. The pinned
+  WebRTC SDK cannot clear an already-set input preference; when that is required,
+  the call ends with a restart instruction rather than silently retaining the old input.
 - Realtime Talk requests Android communication mode and audio focus, using a
-  connected external output or the built-in speaker. Microphone audio is sent
-  during playback only while acoustic echo cancellation is enabled and the
+  connected external output or the built-in speaker. Pausing both capture and
+  playback releases that ownership; resuming reacquires it. Client-owned WebRTC
+  uses the SDK audio-processing pipeline. For Gateway-relay capture, microphone
+  audio is sent during playback only while acoustic echo cancellation is enabled and the
   communication mode and focus remain active. Without echo cancellation,
   microphone audio is not sent during playback. Android presentation timestamps
   estimate playback completion when available. Routes without usable timestamps use

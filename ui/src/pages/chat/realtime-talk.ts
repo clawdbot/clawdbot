@@ -68,12 +68,15 @@ export async function switchActiveRealtimeTalkCameras(
 }
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
+type RealtimeTalkCatalog = TalkCatalogResult["realtime"];
 
 type RealtimeTalkConfigResult = {
   config?: {
     talk?: {
       realtime?: {
+        provider?: string;
         transport?: unknown;
+        providers?: Record<string, { authMethod?: unknown }>;
       };
     };
   };
@@ -117,6 +120,11 @@ export class RealtimeTalkSession {
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
   private acceptingTranscripts = false;
   private serverOwnedVoiceSession = false;
+  private activeIdentityValue: string | null = null;
+
+  get activeIdentity(): string | null {
+    return this.activeIdentityValue;
+  }
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
 
@@ -138,9 +146,9 @@ export class RealtimeTalkSession {
       this.retireTransport();
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
+      const isCurrent = () => !this.closed && lifecycleGeneration === this.lifecycleGeneration;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
-      const providerVideoCapable = await this.resolveVideoCapability();
-      if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+      if (!isCurrent()) {
         return;
       }
       input = new RealtimeTalkInputController(
@@ -153,12 +161,19 @@ export class RealtimeTalkSession {
         // short activation window until the candidate owns its microphone.
         await input.open(this.localOptions.inputDeviceId);
       } catch (error) {
-        if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+        if (!isCurrent()) {
           return;
         }
         throw error;
       }
-      if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+      if (!isCurrent()) {
+        return;
+      }
+      const catalog = await this.loadRealtimeCatalog();
+      const providerVideoCapable =
+        Boolean(this.callbacks.onVideoCapability) &&
+        this.resolveProvider(catalog, this.options.provider)?.supportsVideoFrames === true;
+      if (!isCurrent()) {
         return;
       }
       input.requireStream();
@@ -168,7 +183,11 @@ export class RealtimeTalkSession {
       if (providerVideoCapable) {
         capabilities.push("camera-frame");
       }
-      const session = await this.createSession({ ...this.options, capabilities });
+      const session = await this.createSession(
+        { ...this.options, capabilities },
+        catalog,
+        () => isCurrent() && Boolean(input?.stream),
+      );
       const transport = resolveRealtimeTalkTransport(session);
       // Managed-room stays unsupported here and carries no voice bookkeeping;
       // reject it before the voice-session requirement produces a misleading error.
@@ -183,7 +202,7 @@ export class RealtimeTalkSession {
       if (!voiceSessionId) {
         throw new Error("Realtime Talk session did not return a voice session id");
       }
-      if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+      if (!isCurrent()) {
         this.closeUnadoptedVoiceSession(voiceSessionId, transport, owner);
         ownerTransferred = true;
         return;
@@ -254,11 +273,7 @@ export class RealtimeTalkSession {
       if (this.pendingStartup === nextTransport) {
         this.pendingStartup = null;
       }
-      if (
-        startResult === "cancelled" ||
-        this.closed ||
-        lifecycleGeneration !== this.lifecycleGeneration
-      ) {
+      if (startResult === "cancelled" || !isCurrent()) {
         retireUncommittedRealtimeTalkTransport({
           nextTransport,
           transport,
@@ -269,6 +284,14 @@ export class RealtimeTalkSession {
         return;
       }
       this.transport = nextTransport;
+      const unknown = t("common.unknown");
+      this.activeIdentityValue = t("talkPage.activeIdentity", {
+        provider: session.provider,
+        model: session.model ?? unknown,
+        auth: session.transport === "webrtc" ? (session.authMethod ?? unknown) : unknown,
+        voice: session.voice ?? unknown,
+        transport,
+      });
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
         this.transportGeneration = nextTransportGeneration;
@@ -297,37 +320,34 @@ export class RealtimeTalkSession {
     }
   }
 
-  private async resolveVideoCapability(): Promise<boolean> {
-    if (!this.callbacks.onVideoCapability) {
-      return false;
-    }
+  private async loadRealtimeCatalog(): Promise<RealtimeTalkCatalog | undefined> {
     try {
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
         {},
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
-      const selectedProvider = this.options.provider ?? catalog.realtime.activeProvider;
-      if (!selectedProvider) {
-        return false;
-      }
-      return (
-        catalog.realtime.providers.find(
-          (provider) =>
-            provider.id === selectedProvider || provider.aliases?.includes(selectedProvider),
-        )?.supportsVideoFrames === true
-      );
+      return catalog.realtime;
     } catch {
-      return false;
+      return undefined;
     }
   }
 
+  private resolveProvider(catalog: RealtimeTalkCatalog | undefined, providerId?: string) {
+    const selected = (providerId?.trim() || catalog?.activeProvider)?.toLowerCase();
+    return selected
+      ? (catalog?.providers.find((provider) => provider.id === selected) ??
+          catalog?.providers.find((provider) => provider.aliases?.includes(selected)))
+      : undefined;
+  }
+
   private async createSession(
-    options: RealtimeTalkLaunchOptions & {
+    launchOptions: RealtimeTalkLaunchOptions & {
       capabilities?: Array<"camera-frame" | "voice-transcript">;
     },
+    catalog: RealtimeTalkCatalog | undefined,
+    canRecover: () => boolean,
   ): Promise<RealtimeTalkSessionResult> {
-    const launchOptions = { ...options };
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
@@ -339,12 +359,13 @@ export class RealtimeTalkSession {
       );
     } catch (error) {
       let transport = launchOptions.transport;
-      if (!transport) {
+      if (!transport && canRecover()) {
         let result: RealtimeTalkConfigResult;
+        const realtimeProvider = launchOptions.provider?.trim();
         try {
           result = await this.client.request<RealtimeTalkConfigResult>(
             "talk.config",
-            {},
+            realtimeProvider ? { realtimeProvider } : {},
             { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
           );
         } catch {
@@ -353,15 +374,25 @@ export class RealtimeTalkSession {
         if (!result.config || typeof result.config !== "object") {
           throw error;
         }
-        const configuredTransport = result.config?.talk?.realtime?.transport;
-        if (configuredTransport !== undefined) {
-          transport = normalizeLaunchTransport(configuredTransport);
-          if (!transport) {
-            throw error;
-          }
-        }
+        const configuredRealtime = result.config?.talk?.realtime;
+        const configuredTransport = configuredRealtime?.transport;
+        // Scope strict auth to this call's canonical provider, not inactive legacy
+        // rows. Unknown selection stays fail-closed; resolved Auto can recover.
+        const provider = this.resolveProvider(
+          catalog,
+          launchOptions.provider?.trim() || configuredRealtime?.provider,
+        );
+        const providers = configuredRealtime?.providers ?? {};
+        const strictAuthSelected = provider
+          ? providers[provider.id]?.authMethod !== undefined
+          : Object.values(providers).some((entry) => entry.authMethod !== undefined);
+        transport =
+          configuredTransport === undefined && !strictAuthSelected
+            ? "gateway-relay"
+            : normalizeLaunchTransport(configuredTransport);
       }
-      if (transport && transport !== "gateway-relay") {
+      // Recovery starts a new allocation: stopped/replaced calls or lost input cannot admit it.
+      if (transport !== "gateway-relay" || !canRecover()) {
         throw error;
       }
       const gatewayOptions = { ...launchOptions };
@@ -373,7 +404,7 @@ export class RealtimeTalkSession {
             sessionKey: this.sessionKey,
             ...gatewayOptions,
             mode: "realtime",
-            transport: transport ?? "gateway-relay",
+            transport,
             brain: "agent-consult",
           }),
           { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
@@ -402,6 +433,7 @@ export class RealtimeTalkSession {
   private retireTransport(): void {
     this.lifecycleGeneration += 1;
     this.closed = true;
+    this.activeIdentityValue = null;
     this.videoOperation += 1;
     this.videoEnabled = false;
     activeRealtimeTalkSessions.delete(this);

@@ -36,6 +36,52 @@ describe("RealtimeTalkSession transcript queue", () => {
     transportMock.stop.mockClear();
   });
 
+  it.each(["item", "predecessor"])(
+    "rejects a non-string %s identity before retaining ancestry",
+    async (field) => {
+      const request = vi.fn(async (method: string) =>
+        method === "talk.client.create"
+          ? {
+              provider: "openai",
+              transport: "webrtc",
+              voiceSessionId: "voice-malformed-id",
+              clientSecret: "fixture",
+            }
+          : { ok: true },
+      );
+      const onStatus = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
+        onStatus,
+      });
+      try {
+        await session.start();
+        const receive = transportMock.context?.callbacks.onTranscriptItem;
+        if (!receive) {
+          throw new Error("Expected transcript observer");
+        }
+        const malformed = { nested: "not-a-provider-id" } as unknown as string;
+        receive({
+          type: "created",
+          role: null,
+          itemId: field === "item" ? malformed : "valid-item",
+          previousItemId: field === "predecessor" ? malformed : null,
+        });
+        expect(onStatus).toHaveBeenCalledWith(
+          "error",
+          "Realtime transcript item identity limit exceeded",
+        );
+        expect(transportMock.stop).toHaveBeenCalledOnce();
+        expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(
+          false,
+        );
+      } finally {
+        session.stop();
+        warn.mockRestore();
+      }
+    },
+  );
+
   it("does not admit normalized-empty finals into a stalled transcript queue", async () => {
     let releaseFirstTranscript!: () => void;
     const firstTranscriptPending = new Promise<void>((resolve) => {

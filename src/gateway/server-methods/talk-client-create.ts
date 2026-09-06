@@ -406,6 +406,9 @@ export const createTalkClient: GatewayRequestHandler = async ({
             {
               ...session,
               voiceSessionId,
+              ...(session.transport === "webrtc"
+                ? { transcriptOwner: wantsGatewayControl ? "gateway" : "client", controlSource }
+                : {}),
               ...(clientControl ? { clientControl } : {}),
             },
             undefined,

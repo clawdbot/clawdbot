@@ -39,6 +39,7 @@ export type OpenAIRealtimeUserMessageOptions = {
 };
 
 export type OpenAIRealtimeVoiceProviderConfig = {
+  authMethod?: "oauth" | "api-key";
   apiKey?: string;
   model?: string;
   voice?: string;
@@ -224,9 +225,14 @@ export function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): OpenAIRealtimeVoiceProviderConfig {
   const raw = resolveOpenAIProviderConfigRecord(config);
+  const authMethod = raw?.authMethod;
+  if (authMethod !== undefined && authMethod !== "oauth" && authMethod !== "api-key") {
+    throw new Error("OpenAI Talk authMethod must be oauth or api-key");
+  }
   return {
+    authMethod,
     apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
+      value: authMethod === "oauth" ? undefined : raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw?.model),
@@ -547,12 +553,17 @@ export async function requireOpenAIRealtimePlatformAuth(
 
 export async function resolveOpenAIQuicksilverBridgeAuth(
   params: {
+    authMethod?: "oauth" | "api-key";
     configuredApiKey: string | undefined;
     cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
     agentId?: string;
   },
   runtime: OpenAIRealtimeHost,
 ) {
+  if (params.authMethod === "api-key") {
+    const auth = await requireOpenAIRealtimePlatformAuth(params, runtime);
+    return { type: "api-key" as const, token: auth.value };
+  }
   const { resolveAgentDir } = runtime;
   const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
     {
@@ -564,6 +575,11 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   );
   if (subscriptionAuth) {
     return subscriptionAuth;
+  }
+  if (params.authMethod === "oauth") {
+    throw new Error(
+      "OpenAI Talk selected ChatGPT OAuth, but no usable OAuth profile is available. Sign in again; API-key fallback is disabled.",
+    );
   }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {

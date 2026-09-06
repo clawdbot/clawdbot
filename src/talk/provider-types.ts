@@ -299,6 +299,8 @@ export type RealtimeVoiceBrowserAudioContract = {
 type RealtimeVoiceBrowserWebRtcSdpSession = {
   provider: RealtimeVoiceProviderId;
   transport: "webrtc";
+  /** Auth actually resolved by the provider, not inferred from offer URLs. */
+  authMethod?: "oauth" | "api-key";
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;

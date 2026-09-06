@@ -37,6 +37,7 @@ barcode-scanning = "17.3.0"
 robolectric = "4.16.1"
 room = "3.0.2"
 serialization-json = "1.11.0"
+webrtc = "150.7871.01"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
@@ -97,6 +98,7 @@ mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 play-services-wearable = { module = "com.google.android.gms:play-services-wearable", version.ref = "play-services-wearable" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

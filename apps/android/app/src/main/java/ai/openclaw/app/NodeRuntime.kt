@@ -103,6 +103,7 @@ import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
 import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
+import ai.openclaw.app.voice.AudioInputPreferenceState
 import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
@@ -1110,8 +1111,8 @@ class NodeRuntime private constructor(
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
-  private val _activeAudioInputDevicePreference = MutableStateFlow<String?>(null)
-  val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
+  private val _activeAudioInputDevicePreference = MutableStateFlow<AudioInputPreferenceState>(AudioInputPreferenceState.Inactive)
+  val activeAudioInputDevicePreference: StateFlow<AudioInputPreferenceState> = _activeAudioInputDevicePreference.asStateFlow()
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -2192,7 +2193,7 @@ class NodeRuntime private constructor(
       preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
       onAppliedAudioInputChanged = { key ->
         if (_voiceCaptureMode.value == VoiceCaptureMode.ManualMic) {
-          _activeAudioInputDevicePreference.value = key
+          _activeAudioInputDevicePreference.value = AudioInputPreferenceState.Applied(key)
         }
       },
       createTranscriptionSession = {
@@ -2287,7 +2288,12 @@ class NodeRuntime private constructor(
       preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
       onAppliedAudioInputChanged = { key ->
         if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) {
-          _activeAudioInputDevicePreference.value = key
+          _activeAudioInputDevicePreference.value = AudioInputPreferenceState.Applied(key)
+        }
+      },
+      onRequestedAudioInputChanged = { key ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) {
+          _activeAudioInputDevicePreference.value = AudioInputPreferenceState.Requested(key)
         }
       },
       onBeforeSpeak = { micCapture.pauseForTts() },
@@ -2316,6 +2322,9 @@ class NodeRuntime private constructor(
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
+
+  val talkModeHasFailure: StateFlow<Boolean>
+    get() = talkMode.hasFailure
 
   private val wearRealtimeLifecycleMutex = Mutex()
 
@@ -4296,7 +4305,7 @@ class NodeRuntime private constructor(
         ownershipEpoch = voiceCaptureOwnershipEpoch.incrementAndGet()
         talkPttOwnership.set(null)
         _voiceCaptureMode.value = captureMode
-        _activeAudioInputDevicePreference.value = null
+        _activeAudioInputDevicePreference.value = AudioInputPreferenceState.Inactive
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false

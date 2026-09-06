@@ -3,6 +3,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  isBoundedRealtimeTalkId,
   submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkEventInput,
@@ -18,7 +19,7 @@ type GoogleLivePendingToolCall = {
 };
 
 export type GoogleLiveFunctionCall = {
-  id?: string;
+  id?: unknown;
   name?: string;
   args?: unknown;
 };
@@ -62,6 +63,10 @@ export class GoogleLiveToolOwner {
 
   async handleCall(call: GoogleLiveFunctionCall): Promise<void> {
     if (this.options.isClosed()) {
+      return;
+    }
+    if (call.id != null && !isBoundedRealtimeTalkId(call.id)) {
+      this.options.failConnection("Google Live tool-call session limit exceeded");
       return;
     }
     const name = call.name?.trim();
@@ -112,8 +117,12 @@ export class GoogleLiveToolOwner {
     await this.runConsult(callId, call.args);
   }
 
-  cancel(ids: string[] | undefined): void {
+  cancel(ids: unknown[] | undefined): void {
     for (const rawId of ids ?? []) {
+      if (!isBoundedRealtimeTalkId(rawId)) {
+        this.options.failConnection("Google Live tool-call session limit exceeded");
+        return;
+      }
       const callId = rawId.trim();
       const call = this.pendingCalls.get(callId);
       if (!callId || !call || call.cancelled) {

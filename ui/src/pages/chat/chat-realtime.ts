@@ -277,6 +277,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.realtimeTalkSession = session;
     try {
       await session.start();
+      if (state.realtimeTalkSession === session) {
+        state.requestUpdate();
+      }
     } catch (error) {
       if (state.realtimeTalkSession !== session) {
         return;

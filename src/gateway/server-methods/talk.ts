@@ -10,6 +10,7 @@ import {
   errorShape,
   missingScopeErrorShape,
   normalizeUiAppearancePreference,
+  type TalkConfigParams,
   type TalkSpeakParams,
   UI_APPEARANCE_PREFERENCE_KEYS,
   validateTalkCatalogParams,
@@ -438,6 +439,15 @@ function buildTalkCatalog(config: OpenClawConfig) {
         if (provider.voices?.length) {
           entry.voices = [...provider.voices];
         }
+        entry.effectiveModel =
+          normalizeOptionalString(providerConfig.model) ?? provider.defaultModel;
+        entry.effectiveTransport = realtimeConfig.transport ?? capabilities?.transports?.[0];
+        if (capabilities?.authMethods) {
+          entry.authMethods = capabilities.authMethods;
+        }
+        if (capabilities?.selectedAuthMethod) {
+          entry.selectedAuthMethod = capabilities.selectedAuthMethod;
+        }
         if (capabilities?.voicesByModel) {
           entry.voicesByModel = capabilities.voicesByModel;
         }
@@ -541,6 +551,7 @@ function buildTalkSpeakOverrides(
 
 function resolveTalkResponseFromConfig(params: {
   includeSecrets: boolean;
+  realtimeProvider?: string;
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
 }): TalkConfigResponse | undefined {
@@ -550,20 +561,28 @@ function resolveTalkResponseFromConfig(params: {
   const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
   // Resolve provider selection from materialized config, but project provider-owned fields from
   // source config so SecretRefs stay redacted. The requested provider also avoids re-resolving them.
-  const runtimeRealtime = buildTalkRealtimeConfig(params.runtimeConfig);
+  const runtimeRealtime = buildTalkRealtimeConfig(params.runtimeConfig, params.realtimeProvider);
   const effectiveProvider = canonicalizeRealtimeVoiceProviderId(
     runtimeRealtime.provider,
     params.runtimeConfig,
   );
-  const sourceRealtime = buildTalkRealtimeConfig(params.sourceConfig, effectiveProvider);
+  const sourceRealtime = buildTalkRealtimeConfig(params.sourceConfig, runtimeRealtime.provider);
+  const definitions = listRealtimeVoiceProviders(
+    params.runtimeConfig,
+    Object.keys(sourceRealtime.providers),
+  );
   const sourceProviders: Record<string, TalkProviderConfig> = {};
-  for (const [providerId, providerConfig] of Object.entries(sourceRealtime.providers)) {
+  for (const providerId of Object.keys(sourceRealtime.providers)) {
     const canonicalProviderId =
       canonicalizeRealtimeVoiceProviderId(providerId, params.runtimeConfig) ?? providerId;
-    sourceProviders[canonicalProviderId] = {
-      ...sourceProviders[canonicalProviderId],
-      ...providerConfig,
-    };
+    // Canonicalize only the output key; runtime selection owns which alias rows apply.
+    sourceProviders[canonicalProviderId] = resolveProviderRawConfig({
+      providerId: canonicalProviderId,
+      providerAliases: definitions.find((provider) => provider.id === canonicalProviderId)?.aliases,
+      configuredProviderId:
+        canonicalProviderId === effectiveProvider ? runtimeRealtime.provider : undefined,
+      providerConfigs: sourceRealtime.providers,
+    });
   }
   const effectiveRealtime = normalizeTalkSection({
     realtime: {
@@ -779,7 +798,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const includeSecrets = Boolean((params as { includeSecrets?: boolean }).includeSecrets);
+    const { includeSecrets = false, realtimeProvider } = params as TalkConfigParams;
     if (includeSecrets && !canReadTalkSecrets(client)) {
       respond(
         false,
@@ -800,6 +819,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     try {
       talk = resolveTalkResponseFromConfig({
         includeSecrets,
+        realtimeProvider,
         sourceConfig: snapshot.config,
         runtimeConfig,
       });

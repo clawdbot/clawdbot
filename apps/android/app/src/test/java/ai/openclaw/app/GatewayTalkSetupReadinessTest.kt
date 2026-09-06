@@ -47,7 +47,7 @@ class GatewayTalkSetupReadinessTest {
   fun gatewayTechnicalLabelsStayVerbatimInsideLocalizedPresentation() {
     assertEquals(
       NativeText.Resource(
-        source = "\${state.provider.label} via Gateway relay",
+        source = "\${state.provider.label} via Gateway",
         formatArgs = listOf(NativeText.Verbatim("Future Realtime")),
       ),
       gatewayTalkSetupDescriptionText(
@@ -91,15 +91,6 @@ class GatewayTalkSetupReadinessTest {
     val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
     assertEquals("Deepgram", dictation.provider.label)
-  }
-
-  @Test
-  fun browserOnlyModelsSkipAndroidRealtimeRelay() {
-    assertFalse(isAndroidRealtimeRelayModelSupported("gpt-live"))
-    assertFalse(isAndroidRealtimeRelayModelSupported(" GPT-LIVE-future "))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-realtime-2.1"))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-liveness"))
-    assertTrue(isAndroidRealtimeRelayModelSupported(null))
   }
 
   @Test
