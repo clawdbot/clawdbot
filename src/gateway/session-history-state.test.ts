@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { projectChatDisplayMessagesWithState } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -393,10 +394,8 @@ describe("SessionHistorySseState", () => {
     const { history } = buildSessionHistorySnapshot({
       rawMessages: [],
       projection: {
+        ...projectChatDisplayMessagesWithState([]),
         messages,
-        turnBoundaryPending: false,
-        assistantErrorPending: false,
-        assistantErrorRecoveryObserved: false,
       },
       limit: 1,
     });
