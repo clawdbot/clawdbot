@@ -45,6 +45,7 @@ type DiscordVoiceSegmentParams = Pick<DiscordVoiceResponseParams, "entry" | "use
 export type DiscordVoiceSegmentOutcome =
   | { status: "transcribed"; text: string; conversationAuthorized: Promise<boolean> }
   | { status: "excluded" }
+  | { status: "unavailable" }
   | { status: "empty"; conversationAuthorized: Promise<boolean> };
 
 export async function processDiscordVoiceSegment(
@@ -88,11 +89,19 @@ export async function processDiscordVoiceSegment(
   if (!recording?.capture.isCurrent() && (!admitted || !conversationCurrent())) {
     return { status: "excluded" };
   }
-  const { text: transcript, processing } = await transcribeVoiceAudio({
+  const {
+    text: transcript,
+    processing,
+    unavailable,
+  } = await transcribeVoiceAudio({
     cfg: params.cfg,
     agentId: entry.route.agentId,
     filePath: wavPath,
   });
+  if (unavailable) {
+    recording?.capture.onBatchUnavailable?.();
+    return { status: "unavailable" };
+  }
   // Known omitted input cannot become a partial command. Completed silent input
   // remains empty, including CLI success without text and successful fallback.
   if (processing === "omitted") {

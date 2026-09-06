@@ -1350,10 +1350,8 @@ speech without conversational input or commands. Normal conversation requires a
 fresh receive stream after the current stream ends; brief pauses within
 `voice.captureSilenceGraceMs` keep the current stream and its recording-only behavior.
 
-Recording requires batch audio understanding. If `tools.media.audio.enabled` is
-`false`, starting capture fails with an enablement message; ordinary realtime
-conversation remains available.
-Recording uses one per-speaker audio stream and batch transcription, with the
+Full recording coverage requires batch audio understanding. Recording uses one
+per-speaker audio stream and batch transcription, with the
 receiver's user ID, independently resolved display label, and audio-ingress time.
 Authorized speakers can also feed realtime conversation from the same decoded
 audio. Recording continues when all realtime speaker connections are busy.
@@ -1362,6 +1360,20 @@ recording independent of realtime provider delivery and conversation authorizati
 these are segments within the same capture session, not separate meetings.
 In `stt-tts` mode, authorized conversation shares that batch transcription and
 waits for the normal end of speech before responding.
+
+Existing realtime-only setups can record final text from their active per-speaker
+connections when batch transcription is disabled or no batch backend is available.
+This limited route requires every submitted audio packet to belong to the same
+active capture; it waits for all batch work to settle and never duplicates a
+successful or silent batch result. Mixed capture input, failed or oversized audio,
+and provider continuity resets cannot produce recording fallback text. It covers
+only speakers admitted to realtime conversation, so it does not provide independent
+room recording. `/vc status` shows a coverage warning and directs operators to
+configure audio transcription. Starting capture with `tools.media.audio.enabled`
+set to `false` requires an existing active realtime conversation; otherwise it returns an
+enablement error. Pending realtime finals are limited to 1 MiB and 1,000 entries
+per speaker connection.
+
 Conversation authorization and replies run separately from recording. Each voice
 connection permits eight unfinished voice requests, with at most 1 MiB of decoded
 audio waiting for admission per request. Batch requests retain at most 1 MiB of

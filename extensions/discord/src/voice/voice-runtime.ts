@@ -1,6 +1,5 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
@@ -269,13 +268,11 @@ export class DiscordVoiceManager {
 
   status(): VoiceOperationResult[] {
     return Array.from(this.guildLifecycles.values())
-      .filter(
-        (lifecycle): lifecycle is Extract<VoiceGuildLifecycle, { status: "active" }> =>
-          lifecycle.status === "active",
-      )
+      .filter((lifecycle) => lifecycle.status === "active")
       .map(({ instance: session }) => ({
         ok: true,
         message: `connected: guild ${session.guildId} channel ${session.channelId}`,
+        warning: session.transcripts?.warning,
         guildId: session.guildId,
         channelId: session.channelId,
       }));
@@ -296,10 +293,16 @@ export class DiscordVoiceManager {
     return await resolveDiscordVoiceAccessTarget({ ...params, client: this.client });
   }
 
-  startTranscriptsCapture(target: {
-    guildId: string;
-    channelId: string;
-  }): Promise<VoiceOperationResult> {
+  hasRealtimeCapture(target: { guildId: string; channelId: string }): boolean {
+    const entry = this.sessions.get(target.guildId);
+    return (
+      entry?.channelId === target.channelId &&
+      this.isEntryCurrent(entry) &&
+      entry.realtimeLifecycle.status === "active"
+    );
+  }
+
+  startTranscriptsCapture(target: { guildId: string; channelId: string }) {
     return this.join(target, { captureOnly: true });
   }
 

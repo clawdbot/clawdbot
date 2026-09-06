@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
 import type { DiscordVoiceSegmentOutcome } from "./segment.js";
 import type { VoiceRealtimeSpeakerTurn } from "./session.js";
+import type { DiscordVoiceAudioReceipt } from "./voice-recording.js";
 
 const MAX_PENDING_CONVERSATIONS = 8;
 // Encoded packet limits do not bound the decoded audio waiting for authorization.
@@ -23,7 +24,7 @@ class DiscordVoiceConversationInput {
   private state: "pending" | "admitted" | "retired" = "pending";
   private context: DiscordVoiceIngressContext | null = null;
   private turn: VoiceRealtimeSpeakerTurn | undefined;
-  private audio: Buffer[] = [];
+  private audio: Array<{ pcm: Buffer; receipt?: DiscordVoiceAudioReceipt }> = [];
   private pendingAudioBytes = 0;
   private text: string[] = [];
   private textBytes = 0;
@@ -47,8 +48,8 @@ class DiscordVoiceConversationInput {
       const audio = this.audio;
       this.audio = [];
       this.pendingAudioBytes = 0;
-      for (const pcm of audio) {
-        this.sendAudio(pcm);
+      for (const { pcm, receipt } of audio) {
+        this.sendAudio(pcm, receipt);
       }
     })().catch((error: unknown) => {
       this.retire();
@@ -65,7 +66,7 @@ class DiscordVoiceConversationInput {
     return this.state === "retired";
   }
 
-  sendAudio(pcm: Buffer): void {
+  sendAudio(pcm: Buffer, receipt?: DiscordVoiceAudioReceipt): void {
     if (this.state === "retired") {
       return;
     }
@@ -83,12 +84,12 @@ class DiscordVoiceConversationInput {
       }
       this.pendingAudioBytes += pcm.length;
       if (this.params.createTurn) {
-        this.audio.push(Buffer.from(pcm));
+        this.audio.push({ pcm: Buffer.from(pcm), receipt });
       }
       return;
     }
     try {
-      this.turn?.sendInputAudio(pcm);
+      this.turn?.sendInputAudio(pcm, receipt);
     } catch (error) {
       this.retire();
       this.params.warn(`discord voice: conversation audio failed: ${formatErrorMessage(error)}`);
@@ -139,7 +140,7 @@ class DiscordVoiceConversationInput {
       if (this.state === "retired") {
         return false;
       }
-      if (outcome.status === "excluded") {
+      if (outcome.status === "excluded" || outcome.status === "unavailable") {
         this.retire();
         return false;
       }

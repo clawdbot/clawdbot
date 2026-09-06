@@ -47,6 +47,12 @@ export async function transcribeVoiceAudio(params: {
   return {
     text: normalizeOptionalString(result.text),
     processing: result.decision?.attachmentProcessing?.[0],
+    unavailable:
+      result.decision?.outcome === "skipped" &&
+      result.decision.attachmentDispositions?.[0]?.kind === "no-model" &&
+      result.decision.attachmentProcessing?.[0] === "omitted" &&
+      result.decision.attachments.length > 0 &&
+      result.decision.attachments.every((attachment) => attachment.attempts.length === 0),
   };
 }
 

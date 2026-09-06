@@ -34,12 +34,12 @@ defineDiscordVoiceTests((harness) => {
   } = harness;
   const fixture = createDiscordRecordingFixture(harness);
 
-  it.each(["fresh", "realtime", "replacement"] as const)(
+  it.each(["fresh", "replacement"] as const)(
     "rejects disabled batch recording before changing %s ownership",
     async (phase) => {
       const config = { channels: { discord: { token: "test-token", voice: { enabled: true } } } };
       const disabledAudio = { ...config, tools: { media: { audio: { enabled: false } } } };
-      const f = await fixture("agent-proxy", false, phase === "replacement" ? {} : disabledAudio);
+      const f = await fixture("stt-tts", false, phase === "replacement" ? {} : disabledAudio);
       const source = {
         providerId: "discord-voice",
         accountId: "default",
@@ -79,7 +79,7 @@ defineDiscordVoiceTests((harness) => {
         } else {
           expectConnectedStatus(f.manager, "1001");
           await f.audio("100000000000000001", 1);
-          expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+          expect(realtimeSessionMock.sendAudio).not.toHaveBeenCalled();
           if (phase === "replacement") {
             expect(f.sink).toHaveBeenCalledOnce();
           } else {

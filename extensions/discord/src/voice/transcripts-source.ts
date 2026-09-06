@@ -28,6 +28,7 @@ type DiscordTranscriptsManager = {
   >;
   startTranscriptsCapture: (target: CaptureTarget) => Promise<VoiceOperationResult>;
   stopTranscriptsCapture: (target: CaptureTarget) => Promise<void>;
+  hasRealtimeCapture: (target: CaptureTarget) => boolean;
   watchChannelOccupancy: (
     target: CaptureTarget,
     listener: (state: { occupied: boolean }) => void,
@@ -389,13 +390,6 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     return { ok: true, value: { stop } };
   },
   async start(request) {
-    if (request.cfg?.tools?.media?.audio?.enabled === false) {
-      return {
-        ok: false,
-        error:
-          "Discord transcripts require batch audio understanding; enable tools.media.audio.enabled.",
-      };
-    }
     const managerResolution = await waitForManager({ ...request, source: request.session.source });
     if (!managerResolution.ok) {
       return managerResolution;
@@ -417,6 +411,16 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       return { ok: false, error: "Discord voice manager changed before capture could start." };
     }
     const source = { accountId, guildId, channelId };
+    if (
+      request.cfg?.tools?.media?.audio?.enabled === false &&
+      !manager.hasRealtimeCapture(source)
+    ) {
+      return {
+        ok: false,
+        error:
+          "Discord transcripts require batch audio understanding when no realtime conversation is active; enable tools.media.audio.enabled.",
+      };
+    }
     const key = captureKey(source);
     const previous = captures.get(key);
     const capture: CaptureRegistration = {
@@ -428,6 +432,14 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       onStatus: request.onStatus,
       sessionId: request.session.sessionId,
       isCurrent: () => captures.get(key) === capture,
+      onBatchUnavailable: () => {
+        if (!capture.isCurrent() || capture.warning) {
+          return;
+        }
+        capture.warning =
+          "Independent batch transcription is unavailable; only safely bound realtime finals can be recorded. Configure audio transcription for full recording coverage.";
+        logger.warn(`discord voice: ${capture.warning}`);
+      },
       onUtterance: (utterance) => {
         // Received audio may finish after transport replacement, but never after source revocation.
         if (capture.isCurrent()) {
@@ -455,6 +467,9 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       }
       capture.started = true;
       capture.channelName = channelName;
+      if (request.cfg?.tools?.media?.audio?.enabled === false) {
+        capture.onBatchUnavailable?.();
+      }
       return {
         ok: true,
         session: {
@@ -511,7 +526,9 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       .map((capture) => ({
         active: capture.started,
         sessionId: capture.sessionId,
-        message: "Capture registered; recording while connected to the selected channel.",
+        message:
+          capture.warning ??
+          "Capture registered; recording while connected to the selected channel.",
         source: { providerId: "discord-voice", ...capture.source },
       }));
   },

@@ -20,6 +20,7 @@ import {
 import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
+import { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
 import {
   analyzeVoiceReceiveError,
   DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
@@ -285,6 +286,9 @@ export class DiscordVoiceReceive {
     stream.on("end", endInput);
     stream.on("close", endInput);
     stream.on("error", onError);
+    const realtimeRecording = realtime
+      ? new DiscordRealtimeRecordingInput(!entry.audioInputBudget.enabled)
+      : undefined;
     const conversation = conversationAllowed
       ? entry.conversations.start({
           authorize: () =>
@@ -299,7 +303,7 @@ export class DiscordVoiceReceive {
                 if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
                   realtime.handleBargeIn("speaker-start");
                 }
-                return realtime.beginSpeakerTurn(context, userId);
+                return realtime.beginSpeakerTurn(context, userId, realtimeRecording);
               }
             : undefined,
           warn: (message) => logger.warn(message),
@@ -322,11 +326,15 @@ export class DiscordVoiceReceive {
       },
       resolveSpeaker: () => this.params.speakerContext.resolveIdentity(entry.guildId, userId),
       onSegment: (outcome) => {
+        realtimeRecording?.observeBatch(outcome);
         if (!realtime) {
           conversation?.addSegment(outcome);
         }
       },
       onExcluded: () => {
+        if (entry.audioInputBudget.enabled) {
+          realtimeRecording?.exclude();
+        }
         if (!realtime) {
           conversation?.retire();
         }
@@ -367,7 +375,8 @@ export class DiscordVoiceReceive {
           if (failed) {
             return;
           }
-          conversation?.sendAudio(pcm);
+          realtimeRecording?.noteReceipt(receipt);
+          conversation?.sendAudio(pcm, receipt);
           await recording.append(pcm, receipt);
         },
         onError,
@@ -406,6 +415,7 @@ export class DiscordVoiceReceive {
         }
       }
     } finally {
+      realtimeRecording?.sealBatch();
       if (conversationCompletion) {
         void conversationCompletion.catch((error: unknown) =>
           logger.warn(`discord voice: conversation failed: ${formatErrorMessage(error)}`),

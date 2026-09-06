@@ -18,6 +18,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       resolveAccessTarget: vi.fn(async () => undefined),
       startTranscriptsCapture: vi.fn(async () => ({ ok: true, message: "joined" })),
       stopTranscriptsCapture: vi.fn(async () => {}),
+      hasRealtimeCapture: vi.fn(() => false),
       watchChannelOccupancy: vi.fn(() => vi.fn()),
       ...params.manager,
     };
