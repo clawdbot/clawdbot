@@ -357,11 +357,6 @@ describe("session-store-runtime compatibility surface", () => {
   it("keeps recovery state private across deprecated whole-store mutations", async () => {
     const keptKey = "agent:main:telegram:direct:compat-recovery";
     const removedKey = "agent:main:telegram:direct:compat-removed";
-    const cliHistoryBoundary = {
-      version: 1 as const,
-      sessionId: "compat-recovery-session",
-      state: "unknown" as const,
-    };
     const mainRestartRecovery = {
       chargedAttempts: 2,
       cycleId: "compat-cycle",
@@ -376,7 +371,7 @@ describe("session-store-runtime compatibility surface", () => {
     });
     await patchInternalSessionEntry(
       { agentId: "main", sessionKey: keptKey, storePath },
-      () => ({ mainRestartRecovery, cliHistoryBoundary }) as Partial<InternalSessionEntry>,
+      () => ({ mainRestartRecovery }) as Partial<InternalSessionEntry>,
     );
     await seedSessionEntry(removedKey, {
       sessionId: "compat-removed-session",
@@ -386,7 +381,6 @@ describe("session-store-runtime compatibility surface", () => {
     const compatibilityStore = loadSessionStore(storePath);
     expect(Object.keys(compatibilityStore)).toContain(keptKey);
     expect(compatibilityStore[keptKey]).not.toHaveProperty("mainRestartRecovery");
-    expect(compatibilityStore[keptKey]).not.toHaveProperty("cliHistoryBoundary");
     await updateSessionStore(
       storePath,
       (store) => {
@@ -418,7 +412,6 @@ describe("session-store-runtime compatibility surface", () => {
 
     expect(loadInternalSessionEntry({ sessionKey: keptKey, storePath })).toMatchObject({
       abortedLastRun: true,
-      cliHistoryBoundary,
       mainRestartRecovery,
       model: "gpt-5.6",
       restartRecoveryRuns: [{ lifecycleGeneration: "compat-generation", runId: "compat-run" }],
@@ -624,11 +617,6 @@ describe("session-store-runtime compatibility surface", () => {
 
   it("hides core recovery state and preserves it across public mutations", async () => {
     const sessionKey = "agent:main:recovery-owned";
-    const cliHistoryBoundary = {
-      version: 1 as const,
-      sessionId: "session-recovery",
-      state: "unknown" as const,
-    };
     const mainRestartRecovery = {
       chargedAttempts: 1,
       cycleId: "cycle-1",
@@ -641,7 +629,6 @@ describe("session-store-runtime compatibility surface", () => {
     };
     await replaceInternalSessionEntry({ sessionKey, storePath }, {
       abortedLastRun: true,
-      cliHistoryBoundary,
       mainRestartRecovery,
       model: "gpt-5.5",
       restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
@@ -650,7 +637,6 @@ describe("session-store-runtime compatibility surface", () => {
     } as InternalSessionEntry);
 
     expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("mainRestartRecovery");
-    expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("cliHistoryBoundary");
     expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("mainRestartRecovery");
 
     await patchSessionEntry({
@@ -668,7 +654,6 @@ describe("session-store-runtime compatibility surface", () => {
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
       abortedLastRun: true,
-      cliHistoryBoundary,
       mainRestartRecovery,
       model: "gpt-5.6",
       restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
@@ -681,7 +666,6 @@ describe("session-store-runtime compatibility surface", () => {
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
       abortedLastRun: true,
-      cliHistoryBoundary,
       mainRestartRecovery,
       restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
     });
@@ -696,7 +680,6 @@ describe("session-store-runtime compatibility surface", () => {
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
       abortedLastRun: true,
-      cliHistoryBoundary,
       mainRestartRecovery,
       restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
       sessionId: "session-recovery",
