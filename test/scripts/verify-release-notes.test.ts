@@ -1105,6 +1105,7 @@ console.log(JSON.stringify({ data }));
   );
 
   it.each([
+<<<<<<< HEAD
     { mode: "recover", attempts: 2, error: undefined },
     { mode: "exhaust", attempts: 5, error: "unexpected EOF" },
     { mode: "auth", attempts: 1, error: "Bad credentials" },
@@ -1137,11 +1138,68 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "chore: baseline"]);
       const base = git(cwd, ["rev-parse", "HEAD"]);
       git(cwd, ["commit", "--allow-empty", "-qm", "chore: source contribution"]);
+=======
+    { message: "Exact-head CI #41 passed.", accepted: true },
+    { message: "CI run #41 passed.", accepted: true },
+    { message: "Actions run #41 passed.", accepted: true },
+    { message: "workflow run #41 passed.", accepted: true },
+    { message: "CI #41 passed.", node: "Issue", accepted: true },
+    { message: "CI #41 passed.", node: "PullRequest", accepted: true },
+    { message: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", reverted: true, other: "Related #41.", accepted: false },
+    { message: "CI #41 passed. Fixes #41.", accepted: false },
+    { message: "CI openclaw/openclaw#41 passed.", accepted: false },
+    { message: "CI #41 passed.", other: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", note: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", identity: "missing", accepted: false },
+    { message: "CI #41 passed.", identity: "wrong-id", accepted: false },
+    { message: "CI #41 passed.", identity: "wrong-repo", accepted: false },
+  ])("classifies active workflow references without losing issue accounting: %j", (scenario) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-runs-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "main"]);
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+          "",
+          scenario.note ?? "",
+          "",
+        ].join("\n"),
+      );
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "chore: base"]);
+      const base = git(cwd, ["rev-parse", "HEAD"]);
+      writeFileSync(join(cwd, "validation.txt"), scenario.message);
+      git(cwd, ["add", "validation.txt"]);
+      git(cwd, ["commit", "-qm", "chore: validation", "-m", scenario.message]);
+      if (scenario.reverted) {
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      if (scenario.other) {
+        git(cwd, ["commit", "--allow-empty", "-qm", "chore: follow-up", "-m", scenario.other]);
+      }
+>>>>>>> 40b9ef5cbe8 (fix(release): distinguish verified workflow run references)
       const target = git(cwd, ["rev-parse", "HEAD"]);
       const gh = join(cwd, "gh");
       writeFileSync(
         gh,
         `#!${process.execPath}\n
+<<<<<<< HEAD
 const fs = require("node:fs");
 const mode = ${JSON.stringify(scenario.mode)};
 const state = fs.existsSync("request-state.json") ? JSON.parse(fs.readFileSync("request-state.json", "utf8")) : { attempts: 0, settled: false };
@@ -1167,11 +1225,34 @@ if (!state.settled) {
   }
   state.settled = true;
   fs.writeFileSync("request-state.json", JSON.stringify(state));
+=======
+const scenario = ${JSON.stringify(scenario)};
+if (process.argv[3] === "repos/openclaw/openclaw/actions/runs/41") {
+  require("node:fs").appendFileSync("run-requests", "41\\n");
+  console.log(JSON.stringify(scenario.identity === "missing" ? { message: "Not Found" } : {
+    id: scenario.identity === "wrong-id" ? 42 : 41,
+    repository: { full_name: scenario.identity === "wrong-repo" ? "other/repository" : "openclaw/openclaw" },
+    pull_requests: [],
+  }));
+  process.exit(0);
+>>>>>>> 40b9ef5cbe8 (fix(release): distinguish verified workflow run references)
 }
 const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
 const data = {};
 for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
+<<<<<<< HEAD
   data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }, author: { user: { login: "steipete" } } } };
+=======
+  data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
+  data[alias] = { issueOrPullRequest: scenario.node ? {
+    __typename: scenario.node, number: 41, title: "chore: validation", baseRefName: "main",
+    mergedAt: "2026-01-01T00:00:00Z", author: { __typename: "User", login: "steipete" },
+    closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+    closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+  } : null };
+>>>>>>> 40b9ef5cbe8 (fix(release): distinguish verified workflow run references)
 }
 console.log(JSON.stringify({ data }));
 `,
@@ -1197,6 +1278,7 @@ console.log(JSON.stringify({ data }));
         ],
         { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
       );
+<<<<<<< HEAD
       const requests = JSON.parse(readFileSync(join(cwd, "request-state.json"), "utf8"));
       expect(requests.attempts, result.stderr).toBe(scenario.attempts);
       if (scenario.error) {
@@ -1209,6 +1291,25 @@ console.log(JSON.stringify({ data }));
         expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
           "### Complete contribution record",
         );
+=======
+      if (!scenario.accepted) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("GitHub could not resolve source references: #41");
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(manifest.source.references).toBe(scenario.node ? 1 : 0);
+      expect(manifest.pullRequests.map((entry: { number: number }) => entry.number)).toEqual(
+        scenario.node === "PullRequest" ? [41] : [],
+      );
+      if (!scenario.node) {
+        expect(manifest.directCommits[0].references).toEqual([]);
+        expect(manifest.workflowRuns).toEqual([{ id: 41, repository: "openclaw/openclaw" }]);
+      } else {
+        expect(() => readFileSync(join(cwd, "run-requests"))).toThrow();
+>>>>>>> 40b9ef5cbe8 (fix(release): distinguish verified workflow run references)
       }
     } finally {
       rmSync(cwd, { recursive: true, force: true });
