@@ -18,6 +18,7 @@ type GatewayRunTestApi = {
     port: number;
     timeoutMs?: number;
     tlsFingerprint?: string;
+    signal?: AbortSignal;
   }): Promise<boolean>;
   resolveGatewayLockErrorExitCode(err: unknown): number;
   resolveGatewayStartupFailureExitCode(err: unknown): number;
@@ -27,9 +28,14 @@ type GatewayRunTestApi = {
     port: number;
     healthHost: string;
     log: GatewayRunTestLogger;
+    startupSignal?: AbortSignal;
     now?: () => number;
-    sleep?: (ms: number) => Promise<void>;
-    probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+    probeHealth?: (params: {
+      host: string;
+      port: number;
+      signal?: AbortSignal;
+    }) => Promise<boolean>;
     retryMs?: number;
     timeoutMs?: number;
   }): Promise<void>;

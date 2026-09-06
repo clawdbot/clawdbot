@@ -254,6 +254,61 @@ describe("clawhub artifacts", () => {
     }
   });
 
+  it.each([
+    ["legacy archive", "archive", "/api/v1/packages/demo/download"],
+    ["ClawPack artifact", "clawpack", "/api/v1/packages/demo/versions/1.2.3/artifact/download"],
+  ] as const)(
+    "aborts a held %s request with the caller signal",
+    async (_label, artifact, requestPath) => {
+      const controller = new AbortController();
+      const reason = new Error("Gateway startup interrupted by SIGTERM");
+      let requestedPath = "";
+      let markStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      let releaseFetch: (() => void) | undefined;
+
+      const download = downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact,
+        signal: controller.signal,
+        fetchImpl: async (input, init) => {
+          requestedPath = new URL(input instanceof Request ? input.url : String(input)).pathname;
+          const requestSignal = init?.signal;
+          if (!requestSignal) {
+            throw new Error("ClawHub download did not receive a request signal");
+          }
+          return await new Promise<Response>((resolve, reject) => {
+            const abort = () => {
+              const abortReason = requestSignal.reason;
+              reject(
+                abortReason instanceof Error
+                  ? abortReason
+                  : new Error("ClawHub download request aborted"),
+              );
+            };
+            requestSignal.addEventListener("abort", abort, { once: true });
+            releaseFetch = () => {
+              requestSignal.removeEventListener("abort", abort);
+              resolve(new Response("released", { status: 400 }));
+            };
+            markStarted();
+          });
+        },
+      });
+      const rejection = expect(download).rejects.toBe(reason);
+
+      await started;
+      controller.abort(reason);
+      releaseFetch?.();
+
+      await rejection;
+      expect(requestedPath).toBe(requestPath);
+    },
+  );
+
   it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const sha256Hex = createHash("sha256").update(bytes).digest("hex");

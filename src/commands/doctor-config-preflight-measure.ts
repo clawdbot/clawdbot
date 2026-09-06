@@ -26,7 +26,15 @@ export async function measureDoctorConfigPreflightStep<T>(
   name: string,
   run: () => T | Promise<T>,
   measure?: ConfigSnapshotReadMeasure,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const tracedRun = () => measureGatewayStartupPreflightStep(name, run);
-  return measure ? await measure(`doctor.config-preflight.${name}`, tracedRun) : await tracedRun();
+  try {
+    return measure
+      ? await measure(`doctor.config-preflight.${name}`, tracedRun)
+      : await tracedRun();
+  } finally {
+    signal?.throwIfAborted();
+  }
 }

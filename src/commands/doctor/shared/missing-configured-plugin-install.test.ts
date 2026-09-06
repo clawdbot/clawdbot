@@ -3870,6 +3870,51 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual(['Repaired missing configured plugin "demo".']);
   });
 
+  it("propagates cancellation from persisted-record repair without continuing fallback", async () => {
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: "/missing/demo",
+      },
+    };
+    const controller = new AbortController();
+    const abortReason = new Error("Gateway startup interrupted by SIGTERM");
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.updateNpmInstalledPlugins.mockImplementationOnce(
+      async (params: { signal?: AbortSignal }) => {
+        expect(params.signal).toBeDefined();
+        expect(params.signal?.aborted).toBe(false);
+        controller.abort(abortReason);
+        params.signal?.throwIfAborted();
+        throw new Error("expected composed repair signal to abort");
+      },
+    );
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    await expect(
+      repairMissingConfiguredPluginInstalls({
+        cfg: {
+          plugins: {
+            entries: {
+              demo: { enabled: true },
+            },
+          },
+        },
+        env: {},
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_ABORTED",
+      message: expect.stringContaining("aborted"),
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+  });
+
   it("forwards capability consent to persisted-record repair", async () => {
     const records = {
       demo: {

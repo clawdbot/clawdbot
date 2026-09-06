@@ -74,6 +74,7 @@ export async function ensureCliExecutionBootstrap(params: {
   validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
+  signal?: AbortSignal;
 }) {
   await ensureCliCommandBootstrap({
     runtime: params.runtime,
@@ -93,5 +94,6 @@ export async function ensureCliExecutionBootstrap(params: {
       ? { skipPristineStartupStateMigrations: true }
       : {}),
     ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }

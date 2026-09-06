@@ -14,6 +14,7 @@ import {
 } from "../command-execution-startup.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
+import { getGatewayRunRuntimeHooks } from "../gateway-cli/runtime-hooks.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
@@ -178,16 +179,25 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
       return;
     }
+    const startupSignal = getGatewayRunRuntimeHooks().startupSignal;
     await runStateStoreGuard(commandPath);
     if (startupPolicy.skipConfigGuard) {
       // Config validation and plugin activation are independent startup policies.
       // A cold config read must not suppress a plugin runtime explicitly required by the command.
-      await ensureCliExecutionBootstrap({
-        runtime: defaultRuntime,
-        commandPath,
-        startupPolicy,
-        skipConfigGuard: true,
-      });
+      try {
+        await ensureCliExecutionBootstrap({
+          runtime: defaultRuntime,
+          commandPath,
+          startupPolicy,
+          skipConfigGuard: true,
+          ...(startupSignal ? { signal: startupSignal } : {}),
+        });
+      } catch (error) {
+        if (startupSignal?.aborted) {
+          return;
+        }
+        throw error;
+      }
       return;
     }
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
@@ -208,7 +218,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         force: resolvedOptions.force === true,
         reset: resolvedOptions.reset === true,
       };
-      const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      const shouldBootstrap = await prepareGatewayRunBootstrap({
+        opts,
+        runtime: defaultRuntime,
+        ...(startupSignal ? { signal: startupSignal } : {}),
+      });
       if (!shouldBootstrap) {
         return;
       }
@@ -242,19 +256,34 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         return (await existingGuard?.(snapshot)) ?? true;
       };
     }
-    await ensureCliExecutionBootstrap({
-      runtime: defaultRuntime,
-      commandPath,
-      startupPolicy,
-      allowInvalid,
-      ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
-      ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
-      ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-    });
+    try {
+      await ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        allowInvalid,
+        ...(startupSignal ? { signal: startupSignal } : {}),
+        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+      });
+    } catch (error) {
+      if (startupSignal?.aborted) {
+        return;
+      }
+      throw error;
+    }
     if (beforeStateMigrations && isGatewayRunAction(actionCommand)) {
-      const { reloadTrustedGatewayRunEnvironment } =
-        await import("../gateway-cli/pre-bootstrap.js");
-      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
+      try {
+        const { reloadTrustedGatewayRunEnvironment } =
+          await import("../gateway-cli/pre-bootstrap.js");
+        await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
+      } catch (error) {
+        if (startupSignal?.aborted) {
+          return;
+        }
+        throw error;
+      }
     }
   });
 }

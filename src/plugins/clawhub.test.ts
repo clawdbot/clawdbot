@@ -278,6 +278,7 @@ type PackageLookupCall = {
   artifact?: string;
   baseUrl?: string;
   name?: string;
+  signal?: AbortSignal;
   version?: string;
 };
 
@@ -291,6 +292,7 @@ type ArchiveInstallCall = {
     requestedSpecifier?: string;
     source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
   };
+  signal?: AbortSignal;
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
@@ -1600,6 +1602,44 @@ describe("installPluginFromClawHub", () => {
     });
 
     expectSuccessfulClawHubInstall(result);
+  });
+
+  it("rethrows startup cancellation instead of mapping a package lookup failure", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    fetchClawHubPackageDetailMock.mockImplementationOnce(
+      async ({ signal }: { signal?: AbortSignal }) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort(reason);
+        throw reason;
+      },
+    );
+
+    await expect(
+      installPluginFromClawHub({ spec: "clawhub:demo", signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(fetchClawHubPackageArtifactMock).not.toHaveBeenCalled();
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("does not begin archive installation after a completed download observes cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    downloadClawHubPackageArchiveMock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return {
+        archivePath: "/tmp/clawhub-demo/archive.zip",
+        integrity: DEMO_ARCHIVE_INTEGRITY,
+        cleanup: archiveCleanupMock,
+      };
+    });
+
+    await expect(
+      installPluginFromClawHub({ spec: "clawhub:demo", signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledOnce();
   });
 
   it("recovers version-specific compatibility from version endpoint when artifact metadata is sparse", async () => {

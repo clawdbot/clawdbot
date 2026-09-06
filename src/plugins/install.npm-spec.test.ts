@@ -1622,6 +1622,57 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "version-drift-plugin"))).toBe(false);
   });
 
+  it("propagates an aborted managed npm install without entering recovery", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "aborted-install-plugin";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    const abortReason = new Error("startup SIGTERM");
+    const controller = new AbortController();
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
+      // The staged managed-npm flow installs inside a stage directory before
+      // publication, so intercept by command identity rather than final root.
+      if (isManagedNpmInstallCommand(argv)) {
+        managedInstallAttempts += 1;
+        controller.abort(abortReason);
+        return {
+          code: null,
+          stdout: "",
+          stderr: "",
+          signal: "SIGTERM",
+          killed: true,
+          termination: "signal" as const,
+        };
+      }
+      return await delegate(argv, options);
+    });
+
+    await expect(
+      installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(managedInstallAttempts).toBe(1);
+    expect(fs.existsSync(path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects"))).toBe(
+      false,
+    );
+  });
+
   it("quarantines incomplete integrity metadata and rebuilds the managed project once", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "missing-integrity-plugin";

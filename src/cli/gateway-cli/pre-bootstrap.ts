@@ -12,6 +12,7 @@ import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 type GatewayRunGuardParams = {
   opts: GatewayRunPreBootstrapOptions;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
 };
 
 type GatewayRunEnvironmentSelection = {
@@ -201,35 +202,28 @@ async function recoverGuardedGatewayRunConfig(
   params: GatewayRunGuardParams & { restoreSuspicious: boolean },
 ): Promise<ConfigFileSnapshot | null> {
   const { readConfigFileSnapshot } = await import("../../config/config.js");
+  const { opts, runtime, signal } = params;
   let recoveryAllowed = true;
   const recoveredSnapshot = await readConfigFileSnapshot({
     isolateEnv: true,
     recoverSuspicious: true,
     allowSuspiciousRecovery: (config, current) => {
-      recoveryAllowed = enforceGatewayRunFutureConfigGuard({
-        opts: params.opts,
-        runtime: params.runtime,
-        config: current,
-      });
+      if (signal?.aborted) {
+        recoveryAllowed = false;
+        return false;
+      }
+      recoveryAllowed = enforceGatewayRunFutureConfigGuard({ opts, runtime, config: current });
       if (recoveryAllowed) {
-        recoveryAllowed = enforceGatewayRunFutureConfigGuard({
-          opts: params.opts,
-          runtime: params.runtime,
-          config,
-        });
+        recoveryAllowed = enforceGatewayRunFutureConfigGuard({ opts, runtime, config });
       }
       return params.restoreSuspicious && recoveryAllowed;
     },
   });
-  if (!recoveryAllowed) {
+  if (!recoveryAllowed || signal?.aborted) {
     return null;
   }
   // Recovery can select a different config, so enforce the same guard again before migrations.
-  return enforceGatewayRunFutureConfigGuard({
-    opts: params.opts,
-    runtime: params.runtime,
-    snapshot: recoveredSnapshot,
-  })
+  return enforceGatewayRunFutureConfigGuard({ opts, runtime, snapshot: recoveredSnapshot })
     ? recoveredSnapshot
     : null;
 }
@@ -378,9 +372,15 @@ async function guardGatewayRunSelectedConfig(
     // It is also this startup's first state-directory write (config-health reads open the shared
     // SQLite store, which quarantines orphaned sidecars), so a live gateway owner refuses here
     // before any mutation instead of after the run loop's lock acquisition.
+    if (params.signal?.aborted) {
+      return false;
+    }
     const { describeLiveGatewayOwnerStartupBlocker } =
       await import("../../commands/doctor-startup-migration-refusal.js");
     const liveOwnerBlocker = await describeLiveGatewayOwnerStartupBlocker(process.env);
+    if (params.signal?.aborted) {
+      return false;
+    }
     if (liveOwnerBlocker) {
       params.runtime.error(liveOwnerBlocker);
       params.runtime.exit(1);

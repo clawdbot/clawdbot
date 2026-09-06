@@ -1027,6 +1027,7 @@ describe("runCli exit behavior", () => {
         beforeStateMigrations: expect.any(Function),
         commandPath: ["gateway"],
         loadPlugins: false,
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
@@ -1038,6 +1039,45 @@ describe("runCli exit behavior", () => {
     const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
     expect(recoveryOrder).toBeGreaterThan(0);
     expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
+  });
+
+  it("stops suspicious config recovery when Gateway startup is interrupted", async () => {
+    const processOnSpy = vi.spyOn(process, "on");
+    const previousExitCode = process.exitCode;
+    const currentSnapshot = {
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: { mode: "local" } },
+    };
+    let recoveryAuthorized: boolean | undefined;
+    readConfigFileSnapshotMock.mockImplementation(async (options) => {
+      if (options?.recoverSuspicious) {
+        const sigtermHandler = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+        if (typeof sigtermHandler !== "function") {
+          throw new Error("Gateway startup SIGTERM handler was not registered");
+        }
+        sigtermHandler();
+        recoveryAuthorized = await options.allowSuspiciousRecovery?.(
+          currentSnapshot.sourceConfig,
+          currentSnapshot.sourceConfig,
+        );
+      }
+      return currentSnapshot;
+    });
+
+    try {
+      await runCli(["node", "openclaw", "gateway"]);
+      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+        | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
+        | undefined;
+      await hooks?.beforeRun?.({});
+
+      expect(recoveryAuthorized).toBe(false);
+      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      processOnSpy.mockRestore();
+    }
   });
 
   it("defers config-drift exit to the migration owner before startup migrations", async () => {
@@ -3673,6 +3713,81 @@ describe("runCli exit behavior", () => {
       unregisterCompanionCleanup();
       exitSpy.mockRestore();
       processOnceSpy.mockRestore();
+    }
+  });
+
+  it("waits for Gateway startup cleanup before the managed proxy exits on SIGTERM", async () => {
+    const handle = makeProxyHandle();
+    startProxyMock.mockResolvedValueOnce(handle);
+    let rejectBootstrap: (reason?: unknown) => void = () => {};
+    ensureCliExecutionBootstrapMock.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectBootstrap = reject;
+      }),
+    );
+    commanderParseAsyncMock.mockImplementationOnce(async () => {
+      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+        | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
+        | undefined;
+      await hooks?.beforeRun?.({});
+    });
+
+    const processOnSpy = vi.spyOn(process, "on");
+    const processOnceSpy = vi.spyOn(process, "once");
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
+      void code;
+      return undefined as never;
+    }) as typeof process.exit);
+    const previousExitCode = process.exitCode;
+    const startupError = new Error("configured-plugin repair aborted");
+
+    try {
+      const runPromise = runCli(["node", "openclaw", "gateway", "run"]);
+      await vi.waitFor(
+        () => {
+          expect(startProxyMock).toHaveBeenCalledWith(undefined);
+          expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+          );
+          expect(processOnSpy.mock.calls.some(([event]) => event === "SIGTERM")).toBe(true);
+          expect(processOnceSpy.mock.calls.some(([event]) => event === "SIGTERM")).toBe(true);
+        },
+        { timeout: 5_000 },
+      );
+
+      const startupSigtermHandler = processOnSpy.mock.calls.find(
+        ([event]) => event === "SIGTERM",
+      )?.[1];
+      const proxySigtermHandler = processOnceSpy.mock.calls.find(
+        ([event]) => event === "SIGTERM",
+      )?.[1];
+      if (
+        typeof startupSigtermHandler !== "function" ||
+        typeof proxySigtermHandler !== "function"
+      ) {
+        throw new Error("Gateway SIGTERM handlers were not registered");
+      }
+      startupSigtermHandler();
+      proxySigtermHandler();
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      rejectBootstrap(startupError);
+      await runPromise;
+      await vi.waitFor(() => {
+        expect(exitSpy).toHaveBeenCalledWith(143);
+      });
+      expect(stopProxyMock.mock.invocationCallOrder[0]).toBeLessThan(
+        exitSpy.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      process.exitCode = previousExitCode;
+      exitSpy.mockRestore();
+      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   });
 

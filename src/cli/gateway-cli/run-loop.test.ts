@@ -628,6 +628,31 @@ describe("runGatewayLoop", () => {
     },
   );
 
+  it("releases the gateway lock when startup is aborted after acquisition", async () => {
+    vi.clearAllMocks();
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    const release = vi.fn(async () => {});
+    acquireGatewayLock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return { release };
+    });
+    const start = vi.fn();
+    const { runtime } = createRuntimeWithExitSignal();
+    const { runGatewayLoop } = await import("./run-loop.js");
+
+    await expect(
+      runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        startupSignal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(start).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the ordinary drain when a handoff refuses late terminal persistence", async () => {
     vi.clearAllMocks();
     await withIsolatedSignals(async ({ captureSignal }) => {

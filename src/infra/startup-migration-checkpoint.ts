@@ -54,6 +54,7 @@ type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"
   now?: () => number;
   monotonicNow?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  signal?: AbortSignal;
 };
 
 class StartupMigrationLeaseConflictError extends Error {
@@ -458,6 +459,7 @@ export async function acquireStartupMigrationLeaseWithWait(
   const deadlineMs = monotonicNow() + timeoutMs;
 
   while (true) {
+    params.signal?.throwIfAborted();
     try {
       return acquireStartupMigrationLease({
         env: params.env,
@@ -477,6 +479,7 @@ export async function acquireStartupMigrationLeaseWithWait(
         throw error;
       }
       await sleep(Math.min(pollIntervalMs, remainingMs));
+      params.signal?.throwIfAborted();
     }
   }
 }
