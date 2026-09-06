@@ -459,8 +459,13 @@ export function buildSessionObserverPrompt(
   state: Pick<SessionObserverState, "previousDigest" | "planProgress">,
   notes: readonly string[],
 ): string {
+  const {
+    sessionId: _sessionId,
+    lifecycleRevision: _lifecycleRevision,
+    ...previousDigest
+  } = state.previousDigest ?? {};
   return JSON.stringify({
-    previousDigest: state.previousDigest ?? null,
+    previousDigest: state.previousDigest ? previousDigest : null,
     newNotes: notes,
     planProgress: state.planProgress ?? null,
   });
