@@ -23,7 +23,6 @@ import { lineSetupWizard } from "./setup-surface.js";
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
-
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
@@ -96,13 +95,11 @@ describe("line setup wizard", () => {
   });
 });
 
-
 describe("linePlugin status.probeAccount", () => {
   it("reports bot identity without initializing the message runtime", async () => {
     vi.resetModules();
     const { lineStatusAdapter } = await import("./status.js");
     const identity = {
-
       displayName: "OpenClaw",
       userId: "U123",
       basicId: "@openclaw",

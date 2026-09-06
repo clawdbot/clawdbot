@@ -1,7 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -10,6 +9,7 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -88,8 +88,9 @@ async function readLineWebhookState(
   }
   try {
     const read = createLineApiReader(channelAccessToken, budgetMs);
-    const registered =
-      await read<messagingApi.GetWebhookEndpointResponse>("channel/webhook/endpoint");
+    const registered = await read<messagingApi.GetWebhookEndpointResponse>(
+      "channel/webhook/endpoint",
+    );
     // Only the switch is reported. The registered URL is not needed to act on this
     // — the operator flips Use webhook in the console — and carrying it would put a
     // URL that can hold opaque path or query credentials into logs and status output.
@@ -121,7 +122,6 @@ export async function readLineAccountMessageQuota(params: {
     );
   } catch {
     return undefined;
-
   }
 }
 
