@@ -69,11 +69,15 @@ function expectStableNamePosition(
 
 suite.define(() => {
   it.each([
+    { width: 320, height: 860, profiled: true, safeAreaLeft: 0 },
+    { width: 328, height: 860, profiled: true, safeAreaLeft: 0 },
     { width: 390, height: 860, profiled: true, safeAreaLeft: 0 },
     { width: 430, height: 860, profiled: true, safeAreaLeft: 0 },
     { width: 932, height: 430, profiled: true, safeAreaLeft: 0 },
     { width: 800, height: 430, profiled: true, safeAreaLeft: 44 },
     { width: 390, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 320, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 328, height: 860, profiled: false, safeAreaLeft: 0 },
     { width: 430, height: 860, profiled: false, safeAreaLeft: 0 },
     { width: 932, height: 430, profiled: false, safeAreaLeft: 0 },
     { width: 800, height: 430, profiled: false, safeAreaLeft: 44 },
