@@ -961,30 +961,39 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
-  it("wires successful mutation completions into the snapshot diff stat", async () => {
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
-      },
-      update: vi.fn(),
-      updateOnLineChange: true,
-    });
+  it.each([false, undefined, "Custom progress"])(
+    "retains completed edits when clearing a quiet plan with label %s",
+    async (label) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { toolProgress: false, label } },
+        },
+        update,
+        updateOnLineChange: true,
+      });
 
-    await progress.pushToolEvent({
-      toolCallId: "write-1",
-      name: "write",
-      phase: "start",
-      args: { path: "src/example.ts", content: "one\ntwo" },
-    });
-    expect(progress.getSnapshot().diffStat).toBeUndefined();
-    await progress.pushItemEvent({
-      toolCallId: "write-1",
-      kind: "tool",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
-  });
+      await progress.pushPlanProgress([{ step: "Stale plan", status: "in_progress" }]);
+      await progress.pushToolEvent({
+        toolCallId: "write-1",
+        name: "write",
+        phase: "start",
+        args: { path: "src/example.ts", content: "one\ntwo" },
+      });
+      expect(progress.getSnapshot().diffStat).toBeUndefined();
+      await progress.pushItemEvent({
+        toolCallId: "write-1",
+        kind: "tool",
+        phase: "end",
+        status: "completed",
+      });
+      expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
+      expect(await progress.pushPlanProgress([])).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain("📝 1 files +2");
+      expect(update.mock.lastCall?.[0]).not.toContain("Stale plan");
+      expect(progress.getSnapshot().lines).toEqual([]);
+    },
+  );
 
   it("ignores status updates once the final reply started and clears both per turn", async () => {
     const update = vi.fn();

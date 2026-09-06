@@ -1,5 +1,6 @@
 import {
   compactChannelProgressDraftLine,
+  formatChannelProgressDraftDiffStat,
   isChannelProgressAttentionLine,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
@@ -90,7 +91,14 @@ export function renderTelegramProgressDraftPreview(
   const lineBudget = Math.max(0, maxLines - checklistLines);
   const lines = [...activity.filter((line) => !isChannelProgressAttentionLine(line)), ...attention];
   const visibleLines = lineBudget ? lines.slice(-lineBudget) : [];
-  const label = checklistLines || visibleLines.length < maxLines ? snapshot.label : undefined;
+  const diffStat =
+    visibleLines.length + checklistLines < maxLines
+      ? formatChannelProgressDraftDiffStat(snapshot.diffStat)
+      : undefined;
+  const label =
+    checklistLines || visibleLines.length + (diffStat ? 1 : 0) < maxLines
+      ? snapshot.label
+      : undefined;
   const blocks: InputRichBlock[] = [];
   const html: string[] = [];
   const addParagraph = (text: ProgressText) => {
@@ -147,6 +155,9 @@ export function renderTelegramProgressDraftPreview(
         };
       }),
     });
+  }
+  if (diffStat) {
+    addParagraph(literalProgressText(compactChannelProgressDraftLine(diffStat, maxLineChars)));
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages

@@ -24,6 +24,10 @@ import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/pr
 import { compactProgressText } from "../shared/text-truncate.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
+  formatChannelProgressDraftDiffStat,
+  type ChannelProgressDraftDiffStat,
+} from "./progress-draft-diffstat.js";
+import {
   getChannelStreamingConfigObject,
   type StreamingCompatEntry,
 } from "./streaming-config-readers.js";
@@ -1321,6 +1325,7 @@ export function formatChannelProgressDraftText(params: {
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
+  diffStat?: ChannelProgressDraftDiffStat;
 }): string {
   const narration = compactProgressText(
     params.narration?.replace(/\s+/g, " ").trim() ?? "",
@@ -1381,13 +1386,21 @@ export function formatChannelProgressDraftText(params: {
     .filter((line): line is string => Boolean(line));
   // Budget 0 is handled before the slice: slice(-0) returns every line.
   const rollingLines = toolLineBudget === 0 ? [] : renderedToolLines.slice(-toolLineBudget);
+  const diffStat =
+    rollingLines.length + planLines.length < maxLines
+      ? formatChannelProgressDraftDiffStat(params.diffStat)
+      : undefined;
   // The label is a block, not a line: it yields its slot once real work lines
   // fill the window, which is why a busy draft shows work instead of a title.
   const labelBlock =
-    resolvedLabel && (planLines.length > 0 || rollingLines.length < maxLines)
+    resolvedLabel && (planLines.length > 0 || rollingLines.length + (diffStat ? 1 : 0) < maxLines)
       ? compactChannelProgressDraftLine(resolvedLabel, maxLineChars)
       : undefined;
-  const rollingBlock = [...rollingLines, ...planLines].join("\n");
+  const rollingBlock = [
+    ...rollingLines,
+    ...planLines,
+    ...(diffStat ? [formatLine(compactChannelProgressDraftLine(diffStat, maxLineChars))] : []),
+  ].join("\n");
   return [labelBlock, statusHeadline, rollingBlock].filter(Boolean).join("\n\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

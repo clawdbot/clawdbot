@@ -74,6 +74,7 @@ describe("renderTelegramProgressDraftPreview", () => {
           { kind: "tool", label: "Read", text: "Read files" },
           { kind: "approval", label: "Approval", text: "Approval", detail: "Confirm access" },
         ],
+        diffStat: { files: 1, added: 2, removed: 1 },
         plan: [
           { step: "Inspect", status: "completed" },
           { step: "Repair", status: "in_progress" },
@@ -89,4 +90,15 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(preview.text).toContain("1/4 done");
     expect(preview.text).not.toContain("Read files");
   });
+  it.each([true, false])(
+    "renders retained edit totals without a plan (rich=%s)",
+    (richMessages) => {
+      const preview = renderTelegramProgressDraftPreview(
+        { lines: [], diffStat: { files: 1, added: 2, removed: 1 } },
+        { ...options, richMessages },
+      );
+      expect(telegramHtmlToPlainTextFallback(preview.text)).toBe("📝 1 files +2 −1");
+      expect(preview.text).not.toContain("<code>");
+    },
+  );
 });

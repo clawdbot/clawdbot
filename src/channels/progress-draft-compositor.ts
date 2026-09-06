@@ -1,5 +1,6 @@
 import {
   createProgressDraftDiffStatTracker,
+  formatChannelProgressDraftDiffStat,
   type ChannelProgressDraftDiffStat,
 } from "./progress-draft-diffstat.js";
 import {
@@ -193,6 +194,7 @@ export function createChannelProgressDraftCompositor(params: {
       formatLine: options?.formatted === false ? undefined : params.formatLine,
       narration,
       plan: planSteps,
+      diffStat: resolveDiffStat(),
     });
   };
 
@@ -325,7 +327,12 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     // Labels decorate activity; they must not keep a retracted card alive.
-    if (lines.length || resolveStatusText() || planSteps?.length || resolveDiffStat()) {
+    if (
+      lines.length ||
+      resolveStatusText() ||
+      planSteps?.length ||
+      formatChannelProgressDraftDiffStat(resolveDiffStat())
+    ) {
       return await publish();
     }
     if (!params.deleteCurrent) {
