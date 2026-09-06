@@ -194,6 +194,8 @@ type OpenClawCodingToolsOptions = {
   questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
@@ -897,6 +899,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
+            pinnedWidgetAuthoring: options?.pinnedWidgetAuthoring,
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
