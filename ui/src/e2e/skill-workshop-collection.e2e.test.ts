@@ -1,9 +1,10 @@
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
+  captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -13,6 +14,14 @@ import { createSkillWorkshopCollectionFixture } from "../test-helpers/skill-work
 
 let server: ControlUiE2eServer;
 let browser: Browser;
+
+async function reportWorkshopFailure(page: Page, error: unknown): Promise<never> {
+  await captureControlUiE2eFailureDiagnostics(page, {
+    error: error instanceof Error ? error : new Error(String(error)),
+    label: "workshop-collection",
+  });
+  throw error;
+}
 
 describe("Workshop current collection", () => {
   beforeAll(async () => {
@@ -46,7 +55,7 @@ describe("Workshop current collection", () => {
         const skills = page.locator("#skill-workshop-mode-tab-skills");
         await expect.poll(() => skills.getAttribute("aria-selected")).toBe("true");
         await expect.poll(() => page.locator(".sw-installed-skill").count()).toBe(5);
-        expect(await skills.textContent()).toContain("5");
+        await expect.poll(() => skills.textContent()).toContain("5");
         await page
           .getByText("Current instructions after collection review.", { exact: true })
           .waitFor();
@@ -132,6 +141,8 @@ describe("Workshop current collection", () => {
           body: document.body.scrollWidth,
         }));
         expect(overflow.body).toBeLessThanOrEqual(overflow.width);
+      } catch (error) {
+        await reportWorkshopFailure(page, error);
       } finally {
         await context.close();
       }
@@ -197,6 +208,8 @@ describe("Workshop current collection", () => {
           ),
         )
         .toBe(true);
+    } catch (error) {
+      await reportWorkshopFailure(page, error);
     } finally {
       await page.screenshot({
         animations: "disabled",
@@ -243,6 +256,8 @@ describe("Workshop current collection", () => {
       await page.getByText("No skills installed yet", { exact: true }).waitFor();
       expect(await page.locator(".sw-installed-skill").count()).toBe(0);
       expect(await page.locator("#skill-workshop-mode-tab-history").textContent()).toContain("31");
+    } catch (error) {
+      await reportWorkshopFailure(page, error);
     } finally {
       await context.close();
     }

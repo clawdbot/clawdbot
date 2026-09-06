@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
 import { nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -62,25 +61,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private readonly revisionRecovery = new SkillWorkshopRevisionRecoveryController(
     this.requestPageUpdate,
   );
-  private readonly proposalsTask = new Task(this, {
-    autoRun: false,
-    // State and context identities isolate helper mutations after any source reset.
-    args: () =>
-      [
-        this.gatewayConnected ? (this.context ?? null) : null,
-        this.gatewayConnected ? (this.state ?? null) : null,
-        this.selectedAgentId ?? null,
-        false as boolean,
-      ] as const,
-    task: ([context, state, _agentId, force]) =>
-      context && state ? loadSkillWorkshopPageData({ state, context, force }) : initialState,
-    onComplete: () => {
-      this.requestPageUpdate();
-    },
-    onError: () => {
-      this.requestPageUpdate();
-    },
-  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
@@ -296,7 +276,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     this.operationEpoch += 1;
     this.selfLearningBusy = false;
     this.selfLearningError = null;
-    void this.proposalsTask.run([null, null, null, false]);
     const previous = this.state;
     if (!previous) {
       return;
@@ -356,7 +335,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!state || !context || context.gateway.snapshot.phase !== "connected") {
       return;
     }
-    void this.proposalsTask.run([context, state, context.agentSelection.state.selectedId, force]);
+    // The loaders own in-flight state. Even a later no-op load must not suppress
+    // the productive request's terminal repaint; resets already replace its state.
+    void loadSkillWorkshopPageData({ context, state, force }).finally(this.requestPageUpdate);
+    this.requestPageUpdate();
   }
 
   private readonly handleHistoryScan = () => {

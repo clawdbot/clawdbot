@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
 import "./skill-workshop-page.ts";
+import { createContext } from "./skill-workshop-page.test-support.ts";
 
 type SkillWorkshopPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -14,50 +13,6 @@ type SkillWorkshopPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
 };
-
-function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
-  // SAFETY: this test client implements the only Gateway method exercised by the page.
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods([]),
-    assistantAgentId: "research",
-    sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const subscribe = () => () => undefined;
-  // SAFETY: the page reads only the ApplicationContext fields supplied by this fixture.
-  return {
-    basePath: "",
-    gateway: { snapshot, subscribe },
-    config: {
-      current: { assistantIdentity: { name: "OpenClaw" } },
-      subscribe,
-    },
-    agents: { state: { agentsList: null }, subscribe },
-    agentSelection: {
-      state: { selectedId: "research" },
-      subscribe,
-    },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
-    },
-    sessions: { state: { result: null, loading: false } },
-    runtimeConfig: {
-      state: { configSnapshot: null, configLoading: false, lastError: null },
-      ensureLoaded: vi.fn(async () => undefined),
-      refresh: vi.fn(async () => undefined),
-      patch: vi.fn(async () => true),
-      subscribe,
-    },
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
 
 function appliedProposals(): SkillWorkshopProposal[] {
   return [1, 2, 3, 4].map((updatedAt) => ({

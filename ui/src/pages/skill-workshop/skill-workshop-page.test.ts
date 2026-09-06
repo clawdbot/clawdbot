@@ -1,15 +1,15 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
 import { page as skillWorkshopRoute } from "./route.ts";
 import "./skill-workshop-page.ts";
+import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
 
 type SkillWorkshopPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -57,76 +57,6 @@ function callsFor(request: ReturnType<typeof vi.fn>, method: string) {
   return request.mock.calls.filter(([calledMethod]) => calledMethod === method);
 }
 
-function createRuntimeConfigStub(options?: {
-  sourceConfig?: Record<string, unknown>;
-  patch?: ReturnType<typeof vi.fn>;
-}) {
-  return {
-    state: {
-      configSnapshot: options?.sourceConfig
-        ? { hash: "hash-1", sourceConfig: options.sourceConfig }
-        : null,
-      configLoading: false,
-      lastError: null as string | null,
-    },
-    ensureLoaded: vi.fn(async () => undefined),
-    refresh: vi.fn(async () => undefined),
-    patch: options?.patch ?? vi.fn(async () => true),
-    subscribe: () => () => undefined,
-  };
-}
-
-function createContext(
-  request: ReturnType<typeof vi.fn>,
-  options?: {
-    gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
-    methods?: string[];
-    scopes?: string[];
-    sessions?: ApplicationContext["sessions"];
-    runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
-  },
-): ApplicationContext {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
-    assistantAgentId: "research",
-    sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const subscribe = () => () => undefined;
-  return {
-    basePath: "",
-    gateway: {
-      snapshot,
-      subscribe: options?.gatewaySubscribe ?? subscribe,
-    },
-    config: {
-      current: { assistantIdentity: { name: "OpenClaw" } },
-      subscribe,
-    },
-    agents: {
-      state: { agentsList: null },
-      subscribe,
-    },
-    agentSelection: {
-      state: { selectedId: "research" },
-      subscribe,
-    },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
-    },
-    sessions: options?.sessions ?? { state: { result: null, loading: false } },
-    runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
-
 function createProposal(overrides: Partial<SkillWorkshopProposal>): SkillWorkshopProposal {
   return {
     key: "proposal",
@@ -154,6 +84,53 @@ afterEach(() => {
 });
 
 describe("SkillWorkshopPage lifecycle", () => {
+  it("renders a completed skill read after a repeated same-agent notification", async () => {
+    localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "skills");
+    const skill = {
+      name: "release-review",
+      skillKey: "release-review",
+      description: "Release checks",
+    };
+    const content = deferred<unknown>();
+    const listeners = new Set<() => void>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return { ...emptyWorkshopManifest(), installedSkills: [skill] };
+      }
+      if (method === "skills.workshop.read") {
+        return content.promise;
+      }
+      return null;
+    });
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.context = createContext(request, {
+      agentSelectionSubscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    document.body.append(page);
+    await waitForSkillWorkshop(() =>
+      expect(callsFor(request, "skills.workshop.read")).toHaveLength(1),
+    );
+    await page.updateComplete;
+    for (const listener of listeners) {
+      listener();
+    }
+    await settleLitElement(page);
+    content.resolve({ ...skill, content: "# Release review\n\nCurrent checks are ready." });
+    await waitForSkillWorkshop(() =>
+      expect(page.state?.skillWorkshopInstalledSelection.status).toBe("ready"),
+    );
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector(".sw-collection__reader")?.textContent).toContain(
+        "Current checks are ready.",
+      ),
+    );
+  });
+
   it("renders revisions in the shared modal and handles modal cancellation", async () => {
     const proposal = createProposal({
       key: "proposal-modal",
