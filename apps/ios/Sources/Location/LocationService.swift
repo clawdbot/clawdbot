@@ -11,9 +11,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     private let manager = CLLocationManager()
-    private var authWaitID: UUID?
-    private var authWaitRequiresDeterminedStatus = false
-    private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
+    private struct AuthorizationWait {
+        let requiresDeterminedStatus: Bool
+        let continuation: CheckedContinuation<CLAuthorizationStatus, Never>
+    }
+
+    private var authorizationWaits: [UUID: AuthorizationWait] = [:]
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
     private var cachedAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
@@ -114,9 +117,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
                 return
             }
             let waitID = UUID()
-            self.authWaitID = waitID
-            self.authWaitRequiresDeterminedStatus = requiresDeterminedStatus
-            self.authContinuation = cont
+            // A replacement document can request permission while a retired request still awaits the OS.
+            self.authorizationWaits[waitID] = AuthorizationWait(
+                requiresDeterminedStatus: requiresDeterminedStatus,
+                continuation: cont)
             // Install the waiter before requesting permission so a fast delegate callback cannot be lost.
             request()
             Task { @MainActor in
@@ -126,7 +130,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
                 var observedPrompt = UIApplication.shared.applicationState != .active
                 // A slow system prompt must not trigger the no-callback fallback. Once iOS makes
                 // the app inactive, wait until the user dismisses the prompt and the app returns.
-                while self.authWaitID == waitID, self.authContinuation != nil {
+                while self.authorizationWaits[waitID] != nil {
                     try? await Task.sleep(for: .milliseconds(100))
                     let applicationIsActive = UIApplication.shared.applicationState == .active
                     if !applicationIsActive {
@@ -170,16 +174,14 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         status: CLAuthorizationStatus,
         allowUndeterminedFallback: Bool = false)
     {
-        guard self.authWaitID == waitID, let cont = self.authContinuation else { return }
+        guard let wait = self.authorizationWaits[waitID] else { return }
         guard Self.shouldCompleteAuthorizationWait(
             status: status,
-            requiresDeterminedStatus: self.authWaitRequiresDeterminedStatus,
+            requiresDeterminedStatus: wait.requiresDeterminedStatus,
             allowUndeterminedFallback: allowUndeterminedFallback)
         else { return }
-        self.authWaitID = nil
-        self.authWaitRequiresDeterminedStatus = false
-        self.authContinuation = nil
-        cont.resume(returning: status)
+        self.authorizationWaits.removeValue(forKey: waitID)
+        wait.continuation.resume(returning: status)
     }
 
     private func withTimeout<T: Sendable>(
@@ -221,8 +223,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         Task { @MainActor in
             self.cachedAuthorizationSnapshot = snapshot
             self.authorizationChangeHandler?(snapshot)
-            guard let waitID = self.authWaitID else { return }
-            self.finishAuthorizationWait(waitID: waitID, status: snapshot.authorizationStatus)
+            for waitID in Array(self.authorizationWaits.keys) {
+                self.finishAuthorizationWait(waitID: waitID, status: snapshot.authorizationStatus)
+            }
         }
     }
 
