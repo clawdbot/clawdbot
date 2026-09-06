@@ -2,10 +2,11 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { getPrimaryCommand } from "./argv.js";
 import { CAPABILITY_METADATA, findCapabilityMetadata } from "./capability-cli/metadata.js";
-import { emitJsonOrText, providerSummaryText } from "./capability-cli/shared.js";
+import { emitJsonOrText, providerSummaryText } from "./capability-cli/output.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { removeCommandByName } from "./program/command-tree.js";
 
@@ -72,18 +73,23 @@ async function registerCapabilityDomainCommands(
   capability: Command,
   argv: string[],
 ): Promise<void> {
-  const invocation = resolveCliArgvInvocation(argv);
-  if (!invocation.hasHelpOrVersion) {
-    const selectedName = invocation.commandPath[1];
-    if (selectedName === "list" || selectedName === "inspect") {
-      return;
-    }
-    const selected = capabilityCommandGroups.find(([name]) => name === selectedName);
-    if (selected) {
-      const register = await selected[1]();
-      register(capability);
-      return;
-    }
+  const primary = getPrimaryCommand(argv);
+  // Options before a domain can request parent help, which needs the complete command tree.
+  const selectedName =
+    primary === "infer" || primary === "capability"
+      ? getCommandArgsWithRootOptions(argv, {
+          commandPath: [primary],
+          mode: "command-path",
+        })?.[0]
+      : undefined;
+  if (selectedName === "list" || selectedName === "inspect") {
+    return;
+  }
+  const selected = capabilityCommandGroups.find(([name]) => name === selectedName);
+  if (selected) {
+    const register = await selected[1]();
+    register(capability);
+    return;
   }
 
   const registrars = await Promise.all(capabilityCommandGroups.map(([, load]) => load()));
