@@ -217,7 +217,9 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 // channel projection routes through — and drop the text when markers survive
 // stripping (unbalanced delimiters) instead of delivering it raw.
 function stripInternalContextForDelivery(text: string): string {
-  const stripped = stripInternalRuntimeContext(text);
+  // Match the queue-persistence stripper (protocol-scaffolding): preserve the
+  // surrounding single newline so mid-text blocks rejoin with "\n", not "\n\n".
+  const stripped = stripInternalRuntimeContext(text, { preserveSurroundingWhitespace: true });
   return hasInternalRuntimeContext(stripped) ? "" : stripped;
 }
 
