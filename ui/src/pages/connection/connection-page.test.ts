@@ -3,26 +3,57 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
+import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { ConnectionPage, supportsSystemInfo } from "./connection-page.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
+function source(client: GatewayBrowserClient) {
+  return createApplicationGateway({
+    client,
+    phase: "connected",
+    hello: gatewayHelloForMethods(["system.info"]),
+    sessionKey: "main",
+  } as ApplicationGatewaySnapshot);
+}
+
+async function mount(gateway: ApplicationGateway) {
+  const page = new ConnectionPage();
+  const context = {
+    gateway,
+    channels: { state: { channelsLastSuccess: null }, subscribe: () => () => undefined },
+  } as unknown as ApplicationContext;
+  const provider = createApplicationContextProvider(context);
+  provider.append(page);
+  document.body.append(provider);
+  await settleLitElement(page);
+  return { page, context, provider };
+}
+
+function control(page: ConnectionPage, selector: string) {
+  const element = page.querySelector<HTMLInputElement | HTMLButtonElement>(selector);
+  if (!element) {
+    throw new Error(`Missing Connection control: ${selector}`);
+  }
+  return element;
 }
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("supportsSystemInfo", () => {
@@ -74,76 +105,153 @@ describe("ConnectionPage credentials", () => {
   });
 });
 
-describe("ConnectionPage system info", () => {
-  it("clears stale host info when the Gateway disconnects", () => {
-    const client = {} as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      phase: "stopped",
-      hello: null,
-    } as ApplicationGatewaySnapshot;
-    const page = new ConnectionPage();
-    const state = page as unknown as {
-      context: { gateway: { snapshot: ApplicationGatewaySnapshot } };
-      systemInfo: SystemInfoResult | null;
-      systemInfoClient: GatewayBrowserClient | null;
-      handleSystemInfoGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+describe("ConnectionPage Gateway lifecycle", () => {
+  it("keeps an edited draft through reconnect and resets it for a replacement source", async () => {
+    const request = vi.fn().mockResolvedValue(deviceSystemInfo);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const first = source(client);
+    const { page, context, provider } = await mount(first.gateway);
+    const input = (label: string) => control(page, `input[aria-label="${label}"]`);
+    const edit = (label: string, value: string) => {
+      input(label).value = value;
+      input(label).dispatchEvent(new Event("input"));
     };
-    state.context = { gateway: { snapshot } };
-    state.systemInfoClient = client;
-    state.systemInfo = {} as SystemInfoResult;
+    edit("Gateway Token", "draft-token");
+    edit("Password (not stored)", "draft-password");
+    edit("Default Session Key", "draft-session");
+    control(page, 'button[aria-label="Toggle token visibility"]').click();
+    control(page, 'button[aria-label="Toggle password visibility"]').click();
+    await settleLitElement(page);
+    expect(input("Gateway Token").type).toBe("text");
+    expect(input("Password (not stored)").type).toBe("text");
 
-    state.handleSystemInfoGatewaySnapshot(snapshot);
+    first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
+    await settleLitElement(page);
+    expect(input("Gateway Token").type).toBe("password");
+    expect(input("Password (not stored)").type).toBe("password");
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
+    first.publish({ ...first.gateway.snapshot, phase: "connected", sessionKey: "remote-session" });
+    await settleLitElement(page);
+    expect(input("Gateway Token").value).toBe("draft-token");
+    expect(input("Password (not stored)").value).toBe("draft-password");
+    expect(input("Default Session Key").value).toBe("draft-session");
+    expect(request).toHaveBeenCalledTimes(2);
 
-    expect(state.systemInfo).toBeNull();
+    const second = source(client);
+    Object.assign(second.gateway.connection, {
+      token: "replacement-token",
+      password: "replacement-password",
+    });
+    provider.setContext({ ...context, gateway: second.gateway });
+    await settleLitElement(page);
+    expect(input("Gateway Token").value).toBe("replacement-token");
+    expect(input("Password (not stored)").value).toBe("replacement-password");
+    expect(input("Default Session Key").value).toBe("main");
+    expect(input("Gateway Token").type).toBe("password");
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects an old Gateway source response when the replacement reuses its client", async () => {
-    const firstResponse = deferred<SystemInfoResult>();
-    const secondResponse = deferred<SystemInfoResult>();
-    const client = {
-      request: vi
+  it.each(["response", "error", "response before rebinding"] as const)(
+    "rejects an old Gateway source %s when the replacement reuses its client",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const firstResponse = deferred<SystemInfoResult>();
+      const secondResponse = deferred<SystemInfoResult>();
+      const request = vi
         .fn()
-        .mockImplementationOnce(() => firstResponse.promise)
-        .mockImplementationOnce(() => secondResponse.promise),
-    } as unknown as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      phase: "connected",
-      hello: { features: { methods: ["system.info"] } },
-    } as ApplicationGatewaySnapshot;
-    const firstGateway = { snapshot } as ApplicationGateway;
-    const secondGateway = { snapshot } as ApplicationGateway;
-    const page = new ConnectionPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      syncSystemInfoPolling: () => void;
-      synchronizeSystemInfoGateway: (gateway: ApplicationGateway) => void;
-      loadSystemInfo: () => Promise<void>;
-      systemInfo: SystemInfoResult | null;
-      systemInfoUnavailable: boolean;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.syncSystemInfoPolling = () => undefined;
-    state.context = { gateway: firstGateway } as ApplicationContext;
-    state.synchronizeSystemInfoGateway(firstGateway);
+        .mockReturnValueOnce(firstResponse.promise)
+        .mockReturnValueOnce(secondResponse.promise);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const first = source(client);
+      const second = source(client);
+      const { page, context, provider } = await mount(first.gateway);
+      if (outcome === "response before rebinding") {
+        // Queue completion before Lit's update, while context replacement itself is synchronous.
+        firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
+      }
+      provider.setContext({ ...context, gateway: second.gateway });
+      await settleLitElement(page);
+      expect(request).toHaveBeenCalledTimes(2);
 
-    const firstLoad = state.loadSystemInfo();
-    state.systemInfo = {} as SystemInfoResult;
-    state.systemInfoUnavailable = true;
-    state.context = { gateway: secondGateway } as ApplicationContext;
-    state.synchronizeSystemInfoGateway(secondGateway);
-    const secondLoad = state.loadSystemInfo();
+      if (outcome === "response") {
+        firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
+      } else if (outcome === "error") {
+        firstResponse.reject(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "unknown method: system.info",
+          }),
+        );
+      }
+      await settleLitElement(page);
+      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(request).toHaveBeenCalledTimes(2);
 
-    const stale = { platform: "stale" } as unknown as SystemInfoResult;
-    firstResponse.resolve(stale);
-    await firstLoad;
-    expect(state.systemInfo).toBeNull();
-    expect(state.systemInfoUnavailable).toBe(false);
+      secondResponse.resolve({ ...deviceSystemInfo, machineName: "Current" });
+      await settleLitElement(page);
+      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Current");
+    },
+  );
 
-    const current = { platform: "current" } as unknown as SystemInfoResult;
-    secondResponse.resolve(current);
-    await secondLoad;
-    expect(state.systemInfo).toBe(current);
+  it.each([
+    ["transient", new Error("temporarily unavailable"), true],
+    [
+      "unknown method",
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "unknown method: system.info" }),
+      false,
+    ],
+    [
+      "missing read scope",
+      new GatewayRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
+      }),
+      false,
+    ],
+  ] as const)("preserves the polling policy after a %s error", async (_kind, error, retry) => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(deviceSystemInfo)
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue(deviceSystemInfo);
+    const { page } = await mount(source({ request } as unknown as GatewayBrowserClient).gateway);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settleLitElement(page);
+    expect(page.querySelector(".config-host__name")?.textContent?.trim() ?? null).toBe(
+      retry ? "Gateway" : null,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(request).toHaveBeenCalledTimes(retry ? 3 : 2);
+  });
+
+  it("retires a pending host read when its method advertisement disappears", async () => {
+    const response = deferred<SystemInfoResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValue(deviceSystemInfo);
+    const current = source({ request } as unknown as GatewayBrowserClient);
+    const { page } = await mount(current.gateway);
+    current.publish({
+      ...current.gateway.snapshot,
+      hello: gatewayHelloForMethods([]),
+    });
+    response.resolve(deviceSystemInfo);
+    await settleLitElement(page);
+    expect(page.querySelector(".config-host__name")).toBeNull();
+    current.publish({
+      ...current.gateway.snapshot,
+      hello: gatewayHelloForMethods(["system.info"]),
+    });
+    await settleLitElement(page);
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });
