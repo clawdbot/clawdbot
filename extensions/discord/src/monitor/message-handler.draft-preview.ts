@@ -116,7 +116,7 @@ export function createDiscordDraftPreviewController(params: {
       draftText = previewText;
       hasStreamedMessage = true;
       draftChunker?.reset();
-      draftStream.update(previewText);
+      draftStream.update(previewText, { complete: true });
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -127,9 +127,7 @@ export function createDiscordDraftPreviewController(params: {
       lastPartialText = "";
       draftText = "";
       hasStreamedMessage = false;
-      if (draftStream?.messageId()) {
-        await draftStream.deleteCurrentMessage();
-      }
+      await draftStream?.deleteCurrentMessage();
     },
     isEmptyLine: isEmptyDiscordProgressLine,
     shouldStartNow: shouldStartDiscordProgressDraftNow,

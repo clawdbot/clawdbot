@@ -925,34 +925,37 @@ describe("createCliToolSummaryTracker", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("preserves plan-tool error summaries when no authoritative plan event exists", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      commandDetailsVisible: false,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent({
-      name: "progress_card",
-      phase: "start",
-      args: { markdown: "Working" },
-      toolCallId: "plan-error",
-    });
-    await tracker.noteToolEvent({
-      name: "progress_card",
-      phase: "result",
-      args: undefined,
-      toolCallId: "plan-error",
-      isError: true,
-      result: { content: [{ type: "text", text: "write failed" }] },
-    });
+  it.each([false, true])(
+    "keeps card errors visible without arguments (full output: %s)",
+    async (fullOutput) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => fullOutput,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name: "progress_card",
+        phase: "start",
+        args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        toolCallId: "plan-error",
+      });
+      await tracker.noteToolEvent({
+        name: undefined,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-error",
+        isError: true,
+        result: { content: [{ type: "text", text: "write failed" }] },
+      });
 
-    expect(deliver).toHaveBeenCalledWith({
-      text: expect.stringContaining("Progress Card"),
-      isError: true,
-    });
-  });
+      expect(deliver).toHaveBeenCalledWith({
+        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        isError: true,
+      });
+    },
+  );
 
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();

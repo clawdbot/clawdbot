@@ -60,6 +60,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     flush: noopAsync,
     postId: () => undefined,
     clear: noopAsync,
+    deleteCurrentMessage: noopAsync,
     discardPending: noopAsync,
     seal: noopAsync,
     stop: noopAsync,
@@ -154,6 +155,7 @@ export async function dispatchMattermostInboundTurn(
         await draftStream.flush();
       }
     },
+    deleteCurrent: () => draftStream.deleteCurrentMessage(),
   });
   const enterBlockPreviewActivity = (activity: "reasoning" | "text" | "tool") => {
     if (account.streamingMode !== "block") {

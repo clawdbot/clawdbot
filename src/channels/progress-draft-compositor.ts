@@ -6,8 +6,6 @@ import {
   createChannelProgressDraftEventHandlers,
   type ChannelProgressDraftEventLineBuilder,
 } from "./progress-draft-events.js";
-// Stateful progress-draft compositor for channel streaming previews.
-// It merges status, tool, reasoning, and commentary updates until the final reply replaces them.
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   formatReasoningProgressDisplayLine,
@@ -18,7 +16,6 @@ import {
 } from "./progress-draft-status-text.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
-  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
   type AgentPlanStep,
   type ChannelProgressDraftLine,
@@ -27,6 +24,8 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
+  resolveChannelProgressDraftConfig,
+  resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingProgressCommentary,
@@ -43,12 +42,10 @@ export { createChannelProgressWorkCounter } from "./progress-work-counter.js";
 // the narrator, deliberately not re-exported through the SDK barrels.
 export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 
-// Composes transient channel progress drafts from tool, reasoning, and
-// commentary updates. It owns draft lifecycle state before the final reply wins.
-type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
 export type ChannelProgressDraftCompositorSnapshot = Readonly<{
   lines: readonly ChannelProgressDraftCompositorLine[];
+  label?: string;
   statusHeadline?: string;
   plan?: readonly AgentPlanStep[];
   planExplanation?: string;
@@ -57,7 +54,8 @@ export type ChannelProgressDraftCompositorSnapshot = Readonly<{
 
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
-  lines?: readonly ChannelProgressDraftCompositorLine[];
+  lines: readonly ChannelProgressDraftCompositorLine[];
+  snapshot: ChannelProgressDraftCompositorSnapshot;
 };
 
 /** Creates a stateful compositor for one streaming channel reply. */
@@ -65,12 +63,12 @@ export function createChannelProgressDraftCompositor(params: {
   /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
   entry: StreamingCompatEntry | null | undefined;
-  mode: ChannelProgressDraftMode;
+  mode: StreamingMode;
   active: boolean;
   seed: string;
   update: (
     text: string,
-    options?: ChannelProgressDraftUpdateOptions,
+    options: ChannelProgressDraftUpdateOptions,
   ) => Promise<boolean | void> | boolean | void;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
@@ -205,8 +203,14 @@ export function createChannelProgressDraftCompositor(params: {
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
     const diffStat = resolveDiffStat();
+    const config = resolveChannelProgressDraftConfig(params.entry);
+    const label =
+      statusHeadline && config.label === undefined && config.labels === undefined
+        ? undefined
+        : resolveChannelProgressDraftLabel({ entry: params.entry, seed: params.seed });
     return {
       lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
+      ...(label ? { label } : {}),
       ...(statusHeadline ? { statusHeadline } : {}),
       ...(planSteps ? { plan: planSteps.map((entry) => ({ ...entry })) } : {}),
       ...(planExplanation ? { planExplanation } : {}),
@@ -245,7 +249,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     const observed = await settleProgressVisibilityCallbackResult(
-      params.update(text, { ...options, lines: [...lines] }),
+      params.update(text, { ...options, lines: [...lines], snapshot: getSnapshot() }),
     );
     if (!observed.visible) {
       return false;
@@ -311,15 +315,23 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const renderAfterRetraction = async (): Promise<boolean> => {
-    if (!gate.hasStarted) {
+    if (
+      !params.active ||
+      finalReplyStarted ||
+      finalReplyDelivered ||
+      (params.mode === "progress" && !gate.hasStarted)
+    ) {
       return false;
     }
-    const rendered = await render();
+    const rendered = await publish();
     if (rendered || formatDraftText()) {
       return rendered;
     }
+    if (!params.deleteCurrent) {
+      return false;
+    }
+    await params.deleteCurrent();
     lastRenderedText = "";
-    await params.deleteCurrent?.();
     return true;
   };
 
@@ -358,16 +370,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     lines = nextLines;
-    if (!gate.hasStarted) {
-      return false;
-    }
-    const text = formatDraftText();
-    if (text) {
-      return await render();
-    }
-    lastRenderedText = "";
-    await params.deleteCurrent?.();
-    return true;
+    return await renderAfterRetraction();
   };
 
   const noteProgress = async (
@@ -551,22 +554,15 @@ export function createChannelProgressDraftCompositor(params: {
       if (!params.active || progressSuppressed || finalReplyStarted || finalReplyDelivered) {
         return false;
       }
-      if (params.mode !== "progress") {
-        return await noteProgress(
-          buildChannelProgressDraftLineForEntry(params.entry, {
-            event: "plan",
-            phase: "update",
-            explanation: options?.explanation,
-            steps,
-          }),
-        );
+      if (params.mode !== "progress" && !previewToolProgressEnabled) {
+        return false;
       }
       planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
       planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
       if (!planSteps && !planExplanation) {
         return await renderAfterRetraction();
       }
-      return await startAndRender();
+      return params.mode === "progress" ? await startAndRender() : await publish({ flush: true });
     },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {

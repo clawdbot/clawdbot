@@ -290,21 +290,19 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      const toolName = payload.name ?? storedTool?.name;
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (
-        payload.isError !== true &&
-        isAgentPlanProgressToolName(payload.name ?? storedTool?.name)
-      ) {
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName)) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {
         return storedTool?.commandBearing === true;
       }
-      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+      const aggregate = formatToolAggregate(toolName, meta ? [meta] : undefined, {
         markdown: true,
       });
       let text = aggregate;

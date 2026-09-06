@@ -307,6 +307,7 @@ export function isChannelProgressAttentionLine(line: string | ChannelProgressDra
     line.kind === "approval" ||
     status === "failed" ||
     status === "error" ||
+    status === "blocked" ||
     (status?.startsWith("exit ") === true && status !== "exit 0")
   );
 }
@@ -568,7 +569,7 @@ export function buildChannelProgressDraftLine(
       const name = input.name ?? itemKindToToolName(input.itemKind);
       if (isAgentPlanProgressToolName(name)) {
         const status = normalizeOptionalLowercaseString(input.status);
-        return status === "failed" || status === "error"
+        return status === "failed" || status === "error" || status === "blocked"
           ? buildNamedProgressLine(input.event, name, [], options, {
               id: resolveProgressDraftLineId(input),
               status,
@@ -613,14 +614,16 @@ export function buildChannelProgressDraftLine(
       if (input.phase !== undefined && input.phase !== "update") {
         return undefined;
       }
-      const text = compactStrings([
-        input.explanation,
-        normalizeAgentPlanSteps(input.steps)?.[0]?.step,
-        input.title ?? "Progress updated",
-      ])[0];
-      return text
-        ? { id: "plan:status", kind: input.event, text, label: "", prefix: false }
-        : undefined;
+      return buildNamedProgressLine(
+        input.event,
+        "progress_card",
+        [
+          input.explanation,
+          normalizeAgentPlanSteps(input.steps)?.[0]?.step,
+          input.title ?? "planning",
+        ],
+        options,
+      );
     }
     case "approval": {
       if (input.phase !== undefined && input.phase !== "requested") {
@@ -955,7 +958,7 @@ function normalizeProgressLabels(labels: unknown): string[] {
   return normalized;
 }
 
-function resolveChannelProgressDraftLabel(params: {
+export function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
   random?: () => number;
@@ -1033,7 +1036,7 @@ function repairCompactedProgressMarkdown(value: string): string {
   return `${leadingWhitespace}${trimmedStart.slice(1)}`;
 }
 
-function compactChannelProgressDraftLine(line: string, maxChars: number): string {
+export function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "";
@@ -1081,52 +1084,23 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
   return repairCompactedProgressMarkdown(compactProgressText(normalized, maxChars, chars));
 }
 
-export function formatPlanChecklistLines(
+export function selectPlanChecklistSteps(
   steps: readonly AgentPlanStep[],
-  options: {
-    maxLines: number;
-    maxLineChars: number;
-    /** @deprecated v2026.9.1 SDK option; retain until a breaking SDK release. */
-    plain?: boolean;
-  },
-): string[] {
+  options: { maxLines: number },
+): { steps: AgentPlanStep[]; summary?: string } {
   const normalizedSteps = steps
     .map((entry, index) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim(), index }))
     .filter((entry) => entry.step);
   if (normalizedSteps.length === 0 || options.maxLines <= 0) {
-    return [];
+    return { steps: [] };
   }
-  const maxLines = Math.max(1, options.maxLines);
-  const marker = (status: AgentPlanStepStatus) =>
-    options.plain
-      ? status === "completed"
-        ? "Completed:"
-        : status === "in_progress"
-          ? "In progress:"
-          : "Pending:"
-      : status === "completed"
-        ? "✅"
-        : status === "in_progress"
-          ? "▸"
-          : "▢";
-  const formatStep = (entry: (typeof normalizedSteps)[number]) =>
-    compactChannelProgressDraftLine(`${marker(entry.status)} ${entry.step}`, options.maxLineChars);
-  if (normalizedSteps.length <= maxLines) {
-    return normalizedSteps.map(formatStep);
+  if (normalizedSteps.length <= options.maxLines) {
+    return { steps: normalizedSteps };
   }
-
-  const availableSteps = maxLines - 1;
-  if (availableSteps === 0) {
-    const completedCount = normalizedSteps.filter((entry) => entry.status === "completed").length;
-    return [
-      compactChannelProgressDraftLine(
-        `${options.plain ? "" : "✅ "}${completedCount}/${normalizedSteps.length} done`,
-        options.maxLineChars,
-      ),
-    ];
-  }
+  const availableSteps = Math.max(0, options.maxLines - 1);
   const pendingSteps = normalizedSteps.filter((entry) => entry.status !== "completed");
-  const activeStep = pendingSteps.find((entry) => entry.status === "in_progress");
+  const activeStep =
+    availableSteps > 0 ? pendingSteps.find((entry) => entry.status === "in_progress") : undefined;
   const pendingSlots = Math.max(0, availableSteps - (activeStep ? 1 : 0));
   // slice(-0) would return the whole array and blow past the line cap.
   const pendingTail =
@@ -1143,13 +1117,35 @@ export function formatPlanChecklistLines(
     (a, b) => a.index - b.index,
   );
   const completedCount = normalizedSteps.length - pendingSteps.length;
+  return { steps: visibleSteps, summary: `${completedCount}/${normalizedSteps.length} done` };
+}
+
+export function formatPlanChecklistLines(
+  steps: readonly AgentPlanStep[],
+  options: {
+    maxLines: number;
+    maxLineChars: number;
+    /** @deprecated v2026.9.1 SDK option; retain until a breaking SDK release. */
+    plain?: boolean;
+  },
+): string[] {
+  const selected = selectPlanChecklistSteps(steps, options);
+  const marker = (status: AgentPlanStepStatus) =>
+    options.plain
+      ? status === "completed"
+        ? "Completed:"
+        : status === "in_progress"
+          ? "In progress:"
+          : "Pending:"
+      : status === "completed"
+        ? "✅"
+        : status === "in_progress"
+          ? "▸"
+          : "▢";
   return [
-    compactChannelProgressDraftLine(
-      `${options.plain ? "" : "✅ "}${completedCount}/${normalizedSteps.length} done`,
-      options.maxLineChars,
-    ),
-    ...visibleSteps.map(formatStep),
-  ];
+    ...(selected.summary ? [`${options.plain ? "" : "✅ "}${selected.summary}`] : []),
+    ...selected.steps.map((entry) => `${marker(entry.status)} ${entry.step}`),
+  ].map((line) => compactChannelProgressDraftLine(line, options.maxLineChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {

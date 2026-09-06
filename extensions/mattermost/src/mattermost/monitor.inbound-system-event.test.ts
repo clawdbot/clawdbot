@@ -1484,9 +1484,14 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it.each([undefined, false, true])(
-    "keeps Mattermost progress useful and clears after delivery with toolProgress=%s",
-    async (toolProgress) => {
+  it.each([
+    { toolProgress: undefined, label: "Working" },
+    { toolProgress: false, label: "Working" },
+    { toolProgress: true, label: "Working" },
+    { toolProgress: false, label: false },
+  ] as const)(
+    "keeps Mattermost progress useful and clears after delivery with $toolProgress and label $label",
+    async ({ toolProgress, label }) => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
       mockState.abortController = abortController;
@@ -1494,6 +1499,7 @@ describe("mattermost inbound user posts", () => {
         update: vi.fn(),
         flush: vi.fn(async () => {}),
         clear: vi.fn(async () => {}),
+        deleteCurrentMessage: vi.fn(async () => {}),
         stop: vi.fn(async () => {}),
       };
       mockState.createMattermostDraftStream.mockReturnValue(draftStream);
@@ -1509,7 +1515,7 @@ describe("mattermost inbound user posts", () => {
             streaming: {
               mode: "progress",
               progress: {
-                label: "Working",
+                label,
                 toolProgress,
               },
             },
@@ -1518,6 +1524,14 @@ describe("mattermost inbound user posts", () => {
       };
       mockState.runtimeCore = createRuntimeCore(progressConfig);
       mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+        if (label === false) {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            steps: [{ step: "Inspect", status: "in_progress" }],
+          });
+          await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+          expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+        }
         await params.replyOptions?.onToolStart?.({
           toolCallId: "read-1",
           name: "read",
@@ -1614,7 +1628,7 @@ describe("mattermost inbound user posts", () => {
         expect(updates.at(-1)).toContain("Read");
         expect(updates.at(-1)).toContain("done");
       } else {
-        expect(updates[0]).toBe("Working");
+        expect(updates[0]).toBe(label === false ? "▸ Inspect" : "Working");
         expect(updates.at(-1)).not.toContain("Read");
         expect(updates.at(-1)).not.toContain("done");
       }

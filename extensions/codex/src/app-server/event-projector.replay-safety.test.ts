@@ -23,6 +23,44 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
+  it.each(["completed", "error", "blocked"] as const)(
+    "keeps dynamic card %s outcomes in the correct progress stream",
+    async (terminalType) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+      const success = terminalType === "completed";
+      const text = success ? "Progress card updated" : "Card write unavailable";
+      projector.recordDynamicToolCall({
+        callId: "card-outcome",
+        tool: "progress_card",
+        arguments: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+      });
+      expect(onToolResult).not.toHaveBeenCalled();
+
+      projector.recordDynamicToolResult({
+        callId: "card-outcome",
+        tool: "progress_card",
+        success,
+        terminalType,
+        contentItems: [{ type: "inputText", text }],
+      });
+
+      if (success) {
+        expect(onToolResult).not.toHaveBeenCalled();
+      } else {
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: expect.stringContaining(text),
+          isError: true,
+        });
+        expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private");
+      }
+    },
+  );
+
   it("clears a prior terminal presentation after a native tool completes", async () => {
     let terminalPresentation: string | undefined = "stale web fetch";
     const projector = await createProjector({

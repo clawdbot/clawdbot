@@ -40,148 +40,6 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(work.elapsedSeconds).toBe(1);
   });
 
-  it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true, label: false } } },
-      update,
-    });
-
-    await progress.pushPreambleHeadline("Implementing the change.");
-    await progress.pushPlanProgress([
-      { step: "Inspect", status: "completed" },
-      { step: "Patch", status: "in_progress" },
-    ]);
-
-    expect(progress.hasStarted).toBe(true);
-    expect(update).toHaveBeenLastCalledWith(
-      "Implementing the change.\n\n✅ Inspect\n▸ Patch",
-      expect.objectContaining({ flush: true }),
-    );
-
-    await progress.pushPlanProgress([{ step: "Test", status: "in_progress" }]);
-    expect(update).toHaveBeenLastCalledWith(
-      "Implementing the change.\n\n▸ Test",
-      expect.anything(),
-    );
-
-    progress.reset();
-    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
-    expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
-  });
-
-  it("keeps plan task progress independent from tool progress", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { label: false, commentary: true, toolProgress: false },
-        },
-      },
-      update,
-    });
-
-    expect(
-      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
-        explanation: "Applying the change.",
-      }),
-    ).toBe(true);
-    expect(update).toHaveBeenLastCalledWith("Applying the change.\n\n▸ Patch", {
-      flush: true,
-      lines: [],
-    });
-  });
-
-  it("publishes compact plan status in partial previews without enabling checklists", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "partial", progress: { label: false } } },
-      mode: "partial",
-      active: true,
-      seed: "preview",
-      update,
-    });
-
-    await progress.pushToolProgress("Inspecting files");
-    expect(update).toHaveBeenLastCalledWith("• Inspecting files", {
-      lines: ["Inspecting files"],
-    });
-    expect(
-      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
-        explanation: "0/1 complete",
-      }),
-    ).toBe(true);
-    expect(update).toHaveBeenLastCalledWith("• Inspecting files\n0/1 complete", {
-      lines: [
-        "Inspecting files",
-        { id: "plan:status", kind: "plan", text: "0/1 complete", label: "", prefix: false },
-      ],
-    });
-    await progress.pushPlanProgress([{ step: "Patch", status: "completed" }], {
-      explanation: "1/1 complete",
-    });
-    expect(update).toHaveBeenLastCalledWith("• Inspecting files\n1/1 complete", {
-      lines: [
-        "Inspecting files",
-        { id: "plan:status", kind: "plan", text: "1/1 complete", label: "", prefix: false },
-      ],
-    });
-  });
-
-  it("returns detached structured state for channel-native renderers", async () => {
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true, label: false } } },
-      update: vi.fn(),
-    });
-
-    await progress.pushPreambleHeadline("Checking Slack.");
-    await progress.pushToolProgress(
-      { id: "tool-call-1", kind: "tool", text: "🛠️ Exec", label: "Exec", toolName: "exec" },
-      { startImmediately: true },
-    );
-    await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
-      explanation: "Applying the change.",
-    });
-
-    const snapshot = progress.getSnapshot();
-    expect(snapshot).toEqual({
-      lines: [
-        {
-          id: "tool-call-1",
-          kind: "tool",
-          text: "🛠️ Exec",
-          label: "Exec",
-          toolName: "exec",
-        },
-      ],
-      statusHeadline: "Checking Slack.",
-      plan: [{ step: "Patch", status: "in_progress" }],
-      planExplanation: "Applying the change.",
-    });
-
-    const snapshotLine = snapshot.lines[0];
-    if (typeof snapshotLine !== "object") {
-      throw new Error("expected structured snapshot line");
-    }
-    snapshotLine.text = "mutated";
-    snapshot.plan![0]!.step = "mutated";
-    expect(progress.getSnapshot()).toEqual({
-      lines: [
-        {
-          id: "tool-call-1",
-          kind: "tool",
-          text: "🛠️ Exec",
-          label: "Exec",
-          toolName: "exec",
-        },
-      ],
-      statusHeadline: "Checking Slack.",
-      plan: [{ step: "Patch", status: "in_progress" }],
-      planExplanation: "Applying the change.",
-    });
-  });
-
   it("keeps the progress label visible when tool lines are hidden", async () => {
     const update = vi.fn();
     const progress = createTestProgressDraftCompositor({
@@ -193,7 +51,14 @@ describe("createChannelProgressDraftCompositor", () => {
 
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
 
-    expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+    expect(update).toHaveBeenCalledWith(
+      "Shelling",
+      expect.objectContaining({
+        flush: true,
+        lines: [],
+        snapshot: { lines: [], label: "Shelling" },
+      }),
+    );
   });
 
   it("gates window thinking on its own flag, independent of tool progress", async () => {
@@ -333,9 +198,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Reading");
     await progress.pushReasoningProgress(" files");
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Reading files_", {
-      lines: ["🛠️ Exec", "🧠 _Reading files_"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n🧠 _Reading files_",
+      expect.objectContaining({
+        lines: ["🛠️ Exec", "🧠 _Reading files_"],
+      }),
+    );
   });
 
   it("labels window narration with a 💬 prefix", async () => {
@@ -389,7 +257,7 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\n💬 _Checking the workspace before answering._",
-      {
+      expect.objectContaining({
         lines: [
           expect.objectContaining({
             text: "💬 _Checking the workspace before answering._",
@@ -397,7 +265,7 @@ describe("createChannelProgressDraftCompositor", () => {
             label: "Commentary",
           }),
         ],
-      },
+      }),
     );
     expect(progress.getSnapshot().lines).toHaveLength(1);
   });
@@ -423,12 +291,12 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\n💬 _Checking the workspace_\n💬 _Writing the patch next_",
-      {
+      expect.objectContaining({
         lines: [
           expect.objectContaining({ text: "💬 _Checking the workspace_" }),
           expect.objectContaining({ text: "💬 _Writing the patch next_" }),
         ],
-      },
+      }),
     );
   });
 
@@ -452,9 +320,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushCommentaryProgress("Checking the workspace");
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec", {
-      lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" }), "🛠️ Exec"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec",
+      expect.objectContaining({
+        lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" }), "🛠️ Exec"],
+      }),
+    );
   });
 
   it("keeps id-less commentary when a later snapshot sanitizes to empty", async () => {
@@ -548,7 +419,9 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
-      { lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"] },
+      expect.objectContaining({
+        lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
+      }),
     );
     progress.cancel();
   });
@@ -566,9 +439,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushReasoningProgress("<think>Checking files</think>Final answer prose");
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Checking files_", {
-      lines: ["🛠️ Exec", "🧠 _Checking files_"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n🧠 _Checking files_",
+      expect.objectContaining({
+        lines: ["🛠️ Exec", "🧠 _Checking files_"],
+      }),
+    );
   });
 
   it("waits for complete reasoning tags before showing tagged progress", async () => {
@@ -601,9 +477,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("<thin");
     await progress.pushReasoningProgress("k>Checking files</think>Final answer prose");
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Checking files_", {
-      lines: ["🛠️ Exec", "🧠 _Checking files_"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n🧠 _Checking files_",
+      expect.objectContaining({
+        lines: ["🛠️ Exec", "🧠 _Checking files_"],
+      }),
+    );
   });
 
   it("keeps literal reasoning tags inside code blocks", async () => {
@@ -621,9 +500,9 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\n🛠️ Exec\n🧠 _```html <think>literal</think> ```_",
-      {
+      expect.objectContaining({
         lines: ["🛠️ Exec", "🧠 _```html <think>literal</think> ```_"],
-      },
+      }),
     );
   });
 
@@ -641,9 +520,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Thinking\n\n_Reading_");
     await progress.pushReasoningProgress("Thinking\n\n_Reading files_");
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Reading files_", {
-      lines: ["🛠️ Exec", "🧠 _Reading files_"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n🧠 _Reading files_",
+      expect.objectContaining({
+        lines: ["🛠️ Exec", "🧠 _Reading files_"],
+      }),
+    );
   });
 
   it("keeps tool lines under narration and drops redundant edits", async () => {
@@ -717,7 +599,14 @@ describe("createChannelProgressDraftCompositor", () => {
 
     await progress.start();
 
-    expect(update).toHaveBeenCalledWith("Reading the workspace.", { flush: true, lines: [] });
+    expect(update).toHaveBeenCalledWith(
+      "Reading the workspace.",
+      expect.objectContaining({
+        flush: true,
+        lines: [],
+        snapshot: { lines: [], statusHeadline: "Reading the workspace." },
+      }),
+    );
   });
 
   it("publishes rolling tool-line changes beneath a stable preamble headline", async () => {
@@ -732,9 +621,12 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec one", { startImmediately: true });
     await progress.pushToolProgress("🛠️ Exec two", { startImmediately: true });
 
-    expect(update).toHaveBeenLastCalledWith("Reading the workspace.\n\n🛠️ Exec one\n🛠️ Exec two", {
-      lines: ["🛠️ Exec one", "🛠️ Exec two"],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Reading the workspace.\n\n🛠️ Exec one\n🛠️ Exec two",
+      expect.objectContaining({
+        lines: ["🛠️ Exec one", "🛠️ Exec two"],
+      }),
+    );
   });
 
   it("rejects control-only preambles without clobbering a valid headline", async () => {
@@ -754,10 +646,13 @@ describe("createChannelProgressDraftCompositor", () => {
     );
     expect(progress.hasStatusHeadline).toBe(true);
     await progress.start();
-    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
-      flush: true,
-      lines: [],
-    });
+    expect(update).toHaveBeenLastCalledWith(
+      "Reading the workspace.",
+      expect.objectContaining({
+        flush: true,
+        lines: [],
+      }),
+    );
 
     nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
     const calls = update.mock.calls.length;
@@ -999,10 +894,13 @@ describe("createChannelProgressDraftCompositor", () => {
       expect(update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(update).toHaveBeenCalledWith("Reading the gateway config.\n\n🛠️ Exec", {
-        flush: true,
-        lines: ["🛠️ Exec"],
-      });
+      expect(update).toHaveBeenCalledWith(
+        "Reading the gateway config.\n\n🛠️ Exec",
+        expect.objectContaining({
+          flush: true,
+          lines: ["🛠️ Exec"],
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

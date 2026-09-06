@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectProgressCardChannelUpdate } from "./progress-card-channel-summary.js";
 
-describe("formatProgressCardChannelSummary", () => {
+describe("projectProgressCardChannelUpdate", () => {
   it.each([
     {
       name: "checklist",
@@ -17,6 +17,7 @@ describe("formatProgressCardChannelSummary", () => {
       expected: { steps: [], explanation: "Progress updated" },
     },
     { name: "clear", input: {}, expected: { steps: [] } },
+    { name: "invalid array", input: [], expected: undefined },
   ])("projects normalized $name input for every runtime producer", ({ input, expected }) => {
     expect(projectProgressCardChannelUpdate(input)).toEqual(expected);
   });

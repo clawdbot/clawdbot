@@ -13,7 +13,6 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -54,14 +53,6 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   const created = createToolTerminalObserver(ctx.params.runId);
   fallbackToolTerminalObservers.set(ctx.state, created);
   return created;
-}
-
-export function readProgressCardPlanInput(args: unknown) {
-  const params = readRecordField(args);
-  if (!params) {
-    return undefined;
-  }
-  return projectProgressCardChannelUpdate(params);
 }
 
 export function isMiddlewareToolResultError(result: unknown): boolean {

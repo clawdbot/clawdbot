@@ -244,6 +244,9 @@ Slack-only:
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
   through normal delivery.
+- Plan previews use native checkboxes when `channels.telegram.richMessages`
+  is `true`; otherwise they use readable HTML checklists. Completed steps are
+  checked, and the active step is marked "in progress".
 - If the final edit fails before the completed text is confirmed, OpenClaw uses
   normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly
@@ -366,8 +369,14 @@ Supported surfaces:
 
 ## Progress draft rendering
 
-Progress-mode drafts (`streaming.progress.*`) are bounded and configurable per
-channel:
+[Progress cards](/tools/progress-card) replace the complete plan state in
+`partial`, `block`, and `progress` previews where plan updates are enabled.
+Visible steps follow the channel's line limits. Clearing a card removes its
+checklist and status while preserving other activity; an otherwise empty draft
+is deleted. Failed or blocked writes keep their error visible without replacing
+the previous plan.
+
+Progress-mode drafts (`streaming.progress.*`) have these per-channel settings:
 
 | Key                               | Default       | Behavior                                                       |
 | --------------------------------- | ------------- | -------------------------------------------------------------- |

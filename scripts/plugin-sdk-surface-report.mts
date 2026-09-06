@@ -353,8 +353,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
       // +1: retained runtime config reader preserves channel owner and scoped config identity.
       // +1: shared session-catalog host publication with completion ownership.
-      // +1: normalized progress-card channel projection shared by harness runtimes.
-      4436,
+      // +4: shared progress-card projection and channel-native rendering helpers.
+      4439,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -478,8 +478,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
       // +1: retained runtime config reader preserves channel owner and scoped config identity.
       // +1: shared session-catalog host publication with completion ownership.
-      // +1: normalized progress-card channel projection shared by harness runtimes.
-      2621,
+      // +4: shared progress-card projection and channel-native rendering helpers.
+      2624,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

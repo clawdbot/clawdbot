@@ -3409,51 +3409,71 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("replaces Matrix plan snapshots and keeps the explanation", async () => {
-    vi.useFakeTimers();
-    let finish: (() => Promise<void>) | undefined;
-    try {
-      const { dispatch } = createStreamingHarness({
-        streaming: "progress",
-        previewToolProgressEnabled: true,
-        accountConfig: {
-          streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
-        } as never,
-      });
-      const streaming = await dispatch();
-      const { opts } = streaming;
-      finish = streaming.finish;
-
-      await opts.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Initial plan",
-        steps: [{ step: "Inspect", status: "in_progress" }],
-      });
-      await waitForMatrixState(() => {
-        expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
-      });
-
-      await opts.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Revised plan",
-        steps: [
-          { step: "Inspect", status: "completed" },
-          { step: "Patch", status: "in_progress" },
-        ],
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(editMessageMatrixMock).toHaveBeenCalled();
-      expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
-        "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
-      );
-    } finally {
+  it.each(["partial", "quiet", "progress"] as const)(
+    "replaces, clears, and resumes Matrix plan snapshots in %s mode",
+    async (mode) => {
+      vi.useFakeTimers();
+      let finish: (() => Promise<void>) | undefined;
       try {
-        await finish?.();
+        const { dispatch, redactEventMock } = createStreamingHarness({
+          streaming: mode,
+          previewToolProgressEnabled: true,
+          accountConfig: {
+            streaming: { mode, progress: { toolProgress: true, label: false } },
+          } as never,
+        });
+        const streaming = await dispatch();
+        const { opts } = streaming;
+        finish = streaming.finish;
+
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+        expect(redactEventMock).not.toHaveBeenCalled();
+
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Initial plan",
+          steps: [{ step: "Inspect", status: "in_progress" }],
+        });
+        await waitForMatrixState(() => {
+          expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
+        });
+
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Revised plan",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(editMessageMatrixMock).toHaveBeenCalled();
+        expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
+          "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
+        );
+
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        expect(redactEventMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", "$draft1");
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Resume", status: "in_progress" }],
+        });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
+        });
+        expect(lastCallArg(sendSingleTextMessageMatrixMock, 1, "Matrix resumed plan body")).toBe(
+          "`▸ Resume`",
+        );
       } finally {
-        vi.useRealTimers();
+        try {
+          await finish?.();
+        } finally {
+          vi.useRealTimers();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
     vi.useFakeTimers();

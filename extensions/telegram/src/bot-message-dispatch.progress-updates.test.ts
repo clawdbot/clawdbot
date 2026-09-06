@@ -560,7 +560,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Shelling\n\n🛠️ exit 2; command false",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> command false <i>exit 2</i>",
       ),
     );
   });
@@ -600,10 +600,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\n🛠️ exit 2",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>exit 2</code>",
-      ),
+      telegramProgressPreview("Shelling\n\n🛠️ exit 2", "<b>Shelling</b>\n<b>🛠️ Exec</b> exit 2"),
     );
   });
 

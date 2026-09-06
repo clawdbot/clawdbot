@@ -104,7 +104,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           replyToMode: params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
-          minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
+          minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
           onRetainedPage: (page) => {
             lanes[laneName].retainedPromptContextPages.push({

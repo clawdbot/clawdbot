@@ -264,6 +264,9 @@ describe("progress_card compatibility plan events", () => {
 
   it("emits the typed full plan snapshot after a successful write", async () => {
     const { ctx, onAgentEvent } = createTestContext();
+    ctx.params.onToolResult = vi.fn();
+    ctx.shouldEmitToolResult = () => true;
+    ctx.shouldEmitToolOutput = () => true;
     const emitted: CapturedAgentEvent[] = [];
     const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
     try {
@@ -300,9 +303,32 @@ describe("progress_card compatibility plan events", () => {
       };
       expect(onAgentEvent).toHaveBeenCalledWith(expected);
       expect(emitted).toContainEqual(expect.objectContaining(expected));
+      expect(ctx.emitToolSummary).not.toHaveBeenCalled();
+      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }
+  });
+
+  it("keeps failed card writes visible without exposing their arguments", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    ctx.shouldEmitToolOutput = () => true;
+    const result = { content: [{ type: "text", text: "Card write failed" }] };
+    await executeTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-failed",
+      args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+      isError: true,
+      result,
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "progress_card",
+      undefined,
+      "Card write failed",
+      result,
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(expect.objectContaining({ stream: "plan" }));
   });
 
   it("projects card markdown as safe channel text without exposing progress markup", async () => {

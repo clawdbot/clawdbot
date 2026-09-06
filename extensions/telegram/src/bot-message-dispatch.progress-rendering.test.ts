@@ -70,7 +70,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
-        "<b>Implementing the change.</b><br>✅ Inspect<br>▸ Patch<br>▢ Test",
+        "<b>Implementing the change.</b><br>[x] Inspect<br>[ ] <b>Patch (in progress)</b><br>[ ] Test",
       ),
     );
   });
@@ -110,7 +110,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(preview).toEqual(
       telegramProgressPreview(
         "1/2 complete\n\n✅ Search the skills registry\n▸ Configure Browser Use",
-        "<b>1/2 complete</b><br>✅ Search the skills registry<br>▸ Configure Browser Use",
+        "<b>1/2 complete</b><br>[x] Search the skills registry<br>[ ] <b>Configure Browser Use (in progress)</b>",
       ),
     );
     expect(preview?.text).not.toContain("<progress");
@@ -118,7 +118,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
   });
 
   it.each(["partial", "block"] as const)(
-    "renders compact card status in %s previews without raw markup",
+    "renders the full card in %s previews without raw markup",
     async (streamMode) => {
       const draftStream = createSequencedDraftStream(2001);
       createTelegramDraftStream.mockReturnValue(draftStream);
@@ -138,7 +138,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       });
 
       expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-        telegramProgressPreview("Working\n\n0/1 complete", "<b>Working</b><br>0/1 complete"),
+        telegramProgressPreview(
+          "0/1 complete\nConfigure Browser Use",
+          "<b>0/1 complete</b><br>[ ] <b>Configure Browser Use (in progress)</b>",
+        ),
       );
     },
   );
@@ -193,7 +196,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview("▸ Patch\n▢ Test", "<b>▸ Patch</b><br>▢ Test"),
+      telegramProgressPreview("Patch\nTest", "[ ] <b>Patch (in progress)</b><br>[ ] Test"),
     );
   });
 
@@ -446,7 +449,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       expect(draftStream.updatePreview).toHaveBeenCalledWith(
         telegramProgressPreview(
           "Shelling\n\n🔎 Web Search: docs lookup\n• tests passed",
-          "<b>Shelling</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>\n<b>Update</b> <code>tests passed</code>",
+          "<b>Shelling</b>\n<b>🔎 Web Search</b> docs lookup\n<b>Update</b> tests passed",
         ),
       );
       // Retire a tool-progress-only window by repositioning, with its delete deferred.

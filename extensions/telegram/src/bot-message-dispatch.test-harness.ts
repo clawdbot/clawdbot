@@ -534,6 +534,7 @@ export function telegramProgressPreview(_plainText: string, html: string) {
   return {
     text: html.replaceAll("\n", "<br>"),
     parseMode: "HTML" as const,
+    complete: true as const,
   };
 }
 

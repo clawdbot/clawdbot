@@ -489,7 +489,11 @@ export class CodexToolProgressProjection {
   }
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
-    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+    // Successful cards use the typed plan stream after the write completes.
+    if (
+      params.name === "progress_card" ||
+      !shouldEmitTranscriptToolProgress(params.name, params.arguments)
+    ) {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
@@ -516,10 +520,18 @@ export class CodexToolProgressProjection {
 
   private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
     if (
+      (params.name === "progress_card" && !params.isError) ||
       this.transcriptProgressSuppressedIds.has(params.id) ||
       !shouldEmitTranscriptToolProgress(params.name, this.transcriptArgumentsById.get(params.id))
     ) {
       return;
+    }
+    if (params.name === "progress_card" && this.shouldEmitToolResult()) {
+      this.emitToolResultMessage({
+        itemId: params.id,
+        text: formatToolSummary(params.name),
+        isError: true,
+      });
     }
     if (!this.transcriptProgressCallIds.has(params.id)) {
       this.emitTranscriptToolCallProgress({ id: params.id, name: params.name, arguments: {} });
