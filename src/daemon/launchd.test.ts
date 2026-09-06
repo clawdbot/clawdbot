@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import type { ExecResult } from "./exec-file.js";
 import {
@@ -281,33 +281,6 @@ function launchAgentControlFixture(
   overrides: Omit<LaunchAgentControlFixture, "env" | "stdout"> = {},
 ): LaunchAgentControlFixture {
   return { env, stdout: new PassThrough(), ...overrides };
-}
-
-async function withProcessEnv<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(overrides)) {
-    previous.set(key, process.env[key]);
-    const value = overrides[key];
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        deleteTestEnvValue(key);
-      } else {
-        setTestEnvValue(key, value);
-      }
-    }
-  }
 }
 
 async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
@@ -782,7 +755,7 @@ describe("launchd process ancestry guards", () => {
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
     }
 
-    const result = await withProcessEnv(
+    const result = await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -826,7 +799,7 @@ describe("launchd process ancestry guards", () => {
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-      await withProcessEnv(
+      await withEnvAsync(
         {
           LAUNCH_JOB_LABEL: undefined,
           LAUNCH_JOB_NAME: undefined,
@@ -854,7 +827,7 @@ describe("launchd process ancestry guards", () => {
     const serviceId = `${domain}/ai.openclaw.gateway`;
     getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -887,7 +860,7 @@ describe("launchd process ancestry guards", () => {
       state.serviceStates.set(serviceId, "running");
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-      await withProcessEnv(
+      await withEnvAsync(
         {
           LAUNCH_JOB_LABEL: undefined,
           LAUNCH_JOB_NAME: undefined,
@@ -921,7 +894,7 @@ describe("launchd process ancestry guards", () => {
     state.serviceStates.set(legacyServiceId, "running");
     getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -1802,7 +1775,7 @@ describe("launchd uninstall", () => {
     const previous = "RunAtLoad=true";
     state.files.set(plistPath, previous);
 
-    await withProcessEnv({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, async () => {
+    await withEnvAsync({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, async () => {
       await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
         "Refusing to uninstall LaunchAgent ai.openclaw.gateway from inside ai.openclaw.gateway",
       );
@@ -1920,7 +1893,7 @@ describe("launchd install", () => {
   it("refuses an in-band reinstall before booting out its own LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
-    await withProcessEnv({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, async () => {
+    await withEnvAsync({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, async () => {
       await expect(
         installLaunchAgent({
           env,
@@ -1939,7 +1912,7 @@ describe("launchd install", () => {
   it("refuses an in-band label migration before mutating either LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         XPC_SERVICE_NAME: "0",
         OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
@@ -2691,7 +2664,7 @@ describe("launchd install", () => {
     "refuses in-band LaunchAgent stop before any native mutation (disable=%s)",
     async (disable) => {
       const env = createDefaultLaunchdEnv();
-      await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () => {
+      await withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () => {
         await expect(stopLaunchAgent({ env, stdout: new PassThrough(), disable })).rejects.toThrow(
           "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
         );
@@ -2704,7 +2677,7 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     state.disableCode = 0;
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
       },
@@ -2724,7 +2697,7 @@ describe("launchd install", () => {
   it("does not park an external LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -2754,7 +2727,7 @@ describe("launchd install", () => {
       value: Promise.resolve(false),
     });
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
       },
@@ -2775,7 +2748,7 @@ describe("launchd install", () => {
   it("refuses in-band LaunchAgent stop when XPC_SERVICE_NAME is inherited", async () => {
     const env = createDefaultLaunchdEnv();
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -2802,7 +2775,7 @@ describe("launchd install", () => {
     let output = "";
     const stdout = capturePassThroughOutput((text) => (output += text));
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -2965,7 +2938,7 @@ describe("launchd install", () => {
     });
     probePortUsage.mockResolvedValue("busy");
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -3800,7 +3773,7 @@ describe("launchd install", () => {
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
-    const result = await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+    const result = await withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
       restartLaunchAgent(launchAgentControlFixture(env)),
     );
 
@@ -3821,7 +3794,7 @@ describe("launchd install", () => {
       "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
     ]);
 
-    const result = await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+    const result = await withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
       restartLaunchAgent(launchAgentControlFixture(env)),
     );
 
@@ -3843,7 +3816,7 @@ describe("launchd install", () => {
     });
 
     await expect(
-      withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+      withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
         restartLaunchAgent({
           env,
           stdout: new PassThrough(),
@@ -3855,7 +3828,7 @@ describe("launchd install", () => {
   it("hands restart off when XPC_SERVICE_NAME is inherited", async () => {
     const env = createDefaultLaunchdEnv();
 
-    const result = await withProcessEnv(
+    const result = await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -3882,7 +3855,7 @@ describe("launchd install", () => {
     state.kickstartError = "Could not find service";
     state.kickstartFailuresRemaining = 1;
 
-    const result = await withProcessEnv(
+    const result = await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -3914,7 +3887,7 @@ describe("launchd install", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const serviceId = `${domain}/ai.openclaw.gateway`;
 
-    const result = await withProcessEnv(
+    const result = await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,
@@ -3940,7 +3913,7 @@ describe("launchd install", () => {
   it("does not hand restart off for unrelated inherited XPC service names", async () => {
     const env = createDefaultLaunchdEnv();
 
-    await withProcessEnv(
+    await withEnvAsync(
       {
         LAUNCH_JOB_LABEL: undefined,
         LAUNCH_JOB_NAME: undefined,

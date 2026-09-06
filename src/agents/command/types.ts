@@ -140,6 +140,8 @@ export type AgentCommandOpts = {
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
+  /** Private source-owner fence; cancellation alone does not establish current authority. */
+  assertSourceCurrent?: () => void;
   lane?: string;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
@@ -249,6 +251,7 @@ export type AgentCommandIngressOpts = Omit<
   | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
