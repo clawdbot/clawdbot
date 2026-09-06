@@ -22,6 +22,7 @@ import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
 } from "../plugins/services.js";
+import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -288,6 +289,33 @@ describe("createGatewayCloseHandler", () => {
     expect(getActivePluginRegistry()).toBeNull();
   });
 
+  it("retains Gateway dependencies when a trusted diagnostic service rejects shutdown", async () => {
+    const service: OpenClawPluginService = {
+      id: "diagnostics-otel",
+      start: async () => {},
+      stop: async () => {
+        throw new Error("synthetic plugin cleanup failed");
+      },
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.services.push({ pluginId: service.id, service, source: "test", origin: "bundled" });
+    setActivePluginRegistry(registry);
+    const pluginServices = await startPluginServices({ registry, config: {} });
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const deps = createGatewayCloseTestDeps({ pluginServices, clearSecretsRuntimeSnapshot });
+    try {
+      await expect(
+        createGatewayCloseHandler(deps)({ reason: "gateway startup failed" }),
+      ).rejects.toThrow("synthetic plugin cleanup failed");
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+    } finally {
+      await pluginServices.stop().catch(() => {});
+    }
+  });
+
   it("completes a clean shutdown with a ShutdownResult", async () => {
     const deps = createGatewayCloseTestDeps();
     const close = createGatewayCloseHandler(deps);
@@ -413,8 +441,6 @@ describe("createGatewayCloseHandler", () => {
             'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
           ],
           stdinMode: "pipe-closed",
-          sessionId: "gateway-close-test",
-          backendId: "gateway-close-test",
           onStdout: (chunk) => {
             output += chunk;
           },
@@ -470,8 +496,6 @@ describe("createGatewayCloseHandler", () => {
       argv: [`/openclaw-missing-adapter-${process.pid}`],
       exactEnv: true,
       stdinMode: "pipe-closed",
-      sessionId: "gateway-close-startup-failure",
-      backendId: "gateway-close-startup-failure",
     });
     releaseEmbeddingDrain();
 
@@ -484,8 +508,6 @@ describe("createGatewayCloseHandler", () => {
       argv: [process.execPath, "-e", ""],
       exactEnv: true,
       stdinMode: "pipe-closed",
-      sessionId: "gateway-close-fresh-supervisor",
-      backendId: "gateway-close-fresh-supervisor",
     });
     await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
     expect(nextSupervisor).not.toBe(supervisor);
@@ -868,6 +890,7 @@ describe("createGatewayCloseHandler", () => {
     });
     const pluginCleanup = createDeferredCore();
     const pluginServices = {
+      reload: vi.fn(async () => {}),
       stop: vi.fn(() => pluginCleanup.promise),
     };
     const stopChannel = vi.fn(async () => undefined);

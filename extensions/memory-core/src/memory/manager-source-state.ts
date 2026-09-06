@@ -12,6 +12,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type MemorySourceFileStateRow = {
@@ -85,14 +86,16 @@ export async function inspectMemorySourceState(params: {
 export function loadMemorySourceFileState(params: {
   db: DatabaseSync;
   source: MemorySource;
+  paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
-  return executeSqliteQuerySync(
-    params.db,
-    getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-      .selectFrom("memory_index_sources")
-      .select(["path", "hash", "mtime", "size"])
-      .where("source", "=", params.source),
-  ).rows;
+  let query = getNodeSqliteKysely<MemorySourceDatabase>(params.db)
+    .selectFrom("memory_index_sources")
+    .select(["path", "hash", "mtime", "size"])
+    .where("source", "=", params.source);
+  if (params.paths) {
+    query = query.where("path", "in", sqliteStringSet(params.paths));
+  }
+  return executeSqliteQuerySync(params.db, query).rows;
 }
 
 export function resolveMemorySourceExistingHash(params: {

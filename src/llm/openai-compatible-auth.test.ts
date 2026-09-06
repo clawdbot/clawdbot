@@ -4,6 +4,7 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
 // Lives in core: it proves the facade-installed guarded fetch routes provider
 // requests through OpenClaw's SSRF guard.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
 // Importing the facade installs the OpenClaw AI transport host ports.
 import "./stream.js";
@@ -113,14 +114,7 @@ describe("OpenAI-compatible provider credentials", () => {
             api: "openai-responses",
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [

@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
@@ -134,39 +135,47 @@ export async function terminateAcceptedCollectorRun(params: {
 }): Promise<void> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
-  await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-        timeoutMs,
-      });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
+  const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  await retrySubagentCleanup(
+    async () => {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        if (isMatchingAbortResponse(response, params.gatewayRunId)) {
+          return true;
+        }
+        if (
+          params.sessionCleanup === "preserve" &&
+          isDefinitiveAbortMiss(response, params.gatewayRunId)
+        ) {
+          return true;
+        }
+      } catch {
+        if (params.sessionCleanup === "preserve") {
+          return false;
+        }
+        // Fall through to exact-session deletion for provisional sessions only.
       }
-      if (
-        params.sessionCleanup === "preserve" &&
-        isDefinitiveAbortMiss(response, params.gatewayRunId)
-      ) {
-        return true;
-      }
-    } catch {
       if (params.sessionCleanup === "preserve") {
         return false;
       }
-      // Fall through to exact-session deletion for provisional sessions only.
-    }
-    if (params.sessionCleanup === "preserve") {
-      return false;
-    }
-    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
-      deleteTranscript: true,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
-      callGateway: call,
-      timeoutMs,
-    });
-    // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
-  });
+      const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
+        timeoutMs,
+      });
+      // A changed lifecycle proves the accepted run no longer owns this session.
+      return cleanup !== "failed";
+    },
+    {
+      // A retired request scope can never dispatch again; retrying would retain
+      // its Gateway forever without terminating the accepted run.
+      shouldRetry: () => !resolveGatewayContext || Boolean(resolveGatewayContext()),
+    },
+  );
 }

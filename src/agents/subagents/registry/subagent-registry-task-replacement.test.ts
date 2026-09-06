@@ -12,12 +12,17 @@ import type { WorkerConnectionIdentity } from "../../../gateway/worker-environme
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
-import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../../../infra/agent-events.js";
 import {
   getAgentRunContext,
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
+import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { reloadTaskRuntimeStateFromStore } from "../../../tasks/runtime-internal.js";
 import { failFlow, getTaskFlowById } from "../../../tasks/task-flow-registry.js";
@@ -290,6 +295,17 @@ it.each(["successor", "task activation", "flow activation"] as const)(
     const flowId = terminalTask.parentFlowId!;
     expect(terminalTask.status).toBe("failed");
     expect(getTaskFlowById(flowId)?.status).toBe("failed");
+    previous.collect = true;
+    previous.swarmRequesterSessionKey = "agent:main:main";
+    previous.requesterAgentId = "main";
+    previous.groupId = "rollback-group";
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
+    const parentEvents = vi.fn();
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      if (event.reason === "swarm") {
+        parentEvents(event);
+      }
+    });
     const database = openOpenClawStateDatabase().db;
     const triggerName = `reject_replacement_${
       rejectedWrite === "successor" ? "run" : rejectedWrite === "task activation" ? "task" : "flow"
@@ -325,7 +341,9 @@ it.each(["successor", "task activation", "flow activation"] as const)(
         .toBe(false);
     } finally {
       database.exec(`DROP TRIGGER ${triggerName}`);
+      unsubscribe();
     }
+    expect(parentEvents).not.toHaveBeenCalled();
     expect.soft(subagentRuns.get(previous.runId)).toBe(previous);
     expect.soft(subagentRuns.has("rollback-successor")).toBe(false);
     expect.soft(loadSubagentRegistryFromSqlite().has("rollback-successor")).toBe(false);
@@ -432,9 +450,47 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
   expect(getTaskById(originalTask.taskId)).toEqual(task);
   expect(getTaskFlowById(flowId)).toEqual(flow);
 
+  const activityAt = task.lastEventAt! + 60_001;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(activityAt);
+  try {
+    emitAgentEvent({
+      runId: successor.runId,
+      sessionKey: childSessionKey,
+      stream: "assistant",
+      data: { text: "Resumed work is progressing" },
+    });
+    expect
+      .soft(getTaskActivitySnapshot(task.taskId)?.lastActivity)
+      .toBe("Resumed work is progressing");
+    expect.soft(getTaskById(task.taskId)?.lastEventAt).toBe(activityAt);
+    emitAgentEvent({
+      runId: successor.runId,
+      sessionKey: childSessionKey,
+      stream: "tool",
+      data: { phase: "start", name: "read" },
+    });
+    expect.soft(getTaskById(task.taskId)).toMatchObject({
+      toolUseCount: 1,
+      lastToolName: "read",
+    });
+    const currentActivity = getTaskActivitySnapshot(task.taskId);
+    const currentTask = getTaskById(task.taskId);
+    for (const event of [
+      { stream: "assistant", data: { text: "Retired owner progress" } },
+      { stream: "tool", data: { phase: "start", name: "write" } },
+      { stream: "error", data: { error: "Retired owner error" } },
+    ]) {
+      emitAgentEvent({ runId: previous.runId, sessionKey: childSessionKey, ...event });
+    }
+    expect.soft(getTaskActivitySnapshot(task.taskId)).toEqual(currentActivity);
+    expect.soft(getTaskById(task.taskId)).toEqual(currentTask);
+  } finally {
+    clock.mockRestore();
+  }
+
   const staleFlow = failFlow({
     flowId,
-    expectedRevision: flow.revision,
+    expectedRevision: getTaskFlowById(flowId)!.revision,
     endedAt: Date.now(),
   });
   expect(staleFlow.applied).toBe(true);

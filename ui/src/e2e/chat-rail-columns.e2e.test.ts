@@ -283,14 +283,16 @@ async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
       const panel = element.getBoundingClientRect();
       const shell = element.closest(".sidebar-region");
       const region = shell?.getBoundingClientRect();
-      if (!region) {
-        throw new Error("Expanded side panel has no sidebar region");
+      const header = shell?.querySelector(".chat-pane__header")?.getBoundingClientRect();
+      if (!region || !header) {
+        throw new Error("Focused panel requires its task toolbar and sidebar region");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
-        top: Math.abs(panel.top - region.top),
+        top: Math.abs(header.top - region.top),
+        headerGap: Math.abs(panel.top - header.bottom),
       };
     });
   for (const delta of Object.values(geometry)) {

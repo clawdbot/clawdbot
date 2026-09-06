@@ -188,12 +188,12 @@ class ActivityPage extends OpenClawLightDomElement {
     this.syncSessionActivity();
   }
 
-  private syncSessionActivity(force = false) {
+  private syncSessionActivity(reason: "query" | "retry" = "query") {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
       this.routeData.mode === "sessions" ? this.routeData.filters : null,
-      force,
+      reason,
     );
   }
 
@@ -576,8 +576,9 @@ class ActivityPage extends OpenClawLightDomElement {
         presenceViewers,
         result: this.sessionActivity.result,
         loading: this.sessionActivity.loading,
+        retrying: this.sessionActivity.retrying,
         error: this.sessionActivity.error,
-        onRetry: () => this.syncSessionActivity(true),
+        onRetry: () => this.syncSessionActivity("retry"),
         onAutomationDayToggle: (dayKey) => {
           const next = new Set(this.expandedAutomationDays);
           if (next.has(dayKey)) {

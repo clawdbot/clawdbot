@@ -203,9 +203,12 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
+}));
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
-  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
 }));
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),

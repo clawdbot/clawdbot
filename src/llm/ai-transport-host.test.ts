@@ -7,6 +7,7 @@ import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports
 import type { Context, Model } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import "./ai-transport-host.js";
@@ -87,14 +88,7 @@ describe("OpenClaw provider tool-result redaction", () => {
           provider: "anthropic",
           model: "claude-test",
           content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "toolUse",
           timestamp: 1,
         },

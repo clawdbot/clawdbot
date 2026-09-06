@@ -1,6 +1,5 @@
 // Compile-time identity for the Control UI artifact.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { canReloadControlUiDocument } from "./app/document-reload-guard.ts";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
@@ -14,23 +13,6 @@ declare global {
 
 export const CONTROL_UI_BUILD_INFO =
   globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO ?? normalizeControlUiBuildInfo(undefined);
-
-/** Reports whether the reload was started, so callers can tell an outcome they
- * still have to present from one the reloaded document will present instead. */
-export function reloadControlUiIfStale(identity: {
-  version: string | null;
-  sha: string | null;
-}): boolean {
-  if (
-    typeof window !== "undefined" &&
-    controlUiVersionDiffersFrom(identity.version ?? undefined, identity.sha ?? undefined) &&
-    canReloadControlUiDocument()
-  ) {
-    window.location.reload();
-    return true;
-  }
-  return false;
-}
 
 /** Whether a service worker activation retires this document, so it has to
  * reload onto the announced build. The announcement (`ui/public/sw.js`) is the
@@ -63,28 +45,7 @@ export function controlUiBuildDiffersFrom(identity: {
   if (controlUiBuildId && controlUiBuildId !== "dev" && gatewayBuildId) {
     return controlUiBuildId !== gatewayBuildId;
   }
-  return controlUiVersionDiffersFrom(identity.version ?? undefined);
-}
-
-function controlUiVersionDiffersFrom(
-  gatewayVersion: string | undefined,
-  gatewayCommit?: string,
-): boolean {
   const controlUiVersion = CONTROL_UI_BUILD_INFO.version?.trim();
-  const normalizedGatewayVersion = gatewayVersion?.trim();
-  if (
-    controlUiVersion &&
-    normalizedGatewayVersion &&
-    controlUiVersion !== normalizedGatewayVersion
-  ) {
-    return true;
-  }
-  const controlUiCommit = CONTROL_UI_BUILD_INFO.commit?.trim().toLowerCase();
-  const normalizedGatewayCommit = gatewayCommit?.trim().toLowerCase();
-  return Boolean(
-    controlUiCommit &&
-    normalizedGatewayCommit &&
-    !controlUiCommit.startsWith(normalizedGatewayCommit) &&
-    !normalizedGatewayCommit.startsWith(controlUiCommit),
-  );
+  const gatewayVersion = identity.version?.trim();
+  return Boolean(controlUiVersion && gatewayVersion && controlUiVersion !== gatewayVersion);
 }

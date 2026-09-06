@@ -129,13 +129,18 @@ describe("OpenAI Responses provider", () => {
   });
 
   it("clamps small output limits and disables implicit SDK retries", async () => {
-    const result = await streamOpenAIResponses(model(), context, {
+    const requestModel = model();
+    const options = {
       apiKey: String(1),
       maxTokens: 1,
-    }).result();
+    };
+    const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
+    const result = await streamOpenAIResponses(requestModel, context, options).result();
 
     expect(result.stopReason).toBe("error");
-    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
+    for (const params of [transportParams, openAiMockState.params[0]]) {
+      expect(params).toMatchObject({ max_output_tokens: 16, store: false });
+    }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 

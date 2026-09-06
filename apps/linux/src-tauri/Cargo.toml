@@ -17,7 +17,7 @@ base64 = "0.23.1"
 ed25519-dalek = "3.0.0"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
-mdns-sd = { version = "0.21.1", default-features = false }
+mdns-sd = { version = "0.21.2", default-features = false }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -50,12 +50,13 @@ uuid = { version = "1.26.0", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
 libc = "0.2.189"
-tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a" }
+tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a", default-features = false }
+tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a" }
+tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }

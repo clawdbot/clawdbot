@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
@@ -145,6 +145,7 @@ export function renderSidebarRegion(params: {
   panelDefinitions?: SidebarPanelDefinition[];
   panelActions: SidebarPanelTemplates;
   panelTemplates: SidebarPanelTemplates;
+  header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
@@ -183,6 +184,7 @@ export function renderSidebarRegion(params: {
       "--side-panel-height": `${column?.height ?? 360}px`,
     })}
   >
+    <div class="sidebar-region__header">${params.header ?? nothing}</div>
     ${
       regionError !== undefined
         ? regionError === null

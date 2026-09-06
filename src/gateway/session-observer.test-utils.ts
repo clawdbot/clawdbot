@@ -84,6 +84,8 @@ export async function flushObserver(): Promise<void> {
 }
 
 export function createHarness(options?: {
+  setTimeoutFn?: SessionObserverDeps["setTimeoutFn"];
+  clearTimeoutFn?: SessionObserverDeps["clearTimeoutFn"];
   subscribe?: boolean;
   broadSubscribe?: boolean;
   visible?: boolean;
@@ -118,6 +120,8 @@ export function createHarness(options?: {
   const readSession =
     options?.readSession ?? vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
   const observer = createSessionObserver({
+    setTimeoutFn: options?.setTimeoutFn,
+    clearTimeoutFn: options?.clearTimeoutFn,
     getConfig: () => options?.config ?? cfg,
     subscribers,
     sessionEventSubscribers,

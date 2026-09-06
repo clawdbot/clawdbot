@@ -19,15 +19,12 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
-import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
-import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import {
-  isSystemOwnedCronPayloadKind,
-  type CronJob,
-  type CronJobCreate,
-  type CronJobPatch,
-  type CronStoredJob,
-} from "../types.js";
+  isSystemMonitorDeclaration,
+  systemOwnedDeclarationKeyNamespace,
+} from "../system-owned-declaration.js";
+import { normalizeCronTaskRunJobId } from "../task-run-history.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
 import {
   computeJobNextRunAtMs,
   findJobOrThrow,
@@ -70,6 +67,27 @@ import {
 import { armTimer } from "./timer.js";
 
 const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
+
+/** Cancels only caller-corroborated definitions while the durable lifecycle fence holds. */
+export async function quiesceJobs(
+  state: CronServiceState,
+  jobs: readonly { id: string; revision: string }[],
+  commitGuard: () => void,
+): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoadedForOperation(state);
+    for (const expected of jobs) {
+      const job = state.store?.jobs.find((candidate) => candidate.id === expected.id);
+      if (!job || resolveCronJobConfigRevision(job) !== expected.revision) {
+        throw new Error(`Cron job ${expected.id} changed before cancellation.`);
+      }
+    }
+    commitGuard();
+    for (const job of jobs) {
+      requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+    }
+  });
+}
 
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
@@ -299,14 +317,10 @@ export async function add(
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
-    const declarationKey = normalizeOptionalString(input.declarationKey);
-    if (
-      input.payload &&
-      isSystemOwnedCronPayloadKind(input.payload.kind) &&
-      opts?.systemOwned !== true
-    ) {
+    if (input.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error("system-owned payloads cannot be created by cron clients");
     }
+    const declarationKey = normalizeOptionalString(input.declarationKey);
     const systemOwnedDeclarationNamespace = systemOwnedDeclarationKeyNamespace(declarationKey);
     if (systemOwnedDeclarationNamespace && opts?.systemOwned !== true) {
       throw new Error(
@@ -342,11 +356,6 @@ export async function add(
     const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
-      // A declarative upsert may not repurpose an existing system-owned monitor
-      // with a different payload; only the gateway's own convergence touches it.
-      if (isSystemOwnedCronPayloadKind(existing.payload.kind) && opts?.systemOwned !== true) {
-        throw new Error("system-owned monitor jobs cannot be edited by cron clients");
-      }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
       applyDeclarativeJobSpec(nextJob, normalizedInput, {
@@ -482,9 +491,7 @@ async function updateLoadedJob(params: {
 }) {
   const { state, id, patch, precondition, opts } = params;
   warnIfDisabled(state, "update");
-  // Mirrors the add-time boundary: no caller may patch a job into (or edit)
-  // a system-owned monitor payload; the gateway converges via add only.
-  if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
+  if (patch.payload?.kind === "heartbeat") {
     throw new Error("system-owned payloads cannot be patched by cron clients");
   }
   await ensureLoadedForOperation(state);
@@ -492,7 +499,7 @@ async function updateLoadedJob(params: {
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
   // so updates are rejected outright. Removal stays allowed only to the owner.
-  if (isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  if (isSystemMonitorDeclaration(job.declarationKey)) {
     throw new Error("system-owned monitor jobs cannot be edited by cron clients");
   }
   const now = state.deps.nowMs();
@@ -597,7 +604,7 @@ export async function remove(
     // Config is the monitor's source of truth: ad-hoc deletion would disable
     // the feature until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (isSystemOwnedCronPayloadKind(removedJob.payload.kind) && opts?.systemOwned !== true) {
+    if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
       throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
     opts?.commitGuard?.();
@@ -625,7 +632,7 @@ export async function remove(
       const done = new Promise<void>((resolve) => {
         finish = resolve;
       });
-      const release = registerPendingCronSessionCleanup(state, id, done);
+      const release = registerPendingCronSessionCleanup(state, id, done, agentId);
       sessionCleanup = {
         activeMarker,
         agentId,

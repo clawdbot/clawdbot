@@ -52,7 +52,7 @@ export function createCodexSteeringQueue(params: {
   signal: AbortSignal;
   assertActive: () => void;
   prepareMessage: (text: string, options: CodexSteeringQueueOptions) => Promise<CodexUserInput[]>;
-  beforeConfirmConsumed?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
+  beforeSubmit?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
 }) {
   type PendingSteerMessage = CodexSteeringQueueOptions & {
     assertCurrent: () => void;
@@ -212,6 +212,16 @@ export function createCodexSteeringQueue(params: {
       if (liveItems.length === 0) {
         return;
       }
+      if (params.beforeSubmit) {
+        // Codex may consume input before replying. Commit source custody before
+        // crossing that boundary, then revalidate owners after the awaited write.
+        await params.beforeSubmit(liveItems);
+        assertActive();
+        liveItems = liveItems.filter(isCurrent);
+        if (liveItems.length === 0) {
+          return;
+        }
+      }
       // No await between final owner validation and RPC dispatch. Only these
       // batches become accepted-unconfirmed if cancellation races the response.
       clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
@@ -355,28 +365,9 @@ export function createCodexSteeringQueue(params: {
       }
       dispatchedBatches.delete(clientUserMessageId);
       for (const item of batch.items) {
-        reportItemAcceptance(item, true);
+        resolveItem(item);
       }
-      const resolveBatch = () => {
-        for (const item of batch.items) {
-          resolveItem(item);
-        }
-        return true;
-      };
-      const rejectBatch = (error: unknown) => {
-        for (const item of batch.items) {
-          rejectItem(item, error);
-        }
-        return true;
-      };
-      if (!params.beforeConfirmConsumed) {
-        return resolveBatch();
-      }
-      try {
-        return params.beforeConfirmConsumed(batch.items).then(resolveBatch, rejectBatch);
-      } catch (error) {
-        return rejectBatch(error);
-      }
+      return true;
     },
     sealAdmission: sealQueueAdmission,
     cancel: cancelQueue,

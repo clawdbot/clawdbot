@@ -3,8 +3,8 @@
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -72,9 +72,9 @@ describe("recent session prefetch", () => {
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(key, NOW - 1)],
     };
     updatePrefetch(snapshot);
@@ -99,7 +99,7 @@ describe("recent session prefetch", () => {
     const other = { ...row(otherKey, NOW), hasActiveRun: true };
     const queued = row(queuedKey, NOW - 2);
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: [otherKey],
       rows: [unchanged, queued, other],
@@ -144,9 +144,9 @@ describe("recent session prefetch", () => {
     const request = vi.fn(() => response.promise);
     const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [original],
     };
     updatePrefetch(snapshot);
@@ -184,9 +184,9 @@ describe("recent session prefetch", () => {
       const request = vi.fn(() => response.promise);
       const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
       const snapshot = {
-        client: { request } as unknown as GatewayBrowserClient,
+        client: createTestGatewayClient(request),
         listRevision: 1,
-        openSessionKeys: [],
+        openSessionKeys: ["agent:main:foreground"],
         rows: [original],
       };
       updatePrefetch(snapshot);
@@ -224,9 +224,9 @@ describe("recent session prefetch", () => {
     const response = createDeferred<ReturnType<typeof historyResult>>();
     const request = vi.fn(() => response.promise);
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(key, NOW - 1)],
     };
     updatePrefetch(snapshot);
@@ -236,7 +236,7 @@ describe("recent session prefetch", () => {
 
     let expected: ChatSessionSnapshot | null = null;
     if (change === "client replacement") {
-      updatePrefetch({ ...snapshot, client: { request } as unknown as GatewayBrowserClient });
+      updatePrefetch({ ...snapshot, client: createTestGatewayClient(request) });
     } else if (change === "same-client reconnect") {
       updatePrefetch({ ...snapshot, client: null });
       updatePrefetch(snapshot);
@@ -277,9 +277,9 @@ describe("recent session prefetch", () => {
           : page.promise,
       );
       updatePrefetch({
-        client: { request } as unknown as GatewayBrowserClient,
+        client: createTestGatewayClient(request),
         listRevision: 1,
-        openSessionKeys: [],
+        openSessionKeys: ["agent:main:foreground"],
         rows: [row(key, NOW + 1)],
       });
       await vi.advanceTimersByTimeAsync(300);
@@ -337,7 +337,7 @@ describe("recent session prefetch", () => {
       row("agent:main:eligible-4", NOW - 6),
     ];
     const state: SessionPrefetchUpdate = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["main"],
       rows,
@@ -382,7 +382,7 @@ describe("recent session prefetch", () => {
       historyResult((params as { sessionKey: string }).sessionKey),
     );
     const state: SessionPrefetchUpdate = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["agent:main:main"],
       loadingSessionKeys: ["agent:main:main"],
@@ -415,7 +415,7 @@ describe("recent session prefetch", () => {
       });
     });
     const state: SessionPrefetchUpdate = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["agent:main:main"],
       rows: [
@@ -452,7 +452,7 @@ describe("recent session prefetch", () => {
       historyResult((params as { sessionKey: string }).sessionKey),
     );
     const state: SessionPrefetchUpdate = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["agent:main:main"],
       rows: [row("agent:main:main", NOW - 1), row("agent:main:recent", NOW - 2)],
@@ -490,7 +490,7 @@ describe("recent session prefetch", () => {
       historyResult((params as { sessionKey: string }).sessionKey),
     );
     const state: SessionPrefetchUpdate = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
       openSessionKeys: ["agent:main:main"],
       rows: [row("agent:main:main", NOW - 1), row(sessionKey, NOW + 1)],
@@ -520,37 +520,6 @@ describe("recent session prefetch", () => {
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([sessionKey]);
   });
 
-  it("keeps repeated roster refreshes within the bounded recent-session snapshot window", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const rows = Array.from({ length: 25 }, (_, index) =>
-      row(`agent:main:recent-${index}`, NOW - index - 1),
-    );
-
-    for (let listRevision = 1; listRevision <= 10; listRevision += 1) {
-      updatePrefetch({ client, listRevision, openSessionKeys: [], rows });
-      await vi.advanceTimersByTimeAsync(1_000);
-      await settlePromises();
-      await store.flush();
-    }
-
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
-      rows.slice(0, 20).map(({ key }) => key),
-    );
-    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
-    expect(store.readSavedAt("agent:main:recent-19")).not.toBeNull();
-
-    updatePrefetch({ client, listRevision: 11, openSessionKeys: [], rows });
-    await vi.advanceTimersByTimeAsync(31_000);
-    await settlePromises();
-    await store.flush();
-
-    expect(request).toHaveBeenCalledTimes(20);
-    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
-  });
-
   it("reserves snapshot capacity for presented panes while warming recent background sessions", async () => {
     const presentedSessionKey = "agent:main:presented";
     cacheChatSessionSnapshot(
@@ -572,7 +541,7 @@ describe("recent session prefetch", () => {
     const request = vi.fn(async (_method: string, params: unknown) =>
       historyResult((params as { sessionKey: string }).sessionKey),
     );
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     const backgroundRows = Array.from({ length: 25 }, (_, index) =>
       row(`agent:main:background-${index}`, NOW - index - 1),
     );
@@ -592,16 +561,23 @@ describe("recent session prefetch", () => {
       readChatSessionSnapshot(cache, snapshotHost, { sessionKey: presentedSessionKey }),
     ).toEqual(historySnapshot("presented"));
     expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
+
+    updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settlePromises();
+    await store.flush();
+    expect(request).toHaveBeenCalledTimes(MAX_CACHED_CHAT_SESSIONS - 1);
+    expect(store.readSavedAt("agent:main:background-0")).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
     const request = vi.fn(async (_method: string, params: unknown) =>
       historyResult((params as { sessionKey: string }).sessionKey),
     );
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     const base = {
       client,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
     };
     updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -685,9 +661,9 @@ describe("recent session prefetch", () => {
     }));
 
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(sessionKey, NOW + 1)],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -753,9 +729,9 @@ describe("recent session prefetch", () => {
     }));
 
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row(sessionKey, NOW + 1)],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -771,9 +747,9 @@ describe("recent session prefetch", () => {
     const request = vi.fn();
 
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [{ ...row(sessionKey, NOW + 1), hasActiveRun: true, status: "running" }],
     });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -796,9 +772,9 @@ describe("recent session prefetch", () => {
       value: { request: locksRequest },
     });
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:locked", NOW - 1)],
     });
 
@@ -825,9 +801,9 @@ describe("recent session prefetch", () => {
       value: { request: locksRequest },
     });
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:hidden", NOW - 1)],
     });
     await vi.advanceTimersByTimeAsync(1_500);
@@ -849,9 +825,9 @@ describe("recent session prefetch", () => {
       return historyResult(sessionKey);
     });
     updatePrefetch({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       listRevision: 1,
-      openSessionKeys: [],
+      openSessionKeys: ["agent:main:foreground"],
       rows: [row("agent:main:failed", NOW - 1), row("agent:main:succeeded", NOW - 2)],
     });
 

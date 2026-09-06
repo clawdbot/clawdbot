@@ -13,13 +13,10 @@ extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
 extensions/browser/src/browser/cdp.ts
 extensions/browser/src/browser/chrome-mcp.test.ts
-extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
-extensions/browser/src/browser/pw-tools-core.browser-ssrf-guard.test.ts
-extensions/browser/src/browser/pw-tools-core.interactions.navigation-guard.test.ts
 extensions/browser/src/browser/routes/agent.act.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/browser/src/cli/browser-cli-manage.ts
@@ -60,7 +57,6 @@ extensions/codex/src/app-server/thread-lifecycle.test.ts
 extensions/codex/src/app-server/transcript-mirror.test.ts
 extensions/codex/src/commands.test.ts
 extensions/codex/src/conversation-binding.test.ts
-extensions/codex/src/conversation-binding.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/supervision-tools.ts
@@ -113,7 +109,6 @@ extensions/google/transport-stream.test.ts
 extensions/google/transport-stream.ts
 extensions/imessage/src/actions.test.ts
 extensions/imessage/src/actions.ts
-extensions/imessage/src/approval-reactions.test.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
 extensions/imessage/src/monitor/monitor-provider.ts
@@ -252,14 +247,12 @@ extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
 extensions/voice-call/src/webhook/realtime-handler.test.ts
 extensions/voice-call/src/webhook/realtime-handler.ts
-extensions/webhooks/src/http.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts
 extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/browser/lib/workboard/index.test.ts
 extensions/workboard/browser/pages/workboard/view.test.ts
 extensions/workboard/src/sqlite-store.ts
-extensions/workboard/src/store-card-helpers.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
@@ -273,7 +266,6 @@ packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/agent-tools-parameter-schema.ts
 packages/ai/src/providers/anthropic.test.ts
 packages/ai/src/providers/anthropic.ts
-packages/ai/src/providers/google-shared.ts
 packages/ai/src/providers/mistral.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
@@ -368,7 +360,6 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.replay-and-tools.test.ts
-src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
@@ -469,7 +460,6 @@ src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
-src/cli/daemon-cli/status.gather.ts
 src/cli/daemon-cli/status.print.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/devices-cli.test.ts
@@ -522,7 +512,6 @@ src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/doctor/shared/preview-warnings.test.ts
-src/commands/doctor/shared/preview-warnings.ts
 src/commands/doctor/shared/stale-auth-order.test.ts
 src/commands/gateway-status.test.ts
 src/commands/migrate.test.ts
@@ -625,7 +614,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/devices.test.ts
 src/gateway/server-methods/devices.ts
 src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/doctor.ts
@@ -635,7 +623,6 @@ src/gateway/server-methods/nodes.invoke-wake.test.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
-src/gateway/server-methods/sessions-files.ts
 src/gateway/server-methods/skills.ts
 src/gateway/server-methods/talk.test.ts
 src/gateway/server-methods/talk.ts
@@ -671,7 +658,6 @@ src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
-src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
@@ -744,7 +730,6 @@ src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
 src/plugins/conversation-binding.test.ts
-src/plugins/conversation-binding.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
@@ -760,7 +745,6 @@ src/plugins/loader.discovery-and-security.test-utils.ts
 src/plugins/loader.hooks-and-runtime.test-utils.ts
 src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
-src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
 src/plugins/marketplace.test.ts
@@ -859,7 +843,6 @@ ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/skill-workshop/view.ts
 ui/src/pages/skills/view.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts

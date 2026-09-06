@@ -110,7 +110,6 @@ export function createFixture(
   // validates the fixture's entire dependency topology before and after emit.
   for (const name of [
     ".bin",
-    "@anthropic-ai/claude-agent-sdk",
     "@openclaw/fs-safe",
     "@typescript/native-preview",
     "playwright-core",
@@ -167,6 +166,7 @@ export function createFixture(
     "src/infra/runtime-process-entrypoints.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    "packages/normalization-core/src/record-coerce.ts",
   ]);
   for (const source of runtimeEntryOwners) {
     write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));
@@ -183,6 +183,9 @@ export function createFixture(
     "src/worker/worker-deploy-browser-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "packages/gateway-client/src/websocket.ts",
+    "src/gateway/server-runtime-state.ts",
+    "src/realtime-transcription/websocket-session.ts",
   ]) {
     write(source, "export {};\n");
   }

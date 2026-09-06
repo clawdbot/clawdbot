@@ -2019,7 +2019,7 @@ describe("grouped chat rendering", () => {
         messages: [createMessageEntry("attributed-user-message", message)],
       });
 
-      render(renderTestMessageGroup(group, { ...viewer, showAvatarGutter: true }), container);
+      render(renderTestMessageGroup(group, { ...viewer, avatarPlacement: "gutter" }), container);
 
       expect(
         container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
@@ -2397,43 +2397,51 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Guardian warning");
   });
 
-  it("renders a compact author avatar when the gutter is hidden", async () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
-          key: "attributed-user",
-          senderLabel: "Alice Example",
-          sender: { id: "profile_123", name: "Alice Example" },
-          messages: [
-            {
-              key: "attributed-message",
-              message: { role: "user", content: "hello", timestamp: 1000 },
-            },
-          ],
-          timestamp: 1000,
-        }),
-        {
-          showReasoning: true,
-          showToolCalls: true,
-          assistantName: "OpenClaw",
-          showAvatarGutter: false,
-        },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-avatar.user")).toBeNull();
-    expect(container.querySelector(".chat-group-persistent-author")).toBeNull();
-    await vi.waitFor(() => {
-      expect(container.querySelector(".chat-author-avatar__initials")?.textContent?.trim()).toBe(
-        "AE",
+  it.each(["footer", "none"] as const)(
+    "renders user author identity with %s avatars",
+    async (avatarPlacement) => {
+      const container = document.createElement("div");
+      render(
+        renderMessageGroup(
+          createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
+            key: "attributed-user",
+            senderLabel: "Alice Example",
+            sender: { id: "profile_123", name: "Alice Example" },
+            messages: [
+              {
+                key: "attributed-message",
+                message: { role: "user", content: "hello", timestamp: 1000 },
+              },
+            ],
+            timestamp: 1000,
+          }),
+          {
+            showReasoning: true,
+            showToolCalls: true,
+            assistantName: "OpenClaw",
+            avatarPlacement,
+          },
+        ),
+        container,
       );
-    });
-    expect(container.querySelector(".chat-author-avatar")?.getAttribute("title")).toBe(
-      "Alice Example",
-    );
-  });
+
+      expect(container.querySelector(".chat-avatar.user")).toBeNull();
+      expect(container.querySelector(".chat-group-persistent-author")).toBeNull();
+      expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Alice Example");
+      if (avatarPlacement === "none") {
+        expect(container.querySelector(".chat-author-avatar")).toBeNull();
+        return;
+      }
+      await vi.waitFor(() => {
+        expect(container.querySelector(".chat-author-avatar__initials")?.textContent?.trim()).toBe(
+          "AE",
+        );
+      });
+      expect(container.querySelector(".chat-author-avatar")?.getAttribute("title")).toBe(
+        "Alice Example",
+      );
+    },
+  );
 
   it("falls back to initials when a user avatar image fails", async () => {
     const container = document.createElement("div");
@@ -2451,7 +2459,7 @@ describe("grouped chat rendering", () => {
         showReasoning: true,
         showToolCalls: true,
         assistantName: "OpenClaw",
-        showAvatarGutter: false,
+        avatarPlacement: "footer",
       }),
       container,
     );
@@ -3872,7 +3880,7 @@ describe("grouped chat rendering", () => {
     expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
-  it("checks local assistant audio against server metadata while preview roots load", async () => {
+  it("checks local assistant audio against server metadata", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
@@ -3896,7 +3904,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4266,7 +4273,7 @@ describe("grouped chat rendering", () => {
     ).toContain("Unavailable");
   });
 
-  it("checks local assistant images against server metadata while preview roots load", async () => {
+  it("checks local assistant images against server metadata", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.png`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toContain("meta=1");
@@ -4291,7 +4298,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4317,47 +4323,43 @@ describe("grouped chat rendering", () => {
       reason: "File not found",
       source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
     },
-  ] as const)(
-    "keeps server-rejected $code media blocked while preview roots load",
-    async ({ code, reason, source }) => {
-      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-        expect(url).toContain("meta=1");
-        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-        return { ok: true, json: async () => ({ available: false, code, reason }) };
-      });
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  ] as const)("keeps server-rejected $code media blocked", async ({ code, reason, source }) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => ({ available: false, code, reason }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      const container = document.createElement("div");
-      const renderMessage = () =>
-        renderAssistantMessage(
-          container,
-          createAssistantMessage(`Unavailable recording\nMEDIA:${source}`, {
-            id: `assistant-bootstrap-blocked-${code}`,
-          }),
-          {
-            showToolCalls: false,
-            resourceBasePath: "/openclaw",
-            assistantAttachmentAuthToken: "session-token",
-            localMediaPreviewRoots: [],
-            onRequestUpdate: renderMessage,
-          },
-        );
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage(`Unavailable recording\nMEDIA:${source}`, {
+          id: `assistant-bootstrap-blocked-${code}`,
+        }),
+        {
+          showToolCalls: false,
+          resourceBasePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          onRequestUpdate: renderMessage,
+        },
+      );
 
-      renderMessage();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await flushAssistantAttachmentAvailabilityChecks();
+    renderMessage();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
 
-      await vi.waitFor(() => {
-        expect(
-          container.querySelector(
-            ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta",
-          )?.textContent,
-        ).toContain(reason);
-      });
-      expect(container.querySelector("audio")).toBeNull();
-      expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
-    },
-  );
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(
+          ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta",
+        )?.textContent,
+      ).toContain(reason);
+    });
+    expect(container.querySelector("audio")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+  });
 
   describe("omitted historical images", () => {
     it("renders a non-interactive placeholder with the projected byte size", () => {
@@ -4568,7 +4570,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: renderMessage,
         },
       );
@@ -4631,7 +4632,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4694,7 +4694,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4746,7 +4745,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4796,7 +4794,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: token,
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: () => renderWithToken(token),
         },
       );
@@ -4839,7 +4836,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4880,7 +4876,6 @@ describe("grouped chat rendering", () => {
         {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
       );
@@ -4919,7 +4914,6 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         resourceBasePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
 
@@ -4934,19 +4928,33 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
   });
 
-  it("renders local files outside preview roots as unavailable", () => {
-    const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
-        id: "assistant-blocked-local-media",
-      }),
-      {
-        showToolCalls: false,
-        resourceBasePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
-      },
+  it("renders the Gateway's outside-workspace denial for a local document", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          available: false,
+          reason: "Outside allowed folders",
+          retryable: false,
+        }),
+      })),
     );
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage("Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone", {
+          id: "assistant-blocked-local-media",
+        }),
+        {
+          showToolCalls: false,
+          resourceBasePath: "/openclaw",
+          onRequestUpdate: rerender,
+        },
+      );
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
     const blocked = container.querySelector(".chat-assistant-attachment-card--blocked");
@@ -5000,7 +5008,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         });
       rerender();
@@ -5072,7 +5079,6 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          localMediaPreviewRoots: [],
           onRequestUpdate: rerender,
         },
       );
@@ -5155,7 +5161,6 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "session-token",
-        localMediaPreviewRoots: [],
       },
     );
 
@@ -5383,7 +5388,6 @@ describe("grouped chat rendering", () => {
     };
     panel.content = sidebarContent;
     panel.attachmentRuntime = {
-      localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
     document.body.append(panel);

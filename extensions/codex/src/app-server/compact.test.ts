@@ -269,6 +269,69 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
+  it("rejects a queued compaction after admitted authority rotates before client acquisition", async () => {
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:queued-authority",
+      sessionId: "session-current",
+    };
+    const successor = { ...current, sessionId: "session-successor" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: current.sessionId, updatedAt: 1 },
+    });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "thread-queued", cwd: tempDir };
+    await bindingStore.mutate(current, { kind: "set", binding });
+    const fake = createFakeCodexClient();
+    const clientFactory = vi.fn(async () => fake.client);
+    const queueEntered = createDeferred<void>();
+    const releaseQueue = createDeferred<void>();
+    const held = withCodexAppServerThreadMutation(binding.threadId, async () => {
+      queueEntered.resolve();
+      await releaseQueue.promise;
+    });
+    await queueEntered.promise;
+
+    const pending = maybeCompactCodexAppServerSessionImpl(
+      {
+        sessionId: current.sessionId,
+        sessionKey: current.sessionKey,
+        agentId: current.agentId,
+        sessionTarget: { ...scope, sessionId: current.sessionId },
+        sessionFile: path.join(tempDir, "queued-authority.jsonl"),
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      { bindingStore, clientFactory },
+    );
+    await flushAsyncTasks();
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
+    releaseQueue.resolve();
+    await held;
+
+    await expect(pending).rejects.toThrow("Codex session generation is no longer current");
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(bindingStore.read(current)).toEqual(binding);
+
+    const adopted = await resolveCodexSessionBinding({
+      bindingStore,
+      identity: successor,
+      storePath: scope.storePath,
+    });
+    expect(adopted.binding).toEqual(binding);
+    expect(bindingStore.read(successor)).toEqual(binding);
+  });
+
   it("waits for native app-server compaction completion", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -1739,10 +1802,11 @@ describe("maybeCompactCodexAppServerSession", () => {
         fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
       }
       const closeEntered = createDeferred<void>();
-      const closeGate = createDeferred<boolean>();
+      const closeGate = createDeferred<void>();
       fake.closeAndWait.mockImplementationOnce(async () => {
         closeEntered.resolve();
-        return await closeGate.promise;
+        await closeGate.promise;
+        return { exited: false, cleanup: "uncertain" };
       });
       const retirementOutcome = createDeferred<"retained" | "settled">();
       const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
@@ -1785,14 +1849,14 @@ describe("maybeCompactCodexAppServerSession", () => {
         });
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
-        closeGate.resolve(false);
+        closeGate.resolve();
 
         const outcome = await retirementOutcome.promise;
         expect(bindingStore.read(current)).toEqual(binding);
         expect(outcome).toBe("retained");
         expect(nextMutation).not.toHaveBeenCalled();
       } finally {
-        closeGate.resolve(false);
+        closeGate.resolve();
         fake.emit({
           method: "turn/completed",
           params: {
@@ -1852,7 +1916,9 @@ describe("maybeCompactCodexAppServerSession", () => {
       });
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
       await retainCodexAppServerLiveThread(harness.client, binding.threadId);
-      const closeAndWait = vi.spyOn(harness.client, "closeAndWait").mockResolvedValue(false);
+      const closeAndWait = vi
+        .spyOn(harness.client, "closeAndWait")
+        .mockResolvedValue({ exited: false, cleanup: "uncertain" });
       const retirementOutcome = createDeferred<"retained" | "settled">();
       const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
         if (message === "failed to retire unconfirmed codex app-server compaction") {
@@ -1953,7 +2019,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       autoCompleteCompaction: false,
       rejectInterrupt: true,
     });
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const pluginConfig = {
       supervision: { enabled: true },
       appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
@@ -2313,7 +2379,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("keeps the lifecycle fence when an unconfirmed stdio process does not stop", async () => {
     const fake = createFakeCodexClient({ retainedThreadId: "thread-stuck-stdio" });
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({ threadId: "thread-stuck-stdio" });
 
@@ -2332,7 +2398,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("detaches a guarded remote start after releasing the binding lock", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(
@@ -2773,7 +2839,7 @@ function createFakeCodexClient(
   });
   const closeAndWait = vi.fn<CodexAppServerClient["closeAndWait"]>(async () => {
     close();
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const addNotificationHandler = vi.fn(
     (handler: (notification: CodexServerNotification) => void) => {

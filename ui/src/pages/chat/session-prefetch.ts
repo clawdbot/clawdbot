@@ -2,8 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -28,12 +30,28 @@ const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
 type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
 
+type SessionPrefetchContext = {
+  readonly gateway: {
+    readonly snapshot: Pick<ApplicationGatewaySnapshot, "assistantAgentId" | "hello">;
+    subscribe: (listener: () => void) => () => void;
+  };
+  readonly agents: { readonly state: Pick<AgentCapability["state"], "agentsList"> };
+  readonly sessions: Pick<
+    SessionCapability,
+    "captureConnectionScope" | "isConnectionScopeCurrent" | "canonicalListRevision"
+  > & {
+    readonly state: { readonly result: { readonly sessions: readonly GatewaySessionRow[] } | null };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
 type SessionPrefetchSnapshot = {
   client: GatewayBrowserClient | null;
   isCurrent: () => boolean;
   listRevision: number;
   openSessionKeys: readonly string[];
   intentSessionKey: string | null;
+  automaticPrefetchAllowed: boolean;
   /** False while a presented pane is still fetching its transcript. */
   presentedTranscriptsReady: boolean;
   rows: readonly GatewaySessionRow[] | null;
@@ -42,11 +60,26 @@ type SessionPrefetchSnapshot = {
 
 type SessionPrefetchCandidate = {
   activityAt: number;
+  sessionKey: string;
   snapshotKey: string;
   sessionId: GatewaySessionRow["sessionId"];
   activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
   updatedAt: GatewaySessionRow["updatedAt"];
 };
+
+// Dashboard-only pages warm explicit navigation intent; automatic warming belongs to visible conversations.
+function mayPrefetchHistory(
+  snapshot: SessionPrefetchSnapshot | null,
+  sessionKey?: string,
+): boolean {
+  return (
+    snapshot?.presentedTranscriptsReady === true &&
+    (snapshot.automaticPrefetchAllowed ||
+      Boolean(
+        snapshot.intentSessionKey && (!sessionKey || snapshot.intentSessionKey === sessionKey),
+      ))
+  );
+}
 
 function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
@@ -103,6 +136,7 @@ class SessionPrefetcher {
       previous.client !== snapshot.client ||
       previous.listRevision !== snapshot.listRevision ||
       previous.intentSessionKey !== snapshot.intentSessionKey ||
+      previous.automaticPrefetchAllowed !== snapshot.automaticPrefetchAllowed ||
       previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
       !sameKeys(previous.openSessionKeys, snapshot.openSessionKeys)
     ) {
@@ -187,7 +221,7 @@ class SessionPrefetcher {
     if (
       !snapshot?.client ||
       !snapshot.rows ||
-      !snapshot.presentedTranscriptsReady ||
+      !mayPrefetchHistory(snapshot) ||
       document.visibilityState === "hidden" ||
       !this.connected
     ) {
@@ -217,7 +251,7 @@ class SessionPrefetcher {
     // histories would starve the user's next click on the same socket. A pane
     // that starts loading mid-cycle wins too; its loading-changed event resumes the rest.
     for (const candidate of selection.candidates) {
-      if (!this.snapshot?.presentedTranscriptsReady) {
+      if (!mayPrefetchHistory(this.snapshot, candidate.sessionKey)) {
         return;
       }
       await this.prefetchCandidate(snapshot, client, candidate);
@@ -235,7 +269,7 @@ class SessionPrefetcher {
     const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache();
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
-    const mayRequest = () => isCurrent() && this.snapshot?.presentedTranscriptsReady === true;
+    const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
     if (!mayRequest() || this.isOpen(candidate.snapshotKey, this.snapshot)) {
       return;
     }
@@ -363,7 +397,7 @@ class SessionPrefetcher {
     for (const row of rows) {
       // The presented pane owns transient run adoption and replay. Background
       // prefetch only warms durable history, so it must not consume active state.
-      if (isSessionRunActive(row)) {
+      if (!mayPrefetchHistory(snapshot, row.key) || isSessionRunActive(row)) {
         continue;
       }
       const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
@@ -391,6 +425,7 @@ class SessionPrefetcher {
       }
       candidates.push({
         activityAt,
+        sessionKey: row.key,
         snapshotKey,
         sessionId: row.sessionId,
         activeLeafEntryId: row.activeLeafEntryId,
@@ -476,7 +511,7 @@ type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
 
 class SessionPrefetchController implements ReactiveController {
   private readonly prefetcher: SessionPrefetcher;
-  private context: ApplicationContext | undefined;
+  private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];
   private intentSessionKey: string | null = null;
   private paneRoot: Element;
@@ -485,7 +520,7 @@ class SessionPrefetchController implements ReactiveController {
     private readonly host: SessionPrefetchHost,
     cache: ChatMessageCache,
     snapshotStore: SessionSnapshotStore,
-    private readonly readContext: () => ApplicationContext | undefined,
+    private readonly readContext: () => SessionPrefetchContext | undefined,
   ) {
     this.paneRoot = host;
     this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
@@ -565,6 +600,9 @@ class SessionPrefetchController implements ReactiveController {
       listRevision: context.sessions.canonicalListRevision,
       openSessionKeys,
       intentSessionKey: this.intentSessionKey,
+      automaticPrefetchAllowed: panes.some(
+        (pane) => this.host.contains(pane) && pane.conversationPresented === true,
+      ),
       presentedTranscriptsReady: !panes.some(
         (pane) => pane.presented !== false && pane.transcriptLoading === true,
       ),
@@ -590,7 +628,7 @@ export function installSessionPrefetch(
   host: SessionPrefetchHost,
   cache: ChatMessageCache,
   snapshotStore: SessionSnapshotStore,
-  readContext: () => ApplicationContext | undefined,
+  readContext: () => SessionPrefetchContext | undefined,
 ): ReactiveController {
   return new SessionPrefetchController(host, cache, snapshotStore, readContext);
 }

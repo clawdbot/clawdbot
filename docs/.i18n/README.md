@@ -5,7 +5,7 @@ This folder stores translation config for the source docs repo.
 Generated locale trees and live translation memory now live in the publish repo:
 
 - repo: `openclaw/docs`
-- local checkout: `~/Projects/openclaw-docs`
+- local checkout: `~/path/to/openclaw-docs`
 
 ## Source of truth
 
@@ -15,26 +15,20 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 ## End-to-end flow
 
-1. Edit English docs in `openclaw/openclaw`.
-2. Push to `main`.
-3. `openclaw/openclaw/.github/workflows/docs-sync-publish.yml` mirrors the OpenClaw docs tree into `openclaw/docs`, then replaces `docs/clawhub/` with the current `openclaw/clawhub/docs` input.
-4. The sync script rewrites the publish `docs/docs.json` so the generated locale picker blocks exist there even though they are no longer committed in the source repo.
-5. `openclaw/docs/.github/workflows/translate-all.yml` waits for `main` to settle, translates only stale or missing locale pages, and uploads per-locale artifacts.
-6. The publish repo finalizer applies successful locale artifacts and pushes one aggregate `chore(i18n): refresh translations` commit.
-7. A weekly `full` run reconciles every locale/page path so flaky model failures are retried without making hot docs commits wait.
+Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translation, and publish sequence is documented in [translation-workflow.md](translation-workflow.md). Keep that file as the single description of the pipeline.
 
 ## Why the split exists
 
 - Keep generated locale output out of the main product repo.
 - Keep Mintlify on a single published docs tree.
 - Preserve the built-in language switcher for Mintlify-supported generated locales by letting the publish repo own generated locale trees.
-- Keep generated Thai (`th`) and Persian (`fa`) docs plus translation memory even though Mintlify does not currently accept those codes in `navigation.languages`. Their absence from the built-in docs language picker is a host limitation, not a failed translation run.
+- Keep generated Thai (`th`) and Persian (`fa`) docs plus translation memory even though Mintlify does not accept those codes in `navigation.languages` (checked 2026-09-06). Their absence from the built-in docs language picker is a host limitation, not a failed translation run.
 
 ## Locale visibility
 
 - Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
 - Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
-- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; Russian (`ru`) and Hindi (`hi`) are now included in the publish configuration.
+- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`. As of 2026-09-06, the publish configuration includes Russian (`ru`) and Hindi (`hi`).
 - Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
 ## Files in this folder

@@ -159,6 +159,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               ? "aborted"
               : undefined,
           allowedToolNames,
+          withCompactionPersistence: params.transcriptByteCompactionPersistence,
         },
       );
       checkpointSnapshot = memoryTranscript
@@ -212,11 +213,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         extensionFactories,
       });
       await resourceLoader.reload();
-      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedAgentSettingsManager — same
-      // rehydration also restores OpenClaw runtime's auto-compaction (openclaw#75799), so re-apply
-      // both guards. effectiveModel.baseUrl matches the surrounding scope so
-      // auth-profile-injected baseUrls reach the endpoint-class detector.
+      // Reloading settings discards prepared compaction overrides and restores
+      // runtime auto-compaction, so reapply both guards after reload.
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
@@ -455,7 +453,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
-          if (diagEnabled && preMetrics) {
+          if (preMetrics) {
             log.debug(
               `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -499,26 +497,28 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             accountingRecorder?.recordCompaction(serverTokensAfter);
           };
-          const serverResult = await attemptServerEndpointCompaction({
-            trigger,
-            streamFn: session.agent.streamFn,
-            model: effectiveModel,
-            context: { systemPrompt: systemPromptText, messages: session.messages },
-            sessionManager,
-            extraParams: effectiveExtraParams,
-            customInstructions: params.customInstructions,
-            config: params.config,
-            onUsage: recordUsage,
-            onCompactionCommitted: recordServerCompaction,
-            assertActive,
-            requestOptions: {
-              apiKey: transportApiKey,
-              sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-              timeoutMs: compactionTimeoutMs,
-              signal: params.abortSignal,
-            },
-          });
+          const serverResult = params.transcriptBytePreflightAuthority
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                customInstructions: params.customInstructions,
+                config: params.config,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
           const activeSession = session;
           let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
           if (!serverResult) {
@@ -533,23 +533,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   if (trigger === "manual") {
                     return activeSession.compact(params.customInstructions);
                   }
-                  return resolveEffectiveCompactionMode(params.config) === "default"
-                    ? activeSession[agentSessionAutomaticCompaction](
-                        params.customInstructions,
-                        requestState,
-                      )
-                    : activeSession[agentSessionAutomaticCompaction](
-                        params.customInstructions,
-                        requestState,
-                        "none",
-                      );
+                  return activeSession[agentSessionAutomaticCompaction](
+                    params.customInstructions,
+                    requestState,
+                    resolveEffectiveCompactionMode(params.config) === "default"
+                      ? undefined
+                      : "none",
+                  );
                 },
                 compactionTimeoutMs,
                 {
                   abortSignal: params.abortSignal,
-                  onCancel: () => {
-                    activeSession.abortCompaction();
-                  },
+                  onCancel: () => activeSession.abortCompaction(),
                 },
               );
             } finally {
@@ -605,7 +600,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const postMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
-          if (diagEnabled && preMetrics && postMetrics) {
+          if (preMetrics && postMetrics) {
             log.debug(
               `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -682,9 +677,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             attempted: attemptedThinking,
           });
           if (fallbackThinking) {
-            // Near-term provider fix: when compaction hits a reasoning-mandatory
-            // endpoint with `off`, retry once with `minimal` instead of surfacing
-            // a user-visible failure.
             log.warn(
               `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );

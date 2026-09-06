@@ -80,6 +80,9 @@ Onboarding validates the key shape and warns when a `tp-...` key is entered into
 
 ## Token Plan catalog
 
+Token Plan setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 Choose the Token Plan auth choice that matches the regional base URL shown in Xiaomi's subscription UI:
 
 | Auth choice             | Base URL                                   |

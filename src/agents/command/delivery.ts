@@ -140,7 +140,7 @@ type DeliverAgentCommandResultParams = {
   outboundSession: OutboundSessionContext | undefined;
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
@@ -479,7 +479,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   result: RunResult;
   deliveryChannel?: string;
   plugin?: ChannelPlugin;
@@ -496,7 +496,7 @@ function normalizeAgentCommandReplyPayloads(params: {
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
       : undefined;
   if (!channel) {
-    return { kind: "deliver", payload: payloads as ReplyPayload[] };
+    return { kind: "deliver", payload: payloads };
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
@@ -544,7 +544,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   const normalizedPayloads: ReplyPayload[] = [];
   let suppressionReason: NormalizeReplySkipReason | undefined;
   for (const payload of payloads) {
-    const outcome = normalizeReplyPayloadOutcome(payload as ReplyPayload, {
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,

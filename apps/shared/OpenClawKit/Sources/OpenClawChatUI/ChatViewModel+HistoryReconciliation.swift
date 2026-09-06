@@ -779,6 +779,7 @@ extension OpenClawChatViewModel {
             pendingRunIDs: self.pendingRuns,
             visibleMessagesByID: Dictionary(uniqueKeysWithValues: self.messages.map { ($0.id, $0) }),
             historyMutationGeneration: self.historyMutationGeneration,
+            progressCardGeneration: self.progressCardGeneration,
             runOwnershipGeneration: self.runOwnershipGeneration,
             latestUserTurn: captureLatestUserTurn ? Self.latestUserTurn(in: self.messages) : nil)
     }
@@ -872,7 +873,7 @@ extension OpenClawChatViewModel {
         // Wholesale history replacement drops local-only queued bubbles;
         // re-adopt or re-append them from the durable outbox.
         restoreOutboxMessages(session: request.session)
-        self.scheduleProgressCardFetch(for: request.session)
+        self.refreshProgressCard(from: payload.sessionInfo, for: request)
         self.applyDeferredExternalStateIfReady()
         return true
     }

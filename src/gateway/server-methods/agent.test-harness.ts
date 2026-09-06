@@ -313,7 +313,8 @@ vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),

@@ -30,6 +30,7 @@ import {
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
   getAttachedBackend,
+  hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
   isReplyOperationPreBackendPhase,
   markReplyRunDiagnosticProgress,
@@ -42,7 +43,6 @@ import {
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
-  type ReplyOperationStaleExpiryOptions,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
   waitForReplyBarrierSettlement,
@@ -561,7 +561,10 @@ export function createReplyOperation(params: {
   };
 
   expireReplyOperationByOperation.set(operation, (reason, options) => {
-    if (replyRunState.activeRunsByKey.get(currentSessionKey) !== operation) {
+    if (
+      replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
+      (reason !== "finalization_stalled" && hasCommittedReplyOperationOutcome(operation))
+    ) {
       return false;
     }
     // Set the terminal result BEFORE cancelling the backend: cancel can
@@ -721,14 +724,6 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function expireStaleReplyOperation(
-  operation: ReplyOperation,
-  reason: replyRunSettle.ReplyOperationStaleReason,
-  options?: ReplyOperationStaleExpiryOptions,
-): boolean {
-  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
 }
 
 export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {

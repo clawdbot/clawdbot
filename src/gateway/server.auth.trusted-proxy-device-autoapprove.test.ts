@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import { writeConfigFile } from "../config/config.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -28,6 +32,12 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const BROWSER_ORIGIN = "https://control.example.com";
+const NATIVE_UI_CLIENT = {
+  id: GATEWAY_CLIENT_IDS.MACOS_APP,
+  mode: GATEWAY_CLIENT_MODES.UI,
+  platform: "macOS 26.0",
+  version: "1.0.0",
+} satisfies ConnectParams["client"];
 const TRUSTED_PROXY_HEADERS = {
   origin: BROWSER_ORIGIN,
   "x-forwarded-for": "203.0.113.50",
@@ -92,7 +102,8 @@ async function writeGatewayAuthConfig(params: {
   });
 }
 
-async function connectBrowser(params: {
+async function connectOperatorUi(params: {
+  client?: ConnectParams["client"];
   port: number;
   identityPath: string;
   scopes?: string[];
@@ -100,17 +111,20 @@ async function connectBrowser(params: {
   trustedProxy?: boolean;
   declaredProxyScopes?: string;
 }) {
-  const ws = await openBrowserWs(
-    params.port,
+  const client = params.client ?? CONTROL_UI_CLIENT;
+  const headers: Record<string, string> =
     params.trustedProxy === false
       ? { origin: BROWSER_ORIGIN, "x-forwarded-for": "203.0.113.50" }
-      : trustedProxyHeaders(params.declaredProxyScopes),
-  );
+      : trustedProxyHeaders(params.declaredProxyScopes);
+  if (client.mode === GATEWAY_CLIENT_MODES.UI) {
+    delete headers.origin;
+  }
+  const ws = await openBrowserWs(params.port, headers);
   try {
     return await connectReq(ws, {
       ...(params.token ? { token: params.token } : { skipDefaultAuth: true }),
       ...(params.scopes === undefined ? {} : { scopes: params.scopes }),
-      client: CONTROL_UI_CLIENT,
+      client,
       deviceIdentityPath: params.identityPath,
     });
   } finally {
@@ -175,7 +189,7 @@ async function connectBrowserWithoutScopes(params: {
   }
 }
 
-describe("trusted-proxy browser device auto-approval", () => {
+describe("trusted-proxy operator device auto-approval", () => {
   test("auto-approves operator.admin and warns once at startup", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",
@@ -194,7 +208,7 @@ describe("trusted-proxy browser device auto-approval", () => {
 
     try {
       await withGatewayServer(async ({ port }) => {
-        const res = await connectBrowser({
+        const res = await connectOperatorUi({
           port,
           identityPath,
           scopes: ["operator.admin"],
@@ -212,7 +226,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     expect(
       warnings.filter((message) =>
         message.includes(
-          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
         ),
       ),
     ).toHaveLength(1);
@@ -234,7 +248,13 @@ describe("trusted-proxy browser device auto-approval", () => {
     ).toHaveLength(1);
   });
 
-  test("auto-approves a new browser device with the default scopes", async () => {
+  test.each([
+    CONTROL_UI_CLIENT,
+    NATIVE_UI_CLIENT,
+    { ...NATIVE_UI_CLIENT, id: GATEWAY_CLIENT_IDS.LINUX_APP, platform: "linux" },
+    { ...NATIVE_UI_CLIENT, id: GATEWAY_CLIENT_IDS.IOS_APP, platform: "iOS 26.0" },
+    { ...NATIVE_UI_CLIENT, id: GATEWAY_CLIENT_IDS.ANDROID_APP, platform: "Android 16" },
+  ])("auto-approves a new $id operator with the default scopes", async (client) => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",
       deviceAutoApprove: { enabled: true },
@@ -243,7 +263,8 @@ describe("trusted-proxy browser device auto-approval", () => {
     const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
     await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({
+      const res = await connectOperatorUi({
+        client,
         port,
         identityPath,
         scopes: ["operator.read", "operator.write", "operator.approvals"],
@@ -271,7 +292,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const identityPath = deviceIdentityPath("trusted-proxy-recovery-scope");
 
     await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({
+      const res = await connectOperatorUi({
         port,
         identityPath,
         scopes: ["operator.read"],
@@ -297,7 +318,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
     await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({
+      const res = await connectOperatorUi({
         port,
         identityPath,
         scopes: ["operator.read", "operator.write", "operator.approvals"],
@@ -313,42 +334,46 @@ describe("trusted-proxy browser device auto-approval", () => {
     ]);
   });
 
-  test("leaves mixed node and operator requests pending for manual approval", async () => {
-    await writeGatewayAuthConfig({
-      mode: "trusted-proxy",
-      deviceAutoApprove: { enabled: true, scopes: ["operator.read"] },
-    });
-    const identityPath = deviceIdentityPath("trusted-proxy-mixed-role");
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-
-    await withGatewayServer(async ({ port }) => {
-      const nodeWs = await openBrowserWs(port, trustedProxyHeaders());
-      try {
-        const nodeRes = await connectReq(nodeWs, {
-          skipDefaultAuth: true,
-          client: NODE_CLIENT,
-          role: "node",
-          scopes: [],
-          deviceIdentityPath: identityPath,
-        });
-        expect(nodeRes.ok).toBe(false);
-      } finally {
-        nodeWs.close();
-      }
-
-      const browserRes = await connectBrowser({
-        port,
-        identityPath,
-        scopes: ["operator.read"],
+  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
+    "leaves mixed node and $id operator requests pending for manual approval",
+    async (client) => {
+      await writeGatewayAuthConfig({
+        mode: "trusted-proxy",
+        deviceAutoApprove: { enabled: true, scopes: ["operator.read"] },
       });
-      expect(browserRes.ok).toBe(false);
-    });
+      const identityPath = deviceIdentityPath("trusted-proxy-mixed-role");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
-    await expect(getPairedDevice(identity.deviceId)).resolves.toBeNull();
-    expect(
-      (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId),
-    ).toMatchObject({ roles: ["node", "operator"] });
-  });
+      await withGatewayServer(async ({ port }) => {
+        const nodeWs = await openBrowserWs(port, trustedProxyHeaders());
+        try {
+          const nodeRes = await connectReq(nodeWs, {
+            skipDefaultAuth: true,
+            client: NODE_CLIENT,
+            role: "node",
+            scopes: [],
+            deviceIdentityPath: identityPath,
+          });
+          expect(nodeRes.ok).toBe(false);
+        } finally {
+          nodeWs.close();
+        }
+
+        const browserRes = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read"],
+        });
+        expect(browserRes.ok).toBe(false);
+      });
+
+      await expect(getPairedDevice(identity.deviceId)).resolves.toBeNull();
+      expect(
+        (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId),
+      ).toMatchObject({ roles: ["node", "operator"] });
+    },
+  );
 
   test("caps omitted scopes to the declared proxy scopes", async () => {
     await writeGatewayAuthConfig({
@@ -373,29 +398,33 @@ describe("trusted-proxy browser device auto-approval", () => {
     expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
   });
 
-  test("caps requested scopes to the declared proxy scopes", async () => {
-    await writeGatewayAuthConfig({
-      mode: "trusted-proxy",
-      deviceAutoApprove: {
-        enabled: true,
-        scopes: ["operator.read", "operator.write", "operator.approvals"],
-      },
-    });
-    const identityPath = deviceIdentityPath("trusted-proxy-requested-scopes-cap");
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-
-    await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({
-        port,
-        identityPath,
-        scopes: ["operator.read", "operator.write"],
-        declaredProxyScopes: "operator.read",
+  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
+    "caps $id requested scopes to the configured and declared proxy scopes",
+    async (client) => {
+      await writeGatewayAuthConfig({
+        mode: "trusted-proxy",
+        deviceAutoApprove: {
+          enabled: true,
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        },
       });
-      expect(res.ok).toBe(true);
-    });
+      const identityPath = deviceIdentityPath("trusted-proxy-requested-scopes-cap");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
-  });
+      await withGatewayServer(async ({ port }) => {
+        const res = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read", "operator.write", "operator.admin"],
+          declaredProxyScopes: "operator.read",
+        });
+        expect(res.ok).toBe(true);
+      });
+
+      expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+    },
+  );
 
   test("keeps configured and requested scope behavior when the proxy header is absent", async () => {
     await writeGatewayAuthConfig({
@@ -416,7 +445,7 @@ describe("trusted-proxy browser device auto-approval", () => {
       ).toBe(true);
       expect(
         (
-          await connectBrowser({
+          await connectOperatorUi({
             port,
             identityPath: requestedIdentityPath,
             scopes: ["operator.read", "operator.write"],
@@ -434,36 +463,47 @@ describe("trusted-proxy browser device auto-approval", () => {
     ]);
   });
 
-  test("auto-approves same-key scope upgrades on existing devices", async () => {
-    await writeGatewayAuthConfig({
-      mode: "trusted-proxy",
-      deviceAutoApprove: {
-        enabled: true,
-        scopes: ["operator.read", "operator.write"],
-      },
-    });
-    const identityPath = deviceIdentityPath("trusted-proxy-scope-upgrade");
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-
-    await withGatewayServer(async ({ port }) => {
-      const initial = await connectBrowser({ port, identityPath, scopes: ["operator.read"] });
-      expect(initial.ok).toBe(true);
-
-      const upgrade = await connectBrowser({
-        port,
-        identityPath,
-        scopes: ["operator.read", "operator.write"],
+  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
+    "auto-approves same-key scope upgrades on existing $id devices",
+    async (client) => {
+      await writeGatewayAuthConfig({
+        mode: "trusted-proxy",
+        deviceAutoApprove: {
+          enabled: true,
+          scopes: ["operator.read", "operator.write"],
+        },
       });
-      expect(upgrade.ok).toBe(true);
-    });
+      const identityPath = deviceIdentityPath("trusted-proxy-scope-upgrade");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
-    const pairing = await listDevicePairing();
-    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toHaveLength(0);
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual([
-      "operator.read",
-      "operator.write",
-    ]);
-  });
+      await withGatewayServer(async ({ port }) => {
+        const initial = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read"],
+        });
+        expect(initial.ok).toBe(true);
+
+        const upgrade = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read", "operator.write"],
+        });
+        expect(upgrade.ok).toBe(true);
+      });
+
+      const pairing = await listDevicePairing();
+      expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toHaveLength(
+        0,
+      );
+      expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual([
+        "operator.read",
+        "operator.write",
+      ]);
+    },
+  );
 
   test("narrows same-key reconnects without a pairing round-trip", async () => {
     await writeGatewayAuthConfig({
@@ -475,7 +515,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const warnings: string[] = [];
 
     await withGatewayServer(async ({ port }) => {
-      const initial = await connectBrowser({
+      const initial = await connectOperatorUi({
         port,
         identityPath,
         scopes: ["operator.read", "operator.write"],
@@ -490,7 +530,7 @@ describe("trusted-proxy browser device auto-approval", () => {
       };
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       try {
-        const reconnect = await connectBrowser({
+        const reconnect = await connectOperatorUi({
           port,
           identityPath,
           scopes: ["operator.read", "operator.write", "operator.admin", "operator.pairing"],
@@ -519,104 +559,168 @@ describe("trusted-proxy browser device auto-approval", () => {
     expect(warnings.filter((message) => message.includes("auto-approved"))).toEqual([]);
   });
 
-  test("rejects a foreign-key connect for an already-paired deviceId", async () => {
-    await writeGatewayAuthConfig({
-      mode: "trusted-proxy",
-      deviceAutoApprove: {
-        enabled: true,
-        scopes: ["operator.read", "operator.write"],
-      },
-    });
-    const identityPath = deviceIdentityPath("trusted-proxy-key-mismatch-victim");
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-    const attackerIdentity = loadOrCreateDeviceIdentity({
-      path: deviceIdentityPath("trusted-proxy-key-mismatch-attacker"),
-    });
+  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
+    "rejects a foreign-key $id connect for an already-paired deviceId",
+    async (client) => {
+      await writeGatewayAuthConfig({
+        mode: "trusted-proxy",
+        deviceAutoApprove: {
+          enabled: true,
+          scopes: ["operator.read", "operator.write"],
+        },
+      });
+      const identityPath = deviceIdentityPath("trusted-proxy-key-mismatch-victim");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+      const attackerIdentity = loadOrCreateDeviceIdentity({
+        path: deviceIdentityPath("trusted-proxy-key-mismatch-attacker"),
+      });
 
-    await withGatewayServer(async ({ port }) => {
-      const initial = await connectBrowser({ port, identityPath, scopes: ["operator.read"] });
-      expect(initial.ok).toBe(true);
-
-      // Same deviceId, different key pair: a valid signature over the attacker
-      // key must not ride the trusted-proxy upgrade lane.
-      const ws = await openBrowserWs(port, trustedProxyHeaders());
-      try {
-        const nonce = await readConnectChallengeNonce(ws);
-        if (!nonce) {
-          throw new Error("missing connect.challenge nonce");
-        }
-        const signedAt = Date.now();
-        const scopes = ["operator.read", "operator.write"];
-        const payload = buildDeviceAuthPayloadV3({
-          deviceId: identity.deviceId,
-          clientId: CONTROL_UI_CLIENT.id,
-          clientMode: CONTROL_UI_CLIENT.mode,
-          role: "operator",
-          scopes,
-          signedAtMs: signedAt,
-          token: null,
-          nonce,
-          platform: CONTROL_UI_CLIENT.platform,
+      await withGatewayServer(async ({ port }) => {
+        const initial = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read"],
         });
-        const id = randomUUID();
-        const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
-          ws,
-          (message) => message.type === "res" && message.id === id,
-        );
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "connect",
-            params: {
-              minProtocol: PROTOCOL_VERSION,
-              maxProtocol: PROTOCOL_VERSION,
-              client: CONTROL_UI_CLIENT,
-              caps: [],
-              commands: [],
-              role: "operator",
-              scopes,
-              device: {
-                id: identity.deviceId,
-                publicKey: publicKeyRawBase64UrlFromPem(attackerIdentity.publicKeyPem),
-                signature: signDevicePayload(attackerIdentity.privateKeyPem, payload),
-                signedAt,
-                nonce,
+        expect(initial.ok).toBe(true);
+
+        // Same deviceId, different key pair: a valid signature over the attacker
+        // key must not ride the trusted-proxy upgrade lane.
+        const ws = await openBrowserWs(port, trustedProxyHeaders());
+        try {
+          const nonce = await readConnectChallengeNonce(ws);
+          if (!nonce) {
+            throw new Error("missing connect.challenge nonce");
+          }
+          const signedAt = Date.now();
+          const scopes = ["operator.read", "operator.write"];
+          const payload = buildDeviceAuthPayloadV3({
+            deviceId: identity.deviceId,
+            clientId: client.id,
+            clientMode: client.mode,
+            role: "operator",
+            scopes,
+            signedAtMs: signedAt,
+            token: null,
+            nonce,
+            platform: client.platform,
+          });
+          const id = randomUUID();
+          const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+            ws,
+            (message) => message.type === "res" && message.id === id,
+          );
+          ws.send(
+            JSON.stringify({
+              type: "req",
+              id,
+              method: "connect",
+              params: {
+                minProtocol: PROTOCOL_VERSION,
+                maxProtocol: PROTOCOL_VERSION,
+                client,
+                caps: [],
+                commands: [],
+                role: "operator",
+                scopes,
+                device: {
+                  id: identity.deviceId,
+                  publicKey: publicKeyRawBase64UrlFromPem(attackerIdentity.publicKeyPem),
+                  signature: signDevicePayload(attackerIdentity.privateKeyPem, payload),
+                  signedAt,
+                  nonce,
+                },
               },
-            },
-          }),
-        );
-        expect((await response).ok).toBe(false);
-      } finally {
-        ws.close();
-      }
-    });
+            }),
+          );
+          expect((await response).ok).toBe(false);
+        } finally {
+          ws.close();
+        }
+      });
 
-    // The connect is rejected before any pending request exists: deviceId is
-    // bound to the key fingerprint, so a foreign key cannot even enqueue a
-    // repair, let alone ride the same-key upgrade lane.
-    const pairing = await listDevicePairing();
-    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
-    const paired = await getPairedDevice(identity.deviceId);
-    expect(paired?.approvedScopes).toEqual(["operator.read"]);
-    expect(paired?.publicKey).toBe(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
-  });
+      // The connect is rejected before any pending request exists: deviceId is
+      // bound to the key fingerprint, so a foreign key cannot even enqueue a
+      // repair, let alone ride the same-key upgrade lane.
+      const pairing = await listDevicePairing();
+      expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.approvedScopes).toEqual(["operator.read"]);
+      expect(paired?.publicKey).toBe(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+    },
+  );
 
-  test("leaves trusted-proxy pairing unchanged when auto-approval is disabled", async () => {
-    await writeGatewayAuthConfig({ mode: "trusted-proxy" });
-    const identityPath = deviceIdentityPath("trusted-proxy-disabled");
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
+    "leaves $id pairing unchanged when auto-approval is disabled",
+    async (client) => {
+      await writeGatewayAuthConfig({ mode: "trusted-proxy" });
+      const identityPath = deviceIdentityPath("trusted-proxy-disabled");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
-    await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({ port, identityPath, scopes: ["operator.read"] });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("pairing required");
-    });
+      await withGatewayServer(async ({ port }) => {
+        const res = await connectOperatorUi({
+          client,
+          port,
+          identityPath,
+          scopes: ["operator.read"],
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+      });
 
-    const pairing = await listDevicePairing();
-    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toHaveLength(1);
-    expect(await getPairedDevice(identity.deviceId)).toBeNull();
-  });
+      const pairing = await listDevicePairing();
+      expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toHaveLength(
+        1,
+      );
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+    },
+  );
+
+  test.each([
+    { client: NATIVE_UI_CLIENT, role: "node", scopes: [] },
+    {
+      client: { ...NATIVE_UI_CLIENT, mode: GATEWAY_CLIENT_MODES.BACKEND },
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    {
+      client: { ...NATIVE_UI_CLIENT, id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT },
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+  ])(
+    "does not auto-approve $client.id/$client.mode with role $role",
+    async ({ client, role, scopes }) => {
+      await writeGatewayAuthConfig({
+        mode: "trusted-proxy",
+        deviceAutoApprove: { enabled: true },
+      });
+      const identityPath = deviceIdentityPath("trusted-proxy-ineligible-client");
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+      await withGatewayServer(async ({ port }) => {
+        const headers = trustedProxyHeaders();
+        delete headers.origin;
+        const ws = await openBrowserWs(port, headers);
+        try {
+          const res = await connectReq(ws, {
+            skipDefaultAuth: true,
+            client,
+            role,
+            scopes,
+            deviceIdentityPath: identityPath,
+          });
+          expect(res.ok).toBe(false);
+          expect(res.error?.message).toContain("pairing required");
+        } finally {
+          ws.close();
+        }
+      });
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      expect(
+        (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
+      ).toHaveLength(1);
+    },
+  );
 
   test("does not auto-approve token-authenticated browser devices", async () => {
     await writeGatewayAuthConfig({
@@ -627,7 +731,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const identity = loadOrCreateDeviceIdentity({ path: identityPath });
 
     await withGatewayServer(async ({ port }) => {
-      const res = await connectBrowser({
+      const res = await connectOperatorUi({
         port,
         identityPath,
         scopes: ["operator.read"],

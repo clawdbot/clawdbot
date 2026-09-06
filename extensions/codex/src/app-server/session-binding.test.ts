@@ -1025,6 +1025,116 @@ describe("Codex app-server binding store", () => {
     },
   );
 
+  it("fences an already-readable binding when its admitted session generation rotates", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-authority-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+      sessionKey: "agent:main:readable",
+    };
+    const scope = { agentId: current.agentId, sessionKey: current.sessionKey, storePath };
+    const binding = { threadId: "thread-current", cwd: "/repo" };
+    try {
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: current.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(current, { kind: "set", binding });
+
+      const resolved = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity: current,
+        storePath,
+      });
+      expect(resolved.binding).toEqual(binding);
+
+      await patchSessionEntry({
+        ...scope,
+        update: () => ({ sessionId: "session-successor" }),
+      });
+      expect(resolved.assertCurrent).toThrow("Codex session generation is no longer current");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an already-readable binding owned by a stale admitted session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-stale-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const stale = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-stale",
+      sessionKey: "agent:main:readable",
+    };
+    try {
+      await upsertSessionEntry({
+        agentId: stale.agentId,
+        sessionKey: stale.sessionKey,
+        storePath,
+        entry: { sessionId: "session-current", updatedAt: 1 },
+      });
+      await store.mutate(stale, {
+        kind: "set",
+        binding: { threadId: "thread-stale", cwd: "/repo" },
+      });
+
+      await expect(
+        resolveCodexSessionBinding({ bindingStore: store, identity: stale, storePath }),
+      ).rejects.toThrow("Codex session generation is no longer current");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves caller authority for a scoped session with no durable row", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-ephemeral-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const ephemeral = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-ephemeral",
+      sessionKey: "agent:main:ephemeral",
+    };
+    let active = true;
+    try {
+      await upsertSessionEntry({
+        agentId: ephemeral.agentId,
+        sessionKey: "agent:main:other",
+        storePath,
+        entry: { sessionId: "session-other", updatedAt: 1 },
+      });
+      const binding = { threadId: "thread-ephemeral", cwd: "/repo" };
+      await store.mutate(ephemeral, { kind: "set", binding });
+
+      const resolved = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity: ephemeral,
+        storePath,
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller authority closed");
+          }
+        },
+      });
+      expect(resolved.binding).toEqual(binding);
+      expect(resolved.assertCurrent).not.toThrow();
+
+      active = false;
+      expect(resolved.assertCurrent).toThrow("caller authority closed");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(
     ["two generations behind", "different session key", "different agent"].flatMap((mismatch) =>
       [false, true].map((supervision) => ({ mismatch, supervision })),

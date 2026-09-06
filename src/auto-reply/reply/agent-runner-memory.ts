@@ -28,10 +28,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
-import {
-  resolveCandidateThinkingLevel,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -46,6 +43,7 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import {
+  persistCompactionBoundaryWithSessionEntrySync,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   updateSessionEntry,
@@ -76,6 +74,7 @@ import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
+  resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
@@ -158,7 +157,7 @@ function hasMatchingTranscriptByteCompactionLatch(
   return (
     latch?.sessionId === entry.sessionId &&
     latch.maxBytes === maxBytes &&
-    activeBytes >= latch.activeBytes &&
+    activeBytes >= maxBytes &&
     activeBytes - latch.activeBytes < maxBytes
   );
 }
@@ -558,12 +557,14 @@ type TranscriptTokenEstimate = {
   transcriptByteSize?: number;
 };
 
-async function estimateProviderPromptTokensFromMessages(
+// Fresh totals include the provider usage anchor and any later projected messages.
+async function estimateProviderPromptTokens(
   messages: AgentMessage[],
   contextWindowTokens: number,
+  priorPromptTokens = 0,
 ): Promise<number | undefined> {
   if (messages.length === 0) {
-    return 0;
+    return Math.ceil(priorPromptTokens);
   }
   const { truncateOversizedToolResultsInMessages } = await toolResultTruncationRuntimeLoader.load();
   // Match first-dispatch trailing-result protection without freezing replacements
@@ -576,7 +577,9 @@ async function estimateProviderPromptTokensFromMessages(
     createToolResultPromptProjectionState(),
   ).messages;
   const tokens = estimateMessagesTokens(projected);
-  return Number.isFinite(tokens) && tokens >= 0 ? Math.ceil(tokens) : undefined;
+  return Number.isFinite(tokens) && tokens >= 0
+    ? Math.ceil(priorPromptTokens) + Math.ceil(tokens)
+    : undefined;
 }
 
 async function estimatePromptTokensFromSessionTranscript(params: {
@@ -622,18 +625,20 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(usage.outputTokens)
         : undefined;
     if (hasUsableProviderPromptUsage(usage)) {
-      const trailingMessages = usage.trailingMessages;
-      const trailingTokens = await estimateProviderPromptTokensFromMessages(
-        trailingMessages,
+      const promptTokens = await estimateProviderPromptTokens(
+        usage.trailingMessages,
         params.contextWindowTokens,
+        usage.promptTokens,
       );
-      if (trailingTokens === undefined) {
+      if (promptTokens === undefined) {
         return undefined;
       }
       return {
-        promptTokens: Math.ceil(usage.promptTokens) + trailingTokens,
+        promptTokens,
         promptTokenSource:
-          trailingMessages.length > 0 ? "provider_usage_plus_prompt_projection" : "provider_usage",
+          usage.trailingMessages.length > 0
+            ? "provider_usage_plus_prompt_projection"
+            : "provider_usage",
         outputTokens: normalizedOutputTokens,
         transcriptByteSize: snapshot.byteSize,
       };
@@ -650,7 +655,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         reason: "preflight-compaction-estimate",
       },
     )) as AgentMessage[];
-    const estimatedTokens = await estimateProviderPromptTokensFromMessages(
+    const estimatedTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
     );
@@ -720,7 +725,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  if (params.isHeartbeat || isCli || ownsNativeCompaction) {
+  if (isCli || ownsNativeCompaction) {
     return entry ?? params.sessionEntry;
   }
   const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
@@ -741,6 +746,11 @@ export async function runSessionCompactionIfNeeded(params: {
       resolveSessionStorePathCore(params.cfg.session?.store, { agentId: compactionAgentId }),
   });
   const compactionStore = params.sessionStore ?? { [compactionSessionKey]: entry };
+  const compactionTarget = {
+    agentId: compactionAgentId,
+    sessionKey: compactionSessionKey,
+    storePath: compactionStorePath,
+  };
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
@@ -780,22 +790,20 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    isCodexRuntime || (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
+    params.isHeartbeat ||
+    isCodexRuntime ||
+    (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
-          agentId: compactionAgentId,
+          ...compactionTarget,
           sessionId: entry.sessionId,
-          sessionKey: compactionSessionKey,
-          storePath: compactionStorePath,
           contextWindowTokens,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
       ? readSessionLogSnapshot({
-          agentId: compactionAgentId,
+          ...compactionTarget,
           sessionId: entry.sessionId,
-          sessionKey: compactionSessionKey,
-          storePath: compactionStorePath,
           includeByteSize: true,
           includeUsage: false,
         })
@@ -806,9 +814,8 @@ export async function runSessionCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  // Codex re-evaluates its native rollout fuse every turn; this latch only suppresses local retries.
+  // Codex still re-evaluates its native rollout fuse every turn; this only latches host-byte retries.
   let transcriptByteCompactionLatched =
-    !isCodexRuntime &&
     exceedsTranscriptByteThreshold &&
     hasMatchingTranscriptByteCompactionLatch(
       entry,
@@ -816,6 +823,16 @@ export async function runSessionCompactionIfNeeded(params: {
       maxActiveTranscriptBytes,
     );
   const latch = entry.transcriptByteCompactionLatch;
+  const refreshedTranscriptByteCompactionLatch =
+    transcriptByteCompactionLatched &&
+    typeof activeTranscriptBytes === "number" &&
+    activeTranscriptBytes < (latch?.activeBytes ?? 0)
+      ? {
+          activeBytes: activeTranscriptBytes,
+          sessionId: entry.sessionId,
+          maxBytes: maxActiveTranscriptBytes!,
+        }
+      : undefined;
   // Unknown projection size cannot invalidate a latch whose identity and threshold still apply.
   const shouldClearTranscriptByteCompactionLatch =
     latch !== undefined &&
@@ -823,29 +840,20 @@ export async function runSessionCompactionIfNeeded(params: {
       latch.sessionId !== entry.sessionId ||
       latch.maxBytes !== maxActiveTranscriptBytes ||
       (typeof activeTranscriptBytes === "number" && !transcriptByteCompactionLatched));
-  if (shouldClearTranscriptByteCompactionLatch) {
+  if (refreshedTranscriptByteCompactionLatch || shouldClearTranscriptByteCompactionLatch) {
     const compactionCount = await incrementCompactionCount({
-      agentId: compactionAgentId,
+      ...compactionTarget,
       amount: 0,
       expectedSession: entry,
-      sessionEntry: entry,
-      sessionKey: compactionSessionKey,
       sessionStore: compactionStore,
-      storePath: compactionStorePath,
+      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch,
     });
     assertActive();
     if (compactionCount === undefined) {
       throw new Error("Session changed before byte-compaction progress could be cleared");
     }
     entry = compactionStore[compactionSessionKey] ?? entry;
-    transcriptByteCompactionLatched =
-      !isCodexRuntime &&
-      exceedsTranscriptByteThreshold &&
-      hasMatchingTranscriptByteCompactionLatch(
-        entry,
-        activeTranscriptBytes,
-        maxActiveTranscriptBytes,
-      );
+    transcriptByteCompactionLatched = refreshedTranscriptByteCompactionLatch !== undefined;
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
@@ -906,11 +914,13 @@ export async function runSessionCompactionIfNeeded(params: {
       `sizeTriggerLatched=${transcriptByteCompactionLatched}`,
   );
 
-  const shouldCompactByTokens = shouldRunPreflightCompaction({
-    entry,
-    tokenCount: tokenCountForCompaction,
-    threshold,
-  });
+  const shouldCompactByTokens =
+    !params.isHeartbeat &&
+    shouldRunPreflightCompaction({
+      entry,
+      tokenCount: tokenCountForCompaction,
+      threshold,
+    });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
     return entry ?? params.sessionEntry;
@@ -953,6 +963,45 @@ export async function runSessionCompactionIfNeeded(params: {
   };
   // Provider work can outlive the caller; never account against a replacement session row.
   let expectedSession = entry;
+  let hostAccountingCommitted = false;
+  const recordCompactionAccounting = async (
+    acceptedEntry: SessionEntry,
+    tokensAfter: number | undefined,
+    compactionKind: Parameters<typeof incrementCompactionCount>[0]["compactionKind"],
+    amount = 1,
+  ) => {
+    const postCompactionBytes =
+      compactionTrigger === "transcript_bytes" && typeof maxActiveTranscriptBytes === "number"
+        ? readSessionLogSnapshot({
+            ...compactionTarget,
+            sessionId: acceptedEntry.sessionId,
+            includeByteSize: true,
+            includeUsage: false,
+          }).byteSize
+        : undefined;
+    const transcriptByteCompactionLatch =
+      typeof postCompactionBytes === "number" &&
+      typeof maxActiveTranscriptBytes === "number" &&
+      postCompactionBytes >= maxActiveTranscriptBytes
+        ? {
+            activeBytes: postCompactionBytes,
+            sessionId: acceptedEntry.sessionId,
+            maxBytes: maxActiveTranscriptBytes,
+          }
+        : undefined;
+    const compactionCount = await incrementCompactionCount({
+      ...compactionTarget,
+      sessionStore: compactionStore,
+      amount,
+      tokensAfter,
+      compactionKind,
+      expectedSession: acceptedEntry,
+      transcriptByteCompactionLatch,
+    });
+    if (compactionCount === undefined) {
+      throw new Error("Session changed before compaction maintenance could be recorded");
+    }
+  };
   try {
     await notifyStartCompaction();
     assertActive();
@@ -960,12 +1009,7 @@ export async function runSessionCompactionIfNeeded(params: {
       {
         sessionId: entry.sessionId,
         sessionKey: compactionSessionKey,
-        sessionTarget: {
-          agentId: compactionAgentId,
-          sessionId: entry.sessionId,
-          sessionKey: compactionSessionKey,
-          storePath: compactionStorePath,
-        },
+        sessionTarget: { ...compactionTarget, sessionId: entry.sessionId },
         sandboxSessionKey: params.runtimePolicySessionKey,
         allowGatewaySubagentBinding: true,
         messageChannel: params.followupRun.run.messageProvider,
@@ -1019,6 +1063,54 @@ export async function runSessionCompactionIfNeeded(params: {
       },
       {
         assertActive,
+        ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
+          ? {
+              transcriptBytePreflightHarness: "codex" as const,
+              ...(compactionTarget.storePath &&
+              typeof activeTranscriptBytes === "number" &&
+              typeof maxActiveTranscriptBytes === "number"
+                ? {
+                    withCompactionPersistence: (
+                      append: () => string,
+                      validateAppend: (entryId: string, appendedText: string) => boolean,
+                    ) => {
+                      assertActive();
+                      const entryId = persistCompactionBoundaryWithSessionEntrySync(
+                        {
+                          ...compactionTarget,
+                          expectedLifecycleRevision: expectedSession.lifecycleRevision,
+                          expectedWriterRunId: expectedSession.activeWriterRunId,
+                          sessionId: expectedSession.sessionId,
+                        },
+                        {
+                          append,
+                          transcriptByteCompactionLatch: {
+                            activeBytes: activeTranscriptBytes,
+                            sessionId: expectedSession.sessionId,
+                            maxBytes: maxActiveTranscriptBytes,
+                          },
+                          validateAppend,
+                        },
+                      );
+                      hostAccountingCommitted = true;
+                      return entryId;
+                    },
+                  }
+                : {}),
+              onHostCompactionCommitted: async (commit) => {
+                await recordCompactionAccounting(
+                  commit.entry,
+                  commit.tokensAfter,
+                  commit.compactionKind,
+                  hostAccountingCommitted ? 0 : 1,
+                );
+                hostAccountingCommitted = true;
+              },
+              onHostCompactionTranscriptSettled: async (commit) => {
+                await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
+              },
+            }
+          : {}),
         onCommitted: (accepted) => {
           expectedSession = accepted.entry;
           entry = accepted.entry;
@@ -1054,45 +1146,16 @@ export async function runSessionCompactionIfNeeded(params: {
       throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
 
-    const postCompactionBytes =
-      !isCodexRuntime &&
-      compactionTrigger === "transcript_bytes" &&
-      typeof maxActiveTranscriptBytes === "number"
-        ? readSessionLogSnapshot({
-            agentId: compactionAgentId,
-            sessionId: entry.sessionId,
-            sessionKey: compactionSessionKey,
-            storePath: compactionStorePath,
-            includeByteSize: true,
-            includeUsage: false,
-          }).byteSize
-        : undefined;
-    const transcriptByteCompactionLatch =
-      typeof postCompactionBytes === "number" &&
-      typeof maxActiveTranscriptBytes === "number" &&
-      postCompactionBytes >= maxActiveTranscriptBytes
-        ? {
-            activeBytes: postCompactionBytes,
-            sessionId: entry.sessionId,
-            maxBytes: maxActiveTranscriptBytes,
-          }
-        : undefined;
-    const compactionCount = await incrementCompactionCount({
-      agentId: compactionAgentId,
-      sessionEntry: entry,
-      sessionStore: compactionStore,
-      sessionKey: compactionSessionKey,
-      storePath: compactionStorePath,
-      tokensAfter: result.result?.tokensAfter,
-      compactionKind: result.compactionKind,
-      expectedSession,
-      transcriptByteCompactionLatch,
-    });
-    assertActive();
-    if (compactionCount === undefined) {
-      throw new Error("Session changed before compaction maintenance could be recorded");
+    if (!hostAccountingCommitted) {
+      await recordCompactionAccounting(
+        expectedSession,
+        result.result?.tokensAfter,
+        result.compactionKind,
+      );
     }
+    assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
+    const transcriptByteCompactionLatch = entry.transcriptByteCompactionLatch;
     if (transcriptByteCompactionLatch) {
       preflightCompactionLog.warn(
         "byte-triggered compaction left the active transcript above its limit; suppressing repeats until it grows by another threshold",
@@ -1240,14 +1303,8 @@ export async function runMemoryFlushIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const persistedPromptTokensRaw = entry?.totalTokens;
-  const persistedPromptTokens =
-    typeof persistedPromptTokensRaw === "number" &&
-    Number.isFinite(persistedPromptTokensRaw) &&
-    persistedPromptTokensRaw > 0
-      ? persistedPromptTokensRaw
-      : undefined;
-  const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
+  const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
+  const hasFreshPersistedPromptTokens = persistedPromptTokens !== undefined;
 
   // The soft margin belongs only to early flushing, leaving room before blocking compaction.
   const flushThreshold = Math.max(
@@ -1299,12 +1356,15 @@ export async function runMemoryFlushIfNeeded(params: {
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
-  const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
-  const hasReliableTranscriptPromptTokens =
-    typeof transcriptPromptTokens === "number" &&
-    Number.isFinite(transcriptPromptTokens) &&
-    transcriptPromptTokens > 0;
+  const transcriptPromptTokens = hasUsableProviderPromptUsage(transcriptUsageSnapshot)
+    ? await estimateProviderPromptTokens(
+        transcriptUsageSnapshot.trailingMessages,
+        contextWindowTokens,
+        transcriptUsageSnapshot.promptTokens,
+      )
+    : undefined;
+  const hasReliableTranscriptPromptTokens = typeof transcriptPromptTokens === "number";
   const shouldPersistTranscriptPromptTokens =
     hasReliableTranscriptPromptTokens &&
     (!hasFreshPersistedPromptTokens ||
@@ -1354,17 +1414,14 @@ export async function runMemoryFlushIfNeeded(params: {
     hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
     hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
   );
-  const hasFreshPromptTokensSnapshot =
-    promptTokensSnapshot > 0 &&
-    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
-
-  const projectedTokenCount = hasFreshPromptTokensSnapshot
-    ? resolveEffectivePromptTokens(
-        promptTokensSnapshot,
-        transcriptOutputTokens,
-        promptTokenEstimate,
-      )
-    : undefined;
+  const projectedTokenCount =
+    promptTokensSnapshot > 0
+      ? resolveEffectivePromptTokens(
+          promptTokensSnapshot,
+          transcriptOutputTokens,
+          promptTokenEstimate,
+        )
+      : undefined;
   const tokenCountForFlush =
     typeof projectedTokenCount === "number" &&
     Number.isFinite(projectedTokenCount) &&
@@ -1531,11 +1588,11 @@ export async function runMemoryFlushIfNeeded(params: {
             entry: activeSessionEntry,
             cfg: params.cfg,
           });
-          const candidateThinkLevel = resolveCandidateThinkingLevel({
+          const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
             cfg: params.cfg,
             provider,
             modelId: model,
-            level: params.followupRun.run.thinkLevel,
+            run: params.followupRun.run,
             catalog: params.followupRun.run.thinkingCatalog,
             agentId: params.followupRun.run.agentId,
             sessionKey:
@@ -1593,6 +1650,7 @@ export async function runMemoryFlushIfNeeded(params: {
             onDeferredLifecycleOwner: deferredLifecycle.adopt,
             onDeferredLifecycleAbort: deferredLifecycle.abort,
             replyOperation: params.replyOperation,
+            assistantErrorTranscript: runOptions.assistantErrorTranscript,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           });

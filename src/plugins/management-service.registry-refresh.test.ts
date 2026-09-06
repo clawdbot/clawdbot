@@ -67,14 +67,10 @@ vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  installManagedPlugin,
-  installManagedPluginSource,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
+const { installManagedPluginSource } = await import("./management-install.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
 
 const installSnapshot = {
   config: {},

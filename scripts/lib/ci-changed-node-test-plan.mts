@@ -70,12 +70,17 @@ const MCP_DOCKER_SEED_LANES = [
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
-const DOCKER_SEED_LANE_ORDER = [...MCP_DOCKER_SEED_LANES, "update-channel-switch"] as const;
+const DOCKER_SEED_LANE_ORDER = [
+  ...MCP_DOCKER_SEED_LANES,
+  "update-channel-switch",
+  "fleet-cache",
+] as const;
 type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
   ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/fleet-cache-docker.sh": ["fleet-cache"],
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
   "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
@@ -104,6 +109,9 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
   const selected = new Set<DockerSeedLane>();
   for (const changedPath of changedPaths) {
     const normalizedPath = changedPath.replaceAll("\\", "/");
+    if (normalizedPath.startsWith("scripts/e2e/lib/fleet-cache/")) {
+      selected.add("fleet-cache");
+    }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
       selected.add(lane);
     }

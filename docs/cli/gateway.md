@@ -140,6 +140,8 @@ openclaw gateway restart --wait 30s
 
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
+On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
+
 External terminals without Gateway-service markers, externally supervised Gateways, node services, and non-Windows callers keep their existing routing. Explicit `--force`, `--wait`, `--preserve-definition`, or `--skip-deferral` also retain their existing behavior and validation; they do not implicitly enable `--safe`.
 
 <Warning>
@@ -240,6 +242,11 @@ These reports omit task identities and request origins; categories can overlap.
 An ordinary stop logs `active-work drain settled; beginning server close` before
 teardown, including after a drain timeout or failure. Diagnostics do not change
 drain budgets or the service manager's stop deadline.
+
+A client disconnect leaves interactive setup available for reconnect. A Gateway
+stop or restart closes setup prompts before draining work. Settings writes already
+in progress may finish, but setup will not wait for another answer during shutdown.
+After the Gateway starts again, reopen setup and check the saved settings.
 
 ## Query a running Gateway
 
@@ -613,6 +620,31 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+### Recover an unreadable native service definition
+
+If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first
+restore access to the service files and native service manager. `--force` does not
+bypass unknown service facts. Inspect the selected service with
+`openclaw gateway status --deep` from the account and profile that own it.
+
+For a malformed definition or unsupported environment syntax, privately back up
+the service files and any values stored only in its environment. Correct unresolved
+or unsupported values before reinstalling; OpenClaw cannot infer their intended
+values. Then, from an external shell using the same account and profile:
+
+```bash
+openclaw gateway uninstall
+openclaw gateway install
+openclaw gateway health
+```
+
+Uninstall removes the native registration and launcher, preserving configuration,
+plugin installations, session state, and workspaces. Reinstallation rebuilds the
+service environment from the current configuration and installation inputs;
+service-only values must be supplied again. If native service status is itself
+unavailable, uninstall also refuses: restore native manager access first instead
+of deleting state or bypassing inspection.
+
 ### Lifecycle requests from Gateway chat
 
 Gateway-hosted OpenClaw chat controls the exact Gateway serving that session.
@@ -716,6 +748,7 @@ openclaw gateway restart
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.
     - Gateway lifecycle mutations append best-effort key-value audit records to `<state-dir>/logs/gateway-restart.log`, including CLI start, stop, and restart operations, safe restart requests, supervisor restarts, and detached handoffs.
     - Lifecycle commands accept `--json` for scripting.
+    - A restart that completes native activation or accepted recovery but fails its health check emits `action: "restart"`, `ok: false`, and `result: "restart-health-failed"`, retaining its error, hints, warnings, and exit code 1. This diagnostic does not authorize another activation. Refusals, unexpected exceptions, and definition repair without confirmed activation do not emit this result. A scheduled restart reports acceptance, without claiming successor health.
 
   </Accordion>
   <Accordion title="Managed Gateway heap sizing">

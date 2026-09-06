@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -541,7 +541,7 @@ describe("secrets runtime fast path", () => {
 
   it("pins empty auth stores on startup-only fast-path snapshots until refresh", async () => {
     const { ensureAuthProfileStoreWithoutExternalProfiles } =
-      await import("../agents/auth-profiles/store.js");
+      await import("../agents/auth-profiles/store-runtime.js");
     const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
     const { activateSecretsRuntimeSnapshotState } = await import("./runtime-state.js");
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-empty-store-"));

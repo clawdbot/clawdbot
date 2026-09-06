@@ -39,7 +39,7 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreForLocalUpdate,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 export {
   removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,

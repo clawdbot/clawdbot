@@ -28,6 +28,13 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      [
+        "meetingCapture",
+        "/settings/communications",
+        "?section=transcripts",
+        "#settings-communications-meeting-capture",
+      ],
+      ["meetings", "/meetings", "", ""],
       ["device", "/settings/device", "", ""],
       ["devicePermissions", "/settings/device/permissions", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
@@ -122,7 +129,7 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts"]],
+    ["communications", ["messages", "tts", "transcripts"]],
     ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],

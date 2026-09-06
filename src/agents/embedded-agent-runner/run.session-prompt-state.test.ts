@@ -15,7 +15,7 @@ import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.
 const assertActive = () => {};
 
 const CONTINUE_FROM_TRANSCRIPT_PROMPT =
-  "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
 const CONTINUE_AFTER_TOOL_FAILURE_PROMPT = `${CONTINUE_FROM_TRANSCRIPT_PROMPT} If a tool failed, say so; never claim completion or success.`;
 
 const BASE_RUN_PARAMS = {

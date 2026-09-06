@@ -19,7 +19,7 @@ import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
   installManagedPluginSource,
   type ManagedPluginSourceInstallRequest,
-} from "../plugins/management-service.js";
+} from "../plugins/management-install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";

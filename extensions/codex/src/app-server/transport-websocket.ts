@@ -191,6 +191,8 @@ export function createWebSocketTransport(
   stdin.once("close", closeSocket);
 
   return {
+    // Codex uses tungstenite defaults: one uncompressed frame is limited to 16 MiB.
+    maxFrameBytes: 16 * 1024 * 1024,
     stdin,
     stdout,
     stderr,

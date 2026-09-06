@@ -8,6 +8,12 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  iterateSessionEntryKeys,
+  readExactSessionEntryRow,
+  readSessionEntryCount,
+  readSessionEntryStore,
+} from "./session-accessor.sqlite-entry-store.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 
@@ -156,6 +162,50 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
 });
 
 describe("SQLite exclusion survivor semantics", () => {
+  describe.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)("%s JSON boundaries", (encoding) => {
+    it.each([
+      ["literal NUL", "\u0000"],
+      ["literal NUL and suffix", "\u0000garbage"],
+      ["valid escaped NUL", ""],
+    ])("keeps %s metadata reads consistent with full rows", (_name, suffix) => {
+      const database = openDatabase(encoding);
+      const key = "agent:main:survivor";
+      const json =
+        JSON.stringify({
+          sessionId: "raw",
+          updatedAt: 1,
+          previousSessionId: "historical",
+          label: "escaped\u0000日本語🦞",
+        }) + suffix;
+      insertEntry(database, key, "raw", json);
+      // Compare the actual full-reader contract, including older Node TEXT bindings.
+      const full = readSessionEntryStore(database, { allowCanonicalRepair: true });
+      const fullEntry = full[key];
+      expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
+        full,
+      );
+      expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
+        fullEntry ? ["historical", "raw"] : ["raw"],
+      );
+      expect(readSessionEntryCount(database)).toBe(Object.keys(full).length);
+      expect([...iterateSessionEntryKeys(database)]).toEqual(Object.keys(full));
+      if (fullEntry) {
+        expect(readExactSessionEntryRow(database, key, "list")?.entry).toEqual(fullEntry);
+      } else {
+        expect(() => readExactSessionEntryRow(database, key)).toThrow(
+          "invalid persisted session row",
+        );
+        expect(() => readExactSessionEntryRow(database, key, "list")).toThrow(
+          "invalid persisted session row",
+        );
+      }
+      expect(
+        readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
+      ).toEqual({});
+      expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
+    });
+  });
+
   it.each([
     ["malformed", "{", false],
     ["retained placeholder", "{}", false],

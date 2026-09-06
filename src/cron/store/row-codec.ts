@@ -212,17 +212,31 @@ export function loadCronRows(
   return jobIds ? rows.filter((row) => jobIds.has(row.job_id)) : rows;
 }
 
-/** Fingerprints definition JSON and order while excluding runtime-owned state. */
+/** Fingerprints raw definition rows without mutating their config order. */
+export function fingerprintCronJobRows(
+  rows: readonly Pick<CronJobRow, "job_id" | "job_json" | "sort_order">[],
+): string {
+  // This internal, transient Doctor token uses one encoding-independent ID order.
+  // Keep raw fields so every definition edit invalidates the snapshot.
+  const ordered = rows
+    .map(({ job_id, job_json, sort_order }) => ({
+      idBytes: Buffer.from(job_id),
+      definition: { job_id, job_json, sort_order },
+    }))
+    .toSorted((left, right) => Buffer.compare(left.idBytes, right.idBytes));
+  return sha256Hex(JSON.stringify(ordered.map(({ definition }) => definition)));
+}
+
+/** Reads only definition JSON and order while excluding runtime-owned state. */
 export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
   const rows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
       .select(["job_id", "job_json", "sort_order"])
-      .where("store_key", "=", storeKey)
-      .orderBy("job_id", "asc"),
+      .where("store_key", "=", storeKey),
   ).rows;
-  return sha256Hex(JSON.stringify(rows));
+  return fingerprintCronJobRows(rows);
 }
 
 /** Materializes retired ownership within the caller's write transaction. */

@@ -2061,6 +2061,66 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "moved direct session does not block the event group",
+      storedTo: "user:operator",
+      storedType: "direct",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+    {
+      name: "moved group session does not allow the event direct chat",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "user:operator",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same opaque direct conversation retains its hint",
+      storedTo: "opaque-dm",
+      storedType: "direct",
+      eventTo: "opaque-dm",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same group conversation remains deliverable",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+  ] as const)(
+    "qualifies heartbeat chat type by the selected conversation: $name",
+    async ({ storedTo, storedType, eventTo, expectedChannel, expectedType }) => {
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: {},
+        agentId: "main",
+        entry: {
+          sessionId: "chat-type-owner",
+          updatedAt: 1,
+          lastChannel: "alpha",
+          lastTo: storedTo,
+          chatType: storedType,
+        },
+        heartbeat: { target: "last", directPolicy: "block" },
+        turnSource: { channel: "alpha", to: eventTo },
+      });
+      expect(resolved.channel).toBe(expectedChannel);
+      expect(resolved.chatType).toBe(expectedType);
+      if (expectedChannel === "none") {
+        expect(resolved.reason).toBe("dm-blocked");
+        expect(resolved.to).toBeUndefined();
+      } else {
+        expect(resolved.to).toBe(eventTo);
+      }
+    },
+  );
+
   it("prefers turn-scoped routing over mutable session routing for target=last", () => {
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},

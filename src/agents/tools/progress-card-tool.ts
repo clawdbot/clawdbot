@@ -23,6 +23,7 @@ const ProgressCardToolSchema = Type.Object(
 
 type ProgressCardToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   callGateway?: InProcessGatewayCaller;
 };
 
@@ -54,6 +55,7 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
       }
       const result = await gatewayCall<ProgressCardPutResult>("progressCard.put", {
         sessionKey,
+        ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
         ...(input.markdown ? { markdown: input.markdown } : {}),
         ...(input.steps ? { plan: input.steps } : {}),
       });

@@ -1,23 +1,21 @@
 /** SQLite-backed Codex app-server thread bindings. */
+
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
-  AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
   type AgentHarnessSessionDeletionMutation,
-  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  ensureAuthProfileStore,
-  resolveDefaultAgentDir,
-  resolveProviderIdForAuth,
-  type AuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeCodexAppServerBindingModelProvider,
+  type CodexAppServerAuthProfileLookup,
+} from "./auth-profile.js";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
@@ -26,8 +24,6 @@ import {
   ownsStoredSessionGeneration,
   readCodexAppServerThreadBinding,
   readCodexBindingTimestamp,
-  readCodexBindingSessionEntry,
-  readCodexSessionOwnershipBinding,
   readCurrentCodexAppServerBinding,
   readStoredCodexAppServerBinding,
   stripUndefinedBinding,
@@ -38,7 +34,9 @@ import {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 export {
+  assertCodexBindingMayBeReplaced,
   bindingStoreKey,
+  CodexSupervisionBindingReplacementError,
   readCodexAppServerThreadBinding,
   readStoredCodexAppServerBinding,
   sessionBindingIdentity,
@@ -51,8 +49,6 @@ export {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 
-const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
-const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
 const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 
@@ -68,17 +64,6 @@ const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
 // retirement fence only long enough for bounded stale lease work to drain.
 const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
 
-type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
-type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
-
-/** Inputs needed to resolve whether a binding's auth profile is native Codex/OpenAI auth. */
-export type CodexAppServerAuthProfileLookup = {
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: ProviderAuthAliasConfig;
-};
-
 export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
 
 /** Decides whether a run may share the durable stable-key binding owner. */
@@ -87,15 +72,84 @@ export function resolveCodexRunSessionBindingAuthority(params: {
   config?: OpenClawConfig;
   storePath?: string;
 }): CodexRunSessionBindingAuthority {
-  try {
-    const entry = readCodexBindingSessionEntry(params);
-    if (!entry) {
-      return "ephemeral";
-    }
-    return entry.sessionId === params.identity.sessionId ? "current" : "superseded";
-  } catch {
-    return "superseded";
+  return captureCodexSessionGenerationAuthority(params)[0];
+}
+
+/** Host lineage is recorded in the same transaction as its successor generation. */
+function readCodexBindingSessionEntry(params: {
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  config?: OpenClawConfig;
+  storePath?: string;
+}) {
+  const { identity } = params;
+  return identity.sessionKey?.trim()
+    ? getSessionEntry({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey.trim(),
+        storePath:
+          params.storePath?.trim() ||
+          resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+      })
+    : undefined;
+}
+
+/** Synchronous model selection recognizes the predecessor; admission rewrites its fence. */
+function readCodexSessionOwnershipBinding(params: {
+  bindingStore: {
+    read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
+  };
+  identity: CodexAppServerBindingIdentity;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): CodexAppServerThreadBinding | undefined {
+  const binding = params.bindingStore.read(params.identity);
+  if (binding || params.identity.kind !== "session") {
+    return binding;
   }
+  const entry = readCodexBindingSessionEntry({ ...params, identity: params.identity });
+  return entry?.sessionId === params.identity.sessionId && entry.previousSessionId
+    ? params.bindingStore.read({ ...params.identity, sessionId: entry.previousSessionId })
+    : undefined;
+}
+
+type CodexSessionGenerationAuthorityParams = Parameters<typeof readCodexBindingSessionEntry>[0];
+
+function captureCodexSessionGenerationAuthority(
+  params: CodexSessionGenerationAuthorityParams,
+  assertCallerCurrent: () => void = () => {},
+) {
+  const readEntry = () => {
+    try {
+      return readCodexBindingSessionEntry(params);
+    } catch {
+      return null;
+    }
+  };
+  const entry = readEntry();
+  const current = entry?.sessionId === params.identity.sessionId;
+  const authority = entry === undefined ? "ephemeral" : current ? "current" : "superseded";
+  const previousSessionId = current ? entry.previousSessionId : undefined;
+  const assertHostCurrent = () => {
+    if (authority === "ephemeral") {
+      return;
+    }
+    const latest = readEntry();
+    if (
+      authority !== "current" ||
+      !latest ||
+      latest.sessionId !== params.identity.sessionId ||
+      latest.previousSessionId !== previousSessionId
+    ) {
+      throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
+    }
+  };
+  const assertCurrent = () => {
+    assertCallerCurrent();
+    assertHostCurrent();
+  };
+  return [authority, previousSessionId, assertHostCurrent, assertCurrent] as const;
 }
 
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
@@ -107,31 +161,6 @@ export function createCodexSessionGenerationSupersededError(
   );
 }
 
-export class CodexSupervisionBindingReplacementError extends Error {
-  constructor(threadId: string, operation: string) {
-    super(
-      `Refusing to replace supervised Codex thread ${threadId} while ${operation}; ` +
-        "its native user-home connection and model ownership must be preserved",
-    );
-    this.name = "CodexSupervisionBindingReplacementError";
-  }
-}
-
-export function assertCodexBindingMayBeReplaced(
-  binding: CodexAppServerThreadBinding | undefined,
-  operation: string,
-  expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
-): void {
-  // A native-prepared attempt has no host-selected model for a replacement thread.
-  if (expected) {
-    throw new AgentHarnessPreflightError(
-      `Codex native model ownership prevents ${operation}. Continue or compact the original session in its native runtime, or create a new chat with a concrete model; the original binding was preserved.`,
-    );
-  }
-  if (binding?.connectionScope === "supervision") {
-    throw new CodexSupervisionBindingReplacementError(binding.threadId, operation);
-  }
-}
 type CodexAppServerBindingMutation =
   | {
       kind: "set";
@@ -375,55 +404,28 @@ export function scopeCodexRunBindingStore(params: {
   };
 }
 
-/** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
-export async function reclaimCurrentCodexSessionGeneration(params: {
+type CodexSessionGenerationReclaimParams = CodexSessionGenerationAuthorityParams & {
   assertCurrent?: () => void;
   onHostGenerationVerified?: (assertHostGeneration: () => void) => void;
   bindingStore: CodexAppServerBindingStore;
-  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
-  config?: OpenClawConfig;
-  storePath?: string;
   reclaimStale?: boolean;
-}): Promise<boolean> {
-  params.assertCurrent?.();
-  const sessionKey = params.identity.sessionKey?.trim();
-  if (!sessionKey) {
-    return true;
-  }
+};
+
+async function reclaimPreparedCodexSessionGeneration(
+  params: CodexSessionGenerationReclaimParams,
+  authority: ReturnType<typeof captureCodexSessionGenerationAuthority>,
+  assertCurrent = authority[3],
+): Promise<boolean> {
   const plan = await params.bindingStore.prepareSessionGenerationReclaim(params.identity);
-  params.assertCurrent?.();
+  assertCurrent();
   if (plan.kind === "resolved") {
     return plan.result;
   }
-
-  let previousSessionId: string | undefined;
-  // Only a stale stable-key owner needs session-store authority. Resolve it before
-  // the second mutation so the session read never runs inside the binding write transaction.
-  try {
-    const entry = readCodexBindingSessionEntry(params);
-    if (entry?.sessionId !== params.identity.sessionId) {
-      return false;
-    }
-    previousSessionId = entry.previousSessionId;
-  } catch {
+  const [state, previousSessionId, assertHostCurrent] = authority;
+  if (state !== "current") {
     return false;
   }
-  // Lease waits may outlive host rotation without closing the run. Recheck the
-  // recorded pair immediately before each write, outside the binding transaction.
-  const assertHostGeneration = () => {
-    const entry = readCodexBindingSessionEntry(params);
-    if (
-      entry?.sessionId !== params.identity.sessionId ||
-      entry.previousSessionId !== previousSessionId
-    ) {
-      throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
-    }
-  };
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    assertHostGeneration();
-  };
-  params.onHostGenerationVerified?.(assertHostGeneration);
+  params.onHostGenerationVerified?.(assertHostCurrent);
   if (previousSessionId === plan.expectedPreviousSessionId) {
     const adopted = await params.bindingStore.adoptSessionGeneration(
       params.identity,
@@ -437,7 +439,7 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   if (params.reclaimStale === false) {
     return false;
   }
-  return await params.bindingStore.mutate(
+  return params.bindingStore.mutate(
     params.identity,
     {
       kind: "reclaim-generation",
@@ -445,6 +447,21 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
     },
     assertCurrent,
   );
+}
+
+/** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
+export async function reclaimCurrentCodexSessionGeneration(
+  params: CodexSessionGenerationReclaimParams,
+): Promise<boolean> {
+  params.assertCurrent?.();
+  if (!params.identity.sessionKey?.trim()) {
+    return true;
+  }
+  const authority = captureCodexSessionGenerationAuthority(params, params.assertCurrent);
+  if (authority[0] === "superseded") {
+    return false;
+  }
+  return reclaimPreparedCodexSessionGeneration(params, authority);
 }
 
 /** Resolve continuity before selecting native queues, catalogs, or connections. */
@@ -461,40 +478,36 @@ export async function resolveCodexSessionBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   assertCurrent: () => void;
 }> {
-  let assertHostGeneration: (() => void) | undefined;
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    assertHostGeneration?.();
-  };
+  let assertCurrent = params.assertCurrent ?? (() => {});
   const assertAdmissionCurrent = () => {
     // Each caller retains its own cancellation error and cleanup behavior.
-    params.assertCurrent?.();
+    assertCurrent();
     params.signal?.throwIfAborted();
   };
   assertAdmissionCurrent();
-  if (params.assertBinding) {
-    params.assertBinding(readCodexSessionOwnershipBinding(params));
-  }
-  let binding = params.bindingStore.read(params.identity);
-  if (!binding && params.identity.kind === "session" && params.identity.sessionKey) {
+  params.assertBinding?.(readCodexSessionOwnershipBinding(params));
+  const identity = params.identity;
+  const authority =
+    identity.kind === "session" && identity.sessionKey?.trim()
+      ? captureCodexSessionGenerationAuthority({ ...params, identity }, assertCurrent)
+      : undefined;
+  assertCurrent = authority?.[3] ?? assertCurrent;
+  assertAdmissionCurrent();
+  let binding = params.bindingStore.read(identity);
+  if (!binding && authority && identity.kind === "session") {
     if (
-      !(await reclaimCurrentCodexSessionGeneration({
-        ...params,
-        identity: params.identity,
-        reclaimStale: params.reclaimStale === true,
-        assertCurrent: assertAdmissionCurrent,
-        onHostGenerationVerified: (assertHost) => {
-          assertHostGeneration = assertHost;
-        },
-      })) &&
+      !(await reclaimPreparedCodexSessionGeneration(
+        { ...params, identity, reclaimStale: params.reclaimStale === true },
+        authority,
+        assertAdmissionCurrent,
+      )) &&
       params.reclaimStale
     ) {
-      throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
+      throw createCodexSessionGenerationSupersededError(identity.sessionId);
     }
-    binding = params.bindingStore.read(params.identity);
+    binding = params.bindingStore.read(identity);
   }
-  assertCurrent();
-  params.signal?.throwIfAborted();
+  assertAdmissionCurrent();
   params.assertBinding?.(binding);
   // Adoption can finish before a later host rollover. Carry its exact proof
   // through caller waits instead of treating the rewritten binding as authority.
@@ -1342,66 +1355,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-/** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
-export function isCodexAppServerNativeAuthProfile(
-  lookup: CodexAppServerAuthProfileLookup,
-): boolean {
-  const authProfileId = lookup.authProfileId?.trim();
-  if (!authProfileId) {
-    return false;
-  }
-  try {
-    const store =
-      lookup.authProfileStore ??
-      ensureAuthProfileStore(
-        lookup.agentDir?.trim() || resolveDefaultAgentDir(lookup.config ?? {}),
-        {
-          allowKeychainPrompt: false,
-          config: lookup.config,
-          externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
-          externalCliProfileIds: [authProfileId],
-        },
-      );
-    const credential = store.profiles[authProfileId];
-    if (!credential || credential.type === "api_key") {
-      return false;
-    }
-    const provider = credential.provider?.trim();
-    return Boolean(
-      provider &&
-      resolveProviderIdForAuth(provider, { config: lookup.config }) ===
-        CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
-    );
-  } catch (error) {
-    embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
-      authProfileId,
-      error,
-    });
-    return false;
-  }
-}
-
-/** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
-export function normalizeCodexAppServerBindingModelProvider(params: {
-  authProfileId?: string;
-  modelProvider?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: ProviderAuthAliasConfig;
-}): string | undefined {
-  const modelProvider = params.modelProvider?.trim();
-  if (!modelProvider) {
-    return undefined;
-  }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER
-  ) {
-    return undefined;
-  }
-  return modelProvider;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

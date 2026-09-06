@@ -19,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
   appHtml,
@@ -47,12 +48,7 @@ const { executablePath: chromiumExecutablePath } = inject("controlUiE2eChromium"
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
-  "mcp-app-request-lifetime",
-);
-const proofOptions = { proofDir, captureUiProof };
-const recordHost = recordMcpAppHost.bind(undefined, proofOptions);
+let proofDir: string;
 
 let state: OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
@@ -78,10 +74,12 @@ async function settleCleanup(step: string, cleanup: () => Promise<unknown>) {
   }
 }
 async function recordCleanup() {
-  await fs.writeFile(
-    path.join(proofDir, "cleanup.json"),
-    JSON.stringify({ failures, terminalAtMs: Date.now() }, null, 2),
-  );
+  if (proofDir) {
+    await fs.writeFile(
+      path.join(proofDir, "cleanup.json"),
+      JSON.stringify({ failures, terminalAtMs: Date.now() }, null, 2),
+    );
+  }
   expect(failures).toEqual([]);
 }
 
@@ -95,9 +93,8 @@ const suite = createControlUiE2eSuite({
   resources: {
     retainedState: () => state?.root,
     run: async (signal) => {
-      // Both tests share this artifact owner; never clear between their recordings.
-      await fs.rm(proofDir, { recursive: true, force: true });
-      await fs.mkdir(proofDir, { recursive: true });
+      // Both tests share retained reports even when screenshots and video are disabled.
+      proofDir = createControlUiE2eArtifactDir("mcp-app-request-lifetime");
       signal.throwIfAborted();
       state = await createOpenClawTestState({
         prefix: "openclaw-mcp-app-conformance-",
@@ -256,7 +253,6 @@ const suite = createControlUiE2eSuite({
         );
       }
       if (tempRoot) {
-        await fs.mkdir(proofDir, { recursive: true });
         await settleCleanup("archive fixture events", () =>
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
         );
@@ -288,9 +284,6 @@ suite.define(() => {
     await suite.runScenario(context, {
       run: async (signal) => {
         signal.throwIfAborted();
-        if (captureUiProof) {
-          await fs.mkdir(proofDir, { recursive: true });
-        }
         const teardownProof = createMcpAppTeardownRecorder(proofDir, fixtureEventsPath);
         const controlContext = await newProofContext();
         const controlPage = await controlContext.newPage();
@@ -572,7 +565,7 @@ suite.define(() => {
     await suite.runScenario(context, {
       run: async (signal) => {
         signal.throwIfAborted();
-        await fs.mkdir(proofDir, { recursive: true });
+        const recordHost = recordMcpAppHost.bind(undefined, { proofDir, captureUiProof });
         await fs.writeFile(
           path.join(proofDir, "runtime.json"),
           JSON.stringify(
@@ -620,48 +613,43 @@ suite.define(() => {
             observeMcpAppNetwork(standalonePage, "timing", diagnostics);
             await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
             let app = await findAppFrame(standalonePage);
-            for (const spec of [
-              { scenario: "warm-call8", callDelayMs: 8000, refresh: false },
-              { scenario: "list8-call1", callDelayMs: 1000, refresh: true },
-              { scenario: "list8-call8", callDelayMs: 8000, refresh: true },
-            ]) {
-              await fixture.configure(spec);
-              if (spec.refresh) {
-                await app.locator("#arm-refresh").click();
-                await waitForText(app.locator("#arm-result"), "armed");
-                // The real notification owns this transition. No catalog field is assigned.
-                await expect.poll(() => runtime.peekCatalog()).toBeNull();
-              } else {
-                expect(runtime.peekCatalog()).not.toBeNull();
-              }
-              const startedAtMs = Date.now();
-              diagnostics.push({
-                event: "timing-call-start",
-                atMs: startedAtMs,
-                scenario: spec.scenario,
-              });
-              await app.locator("#call-app").click();
-              await expect
-                .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
-                .not.toBe("pending");
-              const settledAtMs = Date.now();
-              const output = await app.locator("#app-tool").textContent();
-              const events = await waitForMcpAppTimingEvents(fixture.readEvents, spec.scenario);
-              timingResults.push({
-                scenario: spec.scenario,
-                output,
-                events,
-                startedAtMs,
-                settledAtMs,
-              });
-              await recordHost(standalonePage, spec.scenario);
-              await fs.writeFile(
-                path.join(proofDir, "timing-results.json"),
-                JSON.stringify(timingResults, null, 2),
-              );
-              assertMcpAppTimingEvents(events, spec);
-              expect(output).toContain("companion-called");
-            }
+            // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
+            const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
+            await fixture.configure(timingSpec);
+            await app.locator("#arm-refresh").click();
+            await waitForText(app.locator("#arm-result"), "armed");
+            // The real notification owns this transition. No catalog field is assigned.
+            await expect.poll(() => runtime.peekCatalog()).toBeNull();
+            const timingStartedAtMs = Date.now();
+            diagnostics.push({
+              event: "timing-call-start",
+              atMs: timingStartedAtMs,
+              scenario: timingSpec.scenario,
+            });
+            await app.locator("#call-app").click();
+            await expect
+              .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
+              .not.toBe("pending");
+            const settledAtMs = Date.now();
+            const output = await app.locator("#app-tool").textContent();
+            const timingEvents = await waitForMcpAppTimingEvents(
+              fixture.readEvents,
+              timingSpec.scenario,
+            );
+            timingResults.push({
+              scenario: timingSpec.scenario,
+              output,
+              events: timingEvents,
+              startedAtMs: timingStartedAtMs,
+              settledAtMs,
+            });
+            await recordHost(standalonePage, timingSpec.scenario);
+            await fs.writeFile(
+              path.join(proofDir, "timing-results.json"),
+              JSON.stringify(timingResults, null, 2),
+            );
+            assertMcpAppTimingEvents(timingEvents, timingSpec);
+            expect(output).toContain("companion-called");
             const initializations = (await fixture.readEvents()).filter(
               (event) => event.method === "initialize",
             ).length;

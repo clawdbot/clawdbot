@@ -81,6 +81,7 @@ it("hydrates a timeline once and counts status without reading card payloads", a
 
   plugin.register({
     pluginConfig: { captureEnabled: false },
+    lifecycle: { registerRuntimeLifecycle() {} },
     runtime: {},
     session: { controls: { registerControlUiDescriptor() {} } },
     registerNodeInvokePolicy() {},

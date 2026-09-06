@@ -1,9 +1,5 @@
 // Deepinfra plugin entrypoint registers its OpenClaw integration.
-import {
-  type ProviderCatalogContext,
-  type ConfiguredProviderCatalogEntry,
-  readConfiguredProviderCatalogEntries,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -18,9 +14,7 @@ import { applyDeepInfraConfig } from "./onboard.js";
 import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
-  discoverDeepInfraModels,
   getDeepInfraSurfaceFallbackCatalog,
-  hasDeepInfraApiKey,
 } from "./provider-models.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 import {
@@ -68,38 +62,6 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: (ctx: ProviderCatalogContext) => buildDeepInfraApiKeyCatalog(ctx),
       staticRun: async () => ({ provider: buildStaticDeepInfraProvider() }),
-    },
-    augmentModelCatalog: async ({ config, env, agentDir }) => {
-      const configured = readConfiguredProviderCatalogEntries({
-        config,
-        providerId: PROVIDER_ID,
-      });
-      // Gate dynamic discovery on the user having configured a DeepInfra API
-      // key (env var, config SecretInput, or auth-profile store).
-      // Pre-auth flows keep the curated manifest fallback so the model picker
-      // stays tight and startup stays offline-friendly.
-      const hasApiKey = hasDeepInfraApiKey({ env, agentDir, config });
-      const seen = new Set(configured.map((entry) => entry.id));
-      const discovered = await discoverDeepInfraModels({ hasApiKey, env, agentDir });
-      const merged: ConfiguredProviderCatalogEntry[] = [...configured];
-      for (const model of discovered) {
-        if (seen.has(model.id)) {
-          continue;
-        }
-        seen.add(model.id);
-        const input = model.input;
-        merged.push({
-          provider: PROVIDER_ID,
-          id: model.id,
-          name: model.name ?? model.id,
-          ...(typeof model.contextWindow === "number" && model.contextWindow > 0
-            ? { contextWindow: model.contextWindow }
-            : {}),
-          ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
-          ...(input && input.length > 0 ? { input } : {}),
-        });
-      }
-      return merged;
     },
     normalizeConfig: ({ providerConfig }) => providerConfig,
     normalizeTransport: ({ api, baseUrl }) =>

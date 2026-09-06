@@ -101,6 +101,18 @@ export function resolveExecModeFromPolicy(params: {
   return "ask";
 }
 
+// Migration, policy writes, and repair hints must preserve policies that the
+// display-mode projection cannot express: always-ask and full/on-miss.
+export function resolveExactExecModeFromPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode | null {
+  if (params.ask === "always" || (params.security === "full" && params.ask === "on-miss")) {
+    return null;
+  }
+  return resolveExecModeFromPolicy(params);
+}
+
 export function resolveExecPolicyForMode(mode: ExecMode): {
   security: ExecSecurity;
   ask: ExecAsk;

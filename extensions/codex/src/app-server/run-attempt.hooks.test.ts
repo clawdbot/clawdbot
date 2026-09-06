@@ -189,6 +189,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
     expect(assistantEvents).toHaveLength(2);
     expect(assistantEvents[0]?.data).toEqual({
+      itemId: "msg-1",
       text: "hello back",
       delta: "hello back",
       replaceable: true,
@@ -214,6 +215,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(globalAssistantEvents[0]?.runId).toBe("run-1");
     expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
     expect(globalAssistantEvents[0]?.data).toEqual({
+      itemId: "msg-1",
       text: "hello back",
       delta: "hello back",
       replaceable: true,

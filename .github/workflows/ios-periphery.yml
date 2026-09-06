@@ -119,6 +119,14 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Install Watch Rust toolchain
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
       - name: Install iOS Swift tooling
         run: |
           periphery_dir="$RUNNER_TEMP/openclaw-periphery"

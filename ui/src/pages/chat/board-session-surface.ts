@@ -1,6 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html } from "lit";
-import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
+import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
@@ -21,9 +21,7 @@ export async function ensureBoardViewElement(): Promise<boolean> {
   if (customElements.get("openclaw-board-view")) {
     return false;
   }
-  boardViewLoad ??= isMockBoardEnabled()
-    ? import("../../components/board-view-placeholder.ts")
-    : import("../../components/board/board-view.ts");
+  boardViewLoad ??= import("../../components/board/board-view.ts");
   await boardViewLoad;
   return true;
 }

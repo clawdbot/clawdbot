@@ -29,6 +29,7 @@
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
+  container: chat-transcript / size;
   flex: 1 1 0;
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
@@ -59,6 +60,136 @@
   outline: none;
 }
 
+/* Desktop-only transcript landmarks. The rail lives in the existing gutter so it
+   complements the native scrollbar instead of impersonating it. */
+.chat-position-rail {
+  position: sticky;
+  z-index: 4;
+  top: clamp(20px, 3vh, 28px);
+  width: 0;
+  height: 0;
+  margin-inline-start: auto;
+}
+
+.chat-position-rail__track {
+  position: absolute;
+  top: 0;
+  right: calc(var(--chat-thread-gutter) + 4px);
+  width: 24px;
+  height: min(420px, calc(100cqh - 48px));
+  border-inline-start: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+/* The transcript owner measures the actual saved-width gutter. Its 80px
+   threshold covers the marker/tick footprint plus space clear of messages. */
+.chat-thread:not([data-position-rail-gutter]) > .chat-position-rail {
+  display: none;
+}
+
+.chat-position-rail__marker {
+  position: absolute;
+  z-index: 1;
+  top: var(--chat-position-marker);
+  left: -13px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: var(--cursor-action);
+  transform: translateY(-50%);
+}
+
+.chat-position-rail__dot {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--muted);
+  pointer-events: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.chat-position-rail__tick {
+  position: absolute;
+  top: 50%;
+  right: calc(50% + 9px);
+  display: block;
+  width: var(--chat-position-proximity-width);
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 58%, var(--muted));
+  opacity: var(--chat-position-proximity-opacity);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition:
+    width 120ms ease,
+    opacity 120ms ease;
+}
+
+.chat-position-rail__marker:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.chat-position-rail__marker:hover .chat-position-rail__dot,
+.chat-position-rail__marker:focus-visible .chat-position-rail__dot,
+.chat-position-rail__marker--current .chat-position-rail__dot {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.chat-position-rail__marker--current .chat-position-rail__dot {
+  background: var(--accent);
+}
+
+.chat-position-rail__preview {
+  position: absolute;
+  top: var(--chat-position-preview);
+  right: 52px;
+  display: grid;
+  width: 200px;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--focus-ring) 50%, var(--border));
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  line-height: 1.35;
+  transform: translateY(-50%);
+}
+
+/* A contiguous hover path lets magnifier users move from the marker onto the
+   preview. Marker hit targets stay above this transparent bridge. */
+.chat-position-rail__preview::after {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  width: 16px;
+  height: 100%;
+  content: "";
+}
+
+.chat-position-rail__preview-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-position-rail__preview-copy {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }
@@ -70,6 +201,9 @@
   width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
   max-width: var(--chat-thread-max-width);
   margin-inline: auto;
+  /* Commit width with the virtual rows, even under the global reduced-motion
+     duration; gutter and row measurements must not sample a transition. */
+  transition-property: none;
 }
 
 /* Message images (sent images displayed in chat) */
@@ -629,6 +763,30 @@
     --chat-thread-gutter: 16px;
     --chat-thread-side-inset: 0px;
     --chat-mobile-edge-inset: 4px;
+  }
+}
+
+@container chat-transcript (max-width: 960px) or (max-height: 360px) {
+  .chat-position-rail {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-position-rail__dot,
+  .chat-position-rail__tick {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .chat-position-rail__dot {
+    background: ButtonText;
+  }
+
+  .chat-position-rail__marker--current .chat-position-rail__dot {
+    background: Highlight;
+    outline: 2px solid Highlight;
   }
 }
 

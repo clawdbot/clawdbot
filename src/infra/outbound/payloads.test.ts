@@ -700,6 +700,31 @@ describe("OutboundPayloadPlan projections", () => {
     ]);
   });
 
+  it("keeps status-notice flags on the transport projection", () => {
+    const plan = createOutboundPayloadPlan([
+      { text: "✅ New session started.", isStatusNotice: true },
+      { text: "hello" },
+    ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
+      expect.objectContaining({
+        text: "✅ New session started.",
+        mediaUrls: [],
+        isStatusNotice: true,
+      }),
+      expect.objectContaining({ text: "hello", mediaUrls: [] }),
+    ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)[1]?.isStatusNotice).toBeUndefined();
+    expect(
+      summarizeOutboundPayloadForTransport({
+        text: "✅ Session reset.",
+        isStatusNotice: true,
+      }),
+    ).toMatchObject({
+      text: "✅ Session reset.",
+      isStatusNotice: true,
+    });
+  });
+
   it("matches mirror projection behavior", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));

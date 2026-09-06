@@ -179,6 +179,8 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
   }
   const sessionIndexChanged =
+    normalizeOptionalString(current.requesterSessionKey) !==
+      normalizeOptionalString(next.requesterSessionKey) ||
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
