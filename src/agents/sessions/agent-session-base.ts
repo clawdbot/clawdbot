@@ -11,6 +11,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { isToolResultError } from "../tool-result-error.js";
 import {
   takeCodeModeResponseSource,
   prepareCodeModeSourceAppend,
@@ -256,9 +257,11 @@ export abstract class AgentSessionBase {
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+      // Normalize adapted failures before middleware, which may explicitly recover.
+      isError ||= isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return undefined;
+        return { isError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -275,16 +278,18 @@ export abstract class AgentSessionBase {
           }),
       );
 
-      if (!hookResult) {
-        return undefined;
+      if (hookResult) {
+        this.extensionModifiedToolResultIds.add(toolCall.id);
       }
-      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         ...hookResult,
-        isError: hookResult.isError ?? isError,
+        isError: hookResult?.isError ?? isError,
       };
     };
+    // Pre-execution failures skip afterToolCall and its recovery handlers.
+    this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
+      executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
   // =========================================================================
