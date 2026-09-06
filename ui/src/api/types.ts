@@ -28,6 +28,7 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
+import type { RequirementConfigCheck, Requirements } from "../../../src/shared/requirements.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -451,11 +452,6 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
-type SkillsStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
-
 type SkillInstallOption = {
   id: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -513,21 +509,9 @@ export type SkillStatusEntry = {
   modelVisible?: boolean;
   userInvocable?: boolean;
   commandVisible?: boolean;
-  requirements: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    anyBins: string[];
-    bins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  configChecks: SkillsStatusConfigCheck[];
+  requirements: Requirements;
+  missing: Requirements;
+  configChecks: RequirementConfigCheck[];
   install: SkillInstallOption[];
   clawhub?: SkillClawHubLink;
   skillCard?: SkillCardStatus;
