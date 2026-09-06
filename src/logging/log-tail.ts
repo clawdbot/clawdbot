@@ -248,29 +248,51 @@ async function readLogSliceAttempt(
     truncated = start > 0;
   }
 
-  const readWindow = async (windowStart: number, length: number) => {
+  const readBytes = async (windowStart: number, length: number) => {
     const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - windowStart)));
     const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
-    return buffer.toString("base64", 0, bytesRead);
+    return buffer.subarray(0, bytesRead);
   };
-  const buildGeneration = async (generationCursor: number): Promise<LogFileGeneration> => {
+  // Capture the generation before reading returned records so a rewrite cannot replace its
+  // fingerprint after the output buffer was produced.
+  const prefixLength = Math.min(64, size);
+  const prefixSnapshot = await readBytes(0, prefixLength);
+  const generationSnapshotStart = Math.max(0, size - LOG_GENERATION_WINDOW_BYTES);
+  const generationSnapshot = await readBytes(
+    generationSnapshotStart,
+    size - generationSnapshotStart,
+  );
+  const buildGeneration = (generationCursor: number): LogFileGeneration | undefined => {
+    if (
+      prefixSnapshot.length !== prefixLength ||
+      generationSnapshot.length !== size - generationSnapshotStart
+    ) {
+      return undefined;
+    }
     const boundedCursor = Math.min(Math.max(0, generationCursor), size);
-    const prefixLength = Math.min(64, size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
     const contentWindow = getContentWindowBounds(boundedCursor, size);
-    const contentBuffer = Buffer.alloc(contentWindow.length);
-    const contentBytesRead = await readFileWindowFully(handle, contentBuffer, contentWindow.start);
+    const sliceSnapshot = (windowStart: number, length: number) => {
+      const offset = windowStart - generationSnapshotStart;
+      if (offset < 0 || offset + length > generationSnapshot.length) {
+        return undefined;
+      }
+      return generationSnapshot.subarray(offset, offset + length);
+    };
+    const contentBuffer = sliceSnapshot(contentWindow.start, contentWindow.length);
+    const boundary = sliceSnapshot(boundaryStart, boundedCursor - boundaryStart);
+    if (contentBuffer === undefined || boundary === undefined) {
+      return undefined;
+    }
     return {
       identity: `${stat.dev}:${stat.ino}`,
       size,
-      prefix: await readWindow(0, prefixLength),
+      prefix: prefixSnapshot.toString("base64"),
       prefixLength,
-      boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
-      contentHash: createHash("sha256")
-        .update(contentBuffer.subarray(0, contentBytesRead))
-        .digest("hex"),
+      boundary: boundary.toString("base64"),
+      contentHash: createHash("sha256").update(contentBuffer).digest("hex"),
       contentWindowStart: contentWindow.start,
-      contentWindowLength: contentBytesRead,
+      contentWindowLength: contentBuffer.length,
       mtimeNs: stat.mtimeNs.toString(),
       ctimeNs: stat.ctimeNs.toString(),
     };
@@ -284,7 +306,7 @@ async function readLogSliceAttempt(
       truncated,
       reset,
       skippedBytes,
-      generation: await buildGeneration(size),
+      generation: buildGeneration(size),
     };
   }
 
@@ -325,7 +347,7 @@ async function readLogSliceAttempt(
     truncated,
     reset,
     skippedBytes,
-    generation: await buildGeneration(cursor),
+    generation: buildGeneration(cursor),
   };
 }
 

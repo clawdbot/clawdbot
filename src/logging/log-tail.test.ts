@@ -256,6 +256,46 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines.map((line) => line.message)).toEqual(["before"]);
   });
 
+  it("retries when a same-size rewrite races the returned buffer", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const makeLine = (message: string) =>
+      `${JSON.stringify({
+        0: message,
+        time: "2026-01-22T00:00:00.000Z",
+        _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+      })}\n`;
+    const oldLine = makeLine("old");
+    const newLine = makeLine("new");
+    expect(Buffer.byteLength(newLine)).toBe(Buffer.byteLength(oldLine));
+    await fs.writeFile(file, oldLine);
+    setLoggerOverride({ file });
+
+    const realOpen = fs.open.bind(fs);
+    let readCalls = 0;
+    let rewritten = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+        const result = await realRead(...readArgs);
+        readCalls += 1;
+        if (!rewritten && readCalls === 3) {
+          rewritten = true;
+          await fs.writeFile(file, newLine);
+        }
+        return result;
+      });
+      return handle;
+    });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(rewritten).toBe(true);
+    expect(result.lines.map((line) => line.message)).toEqual(["new"]);
+  });
+
   it("keeps the first line when the byte window starts exactly after a newline", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
