@@ -1,7 +1,7 @@
 // Gateway method registry normalizes method descriptors, enforces unique names, and exposes dispatch policy metadata.
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
-import type { OperatorScope } from "../operator-scopes.js";
+import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
@@ -103,5 +103,23 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
       scope,
     };
     return descriptor;
+  });
+}
+
+/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
+export function createPluginGatewayMethodDescriptors(
+  registry: Pick<PluginRegistry, "gatewayHandlers"> &
+    Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
+): GatewayMethodDescriptorInput[] {
+  const descriptors = registry.gatewayMethodDescriptors ?? [];
+  if (descriptors.length > 0) {
+    return [...descriptors];
+  }
+  // Older plugin registries only carried handlers, so keep them callable but assign admin scope
+  // until the plugin can provide explicit descriptor metadata.
+  return createGatewayMethodDescriptorsFromHandlers({
+    handlers: registry.gatewayHandlers,
+    owner: { kind: "plugin", pluginId: "unknown" },
+    defaultScope: ADMIN_SCOPE,
   });
 }
