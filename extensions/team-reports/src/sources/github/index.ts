@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { truncateGraphemes } from "../../text.js";
 import type {
   ActivityWindow,
   GithubItem,
@@ -44,8 +45,7 @@ function commentTitle(body: string | null | undefined): string {
       ?.split(/\r\n?|\n/, 1)[0]
       ?.trim()
       .replace(/\s+/g, " ") || "Comment";
-  const characters = [...firstLine];
-  return characters.length > 140 ? `${characters.slice(0, 139).join("")}…` : firstLine;
+  return truncateGraphemes(firstLine, 140);
 }
 
 async function listRepos(

@@ -1,5 +1,6 @@
 import { periodDayKeys } from "./periods.js";
 import { isBotLogin, primaryLogin } from "./roster.js";
+import { truncateGraphemes } from "./text.js";
 import type {
   DiscordMessage,
   DiscordSourceConfig,
@@ -288,7 +289,7 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
       member.discord.excerpts.push({
         channel: message.channelName,
         atMs: message.atMs,
-        excerpt: [...collapsed].slice(0, discordConfig?.excerptMaxChars ?? 260).join(""),
+        excerpt: truncateGraphemes(collapsed, discordConfig?.excerptMaxChars ?? 260),
       });
     }
   }

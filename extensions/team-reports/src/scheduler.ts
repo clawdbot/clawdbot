@@ -44,7 +44,10 @@ function nextIntradayDue(nowMs: number, everyHours: number): number | undefined 
 
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason);
+    const abort = () => {
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+    };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) {
       abort();

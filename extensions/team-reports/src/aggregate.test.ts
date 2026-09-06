@@ -204,7 +204,7 @@ describe("team report attribution", () => {
         {
           channel: "planning/release",
           atMs: period.sinceMs + 1000,
-          excerpt: "Ready for a release ",
+          excerpt: "Ready for a release…",
         },
       ],
     });
@@ -290,6 +290,18 @@ describe("stored day aggregation", () => {
 });
 
 describe("report evidence bounds", () => {
+  it.each(["🇦🇹", "e\u0301"])("bounds excerpts without splitting %s graphemes", (grapheme) => {
+    for (const [content, excerpt] of [
+      [grapheme.repeat(20), grapheme.repeat(20)],
+      [grapheme.repeat(21), `${grapheme.repeat(19)}…`],
+    ]) {
+      const report = day([], [message({ content })]);
+      expect(member(report, "alpha").discord.excerpts).toEqual([
+        { channel: "planning", atMs: period.sinceMs + 1000, excerpt },
+      ]);
+    }
+  });
+
   it("keeps newest evidence without changing totals", () => {
     const report = day(
       Array.from({ length: 205 }, (_, index) =>

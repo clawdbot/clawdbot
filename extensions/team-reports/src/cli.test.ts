@@ -14,9 +14,12 @@ function program(): Command {
   return command;
 }
 
+const stdoutWrite = vi.fn<typeof process.stdout.write>(() => true);
+
 beforeEach(() => {
   vi.mocked(callGatewayFromCli).mockReset();
-  vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  stdoutWrite.mockClear();
+  vi.spyOn(process.stdout, "write").mockImplementation(stdoutWrite);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -35,7 +38,7 @@ describe("Team Reports CLI", () => {
       { period: "day", key: "2026-08-20", format: "markdown" },
       { mode: "cli", scopes: ["operator.read"] },
     );
-    expect(process.stdout.write).toHaveBeenCalledWith("# Team activity\n\nA useful report.\n");
+    expect(stdoutWrite).toHaveBeenCalledWith("# Team activity\n\nA useful report.\n");
   });
 
   it("requests admin scope for generation and returns the run id as JSON", async () => {
@@ -49,7 +52,7 @@ describe("Team Reports CLI", () => {
       { period: "day", date: "2026-08-20" },
       { mode: "cli", scopes: ["operator.admin"] },
     );
-    expect(process.stdout.write).toHaveBeenCalledWith('{\n  "runId": "run-fixture"\n}\n');
+    expect(stdoutWrite).toHaveBeenCalledWith('{\n  "runId": "run-fixture"\n}\n');
   });
 
   it("rejects invalid calendar dates before issuing a Gateway mutation", async () => {
