@@ -1,5 +1,5 @@
 // Live Docker Stage tests cover live docker stage script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -354,6 +354,42 @@ export function parseRegistryNpmSpec(spec: string) {
     });
     expect(malformed.status).toBe(2);
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+  });
+
+  it("keeps a matching frozen-source capability under pipefail", () => {
+    const root = tempDirs.make("openclaw-frozen-target-capability-");
+    const sourcePath = path.join(root, "scripts/e2e/lib/plugins/assertions.mjs");
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, `function assertPluginTgzRemoved()\n${"x\n".repeat(100_000)}`);
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_frozen_target_source_contains "$2" scripts/e2e/lib/plugins/assertions.mjs "function assertPluginTgzRemoved()"',
+        "test",
+        stageScriptPath,
+        root,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_SELECTED_SHA: selectedSha,
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it.each([
