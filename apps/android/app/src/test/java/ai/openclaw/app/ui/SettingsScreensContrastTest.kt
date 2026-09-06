@@ -1,13 +1,18 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.assertCompleteText
 import ai.openclaw.app.ui.design.contrastThemeCases
 import ai.openclaw.app.ui.design.renderedLabelContrast
 import android.content.Context
@@ -17,9 +22,13 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.DeviceConfigurationOverride
+import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -28,6 +37,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.CoroutineScope
@@ -115,6 +127,132 @@ class SettingsScreensContrastTest {
           }
         },
       ).around(composeRule)
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun voiceInformationKeepsCompleteTextAndSpeakerActionAtLargeFont() {
+    try {
+      val model = offlineTypographyModel()
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+          ClawDesignTheme(dark = false) {
+            SettingsDetailScreen(model, SettingsRoute.Voice, onBack = {})
+          }
+        }
+      }
+      assertEquals(GatewayTalkSetupReadiness.unverified(), model.talkSetupReadiness.value)
+      for (key in listOf("Realtime Talk", "Dictation", "Gateway talk catalog not loaded", "Unverified", "Wake listener", "Pauses during other voice activity.", "Add wake phrase", "Save wake words")) {
+        val label = nativeString(key)
+        val nodes = composeRule.onAllNodesWithText(label, useUnmergedTree = true)
+        assertTrue("$key must have a rendered caller", nodes.fetchSemanticsNodes().isNotEmpty())
+        for (index in nodes.fetchSemanticsNodes().indices) {
+          nodes[index].performScrollTo()
+          captureTypography("voice-$key-$index")
+          nodes[index].assertCompleteText(label)
+        }
+      }
+      val wakeStatus = composeRule.runOnIdle { model.voiceWakeStatusText.value }
+      composeRule.onNodeWithText(wakeStatus, useUnmergedTree = true).assertCompleteText(wakeStatus)
+      for (key in listOf("Realtime Talk", "Dictation", "Wake listener", "Save wake words")) {
+        composeRule.onNodeWithText(nativeString(key)).assertIsNotEnabled()
+      }
+      for ((action, description) in listOf("Mute speaker" to "Replies play aloud", "Enable speaker" to "Assistant speech muted")) {
+        composeRule.onNodeWithText(nativeString(description), useUnmergedTree = true).assertCompleteText(nativeString(description))
+        composeRule.onNodeWithText(nativeString(action), useUnmergedTree = true).assertCompleteText(nativeString(action))
+        val before = model.speakerEnabled.value
+        val status = nativeString(if (before) "On" else "Muted")
+        composeRule.onNodeWithText(status, useUnmergedTree = true).assertCompleteText(status)
+        captureTypography("voice-$action")
+        // The merged Surface can center over status; exercise the visible title's actual hit.
+        composeRule.onNodeWithText(nativeString(action), useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.runOnIdle { assertEquals(!before, model.speakerEnabled.value) }
+      }
+      assertTrue(model.speakerEnabled.value)
+    } finally {
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun gatewayExplanationAndSecurityKeepCompleteTextAndTlsRestriction() {
+    try {
+      val model = offlineTypographyModel()
+      val fontScale = mutableStateOf(2f)
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+          ClawDesignTheme(dark = false) {
+            SettingsDetailScreen(model, SettingsRoute.Gateway, onBack = {})
+          }
+        }
+      }
+      for (key in listOf("Reconnect", "Disconnect")) {
+        val label = nativeString(key)
+        val node = composeRule.onNodeWithText(label, useUnmergedTree = true)
+        node.assertCompleteText(label)
+        captureTypography("gateway-$key")
+        val layouts = mutableListOf<TextLayoutResult>()
+        node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        val layout = layouts.single()
+        assertTrue(
+          "$label must move below its peer rather than break inside its action word",
+          (0 until layout.lineCount - 1).none { line ->
+            val end = layout.getLineEnd(line, visibleEnd = true)
+            end > 0 && end < label.length && label[end - 1].isLetter() && label[end].isLetter()
+          },
+        )
+      }
+      for (key in listOf("Scan or paste a setup code to add another gateway.", "Unencrypted", "Secure (TLS)")) {
+        val label = nativeString(key)
+        composeRule.onNodeWithText(label, useUnmergedTree = true).performScrollTo()
+        captureTypography("gateway-$key")
+        composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+      }
+      composeRule.onNodeWithText(nativeString("Unencrypted")).assertIsNotEnabled().performClick()
+      composeRule.onNodeWithText(nativeString("Secure (TLS)")).assertIsSelected()
+      assertFalse("Presenting required TLS does not rewrite saved preferences", model.manualTls.value)
+
+      composeRule.runOnIdle { fontScale.value = 1f }
+      val reconnect = composeRule.onNodeWithText(nativeString("Reconnect")).performScrollTo()
+      val disconnect = composeRule.onNodeWithText(nativeString("Disconnect"))
+      disconnect.assertIsDisplayed()
+      val first = reconnect.fetchSemanticsNode().boundsInRoot
+      val second = disconnect.fetchSemanticsNode().boundsInRoot
+      assertTrue("Fitting normal-font actions stay beside one another", first.right <= second.left && first.top == second.top)
+      captureTypography("gateway-actions-normal-font")
+    } finally {
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  private fun offlineTypographyModel(): MainViewModel {
+    app = RuntimeEnvironment.getApplication() as NodeApp
+    previousRuntime = app.peekRuntime()
+    NativeStringResources.install(app)
+    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
+    val prefs = SecurePrefs(app, app.getSharedPreferences("typography-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    prefs.setManualHost("wss://gateway.example.test")
+    prefs.setManualPort(443)
+    prefs.setManualTls(false)
+    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    runtime.disconnect()
+    bindNodeRuntimeTestFixture(app, runtime)
+    return MainViewModel(app, prefs, SavedStateHandle()).also { models.put("typography", it) }
+  }
+
+  private fun captureTypography(name: String) {
+    val evidence = File("build/outputs/settings-typography", UUID.randomUUID().toString())
+    check(evidence.mkdirs())
+    File(evidence, "${name.replace(Regex("[^a-zA-Z0-9-]"), "-")}.png").outputStream().use {
+      assertTrue(
+        composeRule
+          .onRoot()
+          .captureToImage()
+          .asAndroidBitmap()
+          .compress(Bitmap.CompressFormat.PNG, 100, it),
+      )
+    }
+  }
 
   @Test
   fun operationalCaptionsRemainReadableThroughTheirSettingsCallers() {
