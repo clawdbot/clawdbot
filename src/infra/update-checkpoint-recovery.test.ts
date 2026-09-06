@@ -202,7 +202,23 @@ async function fixture(
   if (priorPlanRef) {
     expect(prepared.planRef).toEqual(priorPlanRef);
   }
-  const request = { ...access, planRef: prepared.planRef, resourceCursor: 0 };
+  const request = {
+    ...access,
+    planRef: prepared.planRef,
+    resourceCursor: 0,
+    // Synthetic reader contract for this fixture only, not a live older-runtime proof.
+    validateStagedDatabase(db: DatabaseSync): undefined {
+      expect(db.isTransaction).toBe(true);
+      expect(
+        db
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          .get("operator.new-work"),
+      ).toEqual({ value_json: '"online verification work"' });
+      expect(
+        db.prepare("SELECT reason FROM update_runs WHERE run_id = ?").get(later.runId),
+      ).toEqual({ reason: "retained history" });
+    },
+  };
   const reopened = await reopenUpdateCheckpointRestorePlan(prepared.planRef, access);
   const shared = reopened.plan.resources[0]!;
   expect(shared.sourcePath).toBe(file);
@@ -211,6 +227,40 @@ async function fixture(
 }
 
 describe("checkpoint publication with the actual recovery owner", () => {
+  it.each(["rejection", "asynchronous result"])(
+    "does not seal or publish after executor validation %s",
+    async (failure) => {
+      const f = await fixture();
+      const sourceBefore = await inspectCheckpointFile(f.file);
+      const stageBefore = await inspectCheckpointFile(f.stage);
+      const planBefore = await fs.readFile(f.request.planRef.planPath);
+      const request = {
+        ...f.request,
+        recoveryRecord: f.record,
+        fence,
+        validateStagedDatabase() {
+          throw new Error("previous runtime refuses staged database");
+        },
+      };
+      if (failure === "asynchronous result") {
+        // Exercise an untyped caller without weakening the synchronous TypeScript contract.
+        Reflect.set(request, "validateStagedDatabase", () => Promise.resolve());
+      }
+      await expect(sealUpdateCheckpointRestoreSharedDatabase(request)).rejects.toThrow(
+        failure === "rejection"
+          ? "previous runtime refuses staged database"
+          : "validateStagedDatabase must be synchronous",
+      );
+      expect(loadUpdateRecovery(f.record.runId, f.options)).toEqual(f.record);
+      expect(loadUpdateRecovery(f.record.runId, { path: f.stage })).toEqual(f.record);
+      expect((await inspectCheckpointFile(f.file))?.sha256).toBe(sourceBefore?.sha256);
+      expect((await inspectCheckpointFile(f.stage))?.sha256).toBe(stageBefore?.sha256);
+      expect(await fs.readFile(f.request.planRef.planPath)).toEqual(planBefore);
+      expect((await restoreUpdateCheckpointResource(request)).status).toBe("conflict");
+      expect(await fs.readFile(f.configPath, "utf8")).toBe("candidate config");
+    },
+  );
+
   it.each(["late-unavailable", "preparation-interrupted", "prepared-return-lost"] as const)(
     "retries %s without pinning recovery to a dead plan",
     async (failure) => {

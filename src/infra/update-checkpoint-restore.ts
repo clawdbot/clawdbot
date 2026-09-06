@@ -1,6 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { z } from "zod";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -352,6 +354,8 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
     planRef: UpdateCheckpointRestorePlanRef;
     recoveryRecord: UpdateRecoveryRecord;
     fence: UpdateRecoveryFence;
+    /** Synchronous matching-runtime reader supplied by the executor, not a schema-only fallback. */
+    validateStagedDatabase: (db: DatabaseSync) => undefined;
   },
 ): Promise<UpdateRecoveryRecord> {
   const reopened = await reopenUpdateCheckpointRestorePlan(params.planRef, params);
@@ -426,6 +430,13 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
         },
         validateStagedDatabase(db) {
           assertUpdateCheckpointSqliteSchema(checkpointDb, db);
+          const validation: unknown = params.validateStagedDatabase(db);
+          if (validation !== undefined) {
+            if (isPromiseLike(validation)) {
+              void Promise.resolve(validation).catch(() => undefined);
+            }
+            throw new TypeError("validateStagedDatabase must be synchronous and return undefined");
+          }
         },
       });
       sealed = result.record;
