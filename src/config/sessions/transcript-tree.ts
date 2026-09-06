@@ -389,7 +389,7 @@ export function selectSessionTranscriptTreePathNodes<T>(
     }
     currentId = current.parentId;
   }
-  return path.toReversed();
+  return path.reverse();
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */
@@ -407,7 +407,7 @@ export function mergeSessionTranscriptTreePaths<T>(
       selectedParentId = node.id;
     }
   }
-  return [...selectedById.values()].toSorted((left, right) => left.index - right.index);
+  return [...selectedById.values()].sort((left, right) => left.index - right.index);
 }
 
 /**
@@ -427,17 +427,17 @@ export function mergeSessionTranscriptVisiblePathWithOpaqueAppendPath<T>(params:
 } {
   const nodes = mergeSessionTranscriptTreePaths([params.visiblePath]);
   const selectedIds = new Set(nodes.map((node) => node.id));
-  const opaqueSuffix: SessionTranscriptTreeNode<T>[] = [];
-  for (let index = params.appendPath.length - 1; index >= 0; index -= 1) {
-    const node = params.appendPath[index];
+  let opaqueStart = params.appendPath.length;
+  for (; opaqueStart > 0; opaqueStart -= 1) {
+    const node = params.appendPath[opaqueStart - 1];
     if (!node || selectedIds.has(node.id) || isCanonicalSessionTranscriptEntry(node.entry)) {
       break;
     }
-    opaqueSuffix.unshift(node);
   }
 
   let selectedParentId = nodes.at(-1)?.id ?? null;
-  for (const node of opaqueSuffix) {
+  for (let index = opaqueStart; index < params.appendPath.length; index += 1) {
+    const node = params.appendPath[index]!;
     nodes.push({ ...node, selectedParentId });
     selectedIds.add(node.id);
     selectedParentId = node.id;
