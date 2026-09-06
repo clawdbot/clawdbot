@@ -79,6 +79,10 @@
         "filename": {
           "type": "string"
         },
+        "final": {
+          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "type": "boolean"
+        },
         "forceDocument": {
           "description": "Send media as document; no compression.",
           "type": "boolean"

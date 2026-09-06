@@ -127,7 +127,9 @@ describe("buildTurnStartParams source-delivery context", () => {
         expect(
           Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
         ).toBeLessThan(1_000);
-        if (preserveNativeTurnSettings) expect(turn).not.toHaveProperty("collaborationMode");
+        if (preserveNativeTurnSettings) {
+          expect(turn).not.toHaveProperty("collaborationMode");
+        }
       }
       const required = buildTurnStartParams(
         { ...params, sourceReplyDeliveryMode: "message_tool_only" },

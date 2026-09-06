@@ -147,6 +147,10 @@
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
     },
+    "openclaw_source_delivery": {
+      "kind": "application",
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere."
+    },
     "openclaw_temporal_context": {
       "kind": "application",
       "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
@@ -241,20 +245,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 57597,
-    "roughTokens": 14400
+    "chars": 57821,
+    "roughTokens": 14456
   },
   "openClawDeveloperInstructions": {
-    "chars": 3224,
-    "roughTokens": 806
+    "chars": 2862,
+    "roughTokens": 716
   },
   "totalTextOnly": {
-    "chars": 27170,
-    "roughTokens": 6793
+    "chars": 26808,
+    "roughTokens": 6702
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84769,
-    "roughTokens": 21193
+    "chars": 84631,
+    "roughTokens": 21158
   },
   "userInputText": {
     "chars": 863,
@@ -449,8 +453,6 @@ Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other 
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
-
 Never request or echo credentials/secrets (including authentication/pairing codes) in chat, replies, or transcripts; never ask users to share them there.
 Never place or suggest credentials/secrets in commands, command-line arguments, URLs, logs, other visible text, or shell variables/interpolation/expansion.
 Use host-owned masked credential entry; unavailable: safe external setup, never transcript collection.
@@ -635,6 +637,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",
