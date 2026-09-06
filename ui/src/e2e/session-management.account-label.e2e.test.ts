@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -62,11 +63,7 @@ suite.define(() => {
 
   it("opens rename on the stored label, not the account-decorated name", async () => {
     const cardsKey = "agent:main:telegram:cards:direct:42";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -102,11 +99,7 @@ suite.define(() => {
 
   it("opens chat pane rename on the stored label, not the account-decorated title", async () => {
     const cardsKey = "agent:main:telegram:cards:direct:42";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -133,11 +126,7 @@ suite.define(() => {
     async (surface) => {
       const key = "agent:main:dashboard:generated-title";
       const generatedTitle = "Repository activity dashboard";
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const original = {
         ...sessionRow(key, generatedTitle, Date.now()),

@@ -8,7 +8,10 @@ import {
   startControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI offline locale retry",
@@ -21,11 +24,7 @@ const suite = createControlUiE2eSuite({
 const frenchLocaleModule = /\/src\/i18n\/locales\/fr\.ts(?:\?.*)?$/;
 
 async function createContext(): Promise<BrowserContext> {
-  return suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  return suite.browser.newContext(createControlUiE2eContextOptions());
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {

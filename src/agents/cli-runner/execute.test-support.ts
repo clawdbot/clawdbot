@@ -152,3 +152,16 @@ export function createManagedRun(
     cancel: vi.fn(),
   };
 }
+
+export function createSuccessfulProcessExit(): MockRunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+  };
+}

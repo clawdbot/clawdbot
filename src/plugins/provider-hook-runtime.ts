@@ -227,9 +227,9 @@ export function resolveLoadedProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] | undefined {
-  const filterRegistryPlugins = (registry: PluginRegistry) => {
-    const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return registry.providers
+  const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
+  const filterRegistryPlugins = (registry: PluginRegistry) =>
+    registry.providers
       .filter(
         ({ pluginId, provider }) =>
           (!onlyPluginIds || onlyPluginIds.has(pluginId)) &&
@@ -239,28 +239,29 @@ export function resolveLoadedProviderPluginsForHooks(params: {
             )),
       )
       .map(({ pluginId, provider }) => Object.assign({}, provider, { pluginId }));
-  };
   const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (generationRegistry) {
     return filterRegistryPlugins(generationRegistry);
   }
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   // An empty generation is authoritative. Outside a generation, only a loaded
   // hit proves the registry serves this query; preparation may discover on a miss.
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  for (const registry of [
-    scopedRegistry,
-    getLoadedRuntimePluginRegistry({ env, workspaceDir, requiredPluginIds: params.onlyPluginIds }),
-  ]) {
+  const readLoadedRegistry = (registry: PluginRegistry | undefined) => {
     if (registry && registryContainsRuntimePluginIds(registry, params.onlyPluginIds)) {
       const plugins = filterRegistryPlugins(registry);
-      if (plugins.length > 0) {
-        return plugins;
-      }
+      return plugins.length > 0 ? plugins : undefined;
     }
-  }
-  return undefined;
+    return undefined;
+  };
+  return (
+    readLoadedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry) ??
+    readLoadedRegistry(
+      getLoadedRuntimePluginRegistry({
+        env: params.env ?? process.env,
+        workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+        requiredPluginIds: params.onlyPluginIds,
+      }),
+    )
+  );
 }
 
 export function resolveProviderPluginsForHooks(

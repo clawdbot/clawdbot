@@ -140,7 +140,7 @@ struct WatchRealtimeCallView: View {
 
     private var setupGuidance: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("On iPhone, open OpenClaw → Settings → Apple Watch → Enable Standalone Voice.")
+            Text("On iPhone, open OpenClaw → Settings → Apple Watch → Connect Apple Watch.")
                 .font(WatchClawType.body(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
             Text(verbatim: self.directNode.statusText)
