@@ -671,11 +671,13 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("retracts only the matching preamble headline", async () => {
     const update = vi.fn();
+    const deleteCurrent = vi.fn();
     const progress = createTestProgressDraftCompositor({
       entry: {
         streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
       update,
+      deleteCurrent,
     });
 
     await progress.start();
@@ -689,7 +691,8 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(await progress.pushPreambleHeadline("", { itemId: "preamble-2" })).toBe(true);
     expect(progress.hasStatusHeadline).toBe(false);
-    expect(update).toHaveBeenLastCalledWith("Shelling", expect.anything());
+    expect(deleteCurrent).toHaveBeenCalledOnce();
+    expect(progress.isVisible).toBe(false);
   });
 
   it("keeps a fresh preamble ahead of later narration", async () => {

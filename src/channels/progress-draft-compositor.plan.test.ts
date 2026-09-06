@@ -197,13 +197,17 @@ describe("progress draft plan lifecycle", () => {
     },
   );
 
-  it.each(["partial", "block", "progress"] as const)(
-    "deletes an empty card and recreates identical content in %s mode",
-    async (mode) => {
+  it.each(
+    (["partial", "block", "progress"] as const).flatMap((mode) =>
+      [undefined, false, "Custom progress"].map((label) => ({ mode, label })),
+    ),
+  )(
+    "deletes an empty card and recreates identical content in $mode mode with label $label",
+    async ({ mode, label }) => {
       const update = vi.fn();
       const deleteCurrent = vi.fn();
       const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode, progress: { label: false } } },
+        entry: { streaming: { mode, progress: { label } } },
         mode,
         active: true,
         seed: "preview",
@@ -211,18 +215,25 @@ describe("progress draft plan lifecycle", () => {
         deleteCurrent,
       });
 
+      await progress.pushPlanProgress([]);
+      expect(update).not.toHaveBeenCalled();
+      deleteCurrent.mockClear();
+
       expect(await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }])).toBe(
         true,
       );
       expect(await progress.pushPlanProgress([])).toBe(true);
       expect(deleteCurrent).toHaveBeenCalledTimes(1);
       expect(progress.isVisible).toBe(false);
-      expect(progress.getSnapshot()).toEqual({ lines: [] });
+      expect(progress.getSnapshot()).toEqual(expect.objectContaining({ lines: [] }));
       expect(await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }])).toBe(
         true,
       );
       expect(update).toHaveBeenCalledTimes(2);
-      expect(update).toHaveBeenLastCalledWith("▸ Patch", expect.anything());
+      expect(update).toHaveBeenLastCalledWith(
+        expect.stringContaining("▸ Patch"),
+        expect.anything(),
+      );
     },
   );
 

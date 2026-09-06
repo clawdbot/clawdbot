@@ -324,9 +324,9 @@ export function createChannelProgressDraftCompositor(params: {
     ) {
       return false;
     }
-    const rendered = await publish();
-    if (rendered || formatDraftText()) {
-      return rendered;
+    // Labels decorate activity; they must not keep a retracted card alive.
+    if (lines.length || resolveStatusText() || planSteps?.length || resolveDiffStat()) {
+      return await publish();
     }
     if (!params.deleteCurrent) {
       return false;

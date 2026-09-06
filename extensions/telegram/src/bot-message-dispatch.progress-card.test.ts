@@ -225,7 +225,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           telegramCfg: {
             streaming: {
               mode,
-              progress: { toolProgress: true, label: false },
+              progress: { toolProgress: true },
               preview: { toolProgress: true },
             },
           },
