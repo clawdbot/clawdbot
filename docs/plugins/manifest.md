@@ -951,6 +951,8 @@ Each `dangerousFlags` entry supports:
 
 Capability owners fail cold when their provider is unavailable, so a stale credential never remains active. Route owners may retain the last-known-good value while their full plugin config and provider definition stay unchanged.
 
+Declared paths also control Settings redaction, including wildcards and fields behind local schema references. Structured SecretRefs retain `source` and `provider` while `id` is concealed; plaintext secrets are fully concealed. Unrelated Settings saves preserve the original reference. Changing its source or provider requires an explicit identifier.
+
 For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
 
 Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
