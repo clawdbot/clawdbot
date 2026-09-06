@@ -127,6 +127,8 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
+The `Run Node test shard` step prints Bash `time -p` totals: elapsed (`real`), user CPU (`user`), and system CPU (`sys`) seconds, including waited-for child processes. Compare CPU totals with elapsed time across equivalent runs to distinguish extra CPU work from slower execution with similar CPU work. These totals alone do not establish runner contention.
+
 Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
 Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
 provenance metadata. Private QA shards select their private runtime entries. The
@@ -377,7 +379,7 @@ To use the standalone action from another workflow, pin `openclaw/openclaw/.gith
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, screenshot-risk, and generated-native-locale decisions while still verifying native sources.
 
-Release screenshot routing is deliberately conservative because an app change can break deterministic App Store capture without breaking compilation. Pull requests and exact-head release gates run the full iPhone, iPad, and Watch matrix when the diff touches `apps/ios/**`, linked OpenClawKit or Swabble code, Apple Swift configuration, or the scripts used by screenshot capture. The two device shards start alongside `ios-build (release)` and `ios-build (tests)`, because each owns its simulator build and consumes no output from those jobs. CI keeps scenarios serial within each device and captures Watch evidence in the iPad shard. The final gate independently requires both build phases and both screenshot shards. Both build phases and both screenshot shards start on GitHub-hosted `macos-26`; the test phase retains Debug compilation, Swift lint, lifecycle tests, and Watch operation tests. Frozen compatibility targets retain their existing Debug-only build contract. A hosted reducer verifies the exact evidence union before publishing the sole canonical artifact consumed by `openclaw/ci-gate`. Ordinary manual CI and full-scope release validation run that matrix; `npm-beta` and `npm-stable` defer native qualification. The screenshot decision is independent of macOS routing; a pure iOS app change does not select macOS jobs by itself.
+Release screenshot routing is deliberately conservative because an app change can break deterministic App Store capture without breaking compilation. Pull requests and exact-head release gates run the full iPhone, iPad, and Watch matrix when the diff touches iOS app, UI test, resource, or project files, linked OpenClawKit or Swabble code, Apple Swift configuration, or the scripts used by screenshot capture. The two device shards start alongside `ios-build (release)` and `ios-build (tests)`, because each owns its simulator build and consumes no output from those jobs. CI keeps scenarios serial within each device and captures Watch evidence in the iPad shard. The final gate independently requires both build phases and both screenshot shards. Both build phases and both screenshot shards start on GitHub-hosted `macos-26`; the test phase retains Debug compilation, Swift lint, lifecycle tests, and Watch operation tests. Frozen compatibility targets retain their existing Debug-only build contract. A hosted reducer verifies the exact evidence union before publishing the sole canonical artifact consumed by `openclaw/ci-gate`. Ordinary manual CI and full-scope release validation run that matrix; `npm-beta` and `npm-stable` defer native qualification. Swift-only changes under `apps/ios/Tests/` or `apps/ios/WatchTests/` retain both iOS build phases and their native tests without selecting screenshot capture: those files belong only to unit-test targets, while screenshot capture builds `OpenClawUITests` and the apps. Mixed changes still capture when another path affects that graph; project, resource, and capture configuration changes remain conservative. The screenshot decision is independent of macOS routing; a pure iOS app change does not select macOS jobs by itself.
 
 Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code policy. Each runs only when a non-draft pull request touches its native scan scope, or when manually dispatched.
 
@@ -456,7 +458,14 @@ Outer suites and the remaining checkout contract cases stay sequential.
 
 Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
 The manifest separately enforces total-job budgets: 64 Node rows for canonical
-pushes and 120 for canonical PRs, including precise and plugin plans. The smaller
+pushes and 120 for canonical PRs, including precise and plugin plans. GitHub
+also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
+has 524,288 characters for every matrix together. Grouped Node rows list each
+striped test file explicitly. The manifest projects the five fields consumed by
+the shard runner, then uses gzip+base64 (`groups_gzip_base64`) when the target
+contains the codec. Historical targets without that capability receive the same
+projection through legacy `groups` JSON. Workflow tests keep the complete
+generated output under half of the cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
 and Android at two because those runner pools are narrower. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same

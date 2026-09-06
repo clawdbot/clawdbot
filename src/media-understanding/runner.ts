@@ -414,7 +414,6 @@ function hasExplicitImageUnderstandingConfig(params: {
   return (params.cfg.tools?.media?.models ?? []).some((entry) =>
     matchesMediaEntryCapability({
       entry,
-      source: "shared",
       capability: "image",
       providerRegistry: params.providerRegistry,
     }),

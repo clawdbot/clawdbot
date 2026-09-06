@@ -309,6 +309,7 @@
   "provider-onboard",
   "provider-stream-family",
   "provider-stream-shared",
+  "provider-thinking-runtime",
   "provider-transport-runtime",
   "provider-stream",
   "provider-tools",

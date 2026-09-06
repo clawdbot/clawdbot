@@ -93,6 +93,8 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
       });
+    } else if (item.search || item.hash) {
+      props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
     } else {
       props.onNavigate?.(routeId);
     }

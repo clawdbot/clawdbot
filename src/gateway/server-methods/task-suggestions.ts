@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ErrorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptParams,
@@ -47,13 +46,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
-
-function invalidParams(method: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${method} params: ${formatValidationErrors(errors)}`,
-  );
-}
+import { assertValidParams } from "./validation.js";
 
 type TaskSuggestionAcceptanceResult =
   | { ok: true; result: TaskSuggestionsAcceptResult }
@@ -448,12 +441,9 @@ async function deliverSuggestedTaskToSourceSession(params: {
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
   "taskSuggestions.list": ({ params, respond, context, client }) => {
-    if (!validateTaskSuggestionsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.list", validateTaskSuggestionsListParams.errors),
-      );
+    if (
+      !assertValidParams(params, validateTaskSuggestionsListParams, "taskSuggestions.list", respond)
+    ) {
       return;
     }
     const requestedSessionKey = params.sessionKey;
@@ -494,12 +484,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     );
   },
   "taskSuggestions.create": ({ params, respond, context }) => {
-    if (!validateTaskSuggestionsCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.create", validateTaskSuggestionsCreateParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsCreateParams,
+        "taskSuggestions.create",
+        respond,
+      )
+    ) {
       return;
     }
     if (!path.isAbsolute(params.cwd)) {
@@ -543,12 +535,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
   },
   "taskSuggestions.accept": async (options) => {
     const { params, respond } = options;
-    if (!validateTaskSuggestionsAcceptParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.accept", validateTaskSuggestionsAcceptParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsAcceptParams,
+        "taskSuggestions.accept",
+        respond,
+      )
+    ) {
       return;
     }
     // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
@@ -675,12 +669,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     }
   },
   "taskSuggestions.dismiss": ({ params, respond, context, client }) => {
-    if (!validateTaskSuggestionsDismissParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.dismiss", validateTaskSuggestionsDismissParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsDismissParams,
+        "taskSuggestions.dismiss",
+        respond,
+      )
+    ) {
       return;
     }
     const config = context.getRuntimeConfig();

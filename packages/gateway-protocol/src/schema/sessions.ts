@@ -398,6 +398,7 @@ export const SessionsDiffResultSchema = closedObject({
       Type.Literal("unknown_session"),
       Type.Literal("not_git"),
       Type.Literal("unknown_commit"),
+      Type.Literal("workspace_stopped"),
     ]),
   ),
 });

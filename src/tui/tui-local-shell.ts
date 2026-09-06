@@ -131,8 +131,6 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       run = await supervisor.spawn({
         mode: "anchored-shell",
         command: cmd,
-        sessionId: scopeKey,
-        backendId: "tui-local-shell",
         scopeKey,
         cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },

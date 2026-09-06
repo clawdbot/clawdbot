@@ -1,19 +1,28 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import {
+  getUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import {
   sentinelState,
+  withTransferredUpdateHandoff,
   runGatewayUpdateMock,
   runGatewayUpdatePreflightMock,
   resolveUpdateInstallSurfaceMock,
@@ -160,6 +169,9 @@ describe("update.run acknowledgement", () => {
         expect(run?.steps).toContainEqual(
           expect.objectContaining({ step: "managed-service update handoff", status: "completed" }),
         );
+        expect(
+          run?.steps.find((step) => step.step === "managed-service update handoff")?.detail,
+        ).toBeUndefined();
       } else {
         expect(runGatewayUpdateMock).toHaveBeenCalledWith(
           expect.objectContaining({ runId: response?.runId }),
@@ -209,7 +221,7 @@ describe("update.run acknowledgement", () => {
     );
   });
 
-  it("records activation and awaits its notice before parking the managed gateway", async () => {
+  it("awaits one parking notice without advancing the updater phases", async () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValue("launchd");
     getUpdateAvailableMock.mockReturnValue({
@@ -237,13 +249,21 @@ describe("update.run acknowledgement", () => {
     try {
       await Promise.race([started.promise, park]);
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
-      expect(getUpdateRun(response.runId)?.phase).toBe("activating");
+      expect(getUpdateRun(response.runId)?.phase).toBe("requested");
       expect(parked).toBe(false);
     } finally {
       delivered.resolve(true);
     }
     await park;
     await beforePark();
+    expect(getUpdateRun(response.runId)?.phase).toBe("requested");
+    recordUpdateRunPhase(response.runId, "staging");
+    const validating = recordUpdateRunPhase(response.runId, "validating");
+    expect(
+      validating.steps
+        .filter(({ step }) => ["requested", "staging", "validating"].includes(step))
+        .map(({ step }) => step),
+    ).toEqual(["requested", "staging", "validating"]);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -257,6 +277,54 @@ describe("update.run acknowledgement", () => {
     const response = await captureUpdateRunPayload({ sessionKey });
     expect(response?.ackDelivered).toBe(false);
     expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+  });
+
+  it("persists the internal activating notice through the transferred helper before parking", async () => {
+    const internalSessionKey = "agent:main:webchat:lane";
+    const storePath = resolveDefaultSessionStorePath("main");
+    const sessionId = "internal-managed-update";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: internalSessionKey, storePath },
+      { sessionId, updatedAt: 1, delivery: { kind: "internal" } },
+    );
+    const { extractDeliveryInfo } = await import("../../config/sessions/delivery-info.js");
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.extractDeliveryInfo).mockImplementationOnce(extractDeliveryInfo);
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    let noticeCommitted = false;
+    await withTransferredUpdateHandoff(
+      path.dirname(storePath),
+      async (runId) => {
+        const messages = await loadTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          sessionKey: internalSessionKey,
+          storePath,
+        });
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              idempotencyKey: `update-run-activating:${runId}`,
+              content: [{ type: "text", text: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…" }],
+            }),
+          }),
+        );
+        expect(getUpdateRun(runId)?.steps).toContainEqual(
+          expect.objectContaining({ step: "notice:activating", status: "completed" }),
+        );
+        noticeCommitted = true;
+      },
+      async (activate) => {
+        const response = await captureUpdateRunPayload({ sessionKey: internalSessionKey });
+        expect(response).toMatchObject({ ok: true, ackDelivered: true });
+        expect(noticeCommitted).toBe(false);
+        recordUpdateRunPhase(response!.runId, "activating", { after: { version: "2.0.0" } });
+        await activate();
+        await vi.waitFor(() => expect(noticeCommitted).toBe(true), { timeout: 5_000 });
+      },
+    );
   });
 
   it("records an internal API origin from only its persisted session key", async () => {

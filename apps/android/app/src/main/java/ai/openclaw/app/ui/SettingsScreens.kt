@@ -48,7 +48,6 @@ import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawAgentAvatar
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -2741,7 +2740,7 @@ private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
 @Composable
 private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
-  ClawDetailRow(
+  ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
     leading = { ClawIconBadge(icon = Icons.Default.Lock) },
@@ -2774,7 +2773,7 @@ internal fun usageRefreshVisible(
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
-  ClawDetailRow(
+  ClawListItem(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
     leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
@@ -2787,7 +2786,7 @@ private fun CronJobListRow(
   job: GatewayCronJobSummary,
   onClick: () -> Unit,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
@@ -2963,7 +2962,7 @@ private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) nativeString("Default assistant") else nativeString("Ready"),
     leading = {

@@ -473,6 +473,7 @@ const enSettings = {
       notifications: "Notifications",
       talk: "Talk",
       tts: "Voice",
+      transcripts: "Meeting capture",
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",

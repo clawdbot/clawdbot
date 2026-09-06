@@ -240,8 +240,6 @@ it.each(["linux", "win32"] as const)(
       runId: "rejected-construction",
       mode: "anchored-shell",
       command: "synthetic-command",
-      sessionId: "rejected-construction",
-      backendId: "test",
       scopeKey,
     });
     await nextTurn();
@@ -274,8 +272,6 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
   const run = await supervisor.spawn({
     mode: "anchored-shell",
     command: "synthetic-command",
-    sessionId: "windows-job-output",
-    backendId: "windows-job-output",
     noOutputTimeoutMs: 1_000,
   });
   try {
@@ -466,11 +462,15 @@ it.each(["EPERM", "EIO", "still present"])(
   "keeps graceful cleanup uncertain when the kernel group is %s",
   async (failure) => {
     const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const cause =
+      failure === "still present"
+        ? undefined
+        : Object.assign(new Error(`synthetic ${failure}`), { code: failure });
     groupProbe.mockImplementation(() => {
-      if (failure === "still present") {
-        return true;
+      if (cause) {
+        throw cause;
       }
-      throw Object.assign(new Error(`synthetic ${failure}`), { code: failure });
+      return true;
     });
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
@@ -480,6 +480,9 @@ it.each(["EPERM", "EIO", "still present"])(
     vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValue(15_000);
     close();
     await expect(adapter.waitForExtinction()).rejects.toThrow("owned process group");
+    await expect(adapter.waitForExtinction()).rejects.toSatisfy(
+      (error: unknown) => error instanceof Error && error.cause === cause,
+    );
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     expect(groupProbe).toHaveBeenCalledWith(-1235, 0);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);

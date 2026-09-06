@@ -328,14 +328,25 @@ export function recordUpdateRunPhase(
       if (patch.trigger) {
         record.trigger = patch.trigger;
       }
+      const repairsVerification = phase === "repairing" && record.phase === "verifying";
+      const advances = UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase);
+      // Post-activation repair may only return to verification; stale staging
+      // writers must not reopen activation while the live candidate is repaired.
+      const resumesVerification =
+        record.phase === "repairing" && record.steps.some((step) => step.step === "verifying");
       if (
         phase !== "finished" &&
-        UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase)
+        (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
       ) {
         const now = Date.now();
         upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
         record.phase = phase;
-        upsertStep(record, { step: phase, status: "in_progress", startedAtMs: now });
+        upsertStep(record, {
+          step: phase,
+          status: "in_progress",
+          startedAtMs: now,
+          endedAtMs: undefined,
+        });
       }
       if (patch.step) {
         upsertStep(record, patch.step);

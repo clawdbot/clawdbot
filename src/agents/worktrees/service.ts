@@ -905,7 +905,16 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
+    if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
+      throw new Error("Worktree checkout commit is invalid");
+    }
+    const base = params.checkoutCommit
+      ? {
+          gitOperand: params.checkoutCommit,
+          recordRef: params.baseRef ?? params.checkoutCommit,
+          remote: false,
+        }
+      : await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
       await estimateWorktreeGitBytes(repository.repoRoot, base.gitOperand),
       base.remote ? await estimateWorktreeGitBytes(repository.repoRoot, "HEAD") : 0,

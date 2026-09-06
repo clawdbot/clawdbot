@@ -8,6 +8,7 @@ import { formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
 export type ApplicationStatusBanner = {
+  source?: "read";
   tone: "danger" | "warn" | "info";
   text: string;
 };

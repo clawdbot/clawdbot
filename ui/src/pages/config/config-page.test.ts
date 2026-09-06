@@ -355,7 +355,7 @@ describe("ConfigPage header", () => {
     render(page.render(), container);
 
     expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
-      "Messages and text-to-speech settings.",
+      "Messages, text-to-speech, and meeting capture settings.",
     );
   });
 });
@@ -366,7 +366,14 @@ describe("ConfigPage moved section routes", () => {
     ["communications", "broadcast", "advanced", "?section=broadcast"],
     ["communications", "talk", "talk", "?section=talk"],
     ["appearance", "wizard", "advanced", "?section=wizard"],
-  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
+    [
+      "advanced",
+      "transcripts",
+      "communications",
+      "?section=transcripts&advanced=1",
+      "#config-section-transcripts",
+    ],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search, hash = "") => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
@@ -388,7 +395,7 @@ describe("ConfigPage moved section routes", () => {
     state.routeData = {
       pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
-      hash: "",
+      hash,
       section,
       advanced: false,
       tab: null,
@@ -397,7 +404,7 @@ describe("ConfigPage moved section routes", () => {
 
     state.syncRouteData();
 
-    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash });
   });
 
   it("redirects the former Agent Defaults models section", () => {

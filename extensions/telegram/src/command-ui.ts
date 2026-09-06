@@ -42,19 +42,6 @@ export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo
   return buildProviderKeyboard(params.providers);
 }
 
-export function buildTelegramModelsMenuChannelData(params: {
-  providers: ProviderInfo[];
-}): ReplyPayload["channelData"] | null {
-  if (params.providers.length === 0) {
-    return null;
-  }
-  return {
-    telegram: {
-      buttons: buildTelegramModelsMenuButtons(params),
-    },
-  };
-}
-
 export function buildTelegramCommandsListChannelData(params: {
   currentPage: number;
   totalPages: number;

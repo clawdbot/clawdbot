@@ -36,6 +36,8 @@ export type ProviderCatalogContext = {
     mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
+    /** Credential preparation exhausted its candidates; not an unconfigured provider. */
+    preparationFailed?: boolean;
   };
 };
 

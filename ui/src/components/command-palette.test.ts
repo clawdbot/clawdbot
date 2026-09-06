@@ -899,6 +899,25 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).toContain("Recovered chat");
   });
 
+  it("opens the capture section from the palette without losing its deep link", async () => {
+    const { gateway } = createGateway(true, { methods: [] });
+    gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.admin"] };
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    await enterQuery(palette, "meeting capture");
+    const item = findPaletteOption(palette, "Meeting capture");
+    expect(item).toBeDefined();
+    item!.click();
+    expect(palette.onNavigate).toHaveBeenCalledWith("communications", {
+      search: "?section=transcripts",
+      hash: "#settings-communications-meeting-capture",
+    });
+  });
+
   it("navigates to the plugin manager from search", async () => {
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(

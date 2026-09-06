@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -6124,11 +6125,157 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(dockerfile).toContain(
       "node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require",
     );
-    expect(packageRunner).toContain('MUSL_IMAGE_NAME="openclaw-docker-e2e-musl:local"');
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+  });
+
+  it("verifies fs-safe through a pnpm-style linked package root", () => {
+    const root = realpathSync(tempDirs.make("openclaw-linked-package-proof-"));
+    const modules = join(root, "node_modules");
+    const virtualModules = join(modules, ".pnpm/openclaw@fixture/node_modules");
+    const physicalRoot = join(virtualModules, "openclaw");
+    const logicalRoot = join(modules, "openclaw");
+    const fsSafe = join(virtualModules, "@openclaw/fs-safe");
+    mkdirSync(physicalRoot, { recursive: true });
+    mkdirSync(fsSafe, { recursive: true });
+    writeFileSync(join(physicalRoot, "package.json"), '{"name":"openclaw"}');
+    writeFileSync(
+      join(physicalRoot, "cli.cjs"),
+      'process.stdout.write(require.resolve("@openclaw/fs-safe/package.json"));',
+    );
+    writeFileSync(
+      join(fsSafe, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/fs-safe",
+        type: "module",
+        exports: {
+          "./package.json": "./package.json",
+          "./config": "./config.js",
+          "./durability": "./durability.js",
+        },
+      }),
+    );
+    writeFileSync(
+      join(fsSafe, "config.js"),
+      'export function configureFsSafeNative({ mode }) { if (mode !== "off") throw new Error("fixture requires fallback mode"); }',
+    );
+    writeFileSync(
+      join(fsSafe, "durability.js"),
+      `
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+export async function sha256File(file) {
+  return { digest: createHash("sha256").update(await readFile(file)).digest("hex") };
+}
+`,
+    );
+    symlinkSync(physicalRoot, logicalRoot, process.platform === "win32" ? "junction" : "dir");
+    expect(
+      execFileSync(process.execPath, [join(logicalRoot, "cli.cjs")], { encoding: "utf8" }),
+    ).toBe(join(fsSafe, "package.json"));
+    for (const packageRoot of [physicalRoot, logicalRoot]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/docker/verify-fs-safe-native.mjs",
+          "--package-root",
+          packageRoot,
+          "--mode",
+          "fallback",
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+  });
+
+  it("builds and cleans package-lane images without touching shared image tags", () => {
+    const root = realpathSync(tempDirs.make("openclaw-package-image-owner-"));
+    for (const file of [
+      DOCKER_PACKAGE_INSTALL_E2E_PATH,
+      DOCKER_E2E_IMAGE_HELPER_PATH,
+      DOCKER_E2E_PACKAGE_HELPER_PATH,
+      HELPER_PATH,
+      "scripts/lib/docker-e2e-logs.sh",
+      "scripts/lib/docker-e2e-container.sh",
+      "scripts/lib/docker-e2e-resource-diagnostics.sh",
+      PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
+    ]) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      copyFileSync(file, join(root, file));
+    }
+    mkdirSync(join(root, "packages/normalization-core/src"), { recursive: true });
+    const tarball = join(root, "candidate.tgz");
+    writeFileSync(tarball, "synthetic package admission fixture");
+    const registry = join(root, "registry");
+    mkdirSync(registry);
+    writeFileSync(
+      join(registry, "prepublish-plugin-registry.json"),
+      JSON.stringify({
+        sourceSha: "a".repeat(40),
+        candidateVersion: "2026.9.1",
+        packages: [],
+      }),
+    );
+    const log = join(root, "docker.jsonl");
+    const bin = join(root, "bin");
+    writeExecutables(bin, {
+      pnpm: '#!/bin/bash\n[[ "$*" == test:docker:package-install ]] || exit 97\nexec bash scripts/e2e/docker-package-install.sh\n',
+      docker: `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'build') process.exit(0);
+if (args[0] === 'image' && args[1] === 'inspect') process.exit(args[2] === 'shared-bare:fixture' ? 0 : 1);
+if (args[0] === 'image' && args[1] === 'rm' || args[0] === 'rm') process.exit(0);
+// No container body runs. Fail the final creation to exercise the real owner's cleanup.
+if (args[0] === 'run' && fs.readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').map(JSON.parse).filter(call => call[0] === 'run').length < 4) process.exit(0);
+process.exit(73);
+`,
+    });
+    const command = mainLanes.find((lane) => lane.name === "docker-package-install")?.command;
+    expect(command).toBeDefined();
+    const result = spawnSync("bash", ["-c", command!], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+        TMPDIR: root,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: tarball,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry,
+        OPENCLAW_DOCKER_E2E_IMAGE: "shared-bare:fixture",
+        OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+        OPENCLAW_DOCKER_BUILD_ON_MISSING: "0",
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(73);
+    const calls = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    const builds = calls.filter((args) => args[0] === "build");
+    expect(builds.map((args) => args[args.indexOf("--target") + 1])).toEqual(["bare", "musl"]);
+    const tags = builds.map((args) => args[args.indexOf("-t") + 1]);
+    expect(new Set(tags).size).toBe(2);
+    expect(calls.flat()).not.toContain("shared-bare:fixture");
+    expect(
+      calls
+        .filter((args) => args[0] === "image" && args[1] === "rm")
+        .flatMap((args) => args.slice(2)),
+    ).toEqual(tags);
+    expect(calls.findIndex((args) => args[0] === "run")).toBeGreaterThan(calls.indexOf(builds[1]!));
+    const runs = calls.filter((args) => args[0] === "run");
+    expect(runs).toHaveLength(4);
+    for (const args of runs) {
+      expect(args).toContain(`${tarball}:/tmp/openclaw-current.tgz:ro`);
+      expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
+      expect(args[args.indexOf("--entrypoint") + 1]).toBe(
+        "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
+      );
+    }
   });
 
   it("keeps the shared e2e image on the packaged tarball install path", () => {

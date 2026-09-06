@@ -85,7 +85,10 @@ file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, optional
 repairing, activating, restarting, verifying, and finished. When output is
-piped or captured in a log, progress prints without animation.
+piped or captured in a log, progress prints without animation. `repairing` can
+follow failed candidate validation or failed post-activation verification when
+rollback is unsafe or has failed; successful repair returns to validation or
+verification. The Control UI shows this optional phase only after it starts.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
@@ -131,7 +134,9 @@ state, config, and default workspace paths remain pinned for the repair.
 
 Updates using `--yes`, `--json`, or a non-interactive session (including piped
 input or output) collect diagnostics and print handoff commands without starting
-a coding agent. With `--json`, triage output goes to stderr so stdout retains
+an external coding agent. The updater's earlier
+[unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
+can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
 failure.
 
@@ -197,6 +202,9 @@ the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+Triage preserves the original update report. Any update launched during repair
+gets a separate `runId`.
+
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 Human output, chat completion notices, the Control UI update view, and the
@@ -215,14 +223,19 @@ fields and adds optional `activeRun` and `lastRun` records. While a run is activ
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
 
+Native service-stop observations do not advance the update's recorded phase.
+If the Control UI cannot read fresh progress, it shows the read error alongside
+the last recorded run; use **Check status** to retry without starting another update.
+
 Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
 `restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,
-`failed`, `rolled-back`, or `skipped`. Phase timings and verification facts are
-included only when observed. Chat reports are limited to 1,500 characters;
+`failed`, `rolled-back`, or `skipped`. Repair may also follow `verifying` when
+automatic rollback cannot complete. Phase timings, repair attempts, and
+verification facts are included only when observed. Chat reports are limited to 1,500 characters;
 `update.runs.get` preserves the bounded record for detailed inspection.
 
 The run records `downtimeMs` from the service stop request until a Gateway is
-verified running. Staging and candidate validation are excluded. Verification
+verified running. Staging, candidate validation, and pre-activation repair are excluded. Verification
 records include service PID/port, version/build identity, settled health,
 plugin activation errors, channel readiness, `/readyz`, and the inference probe.
 
@@ -441,6 +454,18 @@ The database-schema preflight still refuses incompatible downgrades. These older
 targets do not support automatic schema-neutral rollback; see
 [Downgrade finalization](/install/updating#roll-back-a-package-install).
 
+Candidate Doctor, config, plugin, or canary validation failures enter a bounded
+`repairing` phase using configured inference. The updater reruns the failed
+check after each attempt and activates only after it passes. Failed or unavailable
+repair discards the candidate and leaves the serving Gateway untouched.
+Pre-activation repair uses disposable rehearsal state and configuration, then
+independently validates surviving candidate changes before activation, and
+`repair-requires-config-change` reports changed top-level keys that require
+operator-run `openclaw doctor --fix` or `openclaw triage`; post-activation repair
+uses the live installation. See
+[Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
+budgets, permitted repairs, and attempt reports.
+
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
@@ -469,9 +494,15 @@ for the restoration and package-manager guards. A failure alone does not
 authorize restarting the candidate.
 
 If configuration content or a schema version changed, automatic rollback is refused with
-`state-migrated-no-rollback`. A reachable candidate stays running for diagnosis;
-an unreachable candidate stays stopped. Use the recorded diagnostics and
-[Triage](/cli/triage), preserving the migrated state. These temporary validation
+`state-migrated-no-rollback`. The updater enters `repairing` on the installed
+candidate, also used if rollback itself fails. If the previous package was
+already restored, repair targets that version. Between repair attempts, the
+updater starts or restarts a stopped or unhealthy service once and reruns the
+post-restart verification checks. Successful verification finishes the run as
+`succeeded` for the candidate, or `rolled-back` for the restored release with a
+nonzero command exit. Failed repair preserves the original failure and attempt summaries.
+Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
+preserving migrated state. These temporary validation
 snapshots are not a full-state backup; see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
@@ -483,7 +514,8 @@ LaunchAgent Gateway, the CLI hands the update to the same managed-service helper
 before stopping the Gateway. It prints the helper log path and follow-up commands
 for update status and Gateway health, then exits; this acknowledges the handoff,
 not a completed update. The helper launches staging and validation outside the
-Gateway process tree while the old Gateway keeps serving. It parks the Gateway
+Gateway process tree while the old Gateway keeps serving, including during
+bounded candidate repair. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
 can terminate the surrounding exec shell (SIGTERM or exit 143), including commands
@@ -632,7 +664,7 @@ the sentinel.
     Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
   </Step>
   <Step title="Build a candidate">
-    Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the candidate first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path.
+    Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the candidate first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
 
     The updater prepares the built runtime on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 

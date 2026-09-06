@@ -26,6 +26,7 @@ import {
   registerManagedSystemdHandoffConvergenceTests,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { runManagedRepairAuthorityBoundary } from "./update-managed-service-handoff-repair.test-support.js";
 import {
   registerManagedRecoveryOutcomeTests,
   registerManagedTerminalResultTests,
@@ -77,6 +78,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 const tempDirs = new Set<string>();
+const managedProcessCleanups = new Set<() => Promise<void>>();
 
 beforeEach(async () => {
   // Helpers in one fixture share a coordinator without touching the operator's database.
@@ -102,6 +104,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await Promise.all([...managedProcessCleanups].map((cleanup) => cleanup()));
+  managedProcessCleanups.clear();
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
@@ -114,6 +118,7 @@ afterEach(async () => {
 const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
   spawnMock,
   tempDirs,
+  cleanups: managedProcessCleanups,
 });
 
 describe("managed service update handoff", () => {
@@ -121,17 +126,55 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
+  itUnix.each(["acknowledged", "stalled", "rejected"] as const)(
+    "parks after the transferred pre-park notice is %s, within its bounded attempt",
+    async (beforeParkNotice) => {
+      const { commands, log, state } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        beforeParkNotice,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(commands.some((command) => command.includes("stop openclaw-gateway.service"))).toBe(
+        true,
+      );
+      expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(log.includes("pre-park notice timed out after 10 seconds")).toBe(
+        beforeParkNotice === "stalled",
+      );
+      expect(log.includes("pre-park notice failed")).toBe(beforeParkNotice === "rejected");
+    },
+  );
+
+  itUnix.each(["systemd", "launchd"] as const)(
+    "preserves updater staging and validation history after %s parking",
+    async (kind) => {
+      const { run } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      const steps = run?.steps.map((step) => step.step);
+      expect(steps).toEqual(expect.arrayContaining(["staging", "validating"]));
+      expect(steps).not.toContain("activating");
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({ step: "service-stop", status: "completed" }),
+      );
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       [false, true].map((recover) => ({ kind, recover })),
     ),
   )(
-    "transfers $kind update ownership before CLI disconnect and preserves relative inputs (recovery=$recover)",
+    "keeps $kind serving through ten minutes of validation before activation and preserves relative inputs (recovery=$recover)",
     async ({ kind, recover }) => {
       const { commands, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
         kind,
         {
           controlDisconnect: "transferred",
+          validationClockAdvanceMs: 10 * 60_000,
           relativeInput: true,
           updaterExitCode: recover ? 7 : 0,
           helperExitCode: recover ? 7 : 0,
@@ -189,6 +232,7 @@ describe("managed service update handoff", () => {
       const { commands, parentSignal, log } = await runManagedServiceManagerBoundary("systemd", {
         controlDisconnect: "transferred",
         validationResult,
+        validationClockAdvanceMs: 10 * 60_000,
         helperExitCode: validationResult === "failed" ? 1 : 0,
       });
       expect(commands).toEqual([]);
@@ -215,6 +259,47 @@ describe("managed service update handoff", () => {
         payload: { status: "error", stats: { reason: "owner_required" } },
       });
     },
+  );
+
+  itUnix.each(
+    (["validating", "verifying"] as const).flatMap((phase) =>
+      [false, true].map((revoke) => ({ phase, revoke })),
+    ),
+  )(
+    "guards $phase repair effects with the current chat requester (revoked=$revoke)",
+    async ({ phase, revoke }) => {
+      const { commands, parentSignal, repairEffects, helperExitCode, log, run } =
+        await runManagedRepairAuthorityBoundary(runManagedServiceManagerBoundary, phase, revoke);
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(repairEffects, log).toEqual({
+        firstSpawn: true,
+        secondSpawn: !revoke,
+        firstExec: true,
+        secondExec: !revoke,
+        secondWrite: !revoke,
+      });
+      expect(helperExitCode, log).toBe(revoke ? 1 : 0);
+      expect(run?.repair).toHaveLength(1);
+      if (revoke) {
+        expect(run?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              step: "repairing",
+              status: "failed",
+              detail: expect.stringContaining("requester-revoked"),
+            }),
+          ]),
+        );
+        expect(
+          run?.steps.find((step) => step.step === "repairing" && step.status === "failed")?.detail,
+        ).toContain(phase === "validating" ? "candidate rehearsal" : "live");
+        expect(run?.repair[0]?.reason).toBe("requester-revoked");
+      } else {
+        expect(run?.repair[0]).toMatchObject({ status: "succeeded" });
+      }
+    },
+    120_000,
   );
 
   itUnix("expires admission without interrupting the serving generation", async () => {
@@ -278,104 +363,63 @@ describe("managed service update handoff", () => {
     },
   );
 
-  it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
+  it.each([
+    ["spawn error", { code: "ENOENT" }],
+    [
+      "launcher exit",
+      { message: "managed update handoff exited before signaling readiness (code=1, signal=null)" },
+    ],
+    [
+      "readiness timeout",
+      { message: "managed update handoff did not signal readiness within 30 seconds" },
+    ],
+  ] as const)("rejects %s and cleans up the sensitive handoff", async (failure, expected) => {
+    if (failure === "readiness timeout") {
+      vi.useFakeTimers();
+    }
     const child = createSpawnMock();
-    // Fire after spawn installs readiness listeners; preparation has no one-second deadline.
     spawnMock.mockImplementationOnce(() => {
+      // Readiness listeners and the deadline are installed after spawn returns.
       process.nextTick(() => {
-        child.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+        if (failure === "spawn error") {
+          child.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+        } else if (failure === "launcher exit") {
+          child.emit("exit", 1, null);
+        } else {
+          vi.advanceTimersByTime(30_000);
+        }
       });
       return child;
     });
+    let env: NodeJS.ProcessEnv | undefined;
+    if (failure === "launcher exit") {
+      const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-bin-"));
+      tempDirs.add(binDir);
+      await fs.writeFile(path.join(binDir, "systemd-run"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      env = { PATH: binDir, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" };
+    }
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
-
     const resultPromise = startManagedServiceUpdateHandoff({
       root: MOCK_INSTALL_ROOT,
       restartDrainTimeoutMs: 300_000,
       parentPid: process.pid,
-      execPath: "/definitely/missing/openclaw-node",
+      execPath:
+        failure === "spawn error" ? "/definitely/missing/openclaw-node" : "/usr/local/bin/node",
       argv1: "/opt/openclaw/openclaw.mjs",
+      supervisor: failure === "launcher exit" ? "systemd" : undefined,
+      env,
       meta: { sessionKey: "agent:test:webchat:dm:user-123" },
     });
-    await expect(resultPromise).rejects.toMatchObject({ code: "ENOENT" });
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-    const handoffDir = path.dirname(args[0] ?? "");
-    tempDirs.add(handoffDir);
-
-    expect(child.unref).not.toHaveBeenCalled();
-    await expect(pathExists(handoffDir)).resolves.toBe(false);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.stdout.destroyed).toBe(true);
-  });
-
-  it("rejects a systemd-run launcher that exits before the helper is ready", async () => {
-    const child = createSpawnMock();
-    spawnMock.mockImplementationOnce(() => {
-      process.nextTick(() => child.emit("exit", 1, null));
-      return child;
-    });
-    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-bin-"));
-    tempDirs.add(binDir);
-    await fs.writeFile(path.join(binDir, "systemd-run"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-
-    const resultPromise = startManagedServiceUpdateHandoff({
-      root: MOCK_INSTALL_ROOT,
-      restartDrainTimeoutMs: 300_000,
-      parentPid: process.pid,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      supervisor: "systemd",
-      env: { PATH: binDir, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-      meta: {},
-    });
-    await expect(resultPromise).rejects.toThrow(
-      "managed update handoff exited before signaling readiness (code=1, signal=null)",
-    );
+    await expect(resultPromise).rejects.toMatchObject(expected);
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args.at(-2) ?? "");
     tempDirs.add(handoffDir);
 
-    expect(child.unref).not.toHaveBeenCalled();
-    await expect(pathExists(handoffDir)).resolves.toBe(false);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.stdout.destroyed).toBe(true);
-  });
-
-  it("terminates a detached helper that misses the readiness deadline", async () => {
-    vi.useFakeTimers();
-    const child = createSpawnMock();
-    spawnMock.mockImplementationOnce(() => {
-      // The readiness timer is armed after spawn returns, not during filesystem preparation.
-      process.nextTick(() => vi.advanceTimersByTime(30_000));
-      return child;
-    });
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-
-    const resultPromise = startManagedServiceUpdateHandoff({
-      root: MOCK_INSTALL_ROOT,
-      restartDrainTimeoutMs: 300_000,
-      parentPid: process.pid,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      meta: {},
-    });
-    await expect(resultPromise).rejects.toMatchObject({
-      message: "managed update handoff did not signal readiness within 30 seconds",
-    });
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-    const handoffDir = path.dirname(args[0] ?? "");
-    tempDirs.add(handoffDir);
-
-    expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
+    if (failure === "readiness timeout") {
+      expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
+    }
     expect(child.unref).not.toHaveBeenCalled();
     await expect(pathExists(handoffDir)).resolves.toBe(false);
     expect(child.listenerCount("exit")).toBe(0);

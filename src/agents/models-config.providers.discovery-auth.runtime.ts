@@ -10,6 +10,7 @@ import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const unavailableDiscoveryAuthProfiles = new WeakMap<object, string>();
 
@@ -100,15 +101,19 @@ export async function prepareProviderCatalogOAuthAuth(
   {
     agentDir,
     authStore,
+    env,
     provider,
     resolveProviderAuth,
     isActive,
+    onPreparationFailure,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     provider: string;
     resolveProviderAuth: ProviderAuthResolver;
     isActive: () => boolean;
+    onPreparationFailure: (profileIds: readonly string[]) => void;
   },
   config?: OpenClawConfig,
 ) {
@@ -153,10 +158,20 @@ export async function prepareProviderCatalogOAuthAuth(
     failedProfileIds.push(auth.profileId);
   }
   return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
-    const auth = resolveProviderAuth(requestedProvider?.trim() || provider, {
+    const target = requestedProvider?.trim() || provider;
+    const auth = resolveProviderAuth(target, {
       ...options,
       excludeProfileIds: failedProfileIds,
     });
+    if (
+      auth.mode === "none" &&
+      failedProfileIds.length > 0 &&
+      resolveProviderIdForAuth(target, { config, env }) ===
+        resolveProviderIdForAuth(provider, { config, env })
+    ) {
+      onPreparationFailure(failedProfileIds);
+      return { ...auth, preparationFailed: true };
+    }
     // Refresh owns a separate store; the captured catalog snapshot can still
     // contain the old token. Carry the resolved value for this exact profile.
     return preparedProfile && auth.profileId === preparedProfile.profileId

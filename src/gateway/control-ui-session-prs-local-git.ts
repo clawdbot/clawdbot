@@ -9,12 +9,12 @@ import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 const LOCAL_GIT_CACHE_MS = 75_000;
 
-/** GitHub repo + branch resolved from a session's git checkout. */
+/** GitHub repo + branch resolved from the session's recorded source or checkout. */
 export type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
-  /** Checkout root for local diff stats; absent for stubbed test contexts. */
+  /** Checkout root for local diff stats; absent for repository-only sessions. */
   root?: string;
   /** Remote default branch when origin/HEAD is resolvable. */
   defaultBranch?: string;
