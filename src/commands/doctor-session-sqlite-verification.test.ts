@@ -106,27 +106,21 @@ describe("createRecoveryDestinationVerifier", () => {
     const verify = createRecoveryDestinationVerifier(stateDir);
     const target = makeMinimalTargetManifest(sqlitePath, agentId);
 
-    // Establish baseline.
+    // Ensure a WAL sidecar exists before baseline so the fallback path is deterministic.
+    const walPath = `${sqlitePath}-wal`;
+    if (!fs.existsSync(walPath)) {
+      fs.writeFileSync(walPath, Buffer.alloc(32));
+    }
+
+    // Establish baseline with the WAL present.
     verify([{ target }]);
 
-    // Delete a sidecar file that existed in the baseline. The verifier should
-    // detect the identity change (dev/ino now undefined vs. recorded BigInt).
-    const walPath = `${sqlitePath}-wal`;
-    if (fs.existsSync(walPath)) {
-      fs.unlinkSync(walPath);
-      // SHOULD throw — sidecar identity (dev/ino) changed from recorded to undefined.
-      expect(() => verify([{ target }])).toThrow(
-        "Recovery destination database changed; preview cleanup again.",
-      );
-    } else {
-      // If no WAL sidecar exists, create one and verify deletion is detected.
-      fs.writeFileSync(walPath, Buffer.alloc(32));
-      verify([{ target }]); // Re-establish baseline with the WAL present.
-      fs.unlinkSync(walPath);
-      expect(() => verify([{ target }])).toThrow(
-        "Recovery destination database changed; preview cleanup again.",
-      );
-    }
+    // Delete the sidecar that existed in the baseline. The verifier should detect the
+    // identity change (dev/ino now undefined vs. recorded BigInt). (#140467)
+    fs.unlinkSync(walPath);
+    expect(() => verify([{ target }])).toThrow(
+      "Recovery destination database changed; preview cleanup again.",
+    );
   });
 
   it("throws when a sidecar file's size changes (substantive WAL commit)", () => {
