@@ -13,7 +13,7 @@ describe("pickFallbackThinkingLevel", () => {
 
   it("extracts supported values from error message", () => {
     const result = pickFallbackThinkingLevel({
-      message: 'Supported values are: "high", "medium"',
+      message: 'Unsupported reasoning.effort. Supported values are: "high", "medium"',
       attempted: new Set(),
     });
     expect(result).toBe("high");
@@ -21,7 +21,7 @@ describe("pickFallbackThinkingLevel", () => {
 
   it("skips already attempted values", () => {
     const result = pickFallbackThinkingLevel({
-      message: 'Supported values are: "high", "medium"',
+      message: 'Unsupported reasoning_effort. Supported values are: "high", "medium"',
       attempted: new Set(["high"]),
     });
     expect(result).toBe("medium");
@@ -52,7 +52,7 @@ describe("pickFallbackThinkingLevel", () => {
     expect(result).toBeUndefined();
   });
 
-  it('falls back to "off" for generic not-supported messages', () => {
+  it('falls back to "off" for an explicit unsupported-thinking error', () => {
     const result = pickFallbackThinkingLevel({
       message: "thinking level not supported by this provider",
       attempted: new Set(),
@@ -68,9 +68,17 @@ describe("pickFallbackThinkingLevel", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns undefined for unrelated error messages", () => {
+  it.each([
+    "rate limit exceeded, please retry after 30 seconds",
+    "The 'unavailable-model' model is not supported when using Codex with a ChatGPT account.",
+    "The 'unavailable-thinking-model' model is not supported when using Codex with a ChatGPT account.",
+    "The 'unavailable-reasoning-effort-model' model is not supported when using Codex with a ChatGPT account.",
+    "The 'unavailable-reasoning.effort-model' model is not supported when using Codex with a ChatGPT account.",
+    "This account is not supported by the provider.",
+    'Unsupported service tier. Supported values are: "high", "low"',
+  ])("does not retry unrelated provider failures: %s", (message) => {
     const result = pickFallbackThinkingLevel({
-      message: "rate limit exceeded, please retry after 30 seconds",
+      message,
       attempted: new Set(),
     });
     expect(result).toBeUndefined();

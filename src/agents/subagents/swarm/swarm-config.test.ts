@@ -42,6 +42,24 @@ describe("resolveSwarmConfig", () => {
   });
 
   it.each([
+    { field: "maxConcurrent", fallback: 8, max: 1_000 },
+    { field: "maxChildrenPerGroup", fallback: 50, max: 10_000 },
+    { field: "maxTotalPerGroup", fallback: 200, max: 100_000 },
+    { field: "waitTimeoutSecondsMax", fallback: 600, max: 86_400 },
+  ] as const)("preserves the documented bounds for $field", ({ field, fallback, max }) => {
+    for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(resolveSwarmConfig({ tools: { swarm: { [field]: value } } })[field]).toBe(fallback);
+    }
+    for (const [value, expected] of [
+      [1, 1],
+      [max, max],
+      [max + 1, max],
+    ]) {
+      expect(resolveSwarmConfig({ tools: { swarm: { [field]: value } } })[field]).toBe(expected);
+    }
+  });
+
+  it.each([
     { name: "omitted tools", config: {}, enabled: true },
     { name: "omitted swarm", config: { tools: {} }, enabled: true },
     { name: "empty swarm", config: { tools: { swarm: {} } }, enabled: true },

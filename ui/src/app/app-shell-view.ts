@@ -5,6 +5,7 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
 import {
   renderLazySettingsSidebar,
@@ -171,9 +172,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     return nothing;
   }
   if (host.routeState.routeId === undefined) {
-    return html`<main class="connect-splash" role="status" aria-label=${t("common.loading")}>
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
-    </main>`;
+    return renderConnectingSplash();
   }
   const gatewaySnapshot = context.gateway.snapshot;
   const config = context.config.current;
@@ -376,9 +375,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onNavigate: (routeId, options) => host.navigate(routeId, options),
         onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
-        onSearchQueryChange: (nextQuery) => {
-          void host.handleSettingsSearchQueryChange(nextQuery);
-        },
+        onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
         preloadTimers: host.settingsPreloadTimers,
         saveIndicator: {
           status: runtimeConfig.configAutoSaveStatus,
@@ -391,7 +388,8 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
             updateBusy,
-          onRetry: () => void context.runtimeConfig.save(),
+          onRetry: () => void context.runtimeConfig.retry(),
+          onSave: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },

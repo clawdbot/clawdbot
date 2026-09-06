@@ -94,6 +94,7 @@ function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
+    onOutstandingWorkChange?: (active: boolean) => void;
     onInterrupted?: (reason: "aborted" | "timeout") => boolean;
   } = {},
 ) {
@@ -119,6 +120,7 @@ function runPlugin(
         }
       : {}),
     ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
+    onOutstandingWorkChange: options.onOutstandingWorkChange,
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),
@@ -876,6 +878,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     const approval = createDeferred<{ id: string; decision: "allow-once" }>();
     mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const outstandingWork = vi.fn();
     let completed = false;
     const run = runPlugin(
       context,
@@ -886,7 +889,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         expect(decision.behavior).toBe("allow");
         yield SUCCESS_RESULT;
       },
-      { noOutputTimeoutMs: 100 },
+      { noOutputTimeoutMs: 100, onOutstandingWorkChange: outstandingWork },
     ).then((result) => {
       completed = true;
       return result;
@@ -895,9 +898,11 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     await vi.advanceTimersByTimeAsync(150);
     expect(completed).toBe(false);
+    expect(outstandingWork).toHaveBeenLastCalledWith(true);
 
     approval.resolve({ id: "approval-pending", decision: "allow-once" });
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
+    expect(outstandingWork).toHaveBeenLastCalledWith(false);
   });
 
   it("keeps the overall deadline authoritative while a native approval is outstanding", async () => {

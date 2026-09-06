@@ -44,6 +44,12 @@ export class WorkerTaskPool<Input, Output> {
   private readonly queue: Task<Input, Output>[] = [];
   private readonly maxWorkers: number;
   private closedError?: Error;
+  // Idle retirement is armed from worker messages, outside any caller's turn.
+  // Bind the clock at construction so a process-wide pool cannot land that timer
+  // on a fake or stubbed setTimeout an unrelated test installed later; on the
+  // wrong clock the worker never retires and that test's timer count is off.
+  private readonly setTimeoutFn = setTimeout;
+  private readonly clearTimeoutFn = clearTimeout;
 
   constructor(
     private readonly options: {
@@ -111,7 +117,7 @@ export class WorkerTaskPool<Input, Output> {
         slot = {};
         this.slots.add(slot);
       }
-      clearTimeout(slot.idleTimer);
+      this.clearTimeoutFn(slot.idleTimer);
       const task = this.queue.shift()!;
       slot.task = task;
       task.slot = slot;
@@ -197,6 +203,8 @@ export class WorkerTaskPool<Input, Output> {
     if (task.slot) {
       this.fail(task.slot, error);
     } else {
+      // Only queued tasks lack a slot; dispatch and close remove their entries themselves.
+      this.queue.splice(this.queue.indexOf(task), 1);
       this.finish(task, error);
     }
   }
@@ -221,10 +229,6 @@ export class WorkerTaskPool<Input, Output> {
     task.done = true;
     clearTimeout(task.timer);
     task.options.signal?.removeEventListener("abort", task.abort);
-    const queuedIndex = this.queue.indexOf(task);
-    if (queuedIndex !== -1) {
-      this.queue.splice(queuedIndex, 1);
-    }
     // SAFETY: Only a validated successful reply reaches finish without an error and supplies Output.
     const complete = () => (error ? task.reject(error) : task.resolve(value as Output));
     const slot = task.slot;
@@ -235,7 +239,9 @@ export class WorkerTaskPool<Input, Output> {
         void this.retire(slot).then(complete);
         return;
       }
-      this.idle(slot);
+      if (!this.queue.length) {
+        this.idle(slot);
+      }
     }
     complete();
     this.dispatch();
@@ -246,13 +252,13 @@ export class WorkerTaskPool<Input, Output> {
     slot.worker?.unref();
     const idleMs = this.options.idleTimeoutMs ?? 60_000;
     if (idleMs > 0) {
-      slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
+      slot.idleTimer = this.setTimeoutFn(() => void this.retire(slot), idleMs);
       slot.idleTimer.unref();
     }
   }
 
   private retire(slot: Slot<Input, Output>): Promise<void> {
-    clearTimeout(slot.idleTimer);
+    this.clearTimeoutFn(slot.idleTimer);
     // Retain error listeners until exit: termination can race a worker startup error.
     return (slot.retiring ??= (slot.worker?.terminate() ?? Promise.resolve()).then(() => {
       slot.worker?.removeAllListeners();

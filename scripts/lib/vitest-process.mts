@@ -108,7 +108,7 @@ export function spawnOwnedVitestProcess(spec: {
           `[vitest] retained temporary namespace ${tempRoot}; descendant completion is unverified on this non-group launch. Stop the remaining writers before removing this exact directory.`,
         );
       }
-      return result;
+      return { ...result, groupJoined: verifiedGroup };
     } catch (error) {
       // A failed parent receipt can follow successful child disposal. Report
       // the still-owned ancestor, not a child directory already removed.

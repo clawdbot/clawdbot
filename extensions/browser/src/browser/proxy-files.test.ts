@@ -1,6 +1,7 @@
 // Browser tests cover proxy files plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractOriginalFilename } from "openclaw/plugin-sdk/media-runtime";
 import { createTempHomeEnv, type TempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
@@ -37,6 +38,28 @@ describe("persistBrowserProxyResultFiles", () => {
       `${path.sep}.openclaw${path.sep}media${path.sep}browser${path.sep}`,
     );
     await expect(fs.readFile(savedPath ?? "", "utf8")).resolves.toBe("hello from browser proxy");
+  });
+
+  it.each([
+    { sourcePath: "/tmp/quarterly-report.pdf", expectedFilename: "quarterly-report.pdf" },
+    { sourcePath: "C:\\downloads\\quarterly-report.pdf", expectedFilename: "quarterly-report.pdf" },
+    { sourcePath: "/tmp/my <file>:test!.bin", expectedFilename: "my_filetest.pdf" },
+  ])("preserves a safe filename from $sourcePath", async ({ sourcePath, expectedFilename }) => {
+    const contents = "%PDF-1.7 browser proxy download";
+    const result = { download: { path: sourcePath, suggestedFilename: "website-title.pdf" } };
+    await persistBrowserProxyResultFiles(result, [
+      {
+        path: sourcePath,
+        base64: Buffer.from(contents).toString("base64"),
+        mimeType: "application/pdf",
+      },
+    ]);
+
+    const savedPath = result.download.path;
+    expect(path.dirname(savedPath)).toBe(path.join(tempHome.home, ".openclaw", "media", "browser"));
+    expect(extractOriginalFilename(savedPath)).toBe(expectedFilename);
+    expect(result.download.suggestedFilename).toBe("website-title.pdf");
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toBe(contents);
   });
 
   it("persists legitimate empty browser proxy downloads", async () => {

@@ -63,17 +63,6 @@ export function sessionCatalogListClient(
   return snapshot.client;
 }
 
-function isLegacyProgressIdRejection(error: unknown): boolean {
-  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("progressid") &&
-    /(?:unexpected|unknown|unrecognized) property|additional propert(?:y|ies)/.test(message)
-  );
-}
-
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
   const event = asNullableRecord(value);
   const catalog = asNullableRecord(event?.catalog);
@@ -103,11 +92,9 @@ export class SessionCatalogLiveState {
   requestGeneration: number | null = null;
   sawChange = false;
   refreshPending = false;
-  progressive = true;
 
   private activationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private activationQueueIfActive = false;
-  private connectionEpoch = 0;
   private refetchOwner: symbol | null = null;
   private presenceSignature: string | null = null;
   private progressSequence = 0;
@@ -138,47 +125,6 @@ export class SessionCatalogLiveState {
     this.sawChange = false;
     this.refreshPending = false;
     this.refetchOwner = null;
-  }
-
-  resetConnection() {
-    this.retireConnection(true);
-  }
-
-  retireConnection(reset = false): void {
-    this.clear();
-    if (reset) {
-      this.connectionEpoch += 1;
-      this.progressive = true;
-    }
-  }
-
-  async requestList(
-    client: GatewayBrowserClient,
-    agentId: string,
-    progressId: string,
-  ): Promise<SessionsCatalogListResult> {
-    const connectionEpoch = this.connectionEpoch;
-    const baseParams = { agentId, limitPerHost: 40 };
-    let progressive = this.progressive;
-    let result: SessionsCatalogListResult;
-    try {
-      result = await client.request("sessions.catalog.list", {
-        ...baseParams,
-        ...(progressive ? { progressId } : {}),
-      });
-    } catch (error) {
-      if (!progressive || !isLegacyProgressIdRejection(error)) {
-        throw error;
-      }
-      // Older Gateways advertise the list method but reject the additive field.
-      // Retry once without streaming, then keep that connection on final pages.
-      result = await client.request("sessions.catalog.list", baseParams);
-      progressive = false;
-    }
-    if (connectionEpoch === this.connectionEpoch) {
-      this.progressive = progressive;
-    }
-    return result;
   }
 
   mergeFinal(catalogs: SessionCatalog[], currentCatalogs: readonly SessionCatalog[]) {
@@ -494,7 +440,11 @@ export async function refreshSessionCatalogsLive(params: {
     client === params.currentClient();
   const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
   try {
-    const result = await live.requestList(client, params.agentId, progressId);
+    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId: params.agentId,
+      limitPerHost: 40,
+      progressId,
+    });
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }

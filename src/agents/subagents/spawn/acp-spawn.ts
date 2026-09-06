@@ -121,6 +121,7 @@ type SpawnAcpParams = {
 };
 
 type SpawnAcpContext = {
+  onSpawnEffectsStart?: () => void;
   assertActive?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
@@ -598,6 +599,8 @@ export async function spawnAcpDirect(
   if (admissionReservation && !admissionReservation.ok) {
     return rejectSubagentPolicy(admissionReservation.error);
   }
+  // Admission may already hold a slot; initialization and cleanup can mutate session state.
+  ctx.onSpawnEffectsStart?.();
   let expectsCompletionMessage = false;
   const pipelineResult = await runSpawnPipeline({
     adapter,

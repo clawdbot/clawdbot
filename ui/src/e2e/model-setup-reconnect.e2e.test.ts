@@ -89,6 +89,7 @@ suite.define(() => {
                 done: true,
                 status: "error",
                 error: "401: invalid test API key",
+                activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
               },
               "openclaw.setup.verify": pendingVerification,
             },

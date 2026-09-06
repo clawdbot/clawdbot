@@ -35,11 +35,8 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let shutdownPromise: Promise<void> | undefined;
   let cancelPendingApproval: (() => void) | undefined;
   const supervisor = getProcessSupervisor();
-  const waitForScope = supervisor.waitForScope;
-  if (!waitForScope) {
-    throw new Error("process supervisor must support scope extinction before running local shells");
-  }
   const scopeKey = `tui-local:${randomUUID()}`;
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
@@ -180,8 +177,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     (shutdownPromise ??= (async () => {
       closing = true;
       cancelPendingApproval?.();
-      supervisor.cancelScope(scopeKey);
-      await waitForScope(scopeKey);
+      await cleanupScope();
     })());
 
   return { runLocalShellLine, shutdown };

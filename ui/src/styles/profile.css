@@ -1,4 +1,4 @@
-/* Profile settings page: featured agent and identity controls.
+/* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
 /* Hero (custom identity content inside one settings group) */
@@ -25,6 +25,13 @@
   margin-bottom: var(--space-2);
 }
 
+.profile-hero__avatar .viewer-avatar--profile {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  font-size: 42px;
+}
+
 .profile-hero__avatar-image {
   width: 100%;
   height: 100%;
@@ -43,6 +50,8 @@
 }
 
 .profile-hero__name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -51,10 +60,22 @@
 
 .profile-hero__handle {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
+  max-width: 100%;
   color: var(--muted);
   font-size: var(--control-ui-text-md);
+}
+
+.profile-hero__email {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-hero__badge {
+  flex: 0 0 auto;
 }
 
 .profile-hero__badge,

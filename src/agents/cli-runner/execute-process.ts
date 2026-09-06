@@ -248,6 +248,7 @@ export async function executeCliProcess(params: {
         sessionId: params.resolvedSessionId,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         consumeStdout,
+        onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
         onNoOutputTimeout: (error) => {
           pluginTimeout.error = error;

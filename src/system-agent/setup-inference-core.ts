@@ -57,9 +57,6 @@ export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do no
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 
-export const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
-  "I enabled the lean tool surface for this local runtime.";
-
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 
 export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferenceKind;

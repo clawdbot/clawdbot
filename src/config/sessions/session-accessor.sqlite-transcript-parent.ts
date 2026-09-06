@@ -12,7 +12,10 @@ import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
 } from "./transcript-tree.js";
-import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
+import {
+  isTranscriptEntryOnVisiblePath,
+  resolveVisibleTranscriptAppendParentId,
+} from "./transcript-visible-events.js";
 
 export function resolveTranscriptMessageAppendParent<TMessage>(
   database: OpenClawAgentDatabase,
@@ -27,6 +30,30 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
     return options.parentId;
   }
 
+  // Active appends rebase only along known ancestry; deliberate branches keep their parent.
+  return transcriptEntryIsAncestor(database, sessionId, tailId, options.parentId)
+    ? tailId
+    : options.parentId;
+}
+
+/** Checks the durable tree directly when the materialized active-path projection is dirty. */
+export function isTranscriptEntryOnActivePathInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  entryId: string,
+): boolean {
+  return isTranscriptEntryOnVisiblePath(
+    readTranscriptNavigationEvents(database, sessionId),
+    entryId,
+  );
+}
+
+function transcriptEntryIsAncestor(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  leafId: string,
+  candidateId: string | null,
+): boolean {
   const db = getSessionKysely(database.db);
   // UNION visits each parent once, so cycles terminate without a transcript-wide count.
   // Keep dangling and null parents in the walk: they can be the requested ancestor.
@@ -38,7 +65,7 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
           .selectFrom("transcript_event_identities")
           .select("parent_id")
           .where("session_id", "=", sessionId)
-          .where("event_id", "=", tailId)
+          .where("event_id", "=", leafId)
           .union(
             query
               .selectFrom("transcript_event_identities as ti")
@@ -49,11 +76,10 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
       )
       .selectFrom("transcript_ancestors")
       .select("parent_id")
-      .where("parent_id", options.parentId === null ? "is" : "=", options.parentId)
+      .where("parent_id", candidateId === null ? "is" : "=", candidateId)
       .limit(1),
   );
-  // Active appends rebase only along known ancestry; deliberate branches keep their parent.
-  return ancestor?.parent_id === options.parentId ? tailId : options.parentId;
+  return ancestor?.parent_id === candidateId;
 }
 
 function readActiveTranscriptAppendParentId(
@@ -80,19 +106,7 @@ function readActiveTranscriptAppendParentId(
     return null;
   }
   const resolveFromNavigation = () =>
-    resolveVisibleTranscriptAppendParentId(
-      Array.from(
-        iterateSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("transcript_events")
-            .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
-            .where("session_id", "=", sessionId)
-            .orderBy("seq", "asc"),
-        ),
-        (row) => JSON.parse(row.event_json) as unknown,
-      ),
-    );
+    resolveVisibleTranscriptAppendParentId(readTranscriptNavigationEvents(database, sessionId));
   try {
     const event = JSON.parse(latest.event_json) as unknown;
     const treeEntry = parseSessionTranscriptTreeEntry(event);
@@ -113,6 +127,24 @@ function readActiveTranscriptAppendParentId(
     // Fall through to the tolerant full-tree resolver.
   }
   return resolveFromNavigation();
+}
+
+function readTranscriptNavigationEvents(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): unknown[] {
+  const db = getSessionKysely(database.db);
+  return Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    ),
+    (row) => JSON.parse(row.event_json) as unknown,
+  );
 }
 
 function transcriptTreeReferenceExists(

@@ -79,6 +79,38 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it.each([
+    ["undefined", undefined],
+    ["function", () => "omitted"],
+    ["symbol", Symbol("omitted")],
+    ["escaped values", { text: '"🦞"\n\\\ud800', items: [undefined, Symbol("omitted")] }],
+    ["date", new Date("2026-01-01T00:00:00Z")],
+    [
+      "inherited toJSON",
+      new (class {
+        toJSON(key: string) {
+          return `field:${key}`;
+        }
+      })(),
+    ],
+    ["omitted toJSON", { toJSON: () => undefined }],
+  ])("preserves complete envelope bytes for %s payloads", (_name, payload) => {
+    const peer = makeClient("json-reader");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
+    const stateVersion = {
+      presence: 7,
+      toJSON: (key: string) => ({ presence: key.length }),
+    };
+
+    broadcast("skills.changed", payload, { stateVersion });
+
+    expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+      JSON.stringify({ type: "event", event: "skills.changed", payload, seq: 1, stateVersion }),
+    );
+  });
+
   it("delivers public suspension state to connected operators without read scope", () => {
     const peer = makeClient("suspension-viewer");
     peer.client.connect.scopes = [];

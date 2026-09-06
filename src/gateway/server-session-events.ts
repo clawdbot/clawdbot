@@ -453,7 +453,10 @@ export function createLifecycleEventBroadcastHandler(params: {
       );
       return;
     }
-    const sessionRow = loadGatewaySessionRow(event.sessionKey, { agentId: routingAgentId });
+    const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+      agentId: routingAgentId,
+      ...(event.reason === "swarm" ? { includeSwarmSummary: true } : {}),
+    });
     const activeRunState =
       sessionRow && (sessionRow.key !== "global" || routingAgentId)
         ? resolveVisibleActiveSessionRunState({
