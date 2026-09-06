@@ -1,0 +1,64 @@
+name: Issue 139185 PR 139266 MSYS proof
+
+on:
+  push:
+    branches: [maint/proof-139266-msys-final]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Install dependencies with native Git
+        shell: pwsh
+        run: |
+          npm install --global pnpm@12.3.4
+          pnpm install --frozen-lockfile
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        id: msys
+        with:
+          msystem: MSYS
+          update: true
+          install: git
+      - name: Run real MSYS2 baseline and exact-head candidate
+        shell: pwsh
+        env:
+          MSYS_ROOT: ${{ steps.msys.outputs.msys2-location }}
+        run: |
+          $nativeGit = (Get-Command git.exe).Source
+          $env:PATH = "$env:MSYS_ROOT\usr\bin;$env:PATH"
+          where.exe git
+          & "$env:MSYS_ROOT\usr\bin\git.exe" --version
+          $candidate = '5ed6ef81beca4bc8621886e538645b044f077c82'
+          $baseline = 'd56cfcbe8a33ab9a1e1799eaa7fd75598053261f'
+          & $nativeGit cat-file -e $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Missing baseline commit' }
+          & $nativeGit cat-file -e $candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Missing exact-head candidate commit' }
+          $files = @(
+            'src/agents/worktrees/git.ts',
+            'src/agents/worktrees/service.ts',
+            'src/infra/git-exec.ts',
+            'src/snapshot/git-backup.ts'
+          )
+          & $nativeGit restore --source=$baseline -- $files
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline restore failed' }
+          node scripts/run-vitest.mjs src/infra/git-exec.msys-proof.test.ts 2>&1 | Tee-Object baseline-proof.log
+          $baselineExit = $LASTEXITCODE
+          & $nativeGit restore --source=$candidate -- $files
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate restore failed' }
+          if ($baselineExit -eq 0) { throw 'Baseline unexpectedly passed' }
+          if (!(Select-String -Path baseline-proof.log -Pattern 'MSYS_DEPENDENCY_PROOF' -Quiet)) {
+            throw 'Baseline did not reach the real MSYS2 flow'
+          }
+          node scripts/run-vitest.mjs src/infra/git-exec.msys-proof.test.ts 2>&1 | Tee-Object candidate-proof.log
+          if ($LASTEXITCODE -ne 0) { throw 'Exact-head candidate proof failed' }
