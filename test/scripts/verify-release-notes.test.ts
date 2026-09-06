@@ -44,7 +44,7 @@ const verifier = resolve(
   ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
 );
 
-function git(cwd: string, args: string[]): string {
+function git(cwd: string, args: string[], extraEnv: Record<string, string> = {}): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
@@ -54,6 +54,7 @@ function git(cwd: string, args: string[]): string {
       GIT_AUTHOR_EMAIL: "test@openclaw.invalid",
       GIT_COMMITTER_NAME: "OpenClaw Test",
       GIT_COMMITTER_EMAIL: "test@openclaw.invalid",
+      ...extraEnv,
     },
   }).trim();
 }
@@ -1190,7 +1191,7 @@ for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
 for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
   data[alias] = { issueOrPullRequest: scenario.node ? {
     __typename: scenario.node, number: 41, title: "chore: validation", baseRefName: "main",
-    mergedAt: "2026-01-01T00:00:00Z", author: { __typename: "User", login: "steipete" },
+    mergedAt: "2026-01-01T00:00:00Z", mergeCommit: { oid: ${JSON.stringify(target)} }, author: { __typename: "User", login: "steipete" },
     closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
     closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
   } : null };
@@ -1454,6 +1455,187 @@ console.log(JSON.stringify({ data }));
       expect(
         manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
       ).toEqual(removed ? [] : [21, 22]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "body-only",
+    "future-associated",
+    "stale-row",
+    "reachable-body",
+    "explicit-seed",
+    "canonical-carrier",
+    "backport-carrier",
+    "provenance-carrier",
+    "unresolved-body",
+  ])("bounds contribution membership to the frozen source graph: %s", (mode) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-membership-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "release"]);
+      const prose = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- One.",
+        "- Two.",
+        "- Three.",
+        "- Four.",
+        "- Five.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), prose);
+      const commitAt = (message: string, day: number) => {
+        git(cwd, ["add", "."]);
+        const date = `2026-07-0${day}T12:00:00Z`;
+        git(cwd, ["commit", "--allow-empty", "-qm", message], {
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+        });
+        return git(cwd, ["rev-parse", "HEAD"]);
+      };
+      const base = commitAt("chore: baseline", 1);
+      writeFileSync(join(cwd, "support.txt"), "independent supporting repair\n");
+      const source = commitAt(
+        "chore: supporting repair (#21)\n\nRelated: #22\nThis repair is independent of the performance work.",
+        2,
+      );
+      git(cwd, ["checkout", "-qb", "later-main"]);
+      writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
+      const future = commitAt("chore: performance work (#22)", 3);
+      git(cwd, ["checkout", "-q", "release"]);
+      let main = source;
+      let carrier: string | undefined;
+      if (mode === "reachable-body") {
+        git(cwd, ["merge", "--ff-only", "later-main"]);
+      } else if (mode.endsWith("-carrier")) {
+        main = future;
+        commitAt("chore: release preparation", 4);
+        if (mode === "canonical-carrier") {
+          git(cwd, ["cherry-pick", "-x", future], { GIT_COMMITTER_DATE: "2026-07-05T12:00:00Z" });
+          carrier = git(cwd, ["rev-parse", "HEAD"]);
+        } else {
+          writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
+          carrier = commitAt(
+            mode === "backport-carrier"
+              ? "chore: release performance backport\n\nBackport of #22 to release/fixture."
+              : "chore: carry selected implementation",
+            5,
+          );
+        }
+      }
+      let seed: string | undefined;
+      if (mode === "explicit-seed") {
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${base}..${source} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: supporting repair.\n- **PR #22** chore: performance work.\n`,
+        );
+        seed = commitAt("docs: retain an explicit historical seed", 4);
+      }
+      const target = commitAt("chore: final release preparation", 6);
+      if (
+        [
+          "body-only",
+          "future-associated",
+          "stale-row",
+          "explicit-seed",
+          "unresolved-body",
+        ].includes(mode)
+      ) {
+        expect(() => git(cwd, ["merge-base", "--is-ancestor", future, target])).toThrow();
+        expect(() => git(cwd, ["merge-base", "--is-ancestor", future, main])).toThrow();
+        expect(() => git(cwd, ["cat-file", "-e", `${target}:performance.txt`])).toThrow();
+      }
+      if (mode === "stale-row") {
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${base}..${target} history: 2 in-range PRs + 0 retained seed-only PRs = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: supporting repair.\n- **PR #22** chore: performance work.\n`,
+        );
+      }
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const mode = ${JSON.stringify(mode)};
+const source = ${JSON.stringify(source)};
+const future = ${JSON.stringify(future)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+const nodeFor = (number) => ({ number, mergedAt: number === 21 ? "2026-07-02T12:00:00Z" : "2026-07-03T12:00:00Z", mergeCommit: { oid: number === 21 ? source : future } });
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+ const numbers = hash === source ? (mode === "future-associated" ? [21, 22] : [21]) : hash === future && mode.endsWith("-carrier") ? [22] : [];
+ data[alias] = { object: { associatedPullRequests: { nodes: numbers.map(nodeFor), pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+ const number = Number(rawNumber);
+ data[alias] = { issueOrPullRequest: mode === "unresolved-body" && number === 22 ? null : { ...nodeFor(number), __typename: "PullRequest", title: number === 21 ? (mode === "body-only" ? "chore: supporting repair (Related #22)" : "chore: supporting repair") : "chore: performance work", baseRefName: "main", author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const manifestPath = join(cwd, "manifest.json");
+      const args = [
+        verifier,
+        "--base",
+        base,
+        "--target",
+        target,
+        "--main-ref",
+        main,
+        "--version",
+        "2026.7.1",
+        "--manifest",
+        manifestPath,
+        "--json",
+        ...(seed ? ["--seed-ref", seed] : []),
+        ...(mode === "provenance-carrier" ? ["--release-provenance", `${carrier} -> #22`] : []),
+      ];
+      const run = (write: boolean) =>
+        spawnSync(process.execPath, [...args, ...(write ? ["--write-ledger"] : [])], {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` },
+        });
+      if (mode === "stale-row") {
+        const stale = run(false);
+        expect(stale.status).not.toBe(0);
+        expect(stale.stderr).toContain("outside");
+      }
+      const result = run(true);
+      if (mode === "unresolved-body") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("could not resolve source references: #22");
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const included = mode === "reachable-body" || mode.endsWith("-carrier") || Boolean(seed);
+      expect(
+        manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
+      ).toEqual(included ? [21, 22] : [21]);
+      expect(manifest.source.inRangePullRequests).toBe(included && !seed ? 2 : 1);
+      expect(manifest.source.retainedSeedOnlyPullRequests).toBe(seed ? 1 : 0);
+      expect(manifest.source.references).toBe(2);
+      if (mode === "body-only") {
+        const generated = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          generated.replace("**PR #21**", "**PR #21** Related #22."),
+        );
+        const verified = run(false);
+        expect(verified.stderr).toBe("");
+        expect(verified.status, verified.stdout).toBe(0);
+      }
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

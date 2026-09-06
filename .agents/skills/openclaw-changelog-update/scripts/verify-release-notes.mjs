@@ -910,17 +910,26 @@ export function contaminatingPullRequestReferences({
   nodes,
 }) {
   const allowed = new Set([...sourcePullRequests, ...seededPullRequests]);
+  const allowedEditorial = new Set(allowed);
   for (const number of sourceReferences) {
     if (nodes.get(number)?.__typename === "PullRequest") {
-      allowed.add(number);
+      allowedEditorial.add(number);
     }
   }
   const effectiveRecordedReferences = recordedReferences.filter(
     (number) => !excludedRecordedReferences.has(number),
   );
-  return [...new Set([...noteReferences, ...effectiveRecordedReferences])].filter(
-    (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
-  );
+  return [
+    ...new Set([
+      ...noteReferences.filter(
+        (number) =>
+          nodes.get(number)?.__typename === "PullRequest" && !allowedEditorial.has(number),
+      ),
+      ...effectiveRecordedReferences.filter(
+        (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
+      ),
+    ]),
+  ];
 }
 
 function appendReferences(references, additions) {
@@ -1130,6 +1139,9 @@ function canonicalMainCommits(base, mainRef) {
 
 function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
+  const targetHistory = new Set(git(["rev-list", targetCommit]).split("\n"));
+  const mainCommit = mainRef ? gitCommit(mainRef, true) : undefined;
+  const mainHistory = mainCommit ? new Set(git(["rev-list", mainCommit]).split("\n")) : new Set();
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
@@ -1314,10 +1326,10 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const activePullRequests = resolveAssociatedPullRequests(
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
+    targetHistory,
   );
   const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits, releaseProvenance);
-  const mainCommits = canonicalMainCommits(base, mainRef);
-  const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
+  const mainCommits = canonicalMainCommits(base, mainCommit);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
@@ -1381,6 +1393,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const candidateMainPullRequests = resolveAssociatedPullRequests(
     [...mainAssociationCandidateHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
@@ -1408,6 +1421,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const canonicalMainPullRequests = resolveAssociatedPullRequests(
     [...canonicalMainHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
@@ -1464,6 +1478,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   for (const revertedPullRequestNumbers of resolveAssociatedPullRequests(
     [...revertedCommitHashes],
     targetTimestamp,
+    new Set([...targetHistory, ...mainHistory]),
   ).values()) {
     for (const number of revertedPullRequestNumbers) {
       revertedPullRequests.add(number);
@@ -1502,6 +1517,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     revertedReferences,
     target: targetCommit,
     targetTimestamp,
+    targetHistory,
   };
 }
 
@@ -1539,7 +1555,7 @@ function graphql(query) {
   throw lastError;
 }
 
-function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
+function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
   const pullRequestsByCommit = new Map();
   const pending = [];
   function appendPullRequests(commitHash, connection) {
@@ -1551,6 +1567,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
+        history.has(pullRequest.mergeCommit?.oid) &&
         (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
@@ -2188,11 +2205,11 @@ export function ledgerFor(
   priorRecord,
   sourcePullRequests,
   sourceReferences,
-  noteReferences,
   legacyIssuePullRequests,
   revertedReferences,
   shippedBaselines,
   targetTimestamp,
+  targetHistory,
 ) {
   const entries = references.map((number) => {
     const node = nodes.get(number);
@@ -2210,10 +2227,20 @@ export function ledgerFor(
     };
   });
 
-  const recordedPullRequests = new Set([
+  // A resolved reference supplies context; only shipped graph evidence supplies membership.
+  const inRangePullRequestNumbers = new Set([
     ...sourcePullRequests,
-    ...sourceReferences,
-    ...noteReferences,
+    ...[...sourceReferences].filter((number) => {
+      const node = nodes.get(number);
+      return (
+        node?.__typename === "PullRequest" &&
+        targetHistory.has(node.mergeCommit?.oid) &&
+        mergedByTarget(node.mergedAt, targetTimestamp)
+      );
+    }),
+  ]);
+  const recordedPullRequests = new Set([
+    ...inRangePullRequestNumbers,
     ...legacyIssuePullRequests,
     ...priorRecord.pullRequests.keys(),
   ]);
@@ -2226,10 +2253,6 @@ export function ledgerFor(
       !revertedReferences.has(entry.number),
   );
   const issues = entries.filter((entry) => entry.type === "Issue");
-  const inRangePullRequestNumbers = new Set([
-    ...sourcePullRequests,
-    ...[...sourceReferences].filter((number) => nodes.get(number)?.__typename === "PullRequest"),
-  ]);
   const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
   const records = pullRequests.map((entry) => {
     const priorEntry = priorRecord.pullRequests.get(entry.number);
@@ -2648,22 +2671,6 @@ function main() {
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
   let nodes = resolveReferences(references);
-  const contamination = contaminatingPullRequestReferences({
-    noteReferences,
-    recordedReferences: effectiveRenderedRecordReferences,
-    excludedRecordedReferences,
-    sourcePullRequests: source.pullRequests,
-    sourceReferences: source.references,
-    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
-    nodes,
-  });
-  if (contamination.length > 0) {
-    fail(
-      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
-        .map((number) => `#${number}`)
-        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
-    );
-  }
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
@@ -2755,12 +2762,28 @@ function main() {
     priorRecord,
     source.pullRequests,
     source.references,
-    noteReferences,
     legacyIssuePullRequests,
     source.revertedReferences,
     source.shippedBaselines,
     source.targetTimestamp,
+    source.targetHistory,
   );
+  const contamination = contaminatingPullRequestReferences({
+    noteReferences,
+    recordedReferences: options.writeLedger ? [] : [...renderedRecord.pullRequests.keys()],
+    excludedRecordedReferences,
+    sourcePullRequests: new Set(ledger.pullRequests.map((entry) => entry.number)),
+    sourceReferences: source.references,
+    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
+    nodes,
+  });
+  if (contamination.length > 0) {
+    fail(
+      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
+        .map((number) => `#${number}`)
+        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
+    );
+  }
   const manifest = manifestFor(
     { ...options, target: source.target },
     source,
