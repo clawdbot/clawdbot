@@ -1064,7 +1064,11 @@ Codex harness forwards the other bootstrap files as developer instructions:
   refreshable context rather than generic policy: a changed catalog resumes a
   persistent thread through the normal policy handoff, while a live incognito
   thread receives the complete current catalog as an injected developer
-  message and keeps its conversation. A generic policy change on a live
+  message and keeps its conversation. Compaction rebuilds a thread's initial
+  context from its creation-time developer instructions and discards injected
+  developer messages, so an incognito thread whose catalog was refreshed in
+  place receives the current catalog again after every compaction, including
+  compaction during a turn. A generic policy change on a live
   incognito thread still refuses the turn. Native Codex subagents can inherit
   the catalog with the parent thread's developer instructions; this does not
   move workspace persona or memory context into that carrier.
