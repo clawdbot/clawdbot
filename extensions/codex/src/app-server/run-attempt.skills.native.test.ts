@@ -152,7 +152,7 @@ describe("native Codex skill delivery", () => {
       expect(developerText).toContain(params.skillsSnapshot.prompt);
     } finally {
       if (client) {
-        expect(await client.closeAndWait()).toBe(true);
+        expect(await client.closeAndWait()).toMatchObject({ exited: true });
       }
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
