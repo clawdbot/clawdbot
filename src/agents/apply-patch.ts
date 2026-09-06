@@ -438,15 +438,14 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false && resolved.hostPath) {
-      await assertSandboxPath({
-        filePath: resolved.hostPath,
-        cwd: options.cwd,
-        root: options.root ?? options.cwd,
-        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
-        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
-      });
-    }
+    // The sandbox filesystem bridge is mount-aware: `bridge.resolvePath` only returns
+    // a non-null `hostPath` when the path is on an operator-authorized (possibly writable
+    // bind-mounted) filesystem path that the bridge's own `SandboxFsPathGuard` has accepted.
+    // Running a second `assertSandboxPath` against `options.cwd` here is redundant AND
+    // wrong: it rejects bridge-validated bind-mount targets whose host paths legitimately
+    // lie outside the workspace root, even though the operator explicitly configured those
+    // mounts as writable. The bridge is the authoritative boundary in sandbox mode.
+    // See: https://github.com/openclaw/openclaw/issues/93140
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,
       queueKey: await resolveSandboxFileMutationQueueKey({
