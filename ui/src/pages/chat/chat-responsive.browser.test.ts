@@ -1775,6 +1775,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("hides image avatars when the mobile transcript drops their grid column", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread">
+            <div class="chat-group assistant chat-group--with-footer">
+              <img class="chat-avatar assistant" alt="Assistant" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E" />
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Completed work remains readable.</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const avatar = page.locator(".chat-avatar");
+      for (const width of [430, 400, 390, 320, 401, 1366]) {
+        await page.setViewportSize({ width, height: 720 });
+        if (width <= 400) {
+          await expectBrowser(avatar).toBeHidden();
+        } else {
+          await expectBrowser(avatar).toBeVisible();
+          const image = await avatar.boundingBox();
+          const text = await page.locator(".chat-text").boundingBox();
+          expect(image!.x + image!.width).toBeLessThanOrEqual(text!.x);
+        }
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("applies configured chat width to tool rows and composer without changing defaults", async () => {
     const page = await openBrowserPage(1600, 900);
     const renderFixture = async (configured: boolean) => {
