@@ -398,8 +398,9 @@ describe("parseCliJson", () => {
       'note "example {"type":"error","message":"fake"}"',
     ].join(" ");
 
-    expect(parseCliJson(raw, { command: "custom", output: "json" })).toEqual({
-      text: "done",
+    const parsed = parseCliJson(raw, { command: "custom", output: "json" });
+    expect(parsed?.text, "CLI_QUOTED_RECORDS_LOST").toBe("done");
+    expect(parsed).toMatchObject({
       sessionId: "session-mixed",
       usage: undefined,
     });

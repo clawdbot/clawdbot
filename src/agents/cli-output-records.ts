@@ -1,4 +1,4 @@
-import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
+import { extractBalancedJsonFragments, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -76,34 +76,25 @@ export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): bo
 }
 
 export function decodeCliRecords(raw: string): Record<string, unknown>[] {
-  const parsedRecords: Record<string, unknown>[] = [];
   const trimmed = raw.trim();
   if (!trimmed) {
-    return parsedRecords;
+    return [];
   }
 
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (isRecord(parsed)) {
-      parsedRecords.push(parsed);
-      return parsedRecords;
-    }
-  } catch {
-    // Fall back to scanning for top-level JSON objects embedded in mixed output.
+  const fullRecord = safeParseJsonRecord(trimmed);
+  if (fullRecord) {
+    return [fullRecord];
   }
 
+  const parsedRecords: Record<string, unknown>[] = [];
   // Some CLIs prefix JSON with banners/logs; balanced scanning recovers structured records.
   for (const { json } of extractBalancedJsonFragments(trimmed, {
     openers: ["{"],
     skipQuotedOpeners: true,
   })) {
-    try {
-      const parsed = JSON.parse(json);
-      if (isRecord(parsed)) {
-        parsedRecords.push(parsed);
-      }
-    } catch {
-      // Ignore malformed fragments and keep scanning remaining objects.
+    const parsed = safeParseJsonRecord(json);
+    if (parsed) {
+      parsedRecords.push(parsed);
     }
   }
 
