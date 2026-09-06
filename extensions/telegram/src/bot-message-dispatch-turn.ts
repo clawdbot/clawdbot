@@ -263,10 +263,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             suppressDefaultToolProgressMessages:
               !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
             suppressToolProgressMessages: !toolProgressEnabled,
-            forceToolResultProgress:
-              Boolean(turn.answerLane.stream) &&
-              turn.streamMode === "progress" &&
-              toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(turn.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {
