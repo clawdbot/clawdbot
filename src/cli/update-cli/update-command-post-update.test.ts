@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import {
@@ -8,10 +9,14 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createManagedServiceIdentityFixture } from "./update-command-post-update.test-support.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import {
+  createManagedServiceIdentityFixture,
+  finishSuccessfulPackageSwitch,
+  validConfigSnapshot,
+} from "./update-command-post-update.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
@@ -105,6 +110,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import * as postCoreModule from "./update-command-post-core.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
@@ -166,18 +172,7 @@ afterEach(() => {
   }
 });
 
-const validConfigSnapshot = {
-  valid: true,
-  parsed: {},
-  config: {},
-  runtimeConfig: {},
-  sourceConfig: {},
-  warnings: [],
-  issues: [],
-  legacyIssues: [],
-};
-
-const successfulPluginUpdate = {
+const successfulPluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: false,
   sync: {
@@ -191,76 +186,6 @@ const successfulPluginUpdate = {
   integrityDrifts: [],
   warnings: [],
 };
-
-async function finishSuccessfulPackageSwitch(
-  params: {
-    previousRoot?: string;
-    packageRoot?: string;
-    restartEnvironment?: NodeJS.ProcessEnv;
-    json?: boolean;
-    sealed?: boolean;
-    updateMode?: UpdateRunResult["mode"];
-    stoppedForUpdate?: boolean;
-    stoppedAtMs?: number;
-    run?: FinishUpdateParams["opts"]["run"];
-    windowsTaskAutoStartRecovery?: NonNullable<
-      FinishUpdateParams["preManagedServiceStop"]
-    >["windowsTaskAutoStartRecovery"];
-  } = {
-    restartEnvironment: process.env,
-  },
-  overrides: Partial<FinishUpdateParams> = {},
-): Promise<void> {
-  const packageRoot = params.packageRoot ?? "/tmp/openclaw-update";
-  const previousRoot = params.previousRoot ?? packageRoot;
-  await finishUpdate({
-    result: {
-      status: "ok",
-      mode: params.updateMode ?? "npm",
-      root: packageRoot,
-      ...(params.sealed && {
-        before: { version: "2026.4.23" },
-        after: {
-          version: "2026.4.24",
-          ...(params.updateMode === "git" ? { buildId: "new-build" } : {}),
-        },
-      }),
-      steps: [],
-      durationMs: 1,
-    },
-    root: packageRoot,
-    previousInstallRoot: previousRoot,
-    installKindChanged: !params.restartEnvironment,
-    configSnapshot: validConfigSnapshot,
-    requestedChannel: null,
-    storedChannel: null,
-    channel: params.updateMode === "git" ? "dev" : "stable",
-    downgradeRisk: true,
-    shouldRestart: Boolean(params.restartEnvironment),
-    opts: { json: params.json, run: params.run },
-    controlPlaneUpdateSentinelMeta: {},
-    preUpdatePluginInstallRecords: {},
-    startedAt: Date.now(),
-    updateStepTimeoutMs: 1_000,
-    ...(params.restartEnvironment && {
-      preManagedServiceStop: {
-        stopped: params.stoppedForUpdate ?? true,
-        stoppedAtMs: params.stoppedAtMs,
-        windowsTaskAutoStartRecovery: params.windowsTaskAutoStartRecovery,
-        ...(params.sealed && {
-          serviceUpdateVerdict: {
-            kind: "owned",
-            root: previousRoot,
-            refreshDefinition: false,
-            fingerprint: "sealed",
-          },
-        }),
-      },
-      ownedManagedUpdateEnv: params.restartEnvironment,
-    }),
-    ...overrides,
-  } as unknown as FinishUpdateParams);
-}
 
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
@@ -290,6 +215,74 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
+
+  it.each(["local", "fresh"] as const)(
+    "keeps service activation behind awaited %s convergence and Doctor",
+    async (execution) => {
+      const identity = createManagedServiceIdentityFixture(
+        tempDirs.make("update-convergence-order-"),
+      );
+      mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
+      mocks.stopService.mockResolvedValue({
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        stopped: true,
+      });
+      const events: string[] = [];
+      const entered = createDeferred();
+      const release = createDeferred();
+      const plugins = { ...successfulPluginUpdate, changed: true };
+      const converge = async () => {
+        events.push("plugins");
+        entered.resolve();
+        await release.promise;
+        return plugins;
+      };
+      vi.spyOn(postCoreModule, "shouldResumePostCoreUpdateInFreshProcess").mockReturnValue(
+        execution === "fresh",
+      );
+      if (execution === "fresh") {
+        vi.spyOn(postCoreModule, "continuePostCoreUpdateInFreshProcess").mockImplementationOnce(
+          async () => ({ resumed: true, pluginUpdate: await converge() }),
+        );
+      } else {
+        mocks.updatePlugins.mockImplementationOnce(converge);
+      }
+      mocks.completePluginUpdate.mockImplementationOnce(
+        async (params: { beforeDoctor?: () => Promise<void> }) => {
+          await params.beforeDoctor?.();
+          events.push("doctor");
+          return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
+        },
+      );
+      const recovery = taskRecovery((phase) => events.push(phase));
+      mocks.restartService.mockImplementationOnce(async () => {
+        events.push("start");
+        return "ok";
+      });
+      const finishing = finishSuccessfulPackageSwitch({
+        restartEnvironment: process.env,
+        windowsTaskAutoStartRecovery: recovery,
+      });
+      try {
+        await entered.promise;
+        expect.soft(mocks.restartService).not.toHaveBeenCalled();
+        expect.soft(recovery.restore).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+      }
+      try {
+        await finishing;
+      } finally {
+        identity.restore();
+      }
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
+      expect(mocks.restartService).toHaveBeenCalledOnce();
+      expect(mocks.stopService).not.toHaveBeenCalled();
+    },
+  );
 
   it("restarts after completion status inspection fails", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
@@ -667,13 +660,13 @@ describe("successful update finalization ordering", () => {
     });
 
     it.each([
-      { outcome: "unchanged", stoppedAtMs: 500, downtimeMs: 1_000 },
-      { outcome: "restarted", stoppedAtMs: 500, downtimeMs: 1_500 },
-      { outcome: "rolled-back", stoppedAtMs: 500, downtimeMs: 2_000 },
-      { outcome: "rolled-back", stoppedAtMs: 0, downtimeMs: 2_500 },
+      { outcome: "unchanged", stoppedAtMs: 500, downtimeMs: 10_700 },
+      { outcome: "restarted", stoppedAtMs: 500, downtimeMs: 11_000 },
+      { outcome: "rolled-back", stoppedAtMs: 500, downtimeMs: 11_500 },
+      { outcome: "rolled-back", stoppedAtMs: 0, downtimeMs: 12_000 },
       { outcome: "unverified", stoppedAtMs: 500, downtimeMs: null },
     ] as const)(
-      "converges plugin packages online and measures migration plus restart ($outcome, initial stop=$stoppedAtMs)",
+      "keeps plugin convergence stopped and measures the full interval through verification ($outcome, initial stop=$stoppedAtMs)",
       async ({ outcome, stoppedAtMs, downtimeMs }) => {
         const changed = outcome !== "unchanged";
         const restartFailed = outcome === "rolled-back" || outcome === "unverified";
@@ -695,7 +688,6 @@ describe("successful update finalization ordering", () => {
             windowsEvents.push("old-complete");
           }
         });
-        const nextRecovery = taskRecovery((phase) => windowsEvents.push(`next-${phase}`));
         mocks.readServiceState.mockResolvedValue(
           managedServiceState(serviceEnv, { environment: serviceEnv }),
         );
@@ -730,24 +722,12 @@ describe("successful update finalization ordering", () => {
           now = 11_000;
           return plugins;
         });
-        mocks.stopService.mockImplementationOnce(async () => {
-          events.push("stop");
-          windowsEvents.push("next-suspend");
-          return {
-            stopped: true,
-            inspected: true,
-            runtimeInspected: true,
-            running: true,
-            stoppedAtMs: now,
-            windowsTaskAutoStartRecovery: nextRecovery,
-          };
-        });
         mocks.completePluginUpdate.mockImplementationOnce(
           async (params: { beforeDoctor?: () => Promise<void> }) => {
             if (changed) {
               await params.beforeDoctor?.();
               events.push("doctor");
-              expect(windowsEvents).toEqual(["old-complete", "next-suspend", "next-mutation"]);
+              expect(windowsEvents).toEqual([]);
               now += 300;
             }
             return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
@@ -813,18 +793,15 @@ describe("successful update finalization ordering", () => {
           await finishing;
         }
         expect(events).toEqual([
-          "start",
           "plugins",
-          ...(changed ? ["stop", "doctor", "start"] : []),
+          ...(changed ? ["doctor"] : []),
+          "start",
           ...(restartFailed ? ["rollback"] : []),
         ]);
-        expect(mocks.stopService).toHaveBeenCalledTimes(changed ? 1 : 0);
-        if (changed) {
-          expect(oldRecovery.complete).toHaveBeenCalledOnce();
-          expect(nextRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
-          expect(nextRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
-          expect(windowsEvents.at(-1)).toBe("next-complete");
-        }
+        expect(mocks.stopService).not.toHaveBeenCalled();
+        expect(oldRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
+        expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
+        expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
           status:
             outcome === "rolled-back" ? "rolled-back" : restartFailed ? "failed" : "succeeded",

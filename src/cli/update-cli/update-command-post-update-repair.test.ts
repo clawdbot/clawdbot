@@ -431,7 +431,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
           mocks.restartCommand.mock.invocationCallOrder.at(-1)!,
         );
       }
-      expect(mocks.converge).toHaveBeenCalledTimes(repaired && rollback !== "restored" ? 1 : 0);
+      expect(mocks.converge).toHaveBeenCalledOnce();
       expect(mocks.repair).toHaveBeenCalledOnce();
       if (rollback === "restored") {
         expect(completeRecovery).toHaveBeenCalled();
@@ -551,8 +551,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         });
         mocks.restart.mockImplementation(async (restart) => {
           await startTask();
-          const initial = mocks.restart.mock.calls.length === 1;
-          mocks.healthy = !initial && activated;
+          mocks.healthy = false;
           recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
@@ -574,7 +573,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         });
         mocks.restartCommand.mockImplementation(async () => {
           await startTask();
-          mocks.healthy = true;
+          mocks.healthy = activated;
           return "accepted";
         });
         mocks.repair.mockImplementation(async (repair) => {
@@ -587,16 +586,17 @@ describe("post-activation repair after rollback refusal or failure", () => {
             model: "gpt-5.6-luna",
           });
           const validation = await repair.validate(signal);
-          expect(validation.ok).toBe(true);
-          repair.onEvent?.({ type: "stopped", status: "repaired" });
-          return { status: "repaired", attempts: [], finalValidation: validation };
+          expect(validation.ok).toBe(activated && finalProof);
+          const status = validation.ok ? "repaired" : "unrepaired";
+          repair.onEvent?.({ type: "stopped", status });
+          return { status, attempts: [], finalValidation: validation };
         });
         mocks.converge.mockImplementation(
           async (convergence: {
             result: FinishUpdateParams["result"];
             beforeDoctor?: () => Promise<void>;
           }) => {
-            expect(mocks.healthy).toBe(true);
+            expect(mocks.healthy).toBe(false);
             await convergence.beforeDoctor?.();
             expect(enabled).toBe(false);
             if (!finalProof) {
@@ -628,12 +628,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
         await originalRecovery.complete();
         expect(mocks.rollback).toHaveBeenCalledOnce();
         expect(mocks.repair).toHaveBeenCalledOnce();
-        expect(mocks.restart).toHaveBeenCalledTimes(2);
+        expect(mocks.restart).toHaveBeenCalledOnce();
         expect(mocks.restartCommand).toHaveBeenCalledOnce();
-        expect(mocks.stop).toHaveBeenCalledTimes(2);
+        expect(mocks.stop).toHaveBeenCalledOnce();
         expect(enabled).toBe(activated && finalProof);
         if (activated) {
-          expect(mocks.serving).toHaveBeenCalledTimes(2);
+          expect(mocks.serving).toHaveBeenCalledOnce();
         }
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {

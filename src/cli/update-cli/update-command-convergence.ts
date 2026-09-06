@@ -38,7 +38,6 @@ export async function convergeUpdatePlugins(params: {
   startedAt: number;
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
-  beforeDoctor?: () => Promise<void>;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -72,8 +71,8 @@ export async function convergeUpdatePlugins(params: {
   }
 
   if (params.opts.run) {
-    // Plugin mutations require the installed root; keep them outside the
-    // service outage and verify their fresh runtime after convergence.
+    // This phase uses the installed target while the managed service remains
+    // stopped. Final serving verification follows all config/plugin mutations.
     recordUpdateRunPhase(
       params.opts.run.runId,
       "verifying",
@@ -162,8 +161,8 @@ export async function convergeUpdatePlugins(params: {
       }
 
       if (postCorePluginUpdate) {
-        // Both package paths release the plugin lease before Doctor; the parent
-        // owns the service boundary after package and network work has finished.
+        // Both package paths release the plugin lease before Doctor. The outer
+        // finalizer keeps the service stopped through this fresh migration pass.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
@@ -171,7 +170,6 @@ export async function convergeUpdatePlugins(params: {
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
-          beforeDoctor: params.beforeDoctor,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;

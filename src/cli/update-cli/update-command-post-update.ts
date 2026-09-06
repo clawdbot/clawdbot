@@ -1,6 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
@@ -40,18 +39,12 @@ import {
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import {
-  assertGatewayServiceManagementAllowedForUpdate,
-  GatewayServiceUpdateOwnershipError,
-} from "./update-command-service-plan.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   recordFailedUpdateGatewayState,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
-  maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
-  resolveUpdatedGatewayRestartPort,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
@@ -83,15 +76,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
-  // Rollback and later plugin maintenance can replace the suspension owner.
+  // Rollback can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
   let rolledBack = false;
   let completedDowntimeMs: number | undefined;
   let pendingRestartAtMs =
     params.preManagedServiceStop?.stoppedAtMs ??
     params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
-  // Health resets replace ledger verification. Keep completed outages here so
-  // recovery never counts the online plugin work between service stops.
+  // Health resets replace ledger verification. Keep completed outages here
+  // until final reporting, including a separately verified rollback.
   const recordVerifiedDowntime = (verifiedAtMs: number) => {
     if (pendingRestartAtMs !== undefined) {
       completedDowntimeMs =
@@ -427,8 +420,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
 
     const postUpdateRoot = params.result.root ?? params.root;
-    const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
+    const convergePlugins = async () => {
+      const convergence = await convergeUpdatePlugins(params);
       if (convergence.resultWithPostUpdate.status === "error") {
         const reported = await reportResult(convergence.resultWithPostUpdate);
         throw new UpdateCommandFailure(
@@ -439,15 +432,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       }
       return convergence;
     };
-    // Plugin install/sync changes shared payloads, config, and the installed index.
-    // Start the rehearsed core first; a changed plugin snapshot gets one later restart.
-    const deferPluginConvergence =
-      params.shouldRestart && params.preManagedServiceStop?.stopped === true;
-    let resultWithPostUpdate = params.result;
-    let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
-    if (!deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
-    }
+    // Convergence needs the installed target, not a serving Gateway. Keep config,
+    // payload/index writes and fresh Doctor in the original stopped interval;
+    // prepare/revalidate the native owner only after those awaited mutations.
+    const convergence = await convergePlugins();
+    let { resultWithPostUpdate } = convergence;
+    const { postUpdateConfigSnapshot } = convergence;
     const restartConfigSnapshot =
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
@@ -480,7 +470,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         { cause: error },
       );
     }
-    let { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
+    const { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
       restartContext;
     const {
       gatewayServiceInstallEnv,
@@ -489,7 +479,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       serviceMutationAllowed,
       serviceMutationSkipMessage,
     } = restartContext;
-    let { gatewayPort } = restartContext;
+    const { gatewayPort } = restartContext;
 
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
@@ -577,62 +567,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       }
     };
     await restart();
-    if (deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
-        const before = currentServiceStop();
-        if (!before) {
-          throw new Error("Plugin maintenance lost its update service owner.");
-        }
-        await before.windowsTaskAutoStartRecovery?.complete(true);
-        // Package work finished online. Full Doctor owns state migrations, so
-        // park only now and retain this suspension through verified activation.
-        const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateRun: params.opts.run,
-          updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
-          root: postUpdateRoot,
-          shouldRestart: true,
-          jsonMode: Boolean(params.opts.json),
-          expectedService: { serviceEnv: gatewayServiceEnv, serviceUpdateVerdict },
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
-        if (stopped.blockMessage || !stopped.stopped) {
-          throw new Error(
-            stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
-          );
-        }
-        stopped.windowsTaskAutoStartRecovery?.beginMutation();
-        pendingRestartAtMs ??= stopped.stoppedAtMs;
-      }));
-      if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
-        // Convergence awaited package managers and plugin hooks. Revalidate the
-        // exact native owner again before a changed plugin snapshot is activated.
-        const state = await readGatewayServiceState(resolveGatewayService(), {
-          env: gatewayServiceEnv ?? serviceStateReadEnv,
-          requireEffective: true,
-          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
-          state,
-          root: postUpdateRoot,
-          preManagedServiceStop: {
-            serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
-            serviceUpdateVerdict,
-          },
-        });
-        gatewayServiceEnv = state.env;
-        gatewayPort = await resolveUpdatedGatewayRestartPort({
-          serviceEnv: state.env,
-          serviceCommand: state.command,
-        });
-        pendingRestartAtMs ??= Date.now();
-        restartScriptPath = null;
-        refreshGatewayServiceEnv = false;
-        await restoreWindowsAutoStart(resultWithPostUpdate);
-        await restart();
-      }
-    }
     // Restart and health verification own recovery of the service stopped for this update.
     // Optional completion refresh must run only after that lifecycle boundary settles.
     try {

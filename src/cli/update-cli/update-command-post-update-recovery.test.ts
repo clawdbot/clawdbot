@@ -453,7 +453,7 @@ describe("failed update recovery restart", () => {
   );
 
   it.each([79, 80])(
-    "does not restart again after post-activation convergence exits %s",
+    "does not activate when pre-restart convergence exits %s",
     async (childExitCode) => {
       mocks.restartCandidate.mockResolvedValueOnce("ok");
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
@@ -474,8 +474,8 @@ describe("failed update recovery restart", () => {
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
-      expect(mocks.restartCandidate).toHaveBeenCalledOnce();
-      expect(mocks.restoreWindowsAutoStart).toHaveBeenCalledOnce();
+      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+      expect(mocks.restoreWindowsAutoStart).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();
     },
   );

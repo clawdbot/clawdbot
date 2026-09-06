@@ -30,12 +30,12 @@ An already-installed package version or Git target SHA finishes as
 `skipped` / `already-current` without stopping or restarting the Gateway.
 An explicit `--channel` choice still becomes the saved update channel.
 For targets that support candidate validation, Doctor lint, config and plugin planning, and a
-canary boot on copied state finish before the service stops. The first activation
-window contains the swap, required migrations, and service start. Plugin packages
-download and sync while the core Gateway serves. A changed plugin snapshot then
-requires a second measured activation window for full Doctor migrations under
-exclusive maintenance, restart, and verification. Unchanged plugins do not run
-another full Doctor pass. The final report records downtime and verification
+canary boot on copied state finish before the service stops. The stopped interval
+contains the swap, required migrations, plugin downloads and convergence, and
+service start. Plugin work uses the installed target without requiring a serving
+Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;
+unchanged plugins do not run another full Doctor pass. The final report records
+downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
