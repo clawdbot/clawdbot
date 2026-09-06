@@ -25,7 +25,14 @@ const suite = createControlUiE2eSuite({
       config: {
         gateway: { controlUi: { enabled: true } },
         cron: { enabled: false },
-        agents: { defaults: { model: "fixture/anchor" } },
+        agents: {
+          ownership: "explicit",
+          defaults: { model: "fixture/anchor" },
+          list: [
+            { id: "main", identity: { name: "Main fixture" } },
+            { id: "reviewer", identity: { name: "Reviewer fixture" } },
+          ],
+        },
         models: {
           providers: {
             fixture: {
@@ -59,6 +66,7 @@ suite.define(() => {
     const frames: unknown[] = [];
     const commands: unknown[] = [];
     const catalogRequests = new Set<string>();
+    const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     const publish = async (id: string) => {
       const args = [
@@ -85,6 +93,7 @@ suite.define(() => {
                 frames.push({ direction: "sent", frame });
                 if (frame.method === "models.list" && typeof frame.id === "string") {
                   catalogRequests.add(frame.id);
+                  catalogParams.push(frame.params);
                 }
               }
               server.send(message);
@@ -153,6 +162,32 @@ suite.define(() => {
           await input.press("Enter");
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
           await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
+          await page.goBack();
+          rejectCatalogReplies = true;
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+          await sidebar
+            .getByRole("menuitemradio", { name: "Reviewer fixture", exact: true })
+            .click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
+          const requestsBeforeOpen = catalogParams.length;
+          await page.keyboard.press("Control+K");
+          await input.fill("palette");
+          await status.waitFor({ state: "visible" });
+          expect(catalogParams.length).toBeGreaterThan(requestsBeforeOpen);
+          expect(catalogParams.at(-1)).toEqual({
+            view: "configured",
+            agentId: "reviewer",
+            preparedOnly: true,
+          });
+          expect(await recovered.count()).toBe(0);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "selected-agent-failure.png"),
+          });
+          rejectCatalogReplies = false;
+          await input.fill("palette-held");
+          await recovered.waitFor({ state: "visible" });
+          await status.waitFor({ state: "hidden" });
         },
       );
     } finally {

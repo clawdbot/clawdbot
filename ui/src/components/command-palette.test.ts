@@ -6,6 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -25,7 +26,6 @@ type CustodianPanelToggleDetail = { open?: boolean };
 type GatewayHarness = {
   gateway: ApplicationGateway;
   setConnected: (connected: boolean) => void;
-  setAgent: (agentId: string) => void;
   emit: (event: string) => void;
 };
 
@@ -70,12 +70,6 @@ function createGateway(
   } satisfies ApplicationGateway;
   return {
     gateway,
-    setAgent(agentId) {
-      snapshot = { ...snapshot, assistantAgentId: agentId };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
     emit(event) {
       for (const listener of events) {
         listener({ type: "event", event, payload: {} });
@@ -99,6 +93,10 @@ function createContext(
 ): ApplicationContext<RouteId> {
   return {
     gateway,
+    agentSelection: createAgentSelectionCapability(gateway, {
+      state: { agentsList: null },
+      subscribe: () => () => undefined,
+    }),
     agents: {
       ensureList: async () => null,
     },
@@ -302,44 +300,49 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
   });
 
-  it("searches a bare default session key in the selected agent scope", async () => {
-    const roster = createSessionResult("main", "Default chat");
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
-      options?.search ? { ...roster, count: 0, sessions: [] } : roster,
-    );
-    const request = vi.fn(async () => ({
-      results: [
-        {
-          sessionKey: "main",
-          sessionId: "default",
-          messageId: "message-default",
-          role: "assistant" as const,
-          timestamp: 42,
-          snippet: "The needle is in the default chat body.",
-          score: 10,
-        },
-      ],
-    }));
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request: request as GatewayBrowserClient["request"],
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
+  it.each(["main", "reviewer"])(
+    "searches a bare default session key in selected agent %s",
+    async (agentId) => {
+      const roster = createSessionResult("main", "Default chat");
+      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+        options?.search ? { ...roster, count: 0, sessions: [] } : roster,
+      );
+      const request = vi.fn(async () => ({
+        results: [
+          {
+            sessionKey: "main",
+            sessionId: "default",
+            messageId: "message-default",
+            role: "assistant" as const,
+            timestamp: 42,
+            snippet: "The needle is in the default chat body.",
+            score: 10,
+          },
+        ],
+      }));
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request: request as GatewayBrowserClient["request"],
+      });
+      const context = createContext(gateway, list);
+      context.agentSelection.set(agentId);
+      const { palette } = await mountPalette(context);
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await palette.updateComplete;
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await palette.updateComplete;
 
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      agentId: "main",
-      sessionKeys: ["main"],
-      query: "needle",
-      limit: 25,
-    });
-    expect(palette.textContent).toContain("Default chat");
-    expect(palette.textContent).toContain("needle is in the default chat body");
-  });
+      expect(request).toHaveBeenCalledWith("sessions.search", {
+        agentId,
+        sessionKeys: ["main"],
+        query: "needle",
+        limit: 25,
+      });
+      expect(palette.textContent).toContain("Default chat");
+      expect(palette.textContent).toContain("needle is in the default chat body");
+    },
+  );
 
   it("keeps metadata matches selectable when transcript search fails", async () => {
     const metadata = createSessionResult("agent:main:metadata", "Needle planning");
@@ -504,7 +507,7 @@ describe("CommandPalette lifecycle", () => {
       harness.emit("config.changed");
       await vi.advanceTimersByTimeAsync(50);
       if (replacement === "agent") {
-        harness.setAgent("reviewer");
+        context.agentSelection.set("reviewer");
       } else if (replacement === "source") {
         const next = createGateway(true, { methods: ["models.list"], request });
         provider.setContext(createContext(next.gateway, async () => null));

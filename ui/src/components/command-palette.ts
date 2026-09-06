@@ -331,15 +331,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.clearCatalogSearch();
     },
     ensureInitialData: () => this.scheduleSessionSearch(this.query),
-    onSnapshot: ({ snapshot }) => {
-      if (
-        this.catalogLoad &&
-        this.catalogLoad.agentId !== resolveUiSelectedGlobalAgentId(snapshot)
-      ) {
-        this.clearCatalogSearch();
-        this.scheduleSessionSearch(this.query);
-      }
-    },
   });
 
   constructor() {
@@ -359,6 +350,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
             }
           }
         }),
+    );
+    this.subscriptions.watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        this.clearCatalogSearch();
+        this.scheduleSessionSearch(this.query);
+      },
     );
   }
 
@@ -428,7 +427,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     if (!context || !this.gateway.connected || !gateway || !client) {
       return Promise.resolve();
     }
-    const agentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const agentId =
+      context.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
     const current = this.catalogLoad;
     if (
       !force &&
@@ -452,6 +452,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       if (
         this.catalogLoad?.promise === promise &&
         this.context?.gateway === gateway &&
+        this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
         this.catalogItems = [
@@ -497,13 +498,15 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.open &&
       this.context?.sessions === sessions &&
       this.context?.gateway === gateway &&
+      this.context?.agentSelection === context?.agentSelection &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
     const transcriptSearchAvailable = isGatewayMethodAdvertised(
       gateway.snapshot,
       "sessions.search",
     );
-    const defaultAgentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const defaultAgentId =
+      context?.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
     const transcriptSearch = transcriptSearchAvailable
       ? searchVisibleSessionTranscripts({
           client,
