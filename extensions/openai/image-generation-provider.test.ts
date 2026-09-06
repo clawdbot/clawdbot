@@ -1910,6 +1910,53 @@ describe("openai image generation provider", () => {
     );
   });
 
+  it("keeps the host model's explanation when the image call failed and the completed output is empty", async () => {
+    mockCodexAuthOnly();
+    const explanation = "I'm sorry, but the image request was blocked by the safety system.";
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: { id: "ig_1", type: "image_generation_call", status: "failed" },
+        },
+        {
+          type: "response.output_item.done",
+          item: { id: "rs_1", type: "reasoning", content: [] },
+        },
+        {
+          type: "response.output_item.done",
+          item: { id: "ig_2", type: "image_generation_call", status: "failed" },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "msg_1",
+            type: "message",
+            status: "completed",
+            content: [{ type: "output_text", text: explanation }],
+          },
+        },
+        { type: "response.completed", response: { output: [] } },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const error = await generateOpenAIImage("Draw the prompt the live transport refused").then(
+      () => {
+        throw new Error("expected image generation to reject");
+      },
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    // The point of #124158: the explanation reaches the caller. The failed
+    // status may be reported alongside it, but must not replace it.
+    expect(message).toContain(explanation);
+    expect(message).toMatch(/failed/i);
+    expect(message).not.toMatch(/did not produce an image/i);
+  });
+
   it("strips control characters from completed refusal text", async () => {
     mockCodexAuthOnly();
     mockCodexRawStream(

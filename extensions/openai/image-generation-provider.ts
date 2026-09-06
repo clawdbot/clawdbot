@@ -773,14 +773,19 @@ function extractCodexImageGenerationResult(params: {
     const unfinished = selectedOutputItems.find(
       (item) => item.status && item.status !== "completed",
     );
-    if (unfinished?.status) {
+    if (providerText && unfinished?.status) {
       throw new Error(
-        `OpenAI Codex image generation image call did not complete (${unfinished.status})`,
+        `Image generation provider returned text instead of an image: "${providerText}" (image call did not complete (${unfinished.status}))`,
       );
     }
     if (providerText) {
       throw new Error(
         `Image generation provider returned text instead of an image: "${providerText}"`,
+      );
+    }
+    if (unfinished?.status) {
+      throw new Error(
+        `OpenAI Codex image generation image call did not complete (${unfinished.status})`,
       );
     }
     throw new Error("OpenAI Codex image generation completed but did not produce an image");
