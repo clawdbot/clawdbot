@@ -49,17 +49,17 @@ describe("models config input presence", () => {
     },
   ] as const)("$name in the final generated models.json", async ({ sourceModels, expected }) => {
     const configuredProvider = {
-      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      apiKey: "AWS_PROFILE",
+      baseUrl: "https://model-input.example/v1",
+      apiKey: "MODEL_INPUT_FIXTURE_KEY",
       models: [model("vision-model")],
     };
     const cfg: OpenClawConfig = {
-      models: { providers: { "amazon-bedrock": configuredProvider } },
+      models: { providers: { "model-input-fixture": configuredProvider } },
     };
     const sourceConfigForSecrets = {
       models: {
         providers: {
-          "amazon-bedrock": {
+          "model-input-fixture": {
             baseUrl: configuredProvider.baseUrl,
             apiKey: configuredProvider.apiKey,
             models: sourceModels,
@@ -68,7 +68,7 @@ describe("models config input presence", () => {
       },
     } as unknown as OpenClawConfig;
     const resolveImplicitProviders = vi.fn<ResolveImplicitProviders>(async () => ({
-      "amazon-bedrock": {
+      "model-input-fixture": {
         ...configuredProvider,
         models: [model("vision-model", ["text", "image"])],
       },
@@ -82,7 +82,7 @@ describe("models config input presence", () => {
         agentDir: "/tmp/openclaw-model-input-presence",
         // Model-ID policies are part of this prepared merge fixture, not ambient discovery.
         pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
-        env: { AWS_PROFILE: "default" },
+        env: { MODEL_INPUT_FIXTURE_KEY: "default" },
         existingRaw: "",
         existingParsed: {},
       },
@@ -96,7 +96,7 @@ describe("models config input presence", () => {
     const generated = JSON.parse(plan.contents) as {
       providers: Record<string, { models?: Array<{ input?: string[] }> }>;
     };
-    expect(generated.providers["amazon-bedrock"]?.models?.[0]?.input).toEqual(expected);
+    expect(generated.providers["model-input-fixture"]?.models?.[0]?.input).toEqual(expected);
   });
 
   const liveCost = {
