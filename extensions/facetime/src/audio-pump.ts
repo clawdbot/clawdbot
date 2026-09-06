@@ -342,22 +342,22 @@ export function startFaceTimeAudioPump(params: {
           );
         }
       }
+      if (line.includes("started FaceTime process tap")) {
+        captureSuppressionActive = true;
+        settleCaptureReady();
+      }
+      if (line.includes("verified OpenClaw-Mic input route")) {
+        settleRouteReady();
+      }
+      if (
+        !captureFailureReported &&
+        /facetime-audio-capture: fatal(?:-safety-retained)?:/u.test(line)
+      ) {
+        captureFailureReported = true;
+        reportFailure(new Error("native FaceTime safety monitor reported a fatal error"), false);
+      }
     }
     captureStderr = captureStderr.split(/\r?\n/u).at(-1) ?? "";
-    if (message.includes("started FaceTime process tap")) {
-      captureSuppressionActive = true;
-      settleCaptureReady();
-    }
-    if (message.includes("verified OpenClaw-Mic input route")) {
-      settleRouteReady();
-    }
-    if (
-      !captureFailureReported &&
-      /facetime-audio-capture: fatal(?:-safety-retained)?:/u.test(message)
-    ) {
-      captureFailureReported = true;
-      reportFailure(new Error("native FaceTime safety monitor reported a fatal error"), false);
-    }
   });
   captureProcess.stdout?.on("data", (chunk) => {
     if (!stopped && !mediaSuspended) {

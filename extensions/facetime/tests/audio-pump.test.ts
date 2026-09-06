@@ -48,7 +48,7 @@ function control(event: object): string {
 }
 
 describe("FaceTime native audio bridge", () => {
-  it("publishes suppression and route readiness only after native observation", async () => {
+  it("publishes suppression and route readiness from assembled native lines", async () => {
     const processes: FakeProcess[] = [];
     const spawn = captureProcesses(processes);
     const onInputAudio = vi.fn();
@@ -62,17 +62,39 @@ describe("FaceTime native audio bridge", () => {
     expect(spawn.mock.calls[0]?.[0]).toBe("/capture");
     expect(spawn.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(pump.processOutputSuppressed()).toBe(false);
-    processes[0]?.stderr.emit("data", "facetime-audio-capture: started FaceTime process tap\n");
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: started FaceTime process");
+    expect(pump.processOutputSuppressed()).toBe(false);
+    processes[0]?.stderr.emit("data", " tap\n");
     await pump.suppressionReady();
     expect(pump.processOutputSuppressed()).toBe(true);
     const route = pump.routeReady();
-    processes[0]?.stderr.emit(
-      "data",
-      "facetime-audio-capture: verified OpenClaw-Mic input route\n",
-    );
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: verified OpenClaw-Mic input");
+    processes[0]?.stderr.emit("data", " route\n");
     await route;
     processes[0]?.stdout.emit("data", Buffer.from([1, 2]));
     expect(onInputAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
+  });
+
+  it("assembles fatal markers split across stderr chunks", () => {
+    const processes: FakeProcess[] = [];
+    const onError = vi.fn(async () => false);
+    startFaceTimeAudioPump({
+      captureBinary: "/capture",
+      logger: console,
+      onInputAudio() {},
+      onError,
+      spawn: captureProcesses(processes),
+    });
+
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: fatal-safety");
+    expect(onError).not.toHaveBeenCalled();
+    processes[0]?.stderr.emit("data", "-retained: process tap failed\n");
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "native FaceTime safety monitor reported a fatal error",
+      }),
+    );
   });
 
   it("uses native played-frame and drain events instead of elapsed time", async () => {

@@ -346,7 +346,7 @@ describe("FaceTime runtime call sequencing", () => {
     await runtime.stop();
   });
 
-  it("keeps an exact outbound call muted through ringing until route and provider readiness", async () => {
+  it("targets the replacement outbound carrier while preserving the call lifecycle identity", async () => {
     let releaseReadiness = () => {};
     const talk = createTalkDriver({
       readyForAudio: () =>
@@ -385,7 +385,7 @@ describe("FaceTime runtime call sequencing", () => {
       event: "ft-call-status-changed",
       data: {
         dial_id: dial.dialID,
-        call_uuid: "outbound-call",
+        call_uuid: "replacement-call",
         call_status: 1,
         is_outgoing: true,
         is_sending_audio: true,
@@ -399,8 +399,14 @@ describe("FaceTime runtime call sequencing", () => {
 
     releaseReadiness();
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
-    expect(mocks.helper.setMuted).toHaveBeenCalledWith("outbound-call", false);
-    expect(mocks.helper.startTransmission).toHaveBeenCalledWith("outbound-call");
+    expect(mocks.helper.setMuted).toHaveBeenCalledWith("replacement-call", false);
+    expect(mocks.helper.startTransmission).toHaveBeenCalledWith("replacement-call");
+    expect((await runtime.status()).calls).toMatchObject([{ callUUID: "outbound-call" }]);
+
+    mocks.helper.safetyMute.mockClear();
+    await expect(runtime.hangup()).resolves.toEqual({ callUUID: "outbound-call" });
+    expect(mocks.helper.safetyMute).toHaveBeenCalledWith("replacement-call");
+    expect(mocks.helper.leaveCall).toHaveBeenCalledWith("replacement-call");
     await runtime.stop();
   });
 

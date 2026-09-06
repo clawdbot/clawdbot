@@ -72,14 +72,14 @@ export function createFaceTimeCallControl(params: {
     const generation = call.captureGeneration();
     const mutedResult = await call.runCarrierCommand({
       generation,
-      action: async () => await params.helper.setMuted(call.callUUID, false),
+      action: async () => await params.helper.setMuted(call.carrierCallUUID, false),
     });
     call.lastHelperAction = mutedResult;
     params.retainHelperResultPeers(call, mutedResult);
     projectFaceTimeNativeAction("unmute", mutedResult);
     const transmissionResult = await call.runCarrierCommand({
       generation,
-      action: async () => await params.helper.startTransmission(call.callUUID),
+      action: async () => await params.helper.startTransmission(call.carrierCallUUID),
     });
     call.lastHelperAction = transmissionResult;
     params.retainHelperResultPeers(call, transmissionResult);
@@ -146,7 +146,7 @@ export function createFaceTimeCallControl(params: {
           const muted = await call.runCarrierCommand({
             generation,
             allowClosing: true,
-            action: async () => await params.helper.safetyMute(call.callUUID),
+            action: async () => await params.helper.safetyMute(call.carrierCallUUID),
           });
           projectFaceTimeNativeAction("safe-mute", muted);
           params.retainHelperResultPeers(call, muted);
@@ -159,7 +159,7 @@ export function createFaceTimeCallControl(params: {
           const leave = await call.runCarrierCommand({
             generation,
             allowClosing: true,
-            action: async () => await params.helper.leaveCall(call.callUUID),
+            action: async () => await params.helper.leaveCall(call.carrierCallUUID),
           });
           projectFaceTimeNativeAction("terminate", leave);
           params.retainHelperResultPeers(call, leave);

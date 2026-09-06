@@ -185,6 +185,9 @@ export function createFaceTimeCallEventHandler(params: {
     if (peer) {
       call.carrierPeers.set(peer.processId, peer);
     }
+    // Apple can replace the ringing call object when it becomes active. Keep
+    // lifecycle identity stable, but direct subsequent commands to this owner event's UUID.
+    call.promoteCarrierCallUUID(callUUID);
     updateCallStatus(call, event);
     try {
       await params.callControl.startCallTalk(call);
@@ -263,7 +266,7 @@ export function createFaceTimeCallEventHandler(params: {
             const generation = ringingCall.captureGeneration();
             const muteResult = await ringingCall.runCarrierCommand({
               generation,
-              action: async () => await params.helper.safetyMute(ringingCall.callUUID),
+              action: async () => await params.helper.safetyMute(ringingCall.carrierCallUUID),
             });
             ringingCall.lastHelperAction = muteResult;
             retainHelperResultPeers(ringingCall, muteResult);
@@ -302,7 +305,6 @@ export function createFaceTimeCallEventHandler(params: {
       }
       if (authorizedPending && params.calls.active) {
         params.calls.retainAlias(params.calls.active, callUUID);
-        params.calls.active.carrierCallUUIDs.add(callUUID);
       }
       if (!params.calls.has(callUUID) && !owner) {
         params.logger.info("[facetime] ignored unauthorized active FaceTime call");
