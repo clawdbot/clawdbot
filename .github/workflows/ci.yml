@@ -5030,6 +5030,8 @@ jobs:
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
+            -only-testing:OpenClawTests/LocationServiceCallbackTests \
+            -only-testing:OpenClawTests/LocationServiceOrderingTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \

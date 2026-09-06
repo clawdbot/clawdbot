@@ -29,7 +29,7 @@ class SmsHandler(
     val idx = rawMessage.indexOf(':')
     val code = if (idx > 0) rawMessage.substring(0, idx).trim() else defaultCode
     val message =
-      if (idx > 0 && code == rawMessage.substring(0, idx).trim()) {
+      if (idx > 0) {
         rawMessage.substring(idx + 1).trim().ifEmpty { rawMessage }
       } else {
         rawMessage
