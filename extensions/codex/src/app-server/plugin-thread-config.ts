@@ -2,7 +2,6 @@
  * Builds Codex thread config patches that expose only policy-approved apps
  * for native Codex turns.
  */
-import crypto from "node:crypto";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexAppDenyUnenforceableDiagnostic,
@@ -31,6 +30,7 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { fingerprintCodexPluginPolicy as fingerprintJson } from "./plugin-policy-fingerprint.js";
 import {
   collectCodexPluginOwnedAppIds,
   collectCodexReservedPluginAppIds,
@@ -124,7 +124,13 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 7;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 6;
+// Runs with app denies fingerprint the deny set under a newer version. Runs
+// without denies keep the version-6 shape byte-for-byte, so an unchanged
+// conversation bound before this field existed stays current after upgrade.
+// Native-owned and supervised bindings cannot be rotated, so a gratuitous
+// fingerprint change would refuse their next turn instead of rebuilding.
+const CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION = 7;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -139,12 +145,16 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   deniedAppPatterns?: readonly string[];
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
+  const deniedAppPatterns = normalizeCodexDeniedAppPatterns(params.deniedAppPatterns);
+  const denied = deniedAppPatterns.length > 0;
+  // Per-agent app denies change the admitted set, so bound threads must rebuild.
   return fingerprintJson({
-    version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
+    version: denied
+      ? CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION
+      : CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
-    // Per-agent app denies change the admitted set, so bound threads must rebuild.
-    deniedAppPatterns: normalizeCodexDeniedAppPatterns(params.deniedAppPatterns),
+    ...(denied ? { deniedAppPatterns } : {}),
   });
 }
 
@@ -765,23 +775,4 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
     }
   }
   return merged;
-}
-
-function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
-}
-
-export function stringifyCodexPluginPolicy(value: unknown): string {
-  // Fingerprints must be process-stable across object insertion order so prompt
-  // cache and thread-binding comparisons do not churn between runs.
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

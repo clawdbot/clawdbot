@@ -11,11 +11,11 @@ import { readCodexAppToolsByConnector } from "./app-tool-inventory.js";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
+import { stringifyCodexPluginPolicy } from "./plugin-policy-fingerprint.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
-  stringifyCodexPluginPolicy,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,

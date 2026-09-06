@@ -3220,6 +3220,61 @@ describe("Codex plugin thread config", () => {
     expect(third).not.toBe(second);
   });
 
+  it("keeps the version-6 input fingerprint for bindings without app denies", () => {
+    // Captured from the pre-deny implementation (version 6, no deniedAppPatterns
+    // field). Native-owned and supervised bindings cannot be rotated, so a run
+    // without denies must reproduce this value exactly or the next turn after
+    // an upgrade is refused instead of rebuilt.
+    const legacyBindings = [
+      {
+        pluginConfig: { codexPlugins: { enabled: true } },
+        appCacheKey: "legacy-runtime",
+        inputFingerprint: "ab747934127fa37de46671e53852f16effdaeff0ea7535674c1f8ad1fefb3042",
+      },
+      {
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "ask",
+          },
+        },
+        appCacheKey: "legacy-runtime",
+        inputFingerprint: "3e0fa0dd5c27733ce622720e28f575dce30bd683e95940f438e9100f8c554813",
+      },
+    ];
+    for (const binding of legacyBindings) {
+      const current = buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig: binding.pluginConfig,
+        appCacheKey: binding.appCacheKey,
+      });
+      expect(current).toBe(binding.inputFingerprint);
+      expect(
+        buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig: binding.pluginConfig,
+          appCacheKey: binding.appCacheKey,
+          deniedAppPatterns: [],
+        }),
+      ).toBe(binding.inputFingerprint);
+      expect(
+        isCodexPluginThreadBindingStale({
+          codexPluginsEnabled: true,
+          bindingFingerprint: "legacy-config",
+          bindingInputFingerprint: binding.inputFingerprint,
+          currentInputFingerprint: current,
+          hasBindingPolicyContext: true,
+        }),
+      ).toBe(false);
+      expect(
+        buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig: binding.pluginConfig,
+          appCacheKey: binding.appCacheKey,
+          deniedAppPatterns: ["mcp__codex_apps__gamma_*"],
+        }),
+      ).not.toBe(binding.inputFingerprint);
+    }
+  });
+
   it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

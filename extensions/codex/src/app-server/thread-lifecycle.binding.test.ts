@@ -3139,7 +3139,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       mcp_servers: { alpha: { command: "native", enabled: false }, beta: { command: "native" } },
     });
     // Native code mode stays on: the deny did not restrict the surface.
-    expect(request.config["features.shell_tool"]).toBe(true);
+    expect(request.config?.["features.shell_tool"]).toBe(true);
   });
 
   it("removes every native capability from an explicitly restricted thread", () => {
