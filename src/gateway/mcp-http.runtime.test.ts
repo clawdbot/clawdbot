@@ -32,21 +32,18 @@ function scopedToolFixture(names: string[]) {
   };
 }
 
-function scopeParams(overrides: Record<string, unknown> = {}) {
+type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+
+function scopeParams({
+  cfg = {} as OpenClawConfig,
+  grantToken,
+  ...context
+}: Partial<ScopeParams["context"] & Pick<ScopeParams, "cfg" | "grantToken">> = {}): ScopeParams {
   return {
-    cfg: {} as OpenClawConfig,
-    sessionKey: "agent:main:recall",
-    messageProvider: undefined,
-    currentChannelId: undefined,
-    currentThreadTs: undefined,
-    currentMessageId: undefined,
-    currentInboundAudio: undefined,
-    accountId: undefined,
-    inboundEventKind: undefined,
-    sourceReplyDeliveryMode: undefined,
-    senderIsOwner: false,
-    ...overrides,
-  } as Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+    cfg,
+    grantToken,
+    context: { sessionKey: "agent:main:recall", senderIsOwner: false, ...context },
+  };
 }
 
 beforeEach(() => {
@@ -432,8 +429,8 @@ describe("McpLoopbackToolCache", () => {
     expect(denied.tools).toHaveLength(0);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
 
-    // Same allowlist reuses the cached row.
-    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
+    // Duplicate entries do not change the granted set.
+    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search", "memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
@@ -476,6 +473,25 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
+  });
+
+  it("keeps pinned widget authoring out of capless cached tool lists", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams();
+    resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
+      scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
+    );
+
+    for (const pinnedWidgetAuthoring of [true, undefined, true, false]) {
+      const result = await cache.resolve({
+        ...params,
+        context: { ...params.context, pinnedWidgetAuthoring },
+      });
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
+      );
+    }
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
   it("evicts only the revoked grant's cached tool closures", async () => {
@@ -526,9 +542,9 @@ describe("McpLoopbackToolCache", () => {
     });
 
     await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
+    await cache.resolve({ ...params, context: { ...params.context, sourceReplyOnly: true } });
     await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
+    await cache.resolve({ ...params, context: { ...params.context, sourceReplyOnly: true } });
 
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");

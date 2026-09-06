@@ -528,6 +528,39 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("settles a hard timeout even when shutdown already marked the run for recovery", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_000,
+        lifecycleRunId: "timed-out-run",
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "timed-out-run", lifecycleGeneration }],
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "timed-out-run",
+        lifecycleGeneration,
+        data: {
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          endedAt: 2_000,
+        },
+      },
+    );
+    expect(persisted).toMatchObject({ status: "timeout", abortedLastRun: false, endedAt: 2_000 });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+  });
+
   it("ignores an unidentified completion while recovery remains pending", async () => {
     const persisted = await persistLifecycle(
       {

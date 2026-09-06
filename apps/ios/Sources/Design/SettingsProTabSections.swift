@@ -494,23 +494,11 @@ extension SettingsProTab {
                 Button {
                     Task { await self.sendDirectWatchSetup() }
                 } label: {
-                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(OpenClawType.body)
-                }
-                .disabled(
-                    self.isSendingWatchDirectSetup
-                        || !self.appModel.isOperatorGatewayConnected
-                        || !self.appModel.hasOperatorAdminScope
-                        || !watchStatus.appInstalled)
-
-                Button {
-                    Task { await self.sendDirectWatchSetup(includeVoice: true) }
-                } label: {
                     Label {
-                        Text("Enable Standalone Voice")
+                        Text("Connect Apple Watch")
                             .font(OpenClawType.body)
                     } icon: {
-                        Image(systemName: "waveform")
+                        Image(systemName: "applewatch")
                     }
                 }
                 .disabled(
@@ -528,8 +516,9 @@ extension SettingsProTab {
             } footer: {
                 Text(
                     """
-                    The watch receives a one-time pairing code and stores its own device token. \
-                    Standalone voice also grants read and Talk access, without admin access. \
+                    The watch receives a one-time pairing code and its own device credentials. \
+                    Voice is included with read and Talk access, without admin access. \
+                    The microphone starts only when you tap Start on the watch. \
                     A reachable secure Gateway URL is required away from the iPhone.
                     """)
                     .font(OpenClawType.footnote)

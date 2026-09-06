@@ -165,7 +165,10 @@ describe("gatewayAncestryBlockMessage", () => {
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
     const ancestry = gatewayAncestryBlockMessage(process.pid) ?? "";
-    expect(formatUpdateAncestryBlockMessage(ancestry)).toContain("/update");
+    const updateMessage = formatUpdateAncestryBlockMessage(ancestry);
+    expect(updateMessage).toContain("/update");
+    expect(updateMessage).not.toContain("shell outside");
+    expect(updateMessage).not.toContain("terminal");
     expect(formatUpdateAncestryBlockMessage("service inspection unavailable")).toBe(
       "service inspection unavailable",
     );

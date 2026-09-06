@@ -389,6 +389,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
     // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
     githubPublicationAvailable: params.githubPublicationAvailable,
@@ -629,12 +630,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: () => {
       sessionPromptState.activePrompt.persisted = false;
     },
-    onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({

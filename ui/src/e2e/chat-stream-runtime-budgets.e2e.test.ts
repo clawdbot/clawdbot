@@ -9,6 +9,7 @@ import {
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
@@ -469,257 +470,220 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-        await installRenderProbe(page);
-        await resetRenderProbe(page);
+      await installRenderProbe(page);
+      await resetRenderProbe(page);
 
-        await emitDeltaBurstInPage(page, runId, BURST_DELTA_COUNT);
-        await expect
-          .poll(() =>
-            page.evaluate(
-              (finalChunk) =>
-                (document.querySelector(".chat-thread-inner")?.textContent ?? "").includes(
-                  finalChunk,
-                ),
-              renderedChunkText(BURST_DELTA_COUNT),
-            ),
-          )
-          .toBe(true);
-        // Sample after the trailing animation frame drained so the batch count
-        // reflects the whole burst, not a mid-render snapshot.
-        await expect
-          .poll(async () => {
-            const before = await readRenderProbe(page);
-            await new Promise((resolve) => {
-              setTimeout(resolve, 200);
-            });
-            const after = await readRenderProbe(page);
-            return before.mutationBatches === after.mutationBatches ? after : null;
-          })
-          .not.toBeNull();
+      await emitDeltaBurstInPage(page, runId, BURST_DELTA_COUNT);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (finalChunk) =>
+              (document.querySelector(".chat-thread-inner")?.textContent ?? "").includes(
+                finalChunk,
+              ),
+            renderedChunkText(BURST_DELTA_COUNT),
+          ),
+        )
+        .toBe(true);
+      // Sample after the trailing animation frame drained so the batch count
+      // reflects the whole burst, not a mid-render snapshot.
+      await expect
+        .poll(async () => {
+          const before = await readRenderProbe(page);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 200);
+          });
+          const after = await readRenderProbe(page);
+          return before.mutationBatches === after.mutationBatches ? after : null;
+        })
+        .not.toBeNull();
 
-        const probe = await readRenderProbe(page);
-        await recordBudgetMetrics("delta-burst-commits", {
-          mutationBatches: probe.mutationBatches,
-          rafCount: probe.rafCount,
-          hostUpdates: probe.hostUpdates,
-          hostUpdatesInsideFrame: probe.hostUpdatesInsideFrame,
-        });
+      const probe = await readRenderProbe(page);
+      await recordBudgetMetrics("delta-burst-commits", {
+        mutationBatches: probe.mutationBatches,
+        rafCount: probe.rafCount,
+        hostUpdates: probe.hostUpdates,
+        hostUpdatesInsideFrame: probe.hostUpdatesInsideFrame,
+      });
 
-        expect(probe.hostUpdates).toBeGreaterThanOrEqual(MIN_BURST_HOST_UPDATES);
-        expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_BURST_HOST_UPDATES);
-        expect(probe.hostUpdatesInsideFrame / probe.hostUpdates).toBeGreaterThanOrEqual(
-          FRAME_SCHEDULED_MIN_RATIO,
-        );
-      },
-    );
+      expect(probe.hostUpdates).toBeGreaterThanOrEqual(MIN_BURST_HOST_UPDATES);
+      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_BURST_HOST_UPDATES);
+      expect(probe.hostUpdatesInsideFrame / probe.hostUpdates).toBeGreaterThanOrEqual(
+        FRAME_SCHEDULED_MIN_RATIO,
+      );
+    });
   });
 
   it("keeps the live tool stream bounded under complete tool lifecycles", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        const runId = await openStreamingTurn(page, gateway, "tool flood probe");
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
-        await probeDeferredToolProjection(page, runId);
-        const projection = await page.evaluate(
-          () => (window as ScopedWindow).ocToolProjectionProbe!,
-        );
-        expect(projection.beforeThrottleCardCount).toBe(0);
-        expect(projection.afterThrottleCardCount).toBe(1);
-        expect(projection.afterThrottleText).toContain("Editing");
-        expect(projection.afterThrottleText).toContain("+1");
-        expect(projection.afterThrottleText).toContain("-1");
+      await probeDeferredToolProjection(page, runId);
+      const projection = await page.evaluate(() => (window as ScopedWindow).ocToolProjectionProbe!);
+      expect(projection.beforeThrottleCardCount).toBe(0);
+      expect(projection.afterThrottleCardCount).toBe(1);
+      expect(projection.afterThrottleText).toContain("Editing");
+      expect(projection.afterThrottleText).toContain("+1");
+      expect(projection.afterThrottleText).toContain("-1");
 
-        await completeFirstToolLifecycle(page, runId);
-        const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
-        expect(await firstCard.count()).toBe(1);
-        expect(await firstCard.textContent()).toContain("Edited");
+      await completeFirstToolLifecycle(page, runId);
+      const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
+      expect(await firstCard.count()).toBe(1);
+      expect(await firstCard.textContent()).toContain("Edited");
 
-        await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
-        const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
-        // Eviction drops the oldest entries and keeps the freshest ones.
-        await expect
-          .poll(() => floodCards.count(), { timeout: 15_000 })
-          .toBe(TOOL_STREAM_LIMIT_CONTRACT);
-        const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
-        expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
-        expect(
-          await page
-            .locator(`[data-message-id^="tool:assistant:call-${firstRetainedCall}:"]`)
-            .count(),
-        ).toBe(1);
-        expect(
-          await page
-            .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}:"]`)
-            .count(),
-        ).toBe(1);
-      },
-    );
+      await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
+      const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
+      // Eviction drops the oldest entries and keeps the freshest ones.
+      await expect
+        .poll(() => floodCards.count(), { timeout: 15_000 })
+        .toBe(TOOL_STREAM_LIMIT_CONTRACT);
+      const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
+      expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
+      expect(
+        await page
+          .locator(`[data-message-id^="tool:assistant:call-${firstRetainedCall}:"]`)
+          .count(),
+      ).toBe(1);
+      expect(
+        await page
+          .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}:"]`)
+          .count(),
+      ).toBe(1);
+    });
   });
 
   it("loads a long transcript and streams a rich turn inside budget ceilings", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page, context }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
-        });
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
+      const gateway = await installMockGateway(page, {
+        historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+      });
 
-        const loadStartedAt = Date.now();
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        await page
-          .locator(".chat-thread-inner")
-          .getByText("LONG-TAIL-SENTINEL")
-          .waitFor({ timeout: LONG_TRANSCRIPT_LOAD_CEILING_MS });
-        const loadMs = Date.now() - loadStartedAt;
-        expect(loadMs).toBeLessThanOrEqual(LONG_TRANSCRIPT_LOAD_CEILING_MS);
+      const loadStartedAt = Date.now();
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("LONG-TAIL-SENTINEL")
+        .waitFor({ timeout: LONG_TRANSCRIPT_LOAD_CEILING_MS });
+      const loadMs = Date.now() - loadStartedAt;
+      expect(loadMs).toBeLessThanOrEqual(LONG_TRANSCRIPT_LOAD_CEILING_MS);
 
-        const runId = await openStreamingTurn(page, gateway, "rich streaming turn");
-        await emitDeltaBurstInPage(page, runId, RICH_TURN_CHUNK_COUNT);
-        await gateway.emitChatFinal({ runId, text: "rich turn finalized" });
-        await page.locator(".chat-thread-inner").getByText("rich turn finalized").waitFor();
+      const runId = await openStreamingTurn(page, gateway, "rich streaming turn");
+      await emitDeltaBurstInPage(page, runId, RICH_TURN_CHUNK_COUNT);
+      await gateway.emitChatFinal({ runId, text: "rich turn finalized" });
+      await page.locator(".chat-thread-inner").getByText("rich turn finalized").waitFor();
 
-        const cdpSession = await context.newCDPSession(page);
-        // Metric collection requires the domain to be enabled first.
-        await cdpSession.send("Performance.enable");
-        await cdpSession.send("HeapProfiler.collectGarbage");
-        await cdpSession.send("HeapProfiler.collectGarbage");
-        const { metrics } = await cdpSession.send("Performance.getMetrics");
-        const heapUsedBytes = metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value;
-        expect(heapUsedBytes).toBeLessThanOrEqual(STREAM_SESSION_HEAP_CEILING_BYTES);
+      const cdpSession = await context.newCDPSession(page);
+      // Metric collection requires the domain to be enabled first.
+      await cdpSession.send("Performance.enable");
+      await cdpSession.send("HeapProfiler.collectGarbage");
+      await cdpSession.send("HeapProfiler.collectGarbage");
+      const { metrics } = await cdpSession.send("Performance.getMetrics");
+      const heapUsedBytes = metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value;
+      expect(heapUsedBytes).toBeLessThanOrEqual(STREAM_SESSION_HEAP_CEILING_BYTES);
 
-        await recordBudgetMetrics("long-transcript-rich-turn", {
-          loadMs,
-          heapUsedBytes: Math.round(heapUsedBytes),
-        });
-      },
-    );
+      await recordBudgetMetrics("long-transcript-rich-turn", {
+        loadMs,
+        heapUsedBytes: Math.round(heapUsedBytes),
+      });
+    });
   });
 
   it("keeps steady-state composer edits local to a long transcript", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
 
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
-        await composer.fill("seed");
-        await page.getByRole("button", { name: "Send message" }).waitFor();
-        // The first saved draft notifies presence subscribers. Drain that transition
-        // before measuring edits to an already-present draft.
-        await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
-        // Finish startup scrolling before measuring steady-state composer invalidations.
-        await waitForChatScrollIdle(page);
-        await installRenderProbe(page);
-        await resetRenderProbe(page);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
+      await composer.fill("seed");
+      await page.getByRole("button", { name: "Send message" }).waitFor();
+      // The first saved draft notifies presence subscribers. Drain that transition
+      // before measuring edits to an already-present draft.
+      await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
+      // Finish startup scrolling before measuring steady-state composer invalidations.
+      await waitForChatScrollIdle(page);
+      await installRenderProbe(page);
+      await resetRenderProbe(page);
 
-        const suffix = " ordinary typing without commands";
-        await composer.pressSequentially(suffix);
-        await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
-        expect(await composer.inputValue()).toBe(`seed${suffix}`);
-        const probe = await readRenderProbe(page);
+      const suffix = " ordinary typing without commands";
+      await composer.pressSequentially(suffix);
+      await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
+      expect(await composer.inputValue()).toBe(`seed${suffix}`);
+      const probe = await readRenderProbe(page);
 
-        expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
+      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
 
-        const send = page.locator(".chat-send-btn--send");
-        await composer.fill("");
-        await expect.poll(() => send.isDisabled()).toBe(true);
+      const send = page.locator(".chat-send-btn--send");
+      await composer.fill("");
+      await expect.poll(() => send.isDisabled()).toBe(true);
 
-        await composer.fill("new draft");
-        await expect.poll(() => send.isDisabled()).toBe(false);
+      await composer.fill("new draft");
+      await expect.poll(() => send.isDisabled()).toBe(false);
 
-        await composer.fill("مرحبا");
-        await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
-      },
-    );
+      await composer.fill("مرحبا");
+      await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
+    });
   });
 
   it("stays quiet while idle after a settled stream", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page, context }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
 
-        const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
-        await gateway.emitChatFinal({ runId, text: "short finalized turn" });
-        await page.locator(".chat-thread-inner").getByText("short finalized turn").waitFor();
+      const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
+      await gateway.emitChatFinal({ runId, text: "short finalized turn" });
+      await page.locator(".chat-thread-inner").getByText("short finalized turn").waitFor();
 
-        const cdpSession = await context.newCDPSession(page);
-        await cdpSession.send("Performance.enable");
-        const beforeMetrics = await cdpSession.send("Performance.getMetrics");
-        const taskDurationBefore = beforeMetrics.metrics.find(
-          (metric) => metric.name === "TaskDuration",
-        )!.value;
-        await page.evaluate(() => {
-          const scope = window as ScopedWindow;
-          scope.ocIdleProbe = { longTasks: 0, longTaskMs: 0 };
-          new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              scope.ocIdleProbe!.longTasks += 1;
-              scope.ocIdleProbe!.longTaskMs += entry.duration;
-            }
-          }).observe({ entryTypes: ["longtask"] });
-        });
+      const cdpSession = await context.newCDPSession(page);
+      await cdpSession.send("Performance.enable");
+      const beforeMetrics = await cdpSession.send("Performance.getMetrics");
+      const taskDurationBefore = beforeMetrics.metrics.find(
+        (metric) => metric.name === "TaskDuration",
+      )!.value;
+      await page.evaluate(() => {
+        const scope = window as ScopedWindow;
+        scope.ocIdleProbe = { longTasks: 0, longTaskMs: 0 };
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            scope.ocIdleProbe!.longTasks += 1;
+            scope.ocIdleProbe!.longTaskMs += entry.duration;
+          }
+        }).observe({ entryTypes: ["longtask"] });
+      });
 
-        await new Promise((resolve) => {
-          setTimeout(resolve, IDLE_WINDOW_MS);
-        });
+      await new Promise((resolve) => {
+        setTimeout(resolve, IDLE_WINDOW_MS);
+      });
 
-        const afterMetrics = await cdpSession.send("Performance.getMetrics");
-        const taskDurationAfter = afterMetrics.metrics.find(
-          (metric) => metric.name === "TaskDuration",
-        )!.value;
-        const taskDurationMs = (taskDurationAfter - taskDurationBefore) * 1_000;
-        const idle = await page.evaluate(() => (window as ScopedWindow).ocIdleProbe!);
-        await recordBudgetMetrics("idle-quiescence", {
-          longTasks: idle.longTasks,
-          longTaskMs: Math.round(idle.longTaskMs),
-          taskDurationMs: Math.round(taskDurationMs),
-        });
+      const afterMetrics = await cdpSession.send("Performance.getMetrics");
+      const taskDurationAfter = afterMetrics.metrics.find(
+        (metric) => metric.name === "TaskDuration",
+      )!.value;
+      const taskDurationMs = (taskDurationAfter - taskDurationBefore) * 1_000;
+      const idle = await page.evaluate(() => (window as ScopedWindow).ocIdleProbe!);
+      await recordBudgetMetrics("idle-quiescence", {
+        longTasks: idle.longTasks,
+        longTaskMs: Math.round(idle.longTaskMs),
+        taskDurationMs: Math.round(taskDurationMs),
+      });
 
-        expect(idle.longTaskMs).toBeLessThanOrEqual(IDLE_LONGTASK_TOTAL_CEILING_MS);
-        expect(taskDurationMs).toBeLessThanOrEqual(IDLE_TASK_DURATION_CEILING_MS);
-      },
-    );
+      expect(idle.longTaskMs).toBeLessThanOrEqual(IDLE_LONGTASK_TOTAL_CEILING_MS);
+      expect(taskDurationMs).toBeLessThanOrEqual(IDLE_TASK_DURATION_CEILING_MS);
+    });
   });
 });

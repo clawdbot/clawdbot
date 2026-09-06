@@ -34,7 +34,7 @@ type OpenAITestCatalogResult = {
 async function runCatalogWithFetchGuard(params: {
   fetchGuard: LiveModelCatalogFetchGuard;
   auth: {
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     apiKey: string;
     discoveryApiKey?: string;
     profileId?: string;
@@ -494,6 +494,7 @@ describe("buildOpenAIProvider", () => {
         throw new Error("expected fetch headers");
       }
       expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
+      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }
@@ -533,9 +534,13 @@ describe("buildOpenAIProvider", () => {
     },
   );
 
-  it("falls back to direct API-key catalog discovery when OAuth resolution fails", async () => {
+  it("keeps locked OAuth resolution failures on the selected profile", async () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));
     const provider = buildOpenAIProvider();
+    const resolveProviderApiKey = vi.fn(() => ({
+      apiKey: "sk-openai",
+      discoveryApiKey: "sk-discovery",
+    }));
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({
         data: [{ id: "gpt-5.5", object: "model" }],
@@ -550,10 +555,7 @@ describe("buildOpenAIProvider", () => {
           profileId: "openai:chatgpt",
           source: "profile",
         }),
-        resolveProviderApiKey: () => ({
-          apiKey: "sk-openai",
-          discoveryApiKey: "sk-discovery",
-        }),
+        resolveProviderApiKey,
         config: { auth: { profiles: {} } },
         agentDir: "/tmp/openai-agent",
         workspaceDir: "/tmp/openai-workspace",
@@ -562,19 +564,109 @@ describe("buildOpenAIProvider", () => {
       if (!result || "provider" in result) {
         throw new Error("expected OpenAI live provider catalog");
       }
-      expect(result.providers.openai?.api).toBe("openai-responses");
-      expect(result.providers.openai?.apiKey).toBe("sk-openai");
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      if (!(headers instanceof Headers)) {
-        throw new Error("expected fetch headers");
-      }
-      expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
+      expect(result.providers.openai?.api).toBe("openai-chatgpt-responses");
+      expect(result.providers.openai?.auth).toBe("oauth");
+      expect(result.providers.openai?.apiKey).toBeUndefined();
+      expect(result.outcomes).toEqual([
+        { provider: "openai", profileId: "openai:chatgpt", status: "unavailable" },
+      ]);
+      expect(resolveProviderApiKey).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }
   });
+
+  it("uses a locked runtime key without exposing the selected SecretRef profile", async () => {
+    const profileId = "openai:secretref";
+    const runtimeKey = "sk-runtime-secretref";
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: runtimeKey,
+      profileId,
+      source: `profile:${profileId}`,
+      mode: "api-key",
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }));
+
+    try {
+      const result = await buildOpenAIProvider().catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "api_key",
+          apiKey: "secretref-managed",
+          profileId,
+          source: "profile",
+        }),
+        resolveProviderApiKey: vi.fn(),
+        config: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI live provider catalog");
+      }
+      expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+        `Bearer ${runtimeKey}`,
+      );
+      expect(result.providers.openai?.apiKey).toBe("secretref-managed");
+      expect(JSON.stringify(result)).not.toContain(runtimeKey);
+      expect(result.outcomes).toEqual([{ provider: "openai", profileId, status: "ready" }]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not send a selected SecretRef marker when locked materialization fails", async () => {
+    const profileId = "openai:secretref";
+    const baseUrl = "https://gateway.example.test/v1";
+    mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("secret unavailable"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const result = await buildOpenAIProvider().catalog?.run({
+      resolveProviderAuth: () => ({
+        mode: "api_key",
+        apiKey: "secretref-managed",
+        profileId,
+        source: "profile",
+      }),
+      resolveProviderApiKey: vi.fn(),
+      config: {
+        auth: { profiles: {} },
+        models: { providers: { openai: { baseUrl, models: [] } } },
+      },
+      agentDir: "/tmp/openai-agent",
+      workspaceDir: "/tmp/openai-workspace",
+    } as never);
+
+    if (!result || "provider" in result) {
+      throw new Error("expected OpenAI live provider catalog");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.providers.openai?.baseUrl).toBe(baseUrl);
+    expect(result.outcomes).toEqual([
+      {
+        provider: "openai",
+        profileId,
+        rejectionScope: "catalog",
+        status: "unavailable",
+      },
+    ]);
+  });
+
+  it.each(["oauth", "token"] as const)(
+    "does not send an unmaterialized direct %s credential marker",
+    async (mode) => {
+      const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
+      const result = await runCatalogWithFetchGuard({
+        fetchGuard,
+        auth: { mode, apiKey: "secretref-managed", source: "none" },
+      });
+      expect(fetchGuard).not.toHaveBeenCalled();
+      expect(result.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+    },
+  );
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);
@@ -681,34 +773,52 @@ describe("buildOpenAIProvider", () => {
       () => Response.json({ data: [] }),
       "sk-openai-unavailable",
       false,
+      "ready",
+      "empty",
     ],
     [
       "returns only unsupported models",
       () => Response.json({ data: [{ id: "not-in-manifest", object: "model" }] }),
       "sk-openai-unavailable",
       false,
+      "ready",
+      "empty",
     ],
     [
       "rejects a SecretRef marker",
       () => new Response("unauthorized", { status: 401 }),
       "secretref-managed",
       true,
+      "unavailable",
+      "fallback",
     ],
     [
       "rejects a concrete API key",
       () => new Response("unauthorized", { status: 401 }),
       "sk-openai-unavailable",
       false,
+      "auth-rejected",
+      "empty",
     ],
     [
       "denies account access",
       () => new Response("forbidden", { status: 403 }),
       "sk-openai-unavailable",
       false,
+      "auth-rejected",
+      "empty",
     ],
-  ])(
-    "does not invent available OpenAI models when discovery %s",
-    async (_label, response, apiKey, catalogScoped) => {
+    [
+      "is temporarily unavailable",
+      () => new Response("temporarily unavailable", { status: 503 }),
+      "sk-openai-unavailable",
+      false,
+      "unavailable",
+      "fallback",
+    ],
+  ] as const)(
+    "scopes the selected API-key profile when discovery %s",
+    async (_label, response, apiKey, catalogScoped, status, modelResult) => {
       const release = vi.fn(async () => undefined);
       const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
         response: response(),
@@ -721,13 +831,31 @@ describe("buildOpenAIProvider", () => {
         auth: {
           mode: "api_key",
           apiKey,
+          profileId: "openai:api-key",
           source: "profile",
         },
       });
 
-      expect(result.provider.models).toEqual([]);
-      expect(result.outcomes[0]?.rejectionScope).toBe(catalogScoped ? "catalog" : undefined);
-      expect(release).toHaveBeenCalledOnce();
+      if (modelResult === "empty") {
+        expect(result.provider.models).toEqual([]);
+      } else {
+        expect(result.provider.models.map((model) => model.id)).toEqual(
+          manifest.modelCatalog.providers.openai.models.map((model) => model.id),
+        );
+      }
+      expect(result.outcomes).toEqual([
+        {
+          provider: "openai",
+          profileId: "openai:api-key",
+          ...(catalogScoped ? { rejectionScope: "catalog" as const } : {}),
+          status,
+        },
+      ]);
+      if (apiKey === "secretref-managed") {
+        expect(release).not.toHaveBeenCalled();
+      } else {
+        expect(release).toHaveBeenCalledOnce();
+      }
     },
   );
 
@@ -1203,7 +1331,7 @@ describe("buildOpenAIProvider", () => {
   });
 
   it.each([
-    ["returns no models", () => Response.json({ models: [] })],
+    ["returns no models", () => Response.json({ models: [] }), "ready", "empty"],
     [
       "returns only hidden models",
       () =>
@@ -1213,51 +1341,61 @@ describe("buildOpenAIProvider", () => {
             { slug: "gpt-5.5", display_name: "GPT-5.5", show_in_picker: false },
           ],
         }),
+      "ready",
+      "empty",
     ],
-    ["rejects the subscription token", () => new Response("unauthorized", { status: 401 })],
-    ["denies account access", () => new Response("forbidden", { status: 403 })],
-  ])("does not invent OAuth models when the account catalog %s", async (_label, response) => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: response(),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release,
-    }));
+    [
+      "rejects the subscription token",
+      () => new Response("unauthorized", { status: 401 }),
+      "auth-rejected",
+      "empty",
+    ],
+    [
+      "denies account access",
+      () => new Response("forbidden", { status: 403 }),
+      "auth-rejected",
+      "empty",
+    ],
+    [
+      "is temporarily unavailable",
+      () => new Response("temporarily unavailable", { status: 503 }),
+      "unavailable",
+      "fallback",
+    ],
+  ] as const)(
+    "scopes the selected OAuth profile when the account catalog %s",
+    async (_label, response, status, modelResult) => {
+      const release = vi.fn(async () => undefined);
+      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+        response: response(),
+        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+        release,
+      }));
 
-    const provider = await buildOpenAICodexLiveProviderConfig({
-      discoveryApiKey: "oauth-token-no-visible-models",
-      accountId: "acct-openai-workspace",
-      fetchGuard,
-    });
+      const result = await runCatalogWithFetchGuard({
+        auth: {
+          mode: "oauth",
+          apiKey: "oauth-token-no-visible-models",
+          profileId: "openai:chatgpt",
+          source: "profile",
+        },
+        accountId: "acct-openai-workspace",
+        fetchGuard,
+      });
 
-    expect(provider.api).toBe("openai-chatgpt-responses");
-    expect(provider.auth).toBe("oauth");
-    expect(provider.models).toEqual([]);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("reports when the account catalog rejects saved OAuth credentials", async () => {
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: new Response("unauthorized", { status: 401 }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release: async () => undefined,
-    }));
-
-    const result = await runCatalogWithFetchGuard({
-      fetchGuard,
-      auth: {
-        mode: "oauth",
-        apiKey: "rejected-oauth-token",
-        profileId: "openai:chatgpt",
-        source: "profile",
-      },
-    });
-
-    expect(result.provider.models).toEqual([]);
-    expect(result.outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
-    ]);
-  });
+      expect(result.provider.api).toBe("openai-chatgpt-responses");
+      expect(result.provider.auth).toBe("oauth");
+      if (modelResult === "empty") {
+        expect(result.provider.models).toEqual([]);
+      } else {
+        expect(result.provider.models.length).toBeGreaterThan(0);
+      }
+      expect(result.outcomes).toEqual([
+        { provider: "openai", profileId: "openai:chatgpt", status },
+      ]);
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
     "prefers auth-aware Codex runtime metadata for %s over static OpenAI catalog rows",
