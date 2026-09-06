@@ -416,7 +416,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
       },
     );
 
-    await dispatchWithContext({ context, streamMode: "partial" });
+    await dispatchWithContext({ context, streamMode: "block" });
 
     expect(readLatestAssistantTextByIdentity).not.toHaveBeenCalled();
     expect(recordOutboundMessageForPromptContext).toHaveBeenCalledTimes(1);

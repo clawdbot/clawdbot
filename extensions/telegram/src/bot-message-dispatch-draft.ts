@@ -57,6 +57,11 @@ function renderStreamText(
 
 export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
   const isRoomEvent = params.context.ctxPayload.InboundEventKind === "room_event";
+  // Only non-partial modes split previews into new messages as text grows.
+  // Partial mode keeps ONE preview message and edits it in place across
+  // tool-call boundaries; rotating there is what leaked inter-tool text as
+  // separate messages (openclaw/openclaw#32535).
+  const shouldSplitPreviewMessages = params.streamMode !== "partial";
   const forceBlockStreamingForReasoning =
     params.resolvedReasoningLevel === "on" && params.streamMode !== "progress";
   const streamDeliveryEnabled = !isRoomEvent && params.streamMode !== "off";
@@ -188,6 +193,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
     reasoningLane: lanes.reasoning,
     lanes,
     streamDeliveryEnabled,
+    shouldSplitPreviewMessages,
     streamReasoningInProgressDraft,
     disableBlockStreaming,
     durableReasoningPayloadsEnabled:
@@ -256,7 +262,11 @@ export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boo
 }
 
 export async function rotateAnswerLaneAfterQueuedBlocksSettle(turn: Turn): Promise<boolean> {
-  if (!turn.rotateAnswerLaneWhenQueuedBlocksSettle || turn.queuedAnswerBlockRotations.length > 0) {
+  if (
+    !turn.shouldSplitPreviewMessages ||
+    !turn.rotateAnswerLaneWhenQueuedBlocksSettle ||
+    turn.queuedAnswerBlockRotations.length > 0
+  ) {
     return false;
   }
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
@@ -274,13 +284,19 @@ export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
   if (await rotateAnswerLaneAfterToolProgress(turn)) {
     return true;
   }
-  if (await rotateAnswerLaneAfterQueuedBlocksSettle(turn)) {
+  if (turn.shouldSplitPreviewMessages && (await rotateAnswerLaneAfterQueuedBlocksSettle(turn))) {
     return true;
   }
   if (!turn.answerLane.finalized) {
     return false;
   }
-  turn.answerLane.stream?.forceNewMessage();
+  if (turn.shouldSplitPreviewMessages) {
+    turn.answerLane.stream?.forceNewMessage();
+  } else {
+    // Partial mode reuses the same preview message: revive the stream so the
+    // next update keeps editing in place instead of starting a new message.
+    turn.answerLane.stream?.revive?.();
+  }
   resetLaneState(turn, turn.answerLane);
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
   return true;

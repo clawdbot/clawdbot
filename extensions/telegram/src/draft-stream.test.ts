@@ -811,6 +811,30 @@ describe("createTelegramDraftStream", () => {
     expectNthPreviewSend(api, 2, "After thinking");
   });
 
+  it("keeps editing the same message after revive", async () => {
+    const { api, stream } = createForceNewMessageHarness();
+
+    // First message
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Normal edit (same message)
+    stream.update("Hello edited");
+    await stream.flush();
+    expectPreviewEdit(api, "Hello edited");
+
+    // Revive after finalization (partial-mode tool round): the stream reopens
+    // but keeps the current message id, so the next update EDITS in place
+    // instead of sending a new message.
+    stream.revive?.();
+    stream.update("After revive");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expectPreviewEdit(api, "After revive");
+  });
+
   it("creates new message after cleanup and forceNewMessage", async () => {
     vi.useFakeTimers();
     try {

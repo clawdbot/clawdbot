@@ -74,12 +74,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
         expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
       ],
     ]);
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(
-      requireInvocationOrder(answerDraftStream.forceNewMessage, 0, "first answer draft rotation"),
-    ).toBeLessThan(
-      requireInvocationOrder(answerDraftStream.update, 1, "second answer draft update"),
-    );
+    // Partial mode reuses the same preview across finals instead of rotating.
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.revive).toHaveBeenCalledTimes(1);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -254,7 +251,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(
@@ -265,6 +262,63 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(
       3,
+      "Message B final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("coalesces tool-round text into one preview in partial mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        // Tool round boundary: a new assistant message starts after the tool
+        // result. Partial mode must keep editing the SAME preview, not rotate.
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message A partial");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Message B final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("revives the preview after a finalized assistant message in partial mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        // After a finalized assistant message, partial mode reuses the same
+        // preview instead of rotating to a new one.
+        await replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.revive).toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Message A final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
       "Message B final",
       expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
@@ -344,7 +398,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
@@ -489,7 +543,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
@@ -544,7 +598,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update.mock.calls).toEqual([
       ["Site A shows X."],
@@ -585,7 +639,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Existing preview");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "PFX Original block text");
@@ -637,7 +691,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B final");
@@ -676,7 +730,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
@@ -721,7 +775,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
@@ -763,7 +817,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B partial");

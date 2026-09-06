@@ -399,7 +399,7 @@ export async function deliverReply(
         lanePayload,
         info.assistantMessageIndex,
       );
-      if (turn.streamMode !== "progress" && shouldRotate && !prepared) {
+      if (turn.shouldSplitPreviewMessages && shouldRotate && !prepared) {
         await rotateAnswerLaneForNewMessage(turn);
         turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
       }

@@ -19,6 +19,7 @@ import {
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
+  resetLaneState,
   rotateLaneForNewMessage,
   waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
@@ -225,9 +226,18 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                     turn.finalAnswerDelivered = false;
                     turn.progressCompositor.beginAssistantMessage();
                     if (turn.answerLane.finalized) {
-                      await rotateLaneForNewMessage(turn, turn.answerLane);
-                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                      if (turn.shouldSplitPreviewMessages) {
+                        await rotateLaneForNewMessage(turn, turn.answerLane);
+                        turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                      } else {
+                        // Partial mode: reuse the same preview across assistant
+                        // message boundaries instead of rotating to a new one.
+                        turn.answerLane.stream?.revive?.();
+                        resetLaneState(turn, turn.answerLane);
+                        turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                      }
                     } else if (
+                      turn.shouldSplitPreviewMessages &&
                       turn.answerLane.hasStreamedMessage &&
                       !turn.activeAnswerDraftIsToolProgressOnly &&
                       (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)

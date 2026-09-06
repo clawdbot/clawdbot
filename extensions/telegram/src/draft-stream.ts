@@ -71,6 +71,13 @@ export type TelegramDraftStream = {
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
   /**
+   * Reopen the stream lifecycle after finalization WITHOUT clearing the current
+   * message id or bumping the generation, so subsequent updates keep editing
+   * the same preview message. Used by partial streaming mode to coalesce
+   * tool-call-round text into a single message.
+   */
+  revive?: () => void;
+  /**
    * Reposition the window: rewind so the next update creates a new message,
    * and schedule the superseded message's delete for AFTER the new one lands
    * (post-new-then-delete-old, never delete-then-repost — avoids the client
@@ -956,6 +963,20 @@ export function createTelegramDraftStream(params: {
     remainingFinalContent,
     hasConsumedReplyTarget: () => replyTargetState.kind !== "available",
     forceNewMessage: () => resetStreamToNewMessage(false, true),
+    revive: () => {
+      // Reopen the stream lifecycle after finalization while keeping the current
+      // message id and generation, so the next update edits the same preview
+      // instead of sending a new message. Clears stale pagination/request state
+      // so the resumed run starts from a clean slate against the live message.
+      streamState.stopped = false;
+      streamState.final = false;
+      finalPagePlan = undefined;
+      lastSentPreviewKey = "";
+      lastRequestedText = "";
+      lastRequestedPreview = undefined;
+      loop.resetPending();
+      loop.resetThrottleWindow();
+    },
     rotateToNewMessageDeferringDelete,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
