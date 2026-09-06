@@ -258,7 +258,11 @@ Auth profiles and other per-agent runtime state live in
 `<stateDir>/agents/<agentId>/agent`, but a custom root remains authoritative
 whether it is outside the state directory, inside a workspace, or nested under
 an otherwise regenerable managed state root. `--no-include-workspace` omits
-ordinary workspace sources, not configured agent directories.
+ordinary workspace sources, including the shared base configured by
+`agents.defaults.workspace` when agents use subdirectories beneath it. Configured
+agent directories, the active config file, and credentials remain included even
+when nested in that base. A workspace path equal to or containing the state
+directory never excludes the state directory itself.
 
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.

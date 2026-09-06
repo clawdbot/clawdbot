@@ -930,51 +930,86 @@ describe("createBackupArchive", () => {
     },
   );
 
-  it("omits a nested workspace absolute symlink without dropping a nested agent root", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  it.each(["legacy workspace", "shared workspace base"] as const)(
+    "omits a %s absolute symlink without dropping nested state owners",
+    async (layout) => {
+      if (process.platform === "win32") {
+        return;
+      }
 
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-nested-workspace-symlink-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const nestedWorkspace = state.statePath("workspace");
-        const agentDir = path.join(nestedWorkspace, "custom-agent");
-        const outsideTarget = state.path("outside-build");
-        await fs.mkdir(nestedWorkspace, { recursive: true });
-        await fs.mkdir(agentDir, { recursive: true });
-        await fs.mkdir(outsideTarget, { recursive: true });
-        await fs.writeFile(path.join(nestedWorkspace, "notes.md"), "workspace notes\n", "utf8");
-        await fs.writeFile(path.join(agentDir, "durable-agent-state.json"), "{}\n", "utf8");
-        await fs.symlink(outsideTarget, path.join(nestedWorkspace, ".build"), "dir");
-        await state.writeConfig({
-          agents: {
-            defaults: { workspace: nestedWorkspace },
-            entries: { main: { default: true, agentDir } },
-          },
-        });
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-nested-workspace-symlink-",
+          scenario: "minimal",
+          env: { OPENCLAW_OAUTH_DIR: undefined },
+        },
+        async (state) => {
+          const nestedWorkspace = state.statePath("workspace");
+          const agentDir = path.join(nestedWorkspace, "custom-agent");
+          const configPath = path.join(nestedWorkspace, "config", "openclaw.json");
+          const oauthDir = path.join(nestedWorkspace, "credentials");
+          const outsideTarget = state.path("outside-build");
+          await fs.mkdir(agentDir, { recursive: true });
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.mkdir(oauthDir, { recursive: true });
+          await fs.mkdir(outsideTarget, { recursive: true });
+          await fs.writeFile(path.join(nestedWorkspace, "notes.md"), "workspace notes\n", "utf8");
+          await fs.writeFile(path.join(agentDir, "durable-agent-state.json"), "{}\n", "utf8");
+          await fs.writeFile(path.join(oauthDir, "credentials.json"), "{}\n", "utf8");
+          await fs.writeFile(
+            path.join(path.dirname(configPath), "scratch.txt"),
+            "omit me\n",
+            "utf8",
+          );
+          await fs.symlink(outsideTarget, path.join(nestedWorkspace, ".build"), "dir");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              agents: {
+                ...(layout === "shared workspace base" ? { ownership: "explicit" } : {}),
+                defaults: { workspace: nestedWorkspace },
+                entries:
+                  layout === "legacy workspace"
+                    ? { main: { default: true, agentDir } }
+                    : { main: { agentDir }, helper: { workspace: state.path("helper-workspace") } },
+              },
+            }),
+            "utf8",
+          );
+          state.envVars.OPENCLAW_CONFIG_PATH = configPath;
+          state.envVars.OPENCLAW_OAUTH_DIR = oauthDir;
+          state.applyEnv();
 
-        const archive = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          includeWorkspace: false,
-          nowMs: Date.UTC(2026, 8, 1, 12, 0, 0),
-        });
-        const entries = await listArchiveEntries(archive.archivePath);
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 8, 1, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(archive.archivePath);
 
-        expect(archive.assets.map((asset) => asset.kind)).not.toContain("workspace");
-        expect(entries.some((entry) => entry.includes("/workspace/.build"))).toBe(false);
-        expect(entries.some((entry) => entry.endsWith("/workspace/notes.md"))).toBe(false);
-        expect(
-          entries.some((entry) => entry.endsWith("/custom-agent/durable-agent-state.json")),
-        ).toBe(true);
-        await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
-      },
-    );
-  });
+          expect(archive.assets.map((asset) => asset.kind)).not.toContain("workspace");
+          expect(entries.some((entry) => entry.includes("/workspace/.build"))).toBe(false);
+          expect(entries.some((entry) => entry.endsWith("/workspace/notes.md"))).toBe(false);
+          expect(entries.some((entry) => entry.endsWith("/workspace/config/scratch.txt"))).toBe(
+            false,
+          );
+          expect(entries.some((entry) => entry.endsWith("/workspace/config/openclaw.json"))).toBe(
+            true,
+          );
+          expect(
+            entries.some((entry) => entry.endsWith("/workspace/credentials/credentials.json")),
+          ).toBe(true);
+          expect(
+            entries.some((entry) => entry.endsWith("/custom-agent/durable-agent-state.json")),
+          ).toBe(true);
+          await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
+            ok: true,
+          });
+        },
+      );
+    },
+  );
 
   it("omits an absolute workspace-root symlink under the state directory", async () => {
     if (process.platform === "win32") {
@@ -1034,7 +1069,9 @@ describe("createBackupArchive", () => {
           await fs.writeFile(nestedState, '{"nested":true}\n', "utf8");
           await state.writeConfig({
             agents: {
+              ownership: "explicit",
               defaults: { workspace: resolveWorkspace(state) },
+              entries: { main: {}, helper: { workspace: state.path("helper-workspace") } },
             },
           });
 
