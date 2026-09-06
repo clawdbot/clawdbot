@@ -306,6 +306,13 @@ catalog, API-key auth, and dynamic model resolution.
     authentication scheme; a separate `resolveProviderAuth()` call may select a
     different profile. Omitted mode metadata does not change existing callback behavior.
 
+    `ctx.resolveProviderAuth()` may set `preparationFailed: true` when OAuth
+    preparation exhausted its candidates. Do not treat that flag as absent
+    configuration or restart resolution of the same profiles. A hook may still
+    choose another credential source. Its returned provider configuration or
+    explicit outcome remains authoritative; otherwise the catalog owner reports
+    the consumed preparation failure with the attempted profile identities.
+
     For a non-Bearer or nonstandard list endpoint, pass options instead of
     `true`:
 

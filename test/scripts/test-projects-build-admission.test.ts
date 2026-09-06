@@ -55,7 +55,7 @@ beforeEach(() => {
   }));
   originalArgv = process.argv;
   originalExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
   vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   patternFiles.cleanup();
   process.argv = originalArgv;
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -143,11 +143,11 @@ describe("CLI runtime admission", () => {
     fs.writeFileSync(
       preload,
       `import cp from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
-syncBuiltinESMExports();\n`,
+syncFixtureBuiltinExports();\n`,
     );
     const configArgs = args.includes("--config")
       ? []
@@ -315,7 +315,7 @@ process.stdin.resume();\n`,
               preload,
               `import cp from 'node:child_process';
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   if (args.includes('scripts/run-node.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
@@ -325,7 +325,7 @@ cp.spawn = (bin, args, options) => {
   }
   return spawn(bin, args, options);
 };
-syncBuiltinESMExports();\n`,
+syncFixtureBuiltinExports();\n`,
             );
             const child = spawn(
               process.execPath,
@@ -546,7 +546,7 @@ describe("parallel cache lease completion", () => {
       expect(uiPaths).toHaveLength(4);
       expect(new Set(uiPaths).size).toBe(1);
       expect(attempts).toBe(2);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 
@@ -784,7 +784,7 @@ describe("test-projects build admission", () => {
       }
       expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
       expect(commands.reader).toHaveBeenCalledTimes(2);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 

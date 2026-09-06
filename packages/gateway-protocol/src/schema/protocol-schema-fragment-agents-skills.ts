@@ -143,4 +143,8 @@ export const AgentSkillProtocolSchemas = {
   SkillsUploadCommitParams: agentsModelsSkills.SkillsUploadCommitParamsSchema,
   SkillsInstallParams: agentsModelsSkills.SkillsInstallParamsSchema,
   SkillsUpdateParams: agentsModelsSkills.SkillsUpdateParamsSchema,
+  TranscriptsExportParams: transcripts.TranscriptsExportParamsSchema,
+  TranscriptsExportResult: transcripts.TranscriptsExportResultSchema,
+  TranscriptsStatusParams: transcripts.TranscriptsStatusParamsSchema,
+  TranscriptsStatusResult: transcripts.TranscriptsStatusResultSchema,
 } as const;

@@ -24,6 +24,10 @@ import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
 } from "../../infra/update-post-core-context.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  resolveManagedUpdateRequester,
+} from "../../infra/update-requester-authority.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
@@ -88,7 +92,11 @@ export async function admitUpdateCommandRun(params: {
     },
     { env },
   );
-  return { runId: record.runId, env };
+  const requester = resolveManagedUpdateRequester(record.origin.requester);
+  const requesterAuthority = requester
+    ? await createManagedUpdateRequesterAuthority(requester, env)
+    : undefined;
+  return { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
 }
 
 export function failUpdateCommandRun(

@@ -2144,7 +2144,7 @@ src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
-src/auto-reply/reply/model-selection.ts	3
+src/auto-reply/reply/model-selection.ts	2
 src/auto-reply/reply/queue/drain.ts	2
 src/auto-reply/reply/queue/enqueue.ts	1
 src/auto-reply/reply/queue/settings.ts	1
@@ -3373,7 +3373,7 @@ src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	7
 src/plugins/host-hook-state.ts	8
 src/plugins/host-hooks.ts	1
-src/plugins/install-managed-npm-state.ts	7
+src/plugins/install-managed-npm-state.ts	5
 src/plugins/install-npm-metadata.ts	1
 src/plugins/install-npm-pack.ts	2
 src/plugins/install-persistence.ts	1
@@ -3421,7 +3421,7 @@ src/plugins/plugin-config-trust.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-module-loader-cache.ts	1
 src/plugins/plugin-package-update.ts	1
-src/plugins/plugin-peer-link.ts	6
+src/plugins/plugin-peer-link.ts	4
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-api-key-auth.ts	2
