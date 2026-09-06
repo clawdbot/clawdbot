@@ -350,6 +350,9 @@ async function run() {
   let boxAttempted = false;
   let stoppingSut = false;
   let candidateProcess: ReturnType<typeof spawn> | undefined;
+  let candidateClosed: Promise<void> | undefined;
+  let candidateCliJoined = true;
+  let candidateCancellationRequested = false;
   let lease: QaLease | undefined;
   let ingress: Awaited<ReturnType<typeof startTelegramProofIngress>> | undefined;
   let recorder: ReturnType<typeof spawn> | undefined;
@@ -392,6 +395,24 @@ async function run() {
       return;
     }
     stoppingSut = true;
+    if (candidateProcess && candidateClosed && !candidateCliJoined) {
+      if (!candidateCancellationRequested) {
+        candidateCancellationRequested = true;
+        candidateProcess.kill("SIGTERM");
+      }
+      const deadline = new AbortController();
+      try {
+        const joined = await Promise.race([
+          candidateClosed.then(() => true),
+          delay(15_000, false, { signal: deadline.signal }),
+        ]);
+        if (!joined) {
+          throw new Error("Crabbox command shutdown is incomplete; recovery state retained");
+        }
+      } finally {
+        deadline.abort();
+      }
+    }
     // Independently inspect physical deletion even if CLI bookkeeping failed.
     await box([
       "stop",
@@ -612,6 +633,13 @@ async function run() {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    candidateCliJoined = false;
+    candidateClosed = new Promise((resolve) => {
+      candidateProcess!.once("close", () => {
+        candidateCliJoined = true;
+        resolve();
+      });
+    });
     let candidateLogBytes = 0;
     const candidateLogs: Buffer[] = [];
     for (const stream of [candidateProcess.stdout, candidateProcess.stderr]) {
@@ -788,13 +816,6 @@ async function run() {
     if (boxAttempted && !quiescent) {
       await attempt(stopSut);
     }
-    if (
-      candidateProcess &&
-      candidateProcess.exitCode === null &&
-      candidateProcess.signalCode === null
-    ) {
-      candidateProcess.kill("SIGTERM");
-    }
     const currentBridgeId = bridgeId;
     if (currentBridgeId) {
       await attempt(() => podman(["rm", "--force", currentBridgeId]));
@@ -803,7 +824,7 @@ async function run() {
       await attempt(() => podman(["network", "rm", network]));
     }
     const recorderQuiescent = await recorderExited(1);
-    if (quiescent) {
+    if (quiescent && candidateCliJoined) {
       await attempt(() => rm(boxRoot, { recursive: true, force: true }));
     }
     const privateStateErased = await attempt(() =>

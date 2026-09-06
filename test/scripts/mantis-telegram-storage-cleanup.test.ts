@@ -13,6 +13,9 @@ const fixture = vi.hoisted(() => ({
   removed: false,
   outputAllocated: false,
   candidateCreated: false,
+  helperMissing: false,
+  readyConfigurations: false,
+  networkCommand: "slirp4netns",
 }));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -28,9 +31,16 @@ vi.mock("node:fs", async (original) => {
     mkdtempSync: () => path.join(fixture.root, "scratch"),
     realpathSync: (value: string) => value,
     lstatSync: () => ({ isFile: () => true, uid: 1000, mode: 0o600 }),
-    statSync: () => ({ size: 32 * 1024 ** 3, uid: 1000, mode: 0o600 }),
+    statSync: () => ({ size: 32 * 1024 ** 3, uid: 1000, mode: 0o600, isSocket: () => true }),
     readFileSync: (file: string) => {
       fixture.calls.push(`read:${file}`);
+      if (fixture.readyConfigurations && file.endsWith("storage.conf")) {
+        const mount = path.join(fixture.root, "volume");
+        return `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`;
+      }
+      if (fixture.readyConfigurations && file.endsWith("containers.conf")) {
+        return '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n';
+      }
       if (!file.endsWith("manifest.json")) {
         throw new Error("Configuration is not initialized");
       }
@@ -55,6 +65,23 @@ vi.mock("node:child_process", async (original) => {
     spawnSync: () => ({ status: fixture.mounted ? 0 : 1 }),
     execFileSync: (name: string, args: string[]) => {
       fixture.calls.push(`${name} ${args.join(" ")}`);
+      if (name === "slirp4netns") {
+        if (fixture.helperMissing) {
+          throw new Error("Required networking helper unavailable");
+        }
+        return "slirp4netns version 1.3.3";
+      }
+      if (name === "podman" && args[0] === "info") {
+        const mount = path.join(fixture.root, "volume");
+        return JSON.stringify({
+          host: {
+            security: { rootless: true },
+            logDriver: "k8s-file",
+            rootlessNetworkCmd: fixture.networkCommand,
+          },
+          store: { graphRoot: `${mount}/graphroot`, runRoot: `${mount}/runroot` },
+        });
+      }
       if (name === "fallocate") {
         throw new Error("Allocation failed: no space left");
       }
@@ -135,6 +162,9 @@ beforeEach(() => {
     removed: false,
     outputAllocated: false,
     candidateCreated: false,
+    helperMissing: false,
+    readyConfigurations: false,
+    networkCommand: "slirp4netns",
   });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   Object.defineProperty(process, "getgid", { configurable: true, value: () => 1000 });
@@ -156,6 +186,36 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("interrupted mounted storage initialization", () => {
+  it("refuses setup before allocation when the networking helper is unavailable", async () => {
+    fixture.helperMissing = true;
+    process.argv = [process.execPath, cleanupPath, "setup"];
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    await expect(import("../../scripts/mantis/telegram-proof-storage.mts")).rejects.toThrow(
+      "Required networking helper unavailable",
+    );
+    expect(fixture.calls.some((call) => call.startsWith("fallocate "))).toBe(false);
+    expect(fixture.candidateCreated).toBe(false);
+  });
+  it.each(["slirp4netns", "pasta"])(
+    "verifies the actual rootless networking helper (%s)",
+    async (networkCommand) => {
+      fixture.phase = "ready";
+      fixture.readyConfigurations = true;
+      fixture.networkCommand = networkCommand;
+      process.argv = [process.execPath, "fixture"];
+      const storage = await import("../../scripts/mantis/telegram-proof-storage.mts");
+      for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
+        vi.stubEnv(key, value);
+      }
+      if (networkCommand === "slirp4netns") {
+        expect(() => storage.assertPodmanProofStorage()).not.toThrow();
+      } else {
+        expect(() => storage.assertPodmanProofStorage()).toThrow(
+          "Podman escaped bounded rootless storage",
+        );
+      }
+    },
+  );
   it("refuses mounting when backing allocation fails", async () => {
     process.argv = [process.execPath, cleanupPath, "setup"];
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });

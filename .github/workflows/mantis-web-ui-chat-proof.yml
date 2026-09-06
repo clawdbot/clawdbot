@@ -289,6 +289,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "true"
+      - name: Ensure rootless networking helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v slirp4netns >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends slirp4netns
+          fi
       - name: Prepare bounded rootless candidate storage
         run: node scripts/mantis/telegram-proof-storage.mts setup
       - name: Bootstrap trusted image before candidate execution

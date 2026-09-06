@@ -17,7 +17,9 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 export const proofStorageBytes = 32 * 1024 ** 3;
-const containerConfiguration = '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n';
+const containerConfiguration =
+  '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n' +
+  '[network]\ndefault_rootless_network_cmd = "slirp4netns"\n';
 export function proofImageTag(image: string) {
   if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(image)) {
     throw new Error("Invalid immutable image identity");
@@ -118,7 +120,7 @@ export function proofStorageEnvironment(rootValue = process.env.MANTIS_PODMAN_RO
     !lstatSync(containers).isFile() ||
     statSync(containers).mode & 0o077
   ) {
-    throw new Error("Bounded container logging configuration changed");
+    throw new Error("Bounded container configuration changed");
   }
   if (statSync(runtime).uid !== manifest.uid || !statSync(path.join(runtime, "bus")).isSocket()) {
     throw new Error("Rootless Podman requires the existing runner user session");
@@ -145,6 +147,7 @@ export function assertPodmanProofStorage() {
   if (
     info.host?.security?.rootless !== true ||
     info.host?.logDriver !== "k8s-file" ||
+    info.host?.rootlessNetworkCmd !== "slirp4netns" ||
     info.store?.graphRoot !== `${mount}/graphroot` ||
     info.store?.runRoot !== `${mount}/runroot`
   ) {
@@ -158,6 +161,7 @@ function setup() {
   if (!uid || gid === undefined || process.platform !== "linux") {
     throw new Error("Proof requires a non-root Linux runner");
   }
+  command("slirp4netns", ["--version"]);
   const parent = realpathSync(process.env.RUNNER_TEMP ?? "");
   const root = mkdtempSync(path.join(parent, "mantis-podman-"));
   chmodSync(root, 0o700);
