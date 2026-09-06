@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
@@ -278,7 +278,7 @@ describe("persistent chat session snapshots", () => {
     store.write(sessionKey, snapshot("persisted"));
     await store.flush();
 
-    const evicted = await (async () => {
+    const { evicted, collectionControl } = await (async () => {
       const hydrated = await store.read(sessionKey);
       if (!hydrated) {
         throw new Error("expected hydrated snapshot");
@@ -289,7 +289,10 @@ describe("persistent chat session snapshots", () => {
         { sessionKey },
         hydrated,
       );
-      return new WeakRef(hydrated);
+      return {
+        evicted: new WeakRef(hydrated),
+        collectionControl: new WeakRef({ unowned: true }),
+      };
     })();
     for (let index = 0; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
       cacheChatSessionSnapshot(
@@ -301,10 +304,10 @@ describe("persistent chat session snapshots", () => {
     }
     await store.flush();
     expect(memoryCache.has(sessionKey)).toBe(false);
-    // Weak references keep their target alive for the current job. Move to the
-    // next turn before the V8 heap census forces a complete collection.
-    await setImmediate();
-    queryObjects(SessionSnapshotStore);
+    await collectGarbageForTest(() => {
+      queryObjects(SessionSnapshotStore);
+    });
+    expect(collectionControl.deref()).toBeUndefined();
     expect(evicted.deref()).toBeUndefined();
     expect(store.readSavedAt("agent:main:newer-0")).not.toBeNull();
   });
