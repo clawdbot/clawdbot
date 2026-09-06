@@ -12,6 +12,7 @@ import {
 } from "./memory/search-deadline.js";
 
 type MemoryCorpus = "memory" | "wiki";
+const memoryCorpusDeadlineChecks = new WeakMap<AbortSignal, () => void>();
 type MemorySupplement = ReturnType<typeof listMemoryCorpusSupplements>[number];
 type MemorySupplementGetResult = NonNullable<
   Awaited<ReturnType<MemorySupplement["supplement"]["get"]>>
@@ -31,6 +32,7 @@ type UnavailableMemoryCorpus<T> = {
 export type MemoryCorpusAttempt<T> =
   | { corpus: MemoryCorpus; outcome: "ok"; value: T }
   | UnavailableMemoryCorpus<T>
+  | (Omit<UnavailableMemoryCorpus<T>, "outcome"> & { outcome: "partial" })
   | { corpus: MemoryCorpus; outcome: "not-registered" };
 
 /**
@@ -57,7 +59,7 @@ export function unavailableMemoryCorpus<T>(
   };
 }
 
-async function raceMemoryCorpusSignal<T>(signal: AbortSignal, task: Promise<T>): Promise<T> {
+async function raceMemoryCorpusSignal<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
   if (signal.aborted) {
     throw resolveMemorySearchAbortError(signal);
   }
@@ -68,7 +70,13 @@ async function raceMemoryCorpusSignal<T>(signal: AbortSignal, task: Promise<T>):
     removeAbort = () => signal.removeEventListener("abort", onAbort);
   });
   try {
-    return await Promise.race([task, aborted]);
+    const task = Promise.resolve().then(run);
+    const result = await Promise.race([task, aborted]);
+    memoryCorpusDeadlineChecks.get(signal)?.();
+    if (signal.aborted) {
+      throw resolveMemorySearchAbortError(signal);
+    }
+    return result;
   } finally {
     removeAbort();
   }
@@ -78,15 +86,20 @@ export async function attemptMemoryCorpus<T>(params: {
   corpus: MemoryCorpus;
   signal: AbortSignal;
   unavailableValue: T;
+  getPartialValue?: () => T | null;
   run: () => Promise<T>;
 }): Promise<MemoryCorpusAttempt<T>> {
   try {
     return {
       corpus: params.corpus,
       outcome: "ok",
-      value: await raceMemoryCorpusSignal(params.signal, params.run()),
+      value: await raceMemoryCorpusSignal(params.signal, params.run),
     };
   } catch (error) {
+    const partial = isMemorySearchDeadlineError(error) ? params.getPartialValue?.() : null;
+    if (partial != null) {
+      return { ...unavailableMemoryCorpus(params.corpus, partial, error), outcome: "partial" };
+    }
     return unavailableMemoryCorpus(params.corpus, params.unavailableValue, error);
   }
 }
@@ -100,13 +113,22 @@ export async function runMemoryCorpusDeadline<T>(params: {
     throw resolveMemorySearchAbortError(params.parentSignal);
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort(
-      createMemorySearchDeadlineError(
-        `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
-      ),
-    );
-  }, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
+  const startedAt = performance.now();
+  const timeoutError = createMemorySearchDeadlineError(
+    `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+  );
+  const expire = () => controller.abort(timeoutError);
+  const checkDeadline = () => {
+    // A synchronous database operation can finish before an overdue timer is serviced.
+    if (
+      !controller.signal.aborted &&
+      performance.now() - startedAt >= DEFAULT_MEMORY_SEARCH_TIMEOUT_MS
+    ) {
+      expire();
+    }
+  };
+  memoryCorpusDeadlineChecks.set(controller.signal, checkDeadline);
+  const timer = setTimeout(expire, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
   timer.unref?.();
   const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
   params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
@@ -115,9 +137,15 @@ export async function runMemoryCorpusDeadline<T>(params: {
     if (params.parentSignal?.aborted) {
       throw resolveMemorySearchAbortError(params.parentSignal);
     }
+    const alreadyAborted = controller.signal.aborted;
+    checkDeadline();
+    if (!alreadyAborted && controller.signal.aborted) {
+      throw timeoutError;
+    }
     return result;
   } finally {
     clearTimeout(timer);
+    memoryCorpusDeadlineChecks.delete(controller.signal);
     params.parentSignal?.removeEventListener("abort", onParentAbort);
   }
 }
@@ -131,20 +159,18 @@ export function composeMemoryCorpusMetadata(
   );
   const warnings = ordered.flatMap((attempt) => {
     const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
-    if (attempt.outcome === "unavailable") {
-      return [`${label} corpus unavailable: ${attempt.error}`];
+    if ("error" in attempt) {
+      return [`${label} corpus ${attempt.outcome}: ${attempt.error}`];
     }
     return attempt.outcome === "not-registered" && ordered.length === 1
       ? [`${label} corpus is not registered; results do not cover that requested corpus.`]
       : [];
   });
   warnings.push(...extraWarnings);
-  const errors = ordered.flatMap((attempt) =>
-    attempt.outcome === "unavailable" ? [attempt.error] : [],
-  );
+  const errors = ordered.flatMap((attempt) => ("error" in attempt ? [attempt.error] : []));
   return {
     corpora: ordered.map((attempt) =>
-      attempt.outcome === "unavailable"
+      "error" in attempt
         ? { corpus: attempt.corpus, outcome: attempt.outcome, error: attempt.error }
         : { corpus: attempt.corpus, outcome: attempt.outcome },
     ),
@@ -167,8 +193,7 @@ async function settleMemorySupplements<T>(params: {
   const failures: Array<{ pluginId: string; error: string }> = [];
   const completed: Array<T | undefined> = Array.from({ length: supplements.length });
   try {
-    await raceMemoryCorpusSignal(
-      params.signal,
+    await raceMemoryCorpusSignal(params.signal, () =>
       runTasksWithConcurrency({
         tasks: supplements.map((registration, index) => async () => {
           const result = await params.run(registration);

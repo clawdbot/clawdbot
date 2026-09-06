@@ -897,6 +897,66 @@ describe("createCliToolSummaryTracker", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("leaves plan tools to the authoritative plan event instead of summarizing arguments", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "start",
+      args: {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+      },
+      toolCallId: "plan-1",
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "result",
+      args: undefined,
+      toolCallId: "plan-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "Progress card updated" }] },
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps card errors visible without arguments (full output: %s)",
+    async (fullOutput) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => fullOutput,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name: "progress_card",
+        phase: "start",
+        args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        toolCallId: "plan-error",
+      });
+      await tracker.noteToolEvent({
+        name: undefined,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-error",
+        isError: true,
+        result: { content: [{ type: "text", text: "write failed" }] },
+      });
+
+      expect(deliver).toHaveBeenCalledWith({
+        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        isError: true,
+      });
+    },
+  );
+
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({

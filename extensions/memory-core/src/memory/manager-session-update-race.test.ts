@@ -450,9 +450,11 @@ describe("memory session update sync", () => {
         await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
         releaseEmbedding();
       }
-      await expect(activeSync).rejects.toThrow(
-        repeatPurge ? "full reindex was building" : "changed while indexing",
-      );
+      if (force) {
+        await expect(activeSync).rejects.toThrow("full reindex was building");
+      } else {
+        await expect(activeSync).resolves.toBeUndefined();
+      }
       await purge;
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
       const database = Reflect.get(manager, "db") as DatabaseSync;

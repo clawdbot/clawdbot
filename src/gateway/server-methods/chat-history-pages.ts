@@ -4,6 +4,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
 import {
@@ -14,6 +15,8 @@ import {
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   dropChatHistoryOverreadContextMessage,
+  readChatHistoryMessageId,
+  readChatHistoryRecoveryContext,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
   type IncrementalChatHistoryTail,
@@ -24,11 +27,6 @@ import {
   type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
-
-export function readChatHistoryMessageId(message: unknown): string | undefined {
-  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  return typeof metadata?.id === "string" ? metadata.id : undefined;
-}
 
 type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
@@ -316,14 +314,35 @@ export async function readChatHistoryPage(params: {
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
         );
-    const projected = incrementalTail
-      ? incrementalTail.projected
-      : projectChatDisplayMessages(localMessages, {
-          includeCommentaryFallbacks: true,
-          maxChars: effectiveMaxChars,
-          resolveCurrentUserProfileDisplay,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-        });
+    const project = (messages: unknown[]) =>
+      projectChatDisplayMessagesWithState(messages, {
+        includeCommentaryFallbacks: true,
+        maxChars: effectiveMaxChars,
+        resolveCurrentUserProfileDisplay,
+        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+      });
+    const projection = incrementalTail?.projection ?? project(localMessages);
+    let projected = incrementalTail?.projected ?? projection.messages;
+    const newestPageSeq = readChatHistoryMessageSeq(localMessages.at(-1));
+    if (
+      !incrementalTail &&
+      pageOffset > 0 &&
+      newestPageSeq !== undefined &&
+      projection.assistantErrorPending
+    ) {
+      const recoveryContext = await readChatHistoryRecoveryContext({
+        messages: localMessages,
+        project,
+        readScope,
+        displaySource: readPage.displaySource,
+        maxBytes: maxHistoryBytes,
+      });
+      if (recoveryContext.length > 0) {
+        projected = project([...localMessages, ...recoveryContext]).messages.filter(
+          (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= newestPageSeq,
+        );
+      }
+    }
     const windowed = messageId
       ? capChatHistoryAroundMessage({
           messages: projected,
@@ -339,7 +358,9 @@ export async function readChatHistoryPage(params: {
       ...(isTailPage
         ? {
             activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
-            ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+            ...(readPage.transcriptSource === "active" &&
+            readPage.deltaCursor &&
+            !incrementalTail?.projection.assistantErrorPending
               ? { deltaCursor: readPage.deltaCursor }
               : {}),
           }
@@ -435,7 +456,9 @@ export async function readChatHistoryPage(params: {
   }
   return {
     activeLeafEntryId,
-    ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+    ...(readPage.transcriptSource === "active" &&
+    readPage.deltaCursor &&
+    !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
     messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),

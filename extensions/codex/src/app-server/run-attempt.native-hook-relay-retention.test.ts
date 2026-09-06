@@ -23,6 +23,8 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -81,6 +83,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         return undefined;
       });
       const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, `${childThreadId}-sessions.json`),
+        `${childThreadId}-session`,
+      );
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.onAgentEvent = vi.fn();
@@ -259,6 +266,20 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
         expect(result.runtimeContinuationStarted).toBe(hasDeliveryScope ? true : undefined);
+        const continuationHistory = await readCodexMirroredSessionHistoryMessages(
+          params,
+          undefined,
+          "model-context",
+        );
+        expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([
+          expect.objectContaining({
+            customType: "openclaw.sessions_yield",
+            content:
+              "Waiting for child\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+            display: false,
+            details: { source: "sessions_yield", message: "Waiting for child" },
+          }),
+        ]);
         const terminalLifecycleEvents = (params.onAgentEvent as ReturnType<typeof vi.fn>).mock.calls
           .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
           .filter(
@@ -367,6 +388,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     const workspaceDir = path.join(tempDir, `${childThreadId}-workspace`);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, `${childThreadId}-sessions.json`),
+      `${childThreadId}-session`,
+    );
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
@@ -458,6 +484,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
       const result = await run;
       expect(readAttemptTerminal(result).promptError).toContain("parent failed after yielding");
+      const continuationHistory = await readCodexMirroredSessionHistoryMessages(
+        params,
+        undefined,
+        "model-context",
+      );
+      expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([]);
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
       ).toBeUndefined();

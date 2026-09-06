@@ -285,9 +285,10 @@ describe("markdownToMatrixHtml", () => {
     expect(html).toBe("<p>alt</p>");
   });
 
-  it("preserves line breaks", () => {
-    const html = markdownToMatrixHtml("line1\nline2");
-    expect(html).toBe("<p>line1<br>\nline2</p>");
+  it.each(["\n", "\r\n", "\r"])("preserves %j line breaks in text and HTML", (newline) => {
+    const markdown = `line1${newline}line2`;
+    expect(markdownToMatrixBody(markdown)).toBe("line1\nline2");
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>line1<br>\nline2</p>");
   });
 
   it("compacts loose ordered lists without paragraph tags", () => {
