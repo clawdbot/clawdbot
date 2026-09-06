@@ -3,11 +3,13 @@ import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promi
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   buildProductionControlUiE2e,
+  createControlUiMockBootstrapConfig,
   canRunPlaywrightChromium,
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
@@ -17,6 +19,7 @@ import {
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
+const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 let artifactDir: string;
 beforeEach(() => {
@@ -126,38 +129,27 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
       controlled: navigator.serviceWorker.controller !== null,
       error: null,
     }));
-    const timeout = new Promise<{
-      activeState: null;
-      controlled: boolean;
-      error: string;
-    }>((resolve) => {
-      window.setTimeout(() => {
-        void (async () => {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          const response = await fetch(`/sw.js?v=${workerBuildId}`);
-          resolve({
-            activeState: null,
-            controlled: navigator.serviceWorker.controller !== null,
-            error: JSON.stringify({
-              isSecureContext,
-              location: window.location.href,
-              registrations: registrations.map((value) => ({
-                active: value.active?.state ?? null,
-                activeScriptUrl: value.active?.scriptURL ?? null,
-                installing: value.installing?.state ?? null,
-                scope: value.scope,
-                waiting: value.waiting?.state ?? null,
-              })),
-              serviceWorker: {
-                contentType: response.headers.get("content-type"),
-                status: response.status,
-              },
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<{ activeState: null; controlled: boolean; error: string }>(
+      (resolve) => {
+        // Diagnostics must not await a worker API or fetch before settling the
+        // deadline; either can be the unavailable resource being diagnosed.
+        timer = setTimeout(
+          () =>
+            resolve({
+              activeState: null,
+              controlled: navigator.serviceWorker.controller !== null,
+              error: "Worker readiness timed out for " + workerBuildId,
             }),
-          });
-        })();
-      }, 10_000);
-    });
-    return Promise.race([ready, timeout]);
+          10_000,
+        );
+      },
+    );
+    try {
+      return await Promise.race([ready, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }, expectedBuildId);
   if (registration.error) {
     throw new Error(
@@ -253,18 +245,23 @@ describe("Control UI service-worker production update E2E", () => {
   }, 60_000);
 
   beforeAll(async () => {
-    if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
+    if (!useWebKit && !canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(outDir, buildA, {
-      assistantAgentId: "research",
-      assistantAvatar: "",
-      assistantName: "OpenClaw",
-      basePath: "/",
-      terminalEnabled: true,
-    });
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    server = await startProductionControlUiE2eServer(
+      outDir,
+      buildA,
+      createControlUiMockBootstrapConfig({
+        assistantAgentId: "research",
+        defaultAgentId: "research",
+        serverBuildId: buildA,
+        terminalEnabled: true,
+      }),
+    );
+    browser = useWebKit
+      ? await webkit.launch()
+      : await chromium.launch({ executablePath: chromiumExecutablePath });
   }, 120_000);
 
   afterAll(async () => {
@@ -278,6 +275,106 @@ describe("Control UI service-worker production update E2E", () => {
       );
     }
   });
+
+  it("reloads the same tab after missing the replacement worker's activation", async () => {
+    const context = await browser.newContext({ serviceWorkers: "allow" });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => {
+      pageErrors.push(error.message);
+    });
+    await page.addInitScript(() => {
+      // Model a suspended page missing both one-shot notifications. Keep the
+      // real worker, registration, cache, browser messaging, and reload intact.
+      for (const type of ["message", "controllerchange"]) {
+        navigator.serviceWorker.addEventListener(type, (event) => {
+          if (sessionStorage.getItem("test-missed-activation") === "1") {
+            event.stopImmediatePropagation();
+          }
+        });
+      }
+    });
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+      terminalEnabled: true,
+    });
+    await page.unroute("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH);
+    const nextDir = outDir + "-foreground";
+    const previousDir = outDir + "-sleeping";
+    let swapped = false;
+    try {
+      await page.goto(server.baseUrl + "chat?resume=1#latest");
+
+      await ensureControlledPage(page, pageErrors, buildA);
+
+      await gateway.waitForRequest("chat.startup");
+
+      const originalUrl = page.url();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("keep my draft through the missed update");
+      await buildProductionControlUiE2e(nextDir, buildB);
+      await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
+      await rename(outDir, previousDir);
+      await rename(nextDir, outDir);
+      swapped = true;
+      await page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.getRegistration();
+        await registration?.update();
+      });
+      await expect
+        .poll(() => page.evaluate(() => caches.keys()))
+        .toContain("openclaw-control-" + buildB);
+      await page.waitForFunction(async () => {
+        const registration = await navigator.serviceWorker.getRegistration();
+        return registration?.active?.state === "activated" && !registration.installing;
+      });
+      expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+        client: { buildId: buildA },
+      });
+      await gateway.setServerBuildId(buildB);
+      const reloaded = page.waitForEvent("domcontentloaded");
+      await page.evaluate(() => {
+        sessionStorage.removeItem("test-missed-activation");
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await reloaded;
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
+        .toMatchObject({ client: { buildId: buildB } });
+      expect(page.url()).toBe(originalUrl);
+      await expect
+        .poll(() => composer.inputValue())
+        .toBe("keep my draft through the missed update");
+    } catch (error) {
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "worker-missed-activation",
+          pageErrors,
+        });
+      }
+      throw error;
+    } finally {
+      await context.close();
+      if (swapped) {
+        await rename(outDir, nextDir);
+        await rename(previousDir, outDir);
+      }
+      await rm(nextDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
     const context = await browser.newContext({
