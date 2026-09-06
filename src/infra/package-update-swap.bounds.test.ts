@@ -8,6 +8,46 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 afterEach(() => vi.restoreAllMocks());
 
 describe("package verification bounds", () => {
+  it("rejects manifest growth without attempting an oversized metadata allocation", async () => {
+    await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
+      const { params, packageRoot } = await createPackageSwapFixture(base);
+      const manifest = path.join(packageRoot, "package.json");
+      const open = fs.open.bind(fs);
+      let manifestOpens = 0;
+      let grew = false;
+      let oversizedRead = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) !== manifest) {
+          return handle;
+        }
+        if (++manifestOpens === 1) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            await close();
+            await fs.truncate(manifest, 1024 * 1024 * 1024 + 1);
+            grew = true;
+          });
+        } else {
+          // Stop before allocating the sparse file if the byte cap was omitted.
+          vi.spyOn(handle, "readFile").mockImplementation(async () => {
+            oversizedRead = true;
+            throw new Error("oversized metadata allocation intercepted");
+          });
+        }
+        return handle;
+      });
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
+      expect(grew).toBe(true);
+      expect(result.status).toBe("failed");
+      expect(oversizedRead).toBe(false);
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["package", "launcher", "launcher directory"] as const)(
     "bounds the initial %s observation",
     async (entry) => {

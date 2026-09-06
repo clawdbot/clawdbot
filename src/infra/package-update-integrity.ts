@@ -197,7 +197,8 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     }
 
     await visit(root, "");
-    const version = await read(() => readPackageVersion(root));
+    // The manifest can grow after hashing. Keep its metadata reread bounded too.
+    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_TREE_BYTES }));
     if (!version) {
       throw new Error("Package rollback version is unavailable");
     }
