@@ -26,6 +26,21 @@ type SessionGroupCatalogHost = {
   retryDelayMs: (error: unknown) => number | null;
 };
 
+function renameSessionGroupMembers(state: SessionState, from: string, to: string): SessionState {
+  if (!state.result) {
+    return state;
+  }
+  let changed = false;
+  const sessions = state.result.sessions.map((row) => {
+    if (row.category !== from) {
+      return row;
+    }
+    changed = true;
+    return { ...row, category: to };
+  });
+  return changed ? { ...state, result: { ...state.result, sessions } } : state;
+}
+
 const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
 const GROUPS_LIST_METHOD = "sessions.groups.list";
 const GROUPS_DEFAULTS_METHOD = "sessions.groups.defaults";
@@ -88,8 +103,8 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     groupSettings: readonly SessionGroupSettings[],
     sectionOrder: readonly string[],
     status: SessionGroupDefaultsStatus,
+    state: SessionState = host.readState(),
   ) => {
-    const state = host.readState();
     const groups = groupSettings.map((group) => group.name);
     const groupsUnchanged =
       groups.length === state.groups.length &&
@@ -255,11 +270,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   const publishPathFreeMutation = (
     groupSettings: readonly SessionGroupSettings[],
     sectionOrder: readonly string[],
+    transformState?: (state: SessionState) => SessionState,
   ) => {
     // Catalog mutations do not carry authoritative defaults. Retire any older
     // defaults read and keep group routes blocked until a fresh read completes.
     invalidate();
-    publishCatalog(groupSettings, sectionOrder, "loading");
+    const state = host.readState();
+    publishCatalog(groupSettings, sectionOrder, "loading", transformState?.(state) ?? state);
     void load();
   };
 
@@ -309,8 +326,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishPathFreeMutation(
         mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults: renamedDefaults }),
         readSidebarSectionOrder(result),
+        // The catalog and the rows that populate it are one visible snapshot.
+        // The canonical refresh below verifies this local projection afterward.
+        (state) => renameSessionGroupMembers(state, from, to),
       );
-      // Mutation response commits before a background member-row reconciliation.
+      // The Gateway response confirms the rename before this canonical reconciliation.
       void host.refreshRows();
       return "completed";
     } catch (error) {
