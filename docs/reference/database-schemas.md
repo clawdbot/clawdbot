@@ -596,6 +596,8 @@ Background verification errors retain the original name and message and append b
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
+Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
+
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
 ## Troubleshooting

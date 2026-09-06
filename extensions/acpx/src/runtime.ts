@@ -902,17 +902,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     return delegate;
   }
 
-  private releaseManagedToolsDelegateForSession(sessionKey: string): void {
-    if (!this.managedToolsMcpBridgeEnabled) {
-      return;
-    }
-    const normalizedSessionKey = sessionKey.trim();
-    if (!normalizedSessionKey) {
-      return;
-    }
-    this.managedToolsSessionDelegates.delete(normalizedSessionKey);
-  }
-
   private async loadOperationSnapshotForHandle(
     handle: OpenClawRuntimeHandle,
   ): Promise<AcpxHandleOperationSnapshot> {
@@ -1793,22 +1782,23 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     let cleanupSucceeded = false;
     try {
       const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
-      let closeSucceeded;
+      const handle = toAcpxResourceInput(input).handle;
       try {
         await delegate.close({
-          handle: toAcpxResourceInput(input).handle,
+          handle,
           reason: input.reason,
           discardPersistentState: input.discardPersistentState,
         });
-        closeSucceeded = true;
+        // Delegate retirement does not depend on process cleanup. A delayed close
+        // must not evict a replacement created by another completed close.
+        if (this.managedToolsSessionDelegates.get(handle.sessionKey) === delegate) {
+          this.managedToolsSessionDelegates.delete(handle.sessionKey);
+        }
       } finally {
         await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
         cleanupSucceeded = true;
       }
-      if (closeSucceeded) {
-        this.releaseManagedToolsDelegateForSession(resolveAcpxSessionResource(input.handle));
-      }
-      if (closeSucceeded && input.discardPersistentState) {
+      if (input.discardPersistentState) {
         await this.prepareFreshSession({
           ...input.handle,
           persistedHandle: input.handle,

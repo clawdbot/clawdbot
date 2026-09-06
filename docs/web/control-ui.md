@@ -672,6 +672,9 @@ into an OpenClaw agent. The Gateway discovers supported local memory on its own
 host, so a remote Control UI imports from the Gateway computer rather than the
 browser computer.
 
+If the agent list fails to load, the page shows the Gateway error. Select
+**Refresh** to try again; **Settings → Memory** provides **Retry** for the same failure.
+
 1. Choose the destination agent.
 2. Review the detected source collections and Markdown filenames. File contents
    are not sent in the plan response or displayed in the page.

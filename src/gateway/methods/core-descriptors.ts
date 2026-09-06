@@ -649,6 +649,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["update.runs.list", "update", "operator.admin", "2026.9"],
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["update.report", "update", "operator.admin", "2026.9", { controlPlaneWrite: true }],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
   ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 

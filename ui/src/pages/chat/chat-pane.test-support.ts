@@ -89,7 +89,7 @@ export type TestChatPane = HTMLElement & {
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
+  refreshSessionPullRequests: (options?: { refresh?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   taskSuggestions: TaskSuggestion[];

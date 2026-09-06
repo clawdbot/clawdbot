@@ -3422,7 +3422,7 @@ src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-module-loader-cache.ts	1
 src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	6
-src/plugins/plugin-sdk-native-resolver.ts	3
+src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-api-key-auth.ts	2
 src/plugins/provider-auth-choice-helpers.ts	12
@@ -4008,7 +4008,6 @@ ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
-ui/src/pages/skill-workshop/skill-workshop-page.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	3
 ui/src/pages/usage/heatmap.ts	1

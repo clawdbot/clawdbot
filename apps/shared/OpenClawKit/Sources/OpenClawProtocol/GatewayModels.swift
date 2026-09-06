@@ -17665,21 +17665,69 @@ public struct SkillsProposalsListResult: Codable, Sendable {
     public let schema: String
     public let updatedat: String
     public let proposals: [[String: AnyCodable]]
+    public let installedskills: [[String: AnyCodable]]
 
     public init(
         schema: String,
         updatedat: String,
-        proposals: [[String: AnyCodable]])
+        proposals: [[String: AnyCodable]],
+        installedskills: [[String: AnyCodable]])
     {
         self.schema = schema
         self.updatedat = updatedat
         self.proposals = proposals
+        self.installedskills = installedskills
     }
 
     private enum CodingKeys: String, CodingKey {
         case schema
         case updatedat = "updatedAt"
         case proposals
+        case installedskills = "installedSkills"
+    }
+}
+
+public struct SkillsWorkshopReadParams: Codable, Sendable {
+    public let agentid: String?
+    public let name: String
+
+    public init(
+        agentid: String? = nil,
+        name: String)
+    {
+        self.agentid = agentid
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+    }
+}
+
+public struct SkillsWorkshopReadResult: Codable, Sendable {
+    public let name: String
+    public let skillkey: String
+    public let description: String
+    public let content: String
+
+    public init(
+        name: String,
+        skillkey: String,
+        description: String,
+        content: String)
+    {
+        self.name = name
+        self.skillkey = skillkey
+        self.description = description
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case skillkey = "skillKey"
+        case description
+        case content
     }
 }
 
