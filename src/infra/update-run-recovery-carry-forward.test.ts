@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { validateUpdateRecoveryPublicationDatabaseAtPath } from "./update-run-recovery-publication.js";
 import {
   beginUpdateRecovery,
   claimUpdateRecovery,
@@ -35,7 +36,11 @@ async function fixture() {
   const file = path.join(root, "state", "openclaw.sqlite");
   const stageFile = path.join(root, "stage.sqlite");
   closeOpenClawStateDatabaseForTest();
-  await createVerifiedSqliteSnapshot({ sourcePath: file, targetPath: stageFile });
+  await createVerifiedSqliteSnapshot({
+    sourcePath: file,
+    targetPath: stageFile,
+    preserveRowIds: true,
+  });
   const later = createUpdateRun({ trigger: "cli" }, options);
   finishUpdateRun(later.runId, { status: "failed", reason: "synthetic failure" }, options);
   const identity = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
@@ -234,6 +239,149 @@ describe("recovery carry-forward", () => {
         publishedOptions,
       ),
     ).not.toThrow();
+  });
+
+  it("rejects a rewritten displaced publication record after live progress", async () => {
+    const f = await fixture();
+    const published = prepareUpdateRecoveryCarryForward({
+      ...f.params,
+      nextProgress: { ...f.nextProgress, phase: "intent", planSha256: "a".repeat(64) },
+    });
+    f.sourceDb.close();
+    f.stagedDb.close();
+    const current = recordUpdateRecoveryRestoreProgress(
+      published.record,
+      { ...published.record.restore!, phase: "observed" },
+      fence,
+      { ...f.options, path: f.stageFile },
+    );
+    closeOpenClawStateDatabaseForTest();
+    const displaced = open(f.file);
+    const rewritten = {
+      ...published.record,
+      primaryFailure: { code: "rewritten", effectId: null },
+    };
+    displaced
+      .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+      .run(JSON.stringify(rewritten), "update.recovery." + f.run.runId);
+    displaced.close();
+    expect(() =>
+      validateUpdateRecoveryPublicationDatabaseAtPath(
+        { ...published, expected: current, role: "displaced" },
+        f.options,
+      ),
+    ).toThrow(UpdateRecoveryConflictError);
+  });
+
+  it("validates exact publication roles across reopen, progress, and claim rotation", async () => {
+    const f = await fixture();
+    const published = prepareUpdateRecoveryCarryForward({
+      ...f.params,
+      nextProgress: { ...f.nextProgress, phase: "intent", planSha256: "a".repeat(64) },
+    });
+    f.sourceDb.close();
+    f.stagedDb.close();
+    const stageOptions = { ...f.options, path: f.stageFile };
+    for (const role of ["live-source", "displaced", "staged", "live-restored"] as const) {
+      validateUpdateRecoveryPublicationDatabaseAtPath(
+        { ...published, expected: published.record, role },
+        role === "live-source" || role === "displaced" ? f.options : stageOptions,
+      );
+    }
+    const observed = recordUpdateRecoveryRestoreProgress(
+      published.record,
+      { ...published.record.restore!, phase: "observed" },
+      fence,
+      stageOptions,
+    );
+    const claimed = claimUpdateRecovery(observed, fence, stageOptions);
+    closeOpenClawStateDatabaseForTest();
+    const current = loadUpdateRecovery(f.run.runId, stageOptions)!;
+    expect(current).toEqual(claimed);
+    expect(current.publication).toEqual(published.record.publication);
+    const before = [digest(f.file), digest(f.stageFile), fs.readdirSync(f.root).toSorted()];
+    validateUpdateRecoveryPublicationDatabaseAtPath(
+      { ...published, expected: current, role: "live-restored" },
+      stageOptions,
+    );
+    validateUpdateRecoveryPublicationDatabaseAtPath(
+      { ...published, expected: current, role: "displaced" },
+      f.options,
+    );
+    for (const role of ["live-source", "staged"] as const) {
+      expect(() =>
+        validateUpdateRecoveryPublicationDatabaseAtPath(
+          { ...published, expected: current, role },
+          role === "live-source" ? f.options : stageOptions,
+        ),
+      ).toThrow(UpdateRecoveryConflictError);
+    }
+    expect([digest(f.file), digest(f.stageFile), fs.readdirSync(f.root).toSorted()]).toEqual(
+      before,
+    );
+  });
+
+  it.each(["timestamp", "claim", "history", "operator", "rowid", "commitment"])(
+    "rejects changed displaced %s despite an admissible old revision",
+    async (change) => {
+      const f = await fixture();
+      // A real sparse implicit rowid is part of the logical identity.
+      f.sourceDb.exec(
+        "CREATE TABLE fixture_sparse(value TEXT); INSERT INTO fixture_sparse(rowid,value) VALUES (71,'kept')",
+      );
+      const published = prepareUpdateRecoveryCarryForward({
+        ...f.params,
+        nextProgress: { ...f.nextProgress, phase: "intent", planSha256: "a".repeat(64) },
+      });
+      const prior = structuredClone(published.record);
+      if (change === "claim" || change === "commitment") {
+        if (change === "claim") {
+          prior.claimId = randomUUID();
+        } else {
+          prior.publication!.sha256 = "b".repeat(64);
+        }
+        f.sourceDb
+          .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+          .run(JSON.stringify(prior), "update.recovery." + f.run.runId);
+      } else if (change === "timestamp") {
+        f.sourceDb
+          .prepare(
+            "UPDATE config_machine_state SET updated_at_ms = updated_at_ms + 1 WHERE state_key = ?",
+          )
+          .run("update.recovery." + f.run.runId);
+      } else if (change === "history") {
+        f.sourceDb
+          .prepare("UPDATE update_runs SET reason = 'changed' WHERE run_id = ?")
+          .run(f.later.runId);
+      } else if (change === "operator") {
+        f.sourceDb
+          .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+          .run('"changed"', "fixture.user");
+      } else {
+        f.sourceDb.exec("UPDATE fixture_sparse SET rowid = 1");
+      }
+      f.sourceDb.close();
+      f.stagedDb.close();
+      expect(() =>
+        validateUpdateRecoveryPublicationDatabaseAtPath(
+          { ...published, expected: published.record, role: "displaced" },
+          f.options,
+        ),
+      ).toThrow(UpdateRecoveryConflictError);
+    },
+  );
+
+  it("refuses legacy publication without an exact prior-row commitment", async () => {
+    const f = await fixture();
+    const prepared = prepareUpdateRecoveryCarryForward(f.params);
+    f.sourceDb.close();
+    f.stagedDb.close();
+    expect(() =>
+      validateUpdateRecoveryPublicationDatabaseAtPath(
+        { ...prepared, expected: prepared.record, role: "displaced" },
+        f.options,
+      ),
+    ).toThrow(UpdateRecoveryConflictError);
   });
 
   it("cannot seal a restore plan in just one copy", async () => {

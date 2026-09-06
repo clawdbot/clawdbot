@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { UpdateServingReceiptSchema } from "./update-serving-verification-receipt.js";
@@ -85,6 +86,14 @@ export const UpdateRecoveryRecordSchema = z.strictObject({
   effects: z.array(UpdateRecoveryEffectSchema).max(4096),
   checkpoint: checkpoint.optional(),
   restore: UpdateRecoveryRestoreProgressSchema.nullable().default(null),
+  // Sealed in BOTH copies before publication; later live-only writes preserve it.
+  // Hash of the canonical publication row except this self-referential field.
+  publication: z
+    .strictObject({
+      revision: counter,
+      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    })
+    .optional(),
   verification: z
     .strictObject({
       runtime: z.enum(["candidate", "previous"]),
@@ -135,4 +144,48 @@ export function parseUpdateRecoveryCheckpoint(
     throw new UpdateRecoveryConflictError();
   }
   return captured;
+}
+
+/** Canonical complete publication preimage; the commitment field alone is omitted. */
+function publicationDigest(record: UpdateRecoveryRecord): string {
+  const parsed = UpdateRecoveryRecordSchema.parse(record);
+  delete parsed.publication;
+  return createHash("sha256").update(JSON.stringify(parsed)).digest("hex");
+}
+
+/** Called only inside fenced carry-forward, after revision/time and sealed plan are fixed. */
+export function sealUpdateRecoveryPublication(record: UpdateRecoveryRecord): void {
+  if (record.restore?.phase === "intent") {
+    record.publication = { revision: record.revision, sha256: publicationDigest(record) };
+  }
+}
+
+/** A prior row is evidence only if it matches the commitment retained by current recovery. */
+export function assertUpdateRecoveryPublicationRecord(
+  current: UpdateRecoveryRecord,
+  prior: UpdateRecoveryRecord,
+): void {
+  const anchor = current.publication;
+  const restore = prior.restore;
+  if (
+    !anchor ||
+    !prior.publication ||
+    !restore ||
+    restore.phase !== "intent" ||
+    !restore.planSha256 ||
+    current.runId !== prior.runId ||
+    current.transactionId !== prior.transactionId ||
+    current.revision < prior.revision ||
+    anchor.revision !== prior.revision ||
+    prior.publication.revision !== anchor.revision ||
+    prior.publication.sha256 !== anchor.sha256 ||
+    publicationDigest(prior) !== anchor.sha256 ||
+    current.restore?.restoreId !== restore.restoreId ||
+    current.restore.checkpointId !== restore.checkpointId ||
+    current.restore.planPath !== restore.planPath ||
+    current.restore.planSha256 !== restore.planSha256 ||
+    current.restore.resourceCursor < restore.resourceCursor
+  ) {
+    throw new UpdateRecoveryConflictError();
+  }
 }

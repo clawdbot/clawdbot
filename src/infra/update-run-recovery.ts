@@ -18,6 +18,7 @@ import {
   UpdateRecoveryConflictError,
   UpdateRecoveryRequiredError,
   parseUpdateRecoveryCheckpoint,
+  sealUpdateRecoveryPublication,
   UpdateRecoveryRestoreProgressSchema,
   type UpdateRecoveryRestoreProgress,
   type UpdateRecoveryEffect,
@@ -661,6 +662,7 @@ export function prepareUpdateRecoveryCarryForward(params: {
   advanceRestoreProgress(record, params.nextProgress);
   record.revision++;
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  sealUpdateRecoveryPublication(record);
   const raw = encodeRecovery(record);
   let sourceBinding: UpdateRecoveryDatabaseBinding;
   let stagedBinding: UpdateRecoveryDatabaseBinding;
