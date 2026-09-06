@@ -129,11 +129,9 @@ function makeTranscript(sessionId: string, count: number, bodyBytes: number, sha
 /** Instrument only the isolated process-owned handle borrowed by the native reader. */
 function observeReads(db: DatabaseSync) {
   clearNodeSqliteKyselyCacheForDatabase(db);
-  // Keep the exact methods for restoration; invocation below supplies their receiver.
-  // oxlint-disable-next-line typescript/unbound-method
-  const originalExec = db.exec;
-  // oxlint-disable-next-line typescript/unbound-method
-  const originalPrepare = db.prepare;
+  // Capture exact native methods for restoration; calls below supply their receiver.
+  const originalExec = Reflect.get(db, "exec") as DatabaseSync["exec"];
+  const originalPrepare = Reflect.get(db, "prepare") as DatabaseSync["prepare"];
   const restoreStatements: Array<() => void> = [];
   let current: ReadMetrics | undefined;
   let transactionStart: number | undefined;
@@ -154,9 +152,7 @@ function observeReads(db: DatabaseSync) {
     if (!sql.includes('as "navigation_json"')) {
       return statement;
     }
-    // Save the method for restoration; Reflect.apply below supplies its receiver.
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalIterate = statement.iterate;
+    const originalIterate = Reflect.get(statement, "iterate") as StatementSync["iterate"];
     statement.iterate = function* (
       this: StatementSync,
       ...parameters: SQLInputValue[] | [Record<string, SQLInputValue>, ...SQLInputValue[]]
