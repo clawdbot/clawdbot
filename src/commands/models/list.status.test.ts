@@ -1482,6 +1482,55 @@ describe("modelsStatusCommand auth overview", () => {
     expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("keeps route observations separate for model ids that differ by case", async () => {
+    const localRuntime = createRuntime();
+    const routeInputs: Array<{
+      modelId?: string;
+      observedRoutes?: Array<{ api?: string; baseUrl?: string }>;
+    }> = [];
+    const upperRoute = {
+      id: "Reader",
+      name: "Reader upper",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const lowerRoute = {
+      id: "reader",
+      name: "Reader lower",
+      provider: "openai",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/Reader",
+        fallbacks: ["openai/reader"],
+        profiles: {},
+        catalog: [upperRoute, lowerRoute],
+        routeVariants: [upperRoute, lowerRoute],
+        routeOverride: (params) => {
+          routeInputs.push(params as (typeof routeInputs)[number]);
+          return {
+            kind: "incompatible",
+            code: "fixture-route",
+            message: "fixture route",
+          };
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+      },
+    );
+
+    expect(routeInputs.find((input) => input.modelId === "Reader")?.observedRoutes).toEqual([
+      { api: upperRoute.api, baseUrl: upperRoute.baseUrl },
+    ]);
+    expect(routeInputs.find((input) => input.modelId === "reader")?.observedRoutes).toEqual([
+      { api: lowerRoute.api, baseUrl: lowerRoute.baseUrl },
+    ]);
+  });
+
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
     const localRuntime = createRuntime();
     await withOpenAIStatusFixture(
