@@ -604,6 +604,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
       break;
+    case "directive.rejected":
+      record.channel = event.channel;
+      record.source = event.agentId;
+      record.outcome = event.directiveType;
+      assignReasonCode(record, event.errorText);
+      break;
   }
 
   return record;
