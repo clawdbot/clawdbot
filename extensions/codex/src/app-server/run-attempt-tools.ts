@@ -75,7 +75,7 @@ export function createCodexDynamicToolExecutionRegistry() {
 
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
-  availableTools: readonly { name: string }[],
+  registeredTools: readonly { name: string }[],
   hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
@@ -86,7 +86,9 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  if (availableTools.some((tool) => tool.name === "message")) {
+  // Registration owns persistent layout; a turn may narrow execution without
+  // moving this tool into a namespace and changing the thread fingerprint.
+  if (registeredTools.some((tool) => tool.name === "message")) {
     names.push("message");
   }
   return names;

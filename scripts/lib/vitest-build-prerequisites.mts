@@ -89,10 +89,15 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/gateway",
   })),
+  {
+    file: "src/gateway/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "private-qa",
+    dir: "src/gateway",
+  },
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-auth-rewarm.test.ts",
-    "src/gateway/gateway-codex-delivery-cache.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
   ].map((file) => ({

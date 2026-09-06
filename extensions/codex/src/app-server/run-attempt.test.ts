@@ -321,28 +321,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   };
 }
 
-function createMessageDynamicTool(
-  description: string,
-  actions: string[] = ["send"],
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
-  return {
-    type: "function",
-    name: "message",
-    description,
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: actions,
-        },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    },
-  };
-}
-
 function createNamedDynamicTool(
   name: string,
 ): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
@@ -473,7 +451,7 @@ function createCodexToolBridgeForTest(
     signal,
     directToolNames: testing.resolveCodexDynamicToolDirectNames(
       params,
-      tools,
+      registeredTools,
       hostSystemAgentActive,
     ),
   });

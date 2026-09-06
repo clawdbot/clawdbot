@@ -521,7 +521,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,
-        toolsWithScopedMcp,
+        registeredWithScopedMcp,
         isHostScopedAgentToolActive("openclaw"),
       ),
       hookContext,

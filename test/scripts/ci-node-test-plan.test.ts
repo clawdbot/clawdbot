@@ -2738,7 +2738,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
         ],
-        pretestBuildMode: "runtime",
+        pretestBuildMode: "private-qa",
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
       },

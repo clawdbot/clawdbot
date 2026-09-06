@@ -3063,7 +3063,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             },
             web_search: "disabled",
           }),
-          developerInstructions: expect.stringContaining("`message(action=send)`"),
+          developerInstructions: expect.not.stringContaining("`message(action=send)`"),
         }),
       );
       const typedThreadRequest = threadRequest as {

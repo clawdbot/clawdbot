@@ -52,7 +52,7 @@ describe("Codex direct tool loading", () => {
             loading: "searchable",
             directToolNames: resolveCodexDynamicToolDirectNames(
               createAttemptParams({ sourceReplyDeliveryMode, disableMessageTool }),
-              disableMessageTool ? [] : [tool],
+              [tool],
             ),
           }),
       );
@@ -61,7 +61,7 @@ describe("Codex direct tool loading", () => {
       expect(JSON.stringify(bridges[2]?.specs)).toBe(JSON.stringify(bridges[0]?.specs));
       expect(
         bridges[0]?.specs.some((spec) => spec.type === "function" && spec.name === "message"),
-      ).toBe(!disableMessageTool);
+      ).toBe(true);
       if (disableMessageTool) {
         for (const bridge of bridges) {
           expect(bridge.availableSpecs).toEqual([]);

@@ -1070,7 +1070,7 @@ describe("Codex app-server dynamic tool build", () => {
       params.config = { tools: { exec: { mode: "ask" } } };
       setOpenClawCodingToolsFactoryForTests((options) =>
         createOpenClawCodingTools(options).filter((tool) =>
-          ["openclaw", "message"].includes(tool.name),
+          ["openclaw", "message", "session_status"].includes(tool.name),
         ),
       );
 
@@ -1078,7 +1078,11 @@ describe("Codex app-server dynamic tool build", () => {
         sandbox: null,
         isHostScopedToolActive: () => false,
       });
-      expect(tools.map((tool) => tool.name).toSorted()).toEqual(["message", "openclaw"]);
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+        "message",
+        "openclaw",
+        "session_status",
+      ]);
       const bridge = createCodexDynamicToolBridge({
         tools,
         signal: new AbortController().signal,
@@ -1092,7 +1096,10 @@ describe("Codex app-server dynamic tool build", () => {
         description: "",
         tools: [expect.objectContaining({ type: "function", name: "openclaw" })],
       });
-      const ordinarySpec = expect.objectContaining({ type: "function", name: "message" });
+      expect(bridge.specs).toContainEqual(
+        expect.objectContaining({ type: "function", name: "message" }),
+      );
+      const ordinarySpec = expect.objectContaining({ type: "function", name: "session_status" });
       expect(bridge.specs).toContainEqual(
         loading === "direct"
           ? ordinarySpec
@@ -1100,7 +1107,7 @@ describe("Codex app-server dynamic tool build", () => {
               type: "namespace",
               name: "openclaw",
               description: "",
-              tools: [expect.objectContaining({ name: "message", deferLoading: true })],
+              tools: [expect.objectContaining({ name: "session_status", deferLoading: true })],
             },
       );
     },
