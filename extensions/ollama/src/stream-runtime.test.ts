@@ -1875,7 +1875,7 @@ describe("createOllamaStreamFn streaming events", () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("rate limited", {
         status: 429,
-        headers: { "Retry-After": "30" },
+        headers: { "Content-Type": "text/plain;charset=UTF-8", "Retry-After": "30" },
       }),
       release: vi.fn(async () => undefined),
     });
