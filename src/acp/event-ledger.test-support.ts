@@ -1,5 +1,66 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expect } from "vitest";
+import { afterEach, expect } from "vitest";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
+import type { AcpLedgerOptions } from "./event-ledger.types.js";
+
+type TestAcpLedgerHandle = {
+  databasePath: string;
+  tempDir: string;
+};
+
+const testLedgerHandles: TestAcpLedgerHandle[] = [];
+
+/** Creates a test-owned SQLite ACP ledger and registers its DB/tempdir cleanup. */
+export function createTestAcpEventLedger(options: AcpLedgerOptions = {}): AcpEventLedger {
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")),
+  );
+  const databasePath = path.join(tempDir, "openclaw.sqlite");
+  testLedgerHandles.push({ databasePath, tempDir });
+  return createSqliteAcpEventLedger({ ...options, path: databasePath });
+}
+
+export async function withTestAcpEventLedgerDatabase<T>(
+  fn: (paths: { databasePath: string }) => T | Promise<T>,
+): Promise<T> {
+  return await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    const databasePath = path.join(dir, "openclaw.sqlite");
+    try {
+      return await fn({ databasePath });
+    } finally {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
+  });
+}
+
+export function closeTestAcpEventLedgers(): void {
+  const handles = testLedgerHandles.splice(0).reverse();
+  const errors: unknown[] = [];
+  for (const { databasePath, tempDir } of handles) {
+    try {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to clean up ACP test event ledgers");
+  }
+}
+
+afterEach(() => {
+  closeTestAcpEventLedgers();
+});
 
 /** Independent stored-content ground truth, including NUL and replacement characters. */
 export function expectAcpReplayUtf8Accounting(db: DatabaseSync): number {

@@ -1,11 +1,21 @@
 /** Shared mocked ACP connection and Gateway client helpers for translator tests. */
 import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AcpSessionStore } from "@openclaw/acp-core/session";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import type { AcpEventLedger } from "./event-ledger.js";
+import { AcpGatewayAgent } from "./translator.js";
 
 type TestAcpConnection = AgentSideConnection & {
   __requestPermissionMock: ReturnType<typeof vi.fn>;
   __sessionUpdateMock: ReturnType<typeof vi.fn>;
+};
+
+type TestAcpGatewayAgentOptions = AcpServerOptions & {
+  eventLedger?: AcpEventLedger;
+  sessionStore?: AcpSessionStore;
 };
 
 /** Creates a mocked ACP connection with exposed permission and update spies. */
@@ -32,4 +42,16 @@ export function createAcpGateway(
   return {
     request,
   } as unknown as GatewayClient;
+}
+
+/** Creates an ACP translator with an explicit test-owned SQLite event ledger. */
+export function createAcpGatewayAgent(
+  connection: AgentSideConnection,
+  gateway: GatewayClient,
+  options: TestAcpGatewayAgentOptions = {},
+): AcpGatewayAgent {
+  return new AcpGatewayAgent(connection, gateway, {
+    ...options,
+    eventLedger: options.eventLedger ?? createTestAcpEventLedger(),
+  });
 }
