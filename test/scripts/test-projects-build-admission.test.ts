@@ -213,10 +213,16 @@ syncBuiltinESMExports();\n`,
       "runtime",
     ],
     [
+      "Codex delivery QA runtime",
+      "scripts/run-vitest.mts",
+      ["run", "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"],
+      "private-qa",
+    ],
+    [
       "Gateway core",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"],
-      "private-qa",
+      "runtime",
     ],
     [
       "Gateway selective exclusion",
@@ -228,7 +234,7 @@ syncBuiltinESMExports();\n`,
         "--exclude",
         "gateway-concurrent-streams.test.ts",
       ],
-      "private-qa",
+      "runtime",
     ],
     [
       "Gateway server selective exclusion",
@@ -246,7 +252,7 @@ syncBuiltinESMExports();\n`,
       "Gateway umbrella",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.gateway.config.ts"],
-      "private-qa",
+      "runtime",
     ],
     [
       "Gateway umbrella with core consumers excluded",
@@ -258,7 +264,7 @@ syncBuiltinESMExports();\n`,
       "agentic aggregate",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.full-agentic.config.ts"],
-      "private-qa",
+      "runtime",
     ],
     [
       "Gateway active memory",
@@ -635,6 +641,7 @@ describe("test-projects build admission", () => {
   const toolingConfig = "test/vitest/vitest.tooling.config.ts";
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
   const runtimeTooling = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+  const privateQaTooling = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
 
   it.each([
     {
@@ -647,6 +654,12 @@ describe("test-projects build admission", () => {
       name: "borrowed runtime tooling",
       args: [toolingConfig],
       include: [runtimeTooling],
+      build: true,
+    },
+    {
+      name: "borrowed private-QA tooling",
+      args: [toolingConfig],
+      include: [privateQaTooling],
       build: true,
     },
     { name: "borrowed empty selection", args: [toolingConfig], include: [], build: false },

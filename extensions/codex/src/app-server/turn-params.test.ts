@@ -114,6 +114,7 @@ describe("buildTurnStartParams source-delivery context", () => {
       expect(values[0]).toContain("sending a message doesn’t end your task");
       expect(values[1]).toContain("Use `message(action=send)`");
       expect(values[1]).toContain("For progress, set `final=false`");
+      expect(values[1]).toContain("Set `final=true`, or omit it,");
       expect(values[1]).toContain("current source is default target");
       expect(values[2]).toBe(values[0]);
       for (const turn of turns) {

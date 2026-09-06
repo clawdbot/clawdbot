@@ -9,16 +9,13 @@ import {
   startQaBusServer,
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
-} from "../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/api.js";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mts";
-import {
-  runQaGatewayFixture,
-  stopQaGatewayFixture,
-} from "../../test/helpers/qa-gateway-cleanup.js";
+} from "../../../../scripts/lib/local-build-metadata.mts";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 // The provider is scripted; the Gateway, pinned Codex app-server, dynamic message
 // execution and channel transport are real. This proves wire stability, not model compliance.

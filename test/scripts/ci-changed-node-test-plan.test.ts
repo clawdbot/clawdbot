@@ -877,10 +877,11 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
-    "src/gateway/server-sidecar-retention.test.ts",
-    "src/infra/update-candidate-canary.integration.test.ts",
-    "src/cli/update-cli/update-command-migrated.test.ts",
-  ])("prepares runtime artifacts for changed fixture %s", (target) => {
+    { target: "src/gateway/server-sidecar-retention.test.ts", mode: "runtime" },
+    { target: "src/infra/update-candidate-canary.integration.test.ts", mode: "runtime" },
+    { target: "src/cli/update-cli/update-command-migrated.test.ts", mode: "runtime" },
+    { target: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts", mode: "private-qa" },
+  ])("prepares runtime artifacts for changed fixture $target", ({ target, mode }) => {
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     const owners = shards?.filter((shard) => shard.targets?.includes(target));
@@ -888,7 +889,7 @@ describe("CI changed Node test plan", () => {
     expect(owners?.[0]).toMatchObject({
       configs: [],
       targets: [target],
-      pretestBuildMode: "runtime",
+      pretestBuildMode: mode,
     });
   });
 

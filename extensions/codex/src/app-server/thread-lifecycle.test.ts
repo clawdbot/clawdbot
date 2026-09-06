@@ -732,7 +732,7 @@ describe("Codex delegation capability", () => {
           enabled: false,
         },
       });
-      expect(request.developerInstructions).toContain("`message(action=send)`");
+      expect(request.developerInstructions).not.toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
     }
@@ -1532,25 +1532,6 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
-  });
-
-  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const instructions = buildDeveloperInstructions(params, {
-      dynamicTools: [
-        {
-          type: "function",
-          name: "message",
-          description: "Send a message",
-          inputSchema: { type: "object" },
-        },
-      ],
-    });
-
-    expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
