@@ -5,7 +5,6 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
@@ -14,6 +13,7 @@ import {
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { invalidateAllCliSessions } from "../../config/sessions/cli-session-binding.js";
 import {
   applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
@@ -436,7 +436,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   entryToUpdate.compactionCount =
                     Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
                   if (result.compactionKind === "context-engine") {
-                    clearAllCliSessions(entryToUpdate);
+                    invalidateAllCliSessions(entryToUpdate);
                   }
                   Object.assign(entryToUpdate, COMPACTION_RUN_USAGE_CLEAR_PATCH);
                   delete entryToUpdate.contextBudgetStatus;

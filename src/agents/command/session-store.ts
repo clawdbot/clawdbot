@@ -9,6 +9,7 @@ import {
   type CliSessionBinding,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { invalidateAllCliSessions } from "../../config/sessions/cli-session-binding.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -16,7 +17,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
+import { setCliSessionBinding } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
@@ -375,7 +376,7 @@ export async function recordCliCompactionInStore(params: {
   const next = { ...entry };
   // A shared-history rewrite invalidates every binding; native compaction preserves its session.
   if (compactionKind === "context-engine") {
-    clearAllCliSessions(next);
+    invalidateAllCliSessions(next);
   }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();

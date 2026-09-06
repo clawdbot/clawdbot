@@ -34,7 +34,7 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
     params.localMessages.length === 0 ||
     provider === CLAUDE_CLI_PROVIDER ||
     provider === ANTHROPIC_PROVIDER;
-  return binding?.sessionId && eligible ? binding : undefined;
+  return binding?.sessionId && eligible ? { ...binding, sessionId: binding.sessionId } : undefined;
 }
 
 /** Resolves chat history plus whether a bound external transcript was actually incorporated. */

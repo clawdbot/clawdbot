@@ -128,7 +128,10 @@ export type SessionDiffBaseline = {
 };
 
 export type CliSessionBinding = {
-  sessionId: string;
+  /** Absent after invalidation; authentication metadata still guards history reseeding. */
+  sessionId?: string;
+  /** A legacy binding was cleared without a recorded authentication identity. */
+  historyAuthUnknown?: true;
   /** Last successful assistant boundary accepted by the backend's resume contract. */
   resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */

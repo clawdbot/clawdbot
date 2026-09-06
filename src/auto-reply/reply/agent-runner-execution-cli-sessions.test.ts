@@ -577,7 +577,9 @@ describe("executeAgentTurn: CLI session routing", () => {
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         const resultLocal = await runLocal();
-        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
+          historyAuthUnknown: true,
+        });
         cleanupObservedBeforePlacementRelease = true;
         return resultLocal;
       },
@@ -610,7 +612,9 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
+      historyAuthUnknown: true,
+    });
   });
 
   it("keeps room-event CLI bindings when synthetic hooks return no CLI binding", async () => {
@@ -706,7 +710,9 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
+      historyAuthUnknown: true,
+    });
   });
 
   it("clears a fork-marked Claude CLI binding when the channel turn fails", async () => {
@@ -751,7 +757,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
 
     expect(result.kind).toBe("final");
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionEntry.claudeCliSessionId).toBeUndefined();
   });
@@ -865,7 +871,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       const result = await runPromise;
 
       expect(result.kind).toBe("final");
-      expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
       expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(sessionEntry.claudeCliSessionId).toBeUndefined();
     } finally {
@@ -919,7 +925,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
       cliSessionId: "stale-cli-session",
     });
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual({ historyAuthUnknown: true });
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionEntry.claudeCliSessionId).toBeUndefined();
   }, 15_000);

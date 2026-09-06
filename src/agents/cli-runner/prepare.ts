@@ -8,6 +8,7 @@ import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-aut
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -462,6 +463,18 @@ function buildCliAuthProfileResolutionError(params: {
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
+  inputParams: RunCliAgentParams,
+): Promise<PreparedCliRunContext> {
+  // Fallbacks may already have admitted this user turn; recover only prior history.
+  return runWithSessionTranscriptReadFence(
+    inputParams.sessionManager
+      ? undefined
+      : inputParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    () => prepareCliRunContextWithinReadFence(inputParams),
+  );
+}
+
+async function prepareCliRunContextWithinReadFence(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
@@ -1738,7 +1751,7 @@ export async function prepareCliRunContext(
     // Native controls target the already-owned transcript without rebuilding its turn-time MCP
     // topology. Re-validating that topology here would discard the session being compacted.
     const controlOperationCliSessionId = isControlOperation
-      ? params.cliSessionBinding?.sessionId.trim() || params.cliSessionId?.trim()
+      ? params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim()
       : undefined;
     const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
       ? { mode: "none" }
@@ -1982,7 +1995,11 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // No native binding is a fresh CLI session, not an empty OpenClaw conversation.
+    // Invalidated bindings retain auth metadata so account changes cannot take this default.
+    const rawTranscriptReseedReason = reusableCliSessionId
+      ? "session-expired"
+      : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.

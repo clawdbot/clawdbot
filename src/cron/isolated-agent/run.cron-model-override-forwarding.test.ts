@@ -399,7 +399,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     );
 
     expect(result.status).toBe("ok");
-    expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual({
+      historyAuthUnknown: true,
+    });
     expect(cronSession.sessionEntry.cliSessionBindings?.["codex-cli"]).toEqual({
       sessionId: "codex-session",
     });
@@ -535,7 +537,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         : accepted
           ? cliSessionBinding
           : clear
-            ? undefined
+            ? { historyAuthUnknown: true }
             : { sessionId: "previous-cli-session" },
     );
   });

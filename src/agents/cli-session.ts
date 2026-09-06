@@ -7,11 +7,15 @@ import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
-import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import {
+  invalidateCliSession as clearCliSession,
+  normalizeCliSessionReseedReceipt,
+} from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
 import { isFailoverError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 export {
+  invalidateCliSession as clearCliSession,
   clearAllCliSessions,
   getCliSessionBinding,
 } from "../config/sessions/cli-session-binding.js";
@@ -45,7 +49,7 @@ export function applyCliSessionBindingResult(
 ): boolean {
   if (meta?.clearCliSessionBinding === true) {
     clearCliSession(entry, provider);
-  } else if (meta?.cliSessionBinding?.sessionId.trim()) {
+  } else if (meta?.cliSessionBinding?.sessionId?.trim()) {
     setCliSessionBinding(entry, provider, meta.cliSessionBinding);
   } else {
     return false;
@@ -74,7 +78,7 @@ export function setCliSessionBinding(
   binding: CliSessionBinding,
 ): void {
   const normalized = normalizeProviderId(provider);
-  const trimmed = binding.sessionId.trim();
+  const trimmed = binding.sessionId?.trim();
   if (!trimmed) {
     return;
   }
@@ -129,24 +133,6 @@ export function setCliSessionBinding(
   }
 }
 
-/** Remove the stored CLI session binding for one provider. */
-export function clearCliSession(entry: SessionEntry, provider: string): void {
-  const normalized = normalizeProviderId(provider);
-  if (entry.cliSessionBindings?.[normalized] !== undefined) {
-    const next = { ...entry.cliSessionBindings };
-    delete next[normalized];
-    entry.cliSessionBindings = Object.keys(next).length > 0 ? next : undefined;
-  }
-  if (entry.cliSessionIds?.[normalized] !== undefined) {
-    const next = { ...entry.cliSessionIds };
-    delete next[normalized];
-    entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = undefined;
-  }
-}
-
 /** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
 export function shouldClearFailedCliSessionBinding(params: {
   error: unknown;
@@ -172,7 +158,13 @@ export function resolveCliSessionClearReason(error: unknown): string {
   return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
-type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
+type CliSessionInvalidatedReason =
+  | "auth-unknown"
+  | "auth-profile"
+  | "auth-epoch"
+  | "message-policy"
+  | "cwd"
+  | "mcp";
 
 type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
 
@@ -201,10 +193,16 @@ export function resolveCliSessionReuse(params: {
 }): CliSessionReuseResult {
   const binding = params.binding;
   const sessionId = normalizeOptionalString(binding?.sessionId);
-  if (!sessionId) {
+  if (!binding) {
     return { mode: "none" };
   }
-  if (binding?.forceReuse === true) {
+  if (
+    binding.historyAuthUnknown ||
+    (!sessionId && binding.authEpochVersion !== params.authEpochVersion)
+  ) {
+    return { mode: "invalidate", invalidatedReason: "auth-unknown" };
+  }
+  if (sessionId && binding.forceReuse === true) {
     return { mode: "reuse", sessionId };
   }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
@@ -232,6 +230,9 @@ export function resolveCliSessionReuse(params: {
     storedAuthEpoch !== currentAuthEpoch
   ) {
     return { mode: "invalidate", invalidatedReason: "auth-epoch" };
+  }
+  if (!sessionId) {
+    return { mode: "none" };
   }
   const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
   if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {

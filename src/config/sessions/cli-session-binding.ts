@@ -106,7 +106,64 @@ export function getCliSessionBinding(
       return { sessionId: legacy };
     }
   }
+  if (
+    fromBindings &&
+    (fromBindings.historyAuthUnknown ||
+      fromBindings.authProfileId ||
+      fromBindings.authEpoch ||
+      fromBindings.authEpochVersion !== undefined)
+  ) {
+    return {
+      authProfileId: normalizeOptionalString(fromBindings.authProfileId),
+      authEpoch: normalizeOptionalString(fromBindings.authEpoch),
+      authEpochVersion: fromBindings.authEpochVersion,
+      ...(fromBindings.historyAuthUnknown ? { historyAuthUnknown: true } : {}),
+    };
+  }
   return undefined;
+}
+
+/** Remove native continuity while retaining the identity required to reseed the same history. */
+export function invalidateCliSession(entry: CliSessionBindingEntry, provider: string): void {
+  const normalized = normalizeProviderId(provider);
+  const binding = getCliSessionBinding(entry, normalized);
+  if (binding) {
+    const hasIdentity = Boolean(
+      binding.authProfileId ||
+      binding.authEpoch ||
+      (typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)),
+    );
+    entry.cliSessionBindings = {
+      ...entry.cliSessionBindings,
+      [normalized]: hasIdentity
+        ? {
+            authProfileId: binding.authProfileId,
+            authEpoch: binding.authEpoch,
+            authEpochVersion: binding.authEpochVersion,
+          }
+        : { historyAuthUnknown: true },
+    };
+  }
+  if (entry.cliSessionIds?.[normalized] !== undefined) {
+    const next = { ...entry.cliSessionIds };
+    delete next[normalized];
+    entry.cliSessionIds = Object.keys(next).length ? next : undefined;
+  }
+  if (normalized === CLAUDE_CLI_BACKEND_ID) {
+    entry.claudeCliSessionId = undefined;
+  }
+}
+
+/** Shared-history compaction invalidates handles, not the history's authentication boundary. */
+export function invalidateAllCliSessions(entry: CliSessionBindingEntry): void {
+  const providers = new Set([
+    ...Object.keys(entry.cliSessionBindings ?? {}),
+    ...Object.keys(entry.cliSessionIds ?? {}),
+    ...(entry.claudeCliSessionId ? [CLAUDE_CLI_BACKEND_ID] : []),
+  ]);
+  for (const provider of providers) {
+    invalidateCliSession(entry, provider);
+  }
 }
 
 export function clearAllCliSessions(

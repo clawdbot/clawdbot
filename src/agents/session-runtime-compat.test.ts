@@ -123,6 +123,17 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
+  it("does not route manual compaction to a cleared native session", () => {
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        entry: {
+          cliSessionBindings: { "claude-cli": { authEpoch: "retained", authEpochVersion: 1 } },
+        },
+      }),
+    ).toEqual({});
+  });
+
   it("uses setup metadata when the runtime registry is scoped elsewhere", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],

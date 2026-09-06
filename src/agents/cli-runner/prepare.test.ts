@@ -41,6 +41,7 @@ import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -5045,53 +5046,118 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
-    const recoveredAt = "2020-01-02T03:04:05.000Z";
+  it("does not replay the already-admitted current user turn during fresh CLI recovery", async () => {
     fixture.appendTranscript({
-      id: "msg-1",
+      id: "prior",
       parentId: null,
-      timestamp: recoveredAt,
-      message: {
-        role: "user",
-        content: "prior claude-cli ask",
-        timestamp: 1,
+      timestamp: "2020-01-01T00:00:00.000Z",
+      message: { role: "user", content: "prior task", timestamp: 1 },
+    });
+    const { sessionTarget } = fixture.session;
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "latest ask", idempotencyKey: "recovery-current-turn" },
+      target: {
+        ...sessionTarget,
+        sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
       },
     });
-    setCliBackendForPrepareTest({
-      reseedFromRawTranscriptWhenUncompacted: true,
-    });
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => false);
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-    });
-
+    await recorder.persistApproved();
+    expect(recorder.getAdmissionReceipt()).toBeDefined();
+    setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
     const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
       provider: "claude-cli",
       model: "opus",
-      cliSessionBinding: { sessionId: "stale-claude-sid" },
-      cliSessionId: "stale-claude-sid",
+      userTurnTranscriptRecorder: recorder,
     });
-
-    // Candidate is invalidated (no native --resume) yet reseed still fires:
-    // prepare hands the prior OpenClaw conversation forward as history.
-    expect(context.reusableCliSession).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "missing-transcript",
-    });
-    expect(context.openClawHistoryPrompt).toContain(`[${recoveredAt}] User: prior claude-cli ask`);
-    expect(context.openClawHistoryPrompt).not.toContain(
-      "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
-    );
-    expect(context.openClawHistoryPrompt).toContain(
-      "Recovered history may be stale; verify current and time-sensitive facts before acting.",
-    );
-    expect(context.openClawHistoryPrompt).toContain(
-      "<next_user_message>\nlatest ask\n</next_user_message>",
-    );
+    expect(context.openClawHistoryPrompt).toContain("User: prior task");
+    expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
   });
+
+  it.each([true, false])(
+    "redelivers prior conversation to a fresh CLI session (previous binding: %s)",
+    async (hasBinding) => {
+      const recoveredAt = "2020-01-02T03:04:05.000Z";
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: recoveredAt,
+        message: {
+          role: "user",
+          content: "prior claude-cli ask",
+          timestamp: 1,
+        },
+      });
+      fixture.appendTranscript({
+        id: "result-1",
+        parentId: "msg-1",
+        timestamp: "2020-01-02T03:04:06.000Z",
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          isError: false,
+          content: [{ type: "text", text: "Archive created at /tmp/example-backup.tar" }],
+          timestamp: 2,
+        },
+      });
+      fixture.appendTranscript({
+        id: "result-2",
+        parentId: "result-1",
+        timestamp: "2020-01-02T03:04:07.000Z",
+        message: {
+          role: "toolResult",
+          toolCallId: "call-2",
+          toolName: "exec",
+          isError: true,
+          content: [{ type: "text", text: "Upload failed: destination unavailable" }],
+          timestamp: 3,
+        },
+      });
+      setCliBackendForPrepareTest({
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await fixture.prepare({
+        sessionKey: "agent:main:telegram:direct:peer",
+        provider: "claude-cli",
+        model: "opus",
+        cliSessionBinding: hasBinding ? { sessionId: "stale-claude-sid" } : undefined,
+        cliSessionId: hasBinding ? "stale-claude-sid" : undefined,
+      });
+
+      // Candidate is invalidated (no native --resume) yet reseed still fires:
+      // prepare hands the prior OpenClaw conversation forward as history.
+      expect(context.reusableCliSession).toEqual(
+        hasBinding
+          ? { mode: "invalidate", invalidatedReason: "missing-transcript" }
+          : { mode: "none" },
+      );
+      expect(context.openClawHistoryPrompt).toContain(
+        `[${recoveredAt}] User: prior claude-cli ask`,
+      );
+      expect(context.openClawHistoryPrompt).toContain(
+        "Tool result (exec): Archive created at /tmp/example-backup.tar",
+      );
+      expect(context.openClawHistoryPrompt).toContain(
+        "Tool result (exec) [error]: Upload failed: destination unavailable",
+      );
+      expect(context.openClawHistoryPrompt).not.toContain(
+        "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
+      );
+      expect(context.openClawHistoryPrompt).toContain(
+        "Recovered history may be stale; verify current and time-sensitive facts before acting.",
+      );
+      expect(context.openClawHistoryPrompt).toContain(
+        "<next_user_message>\nlatest ask\n</next_user_message>",
+      );
+    },
+  );
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
     fixture.appendTranscript({

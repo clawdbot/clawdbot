@@ -47,7 +47,7 @@ type ResolvedSessionEntryResetFreshness =
 
 export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
-  return Boolean(provider && getCliSessionBinding(entry, provider));
+  return Boolean(provider && getCliSessionBinding(entry, provider)?.sessionId);
 }
 
 /** Resolves one session entry's reset freshness using the runtime lifecycle rules. */

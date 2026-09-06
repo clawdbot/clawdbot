@@ -1,4 +1,4 @@
-import { clearAllCliSessions } from "./cli-session-binding.js";
+import { invalidateAllCliSessions } from "./cli-session-binding.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -111,7 +111,10 @@ export function projectCompactionAccountingPatch(
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (params.compactionKind === "context-engine") {
-    clearAllCliSessions(patch);
+    patch.cliSessionBindings = current.cliSessionBindings;
+    patch.cliSessionIds = current.cliSessionIds;
+    patch.claudeCliSessionId = current.claudeCliSessionId;
+    invalidateAllCliSessions(patch);
   }
   if (tokensAfter !== undefined) {
     Object.assign(patch, {

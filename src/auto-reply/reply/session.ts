@@ -188,7 +188,7 @@ function resolveStaleSessionEndReason(params: {
 
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
-  return Boolean(provider && getCliSessionBinding(entry, provider));
+  return Boolean(provider && getCliSessionBinding(entry, provider)?.sessionId);
 }
 
 export type SessionInitResult = {

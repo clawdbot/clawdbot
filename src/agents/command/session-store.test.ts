@@ -849,7 +849,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        authEpoch: "old-epoch",
+      });
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session",
       });
@@ -858,7 +860,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
       const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        authEpoch: "old-epoch",
+      });
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
     });
@@ -3005,8 +3009,12 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(42);
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
+        historyAuthUnknown: true,
+      });
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        historyAuthUnknown: true,
+      });
       expect(sessionStore[sessionKey]?.cliSessionIds).toBeUndefined();
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
       expect(persisted?.sessionId).toBe(sessionId);
@@ -3014,7 +3022,7 @@ describe("recordCliCompactionInStore", () => {
       expect(persisted?.model).toBe("gpt-5.5");
       expect(persisted?.compactionCount).toBe(1);
       expect(persisted?.totalTokens).toBe(42);
-      expect(persisted?.cliSessionBindings?.codex).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.codex).toEqual({ historyAuthUnknown: true });
       expect(persisted?.cliSessionIds?.codex).toBeUndefined();
     });
   });
@@ -3279,9 +3287,9 @@ describe("CLI binding settlement", () => {
         controller.abort(new Error("run aborted"));
         if (operation === "aborted-clear") {
           await settlement;
-          expect(
-            loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings,
-          ).toBeUndefined();
+          expect(loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings).toEqual({
+            "claude-cli": { historyAuthUnknown: true },
+          });
         } else {
           expect(await settlement).toMatchObject({
             meta: {
@@ -3553,7 +3561,7 @@ describe("clearCliSessionInStore", () => {
         storePath,
       });
 
-      expect(cleared?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionBindings?.["claude-cli"]).toEqual({ authEpoch: "epoch-1" });
       expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
@@ -3563,7 +3571,7 @@ describe("clearCliSessionInStore", () => {
       expect(sessionStore[sessionKey]).toEqual(cleared);
 
       const persisted = loadPersistedSessionEntry(storePath, sessionKey);
-      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({ authEpoch: "epoch-1" });
       expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
@@ -3636,7 +3644,7 @@ describe("clearCliSessionInStore", () => {
       expect(cleared?.sessionId).toBe("openclaw-session-1");
       expect(cleared?.modelProvider).toBe("anthropic");
       expect(cleared?.model).toBe("claude-opus-4-6");
-      expect(cleared?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionBindings?.["claude-cli"]).toEqual({ authEpoch: "epoch-1" });
       expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
@@ -3645,7 +3653,7 @@ describe("clearCliSessionInStore", () => {
       expect(persisted?.sessionId).toBe("openclaw-session-1");
       expect(persisted?.modelProvider).toBe("anthropic");
       expect(persisted?.model).toBe("claude-opus-4-6");
-      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({ authEpoch: "epoch-1" });
       expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
