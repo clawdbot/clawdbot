@@ -438,11 +438,20 @@ describe("OpenCode session catalog", () => {
         );
         expect(hosts.at(-1)?.sessions[0]?.threadId).toBe("ses_remote");
       }
+      const hostIds = ["gateway", "node:node-1"];
+      const hosts = await provider!.list({
+        ...options,
+        hostIds,
+        onHost: () => {
+          hostIds.length = 0;
+        },
+      });
+      expect(hosts.map((host) => host.hostId)).toEqual(["gateway", "node:node-1"]);
       expect(discovery === "request" ? requestListNodes : runtimeListNodes).toHaveBeenCalledTimes(
-        3,
+        4,
       );
       expect(discovery === "request" ? runtimeListNodes : requestListNodes).not.toHaveBeenCalled();
-      expect(invoke).toHaveBeenCalledTimes(3);
+      expect(invoke).toHaveBeenCalledTimes(4);
     },
   );
 
