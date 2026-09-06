@@ -216,7 +216,15 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
-      if (searchSyncEnabled && (this.dirty || this.sessionsDirty)) {
+      // No watcher can observe later edits after kernel capacity exhaustion.
+      // Record a fresh generation at the search boundary so detached maintenance
+      // receives the fact instead of starting from a clean transient manager.
+      if (this.memoryWatchCapacityDegraded) {
+        this.dirty = true;
+      }
+      const capacitySyncInFlight =
+        this.memoryWatchCapacityDegraded && this.activeBackgroundSearchSyncs.size > 0;
+      if (searchSyncEnabled && !capacitySyncInFlight && (this.dirty || this.sessionsDirty)) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
             log.warn(`memory sync failed (search): ${String(err)}`);

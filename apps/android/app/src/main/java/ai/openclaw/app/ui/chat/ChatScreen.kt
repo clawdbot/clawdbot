@@ -239,16 +239,16 @@ internal enum class ChatComposerPrimaryAction {
   Send,
 }
 
-/** Drafts keep their Send action while admission waits; active Talk owns its separate voice control. */
+/** New drafts can steer an active run; Talk retains its independent voice controls. */
 internal fun resolveChatComposerPrimaryAction(
   talkActive: Boolean,
   runActive: Boolean,
   hasContent: Boolean,
 ): ChatComposerPrimaryAction =
   when {
+    hasContent && !talkActive -> ChatComposerPrimaryAction.Send
     runActive -> ChatComposerPrimaryAction.Stop
     talkActive -> ChatComposerPrimaryAction.None
-    hasContent -> ChatComposerPrimaryAction.Send
     else -> ChatComposerPrimaryAction.StartTalk
   }
 
@@ -2451,7 +2451,7 @@ private fun ChatComposer(
   val sendEnabled =
     chatComposerSendEnabled(
       voiceNoteState = voiceNoteState,
-      pendingRunCount = pendingRunCount,
+      talkActive = talkActive,
       hasContent = hasContent,
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,

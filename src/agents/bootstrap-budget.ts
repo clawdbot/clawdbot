@@ -137,10 +137,8 @@ export function analyzeBootstrapBudget(params: {
     params.nearLimitRatio < 1
       ? params.nearLimitRatio
       : DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
-  const nonMissing = params.files.filter((file) => !file.missing);
-  const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
-  const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
-  const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
+  let rawChars = 0;
+  let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
     const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
@@ -149,6 +147,9 @@ export function analyzeBootstrapBudget(params: {
     if (file.missing) {
       return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
+    // Missing-file markers consume budget above but do not enter reported file totals.
+    rawChars += file.rawChars;
+    injectedChars += file.injectedChars;
     const perFileOverLimit = file.rawChars > effectiveFileLimit;
     const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
@@ -170,7 +171,7 @@ export function analyzeBootstrapBudget(params: {
     files,
     truncatedFiles,
     nearLimitFiles,
-    totalNearLimit,
+    totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
     hasTruncation: truncatedFiles.length > 0,
     totals: {
       rawChars,

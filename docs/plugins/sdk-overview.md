@@ -294,6 +294,15 @@ advertised node command.
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+#### File-watch capacity errors
+
+`getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`
+returns `EMFILE`, `ENFILE`, or `ENOSPC` for a native watch failure, or `undefined`
+for other errors. It requires `syscall: "watch"` because watcher libraries can
+forward directory-scan errors through the same error event. Use the result in
+the watcher lifecycle owner to stop native retries and select an existing
+refresh path.
+
 #### SQLite write admission
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
