@@ -2771,7 +2771,6 @@ src/gateway/health/collector.ts	3
 src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
-src/gateway/live-chat-projector.ts	1
 src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	5
 src/gateway/mcp-app-operations.ts	3
@@ -2788,8 +2787,8 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	5
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	28
-src/gateway/openresponses-http.ts	4
+src/gateway/openai-http.ts	27
+src/gateway/openresponses-http.ts	3
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
 src/gateway/operator-scopes.ts	1
