@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
@@ -219,14 +220,7 @@ describe("openai completions params", () => {
             api: "openai-completions",
             provider: "vllm",
             model: "qwen3-5-122b-a10b-nvfp4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "aborted",
             timestamp: 2,
           },
