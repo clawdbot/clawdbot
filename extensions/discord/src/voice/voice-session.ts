@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -164,7 +163,10 @@ export class DiscordVoiceSessions {
   }: {
     guildId: string;
     channelId: string;
-  }): Promise<Result<Awaited<ReturnType<Client["fetchChannel"]>>, VoiceOperationResult>> {
+  }): Promise<
+    | { ok: true; value: Awaited<ReturnType<Client["fetchChannel"]>> }
+    | { ok: false; error: VoiceOperationResult }
+  > {
     let channelInfo: Awaited<ReturnType<Client["fetchChannel"]>>;
     try {
       channelInfo = await this.params.client.fetchChannel(channelId);

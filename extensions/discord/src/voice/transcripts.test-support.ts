@@ -1,3 +1,4 @@
+import type { TranscriptStartRequest } from "openclaw/plugin-sdk/transcripts";
 import { afterEach, vi } from "vitest";
 import {
   discordVoiceTranscriptsSourceProvider,
@@ -14,7 +15,7 @@ export function createDiscordVoiceTranscriptFixture() {
   const registeredManagers = new Map<string, DiscordVoiceManager>();
   const startTranscripts = async (
     manager: DiscordVoiceManager,
-    onUtterance = vi.fn(),
+    onUtterance: TranscriptStartRequest["onUtterance"] = vi.fn(),
     sessionId = "notes-1",
     channelId = "1001",
     accountId = "default",
