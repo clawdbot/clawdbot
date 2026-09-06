@@ -479,9 +479,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       probePath,
       [
         'import fs from "node:fs";',
+        'import Module from "node:module";',
         'import path from "node:path";',
         'import { pathToFileURL } from "node:url";',
-        `import { installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
+        `import { installOpenClawInternalCorePackageNativeResolver, installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
         `const root = ${JSON.stringify(root)};`,
         "const writeJson = (targetPath, value) => {",
         "  fs.mkdirSync(path.dirname(targetPath), { recursive: true });",
@@ -503,6 +504,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         'const loaderModulePath = path.join(root, "dist", "plugins", "loader.js");',
         "fs.mkdirSync(path.dirname(loaderModulePath), { recursive: true });",
         'fs.writeFileSync(loaderModulePath, "export default {};\\n", "utf8");',
+        "const originalResolver = Module._resolveFilename;",
+        "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(loaderModulePath).href });",
+        "installOpenClawPluginSdkNativeResolver({ modulePath: loaderModulePath });",
+        "const aliasFreeUnchanged = Module._resolveFilename === originalResolver;",
         'const pluginRoot = path.join(root, "external-plugin");',
         'writeJson(path.join(pluginRoot, "package.json"), { name: "external-plugin", type: "module" });',
         'const entryPath = path.join(pluginRoot, "dist", "runtime-api.js");',
@@ -525,7 +530,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "});",
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
-        "console.log(`${module.eager}:${lazy.lazy}`);",
+        "console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));",
         "",
       ].join("\n"),
       "utf8",
@@ -546,7 +551,14 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
   it("keeps SDK aliases available for native ESM lazy imports", () => {
     expect(nativeEsmLazyImportProbe.stderr).toBe("");
     expect(nativeEsmLazyImportProbe.status).toBe(0);
-    expect(nativeEsmLazyImportProbe.stdout.trim()).toBe("adapter:late-adapter");
+    expect(JSON.parse(nativeEsmLazyImportProbe.stdout)).toMatchObject({
+      eager: "adapter",
+      lazy: "late-adapter",
+    });
+  });
+
+  it("leaves native resolution untouched until aliases are registered", () => {
+    expect(JSON.parse(nativeEsmLazyImportProbe.stdout).aliasFreeUnchanged).toBe(true);
   });
 
   it("does not resolve SDK aliases for parents outside registered plugin roots", () => {
