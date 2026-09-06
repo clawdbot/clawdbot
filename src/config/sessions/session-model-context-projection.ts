@@ -20,7 +20,7 @@ export function projectModelContextEventSql(
     THEN json_remove(${modelEvent}, '$.message.providerReplay') ELSE ${modelEvent} END`;
 }
 
-function pickJsonObject(value: Expression<string>, keys: readonly string[]): RawBuilder<string> {
+function pickJsonObject(value: Expression<unknown>, keys: readonly string[]): RawBuilder<string> {
   // json_each distinguishes absent properties from explicit nulls. Preserve JSON
   // subtypes so booleans and nested navigation facts do not become strings/numbers.
   return /* kysely-allow-raw: narrow JSON member selection, with bound property names. */ sql<string>`(SELECT json_group_object(key, CASE type
@@ -61,7 +61,12 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
 
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(event: Expression<string>): RawBuilder<string> {
-  const entry = pickJsonObject(event, [
+  // Keep intermediate navigation input binary so nested JSON functions do not
+  // repeatedly render and parse opaque message bodies. Durable JSON stays text;
+  // the aggregate builders below still consume text and return the same view.
+  const navigationEvent = /* kysely-allow-raw: query-local JSONB avoids text conversion without changing stored events. */ sql<Uint8Array>`jsonb(${event})`;
+
+  const entry = pickJsonObject(navigationEvent, [
     ...TRANSCRIPT_NAVIGATION_KEYS,
     "timestamp",
     "version",
@@ -78,7 +83,7 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
     "label",
     "name",
   ]);
-  const message = /* kysely-allow-raw: JSON message metadata is selected without content or native replay payloads. */ sql<string>`json_extract(${event}, '$.message')`;
+  const message = /* kysely-allow-raw: JSON message metadata is selected without content or native replay payloads. */ sql<unknown>`jsonb_extract(${navigationEvent}, '$.message')`;
   const messageFacts = pickJsonObject(message, [
     "role",
     "provider",
@@ -100,15 +105,15 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
   const calls = /* kysely-allow-raw: pairing needs call identities, never tool arguments or result bodies. */ sql<string>`(SELECT json_group_array(json_object(
     'type', json_extract(value, '$.type'), 'id', json_extract(value, '$.id'),
     'name', json_extract(value, '$.name')))
-    FROM json_each(${event}, '$.message.content') WHERE type = 'object'
+    FROM json_each(${navigationEvent}, '$.message.content') WHERE type = 'object'
     AND json_extract(value, '$.type') IN ('toolCall', 'toolUse', 'functionCall'))`;
-  const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
-    SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
+  const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${navigationEvent}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
+    SELECT 1 FROM json_each(${navigationEvent}, '$.message.content') WHERE type = 'object'
     AND json_extract(value, '$.type') = 'text' AND json_extract(value, '$.text') = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
+  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${navigationEvent}, '$.type')
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
-      '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
+      '$.providerReplay', json_object('type', json_extract(${navigationEvent}, '$.message.providerReplay.type')),
       '$.details', json_object(${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}, json(CASE WHEN (${synthetic}) THEN 'true' ELSE 'false' END))))
     WHEN 'custom_message' THEN json_set(${entry}, '$.content', json('[]'))
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
