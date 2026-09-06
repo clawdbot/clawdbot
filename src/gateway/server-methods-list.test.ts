@@ -172,6 +172,37 @@ describe("listGatewayMethods", () => {
     }
   });
 
+  it("classifies active pairing and token mutations as control-plane writes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of [
+      "node.pair.approve",
+      "node.pair.remove",
+      "device.pair.approve",
+      "device.pair.remove",
+      "device.token.rotate",
+      "device.token.revoke",
+    ]) {
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.pairing",
+        controlPlaneWrite: true,
+      });
+    }
+    for (const method of [
+      "node.pair.list",
+      "node.pair.reject",
+      "node.rename",
+      "device.pair.list",
+      "device.pair.reject",
+      "device.pair.rename",
+    ]) {
+      expect(
+        descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
+      ).toBeUndefined();
+    }
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("node.runnerInventory.update");
