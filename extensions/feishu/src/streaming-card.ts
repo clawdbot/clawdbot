@@ -28,6 +28,8 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  /** Initial card header retained for non-streaming fallback replacement. */
+  header?: { title: string; template?: string };
 };
 
 type CardKitResponse = { code?: number; msg?: string };
@@ -298,6 +300,14 @@ export class FeishuStreamingSession {
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
+      ...(options?.header
+        ? {
+            header: {
+              title: options.header.title,
+              template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
+            },
+          }
+        : {}),
     };
     this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
@@ -403,6 +413,12 @@ export class FeishuStreamingSession {
       }
       return true;
     } catch (error) {
+      if (isCardStreamClosedError(error)) {
+        this.streamDead = true;
+        this.log?.(
+          `Streaming card stream is dead (cardId=${this.state.cardId}); skipping further streaming patches`,
+        );
+      }
       onError?.(error);
       return false;
     }
@@ -549,9 +565,24 @@ export class FeishuStreamingSession {
     // 300309 "streaming mode is closed"), all streaming API patches fail. Skip them
     // and fall back to the non-streaming im.message.patch API to update the card
     // content so the final text is not lost and logs are not flooded.
-    if (this.streamDead && this.state.messageId) {
+    // When the streaming card's server-side stream is dead (200850 idle timeout →
+    // 300309 "streaming mode is closed"), all streaming API patches fail. Skip them
+    // and fall back to the non-streaming im.message.patch API to update the card
+    // content so the final text is not lost and logs are not flooded.
+    const applyNonStreamingFallback = async (): Promise<void> => {
+      if (!this.state?.messageId) {
+        return;
+      }
       const fallbackContent = JSON.stringify({
         schema: "2.0",
+        ...(this.state.header
+          ? {
+              header: {
+                title: { tag: "plain_text", content: this.state.header.title },
+                template: this.state.header.template ?? "blue",
+              },
+            }
+          : {}),
         body: {
           elements: [
             { tag: "markdown", content: text, element_id: "content" },
@@ -579,6 +610,8 @@ export class FeishuStreamingSession {
         this.state.sentText = text;
         this.state.currentText = text;
         visibleContentSent = Boolean(text.trim());
+        // Clear the prior write error — the fallback recovered the final content.
+        finalWriteError = undefined;
         this.log?.(
           `Closed streaming via non-streaming fallback: cardId=${this.state.cardId}, messageId=${this.state.messageId}`,
         );
@@ -586,6 +619,10 @@ export class FeishuStreamingSession {
         finalWriteError = error;
         this.log?.(`Non-streaming card fallback failed: ${String(error)}`);
       }
+    };
+
+    if (this.streamDead && this.state.messageId) {
+      await applyNonStreamingFallback();
     } else if ((text || finalText !== undefined) && text !== this.state.sentText) {
       // Only send final update if content differs from what's already displayed.
       // An explicit empty final text clears a transient preview before closeout.
@@ -602,6 +639,11 @@ export class FeishuStreamingSession {
       if (sent) {
         this.state.sentText = text;
         visibleContentSent = Boolean(text.trim());
+      }
+      // If the final write first detected stream expiration, retry via the
+      // non-streaming fallback so the final text replaces the stale partial.
+      if (this.streamDead && this.state.messageId && text !== this.state.sentText) {
+        await applyNonStreamingFallback();
       }
     }
 
