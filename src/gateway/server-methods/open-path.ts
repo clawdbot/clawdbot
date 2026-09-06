@@ -1,3 +1,4 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { runExec, spawnCommand } from "../../process/exec.js";
 
@@ -128,11 +129,20 @@ export function formatOpenPathError(error: unknown): string {
   return String(error);
 }
 
-export function isHeadlessOpenPathError(message: string): boolean {
-  return (
-    message.includes("xdg-open") &&
-    (message.includes("no method available") || message.includes("ENOENT"))
-  );
+export function isHeadlessOpenPathError(
+  error: unknown,
+  command: OpenPathCommand,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (
+    platform === "linux" &&
+    command.command === "xdg-open" &&
+    extractErrorCode(error) === "ENOENT"
+  ) {
+    return true;
+  }
+  const message = formatOpenPathError(error);
+  return message.includes("xdg-open") && message.includes("no method available");
 }
 
 export function sanitizePathForLog(targetPath: string): string {

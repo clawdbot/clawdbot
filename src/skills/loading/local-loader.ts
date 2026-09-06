@@ -129,3 +129,31 @@ export function loadSingleSkillDirectory(params: {
     content: raw,
   };
 }
+
+export function readSkillFrontmatterSafe(params: {
+  rootDir: string;
+  filePath: string;
+  maxBytes?: number;
+  rejectHardlinks?: boolean;
+}): Record<string, string> | null {
+  let rootRealPath: string;
+  try {
+    rootRealPath = fs.realpathSync(path.resolve(params.rootDir));
+  } catch {
+    return null;
+  }
+  const raw = readSkillFileSync({
+    rootRealPath,
+    filePath: path.resolve(params.filePath),
+    maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
+  });
+  if (raw === null) {
+    return null;
+  }
+  try {
+    return parseSkillFrontmatter(raw);
+  } catch {
+    return null;
+  }
+}

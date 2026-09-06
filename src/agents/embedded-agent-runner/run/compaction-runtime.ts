@@ -136,6 +136,8 @@ export async function compactEmbeddedRunForRecovery(
       bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
       permissionMode: runParams.permissionMode,
       sessionRoot: runParams.sessionRoot,
+      requireWorkspaceOnly: runParams.requireWorkspaceOnly,
+      requireWritableSandbox: runParams.requireWritableSandbox,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,

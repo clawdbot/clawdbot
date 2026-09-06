@@ -29,6 +29,7 @@ type StaleChunkReloadDeps = {
   buildId?: string;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
+  canReload?: () => boolean;
 };
 
 type MissingStylesheetRecoveryDeps = {
@@ -49,8 +50,7 @@ export function isStaleChunkImportError(error: unknown): boolean {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
 
-export function reloadControlUiDocument(): void {
-  const url = new URL(window.location.href);
+export function reloadControlUiDocument(url = new URL(window.location.href)): void {
   // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
   url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
   window.location.replace(url.href);
@@ -108,7 +108,7 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!canReloadControlUiDocument()) {
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
     return false;
   }
   const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
@@ -132,7 +132,9 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
       attemptsByBuild.delete(attemptedBuildId);
     }
   }
-  if (attemptsByBuild.has(buildId)) {
+  // A replacement connection can join a pending probe; only starting another
+  // probe is throttled, so retiring the first caller cannot strand its successor.
+  if (attemptsByBuild.has(buildId) && (!inFlightDocumentProbe || recovery[1] !== buildId)) {
     return false;
   }
   attemptsByBuild.set(buildId, now);
@@ -154,6 +156,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   const reload = deps.reload ?? reloadControlUiDocument;
   if (
     !canReloadControlUiDocument() ||
+    deps.canReload?.() === false ||
     recovery[1] !== buildId ||
     !persistGuardBuildId(storage, buildId)
   ) {
@@ -202,7 +205,6 @@ export async function retryStaleChunkReloadWhenReachable(
     intervalMs?: number;
     probe?: () => Promise<boolean>;
     wait?: (ms: number) => Promise<void>;
-    canReload?: () => boolean;
   } = {},
 ): Promise<boolean> {
   if (deps.canReload?.() === false || !canReloadControlUiDocument(true)) {

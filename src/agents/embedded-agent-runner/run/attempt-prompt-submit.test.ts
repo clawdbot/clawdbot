@@ -757,9 +757,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
         isError: false,
         timestamp: 3,
       },
-      // Real dispatch pins a non-tool carrier after tool results, so the fresh
-      // batch is not trailing-protected and aggregate recovery can engage.
-      { role: "user", content: "continue", timestamp: 4 },
+      // Consumed results remain eligible when history is projected for the first time.
+      { role: "assistant", content: [{ type: "text", text: "results processed" }], timestamp: 4 },
+      { role: "user", content: "continue", timestamp: 5 },
     ] as AgentMessage[];
     activeSession.agent.streamFn = (() => undefined as never) as StreamFn;
 

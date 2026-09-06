@@ -264,26 +264,32 @@ describe("sessions.files RPC handlers", () => {
     );
   });
 
-  it("returns missing xdg-open launcher failure as a headless environment error", async () => {
-    const warn = vi.fn();
-    hoisted.execOpenPath.mockRejectedValueOnce(
-      new Error("Command failed with ENOENT: xdg-open /tmp\nspawn xdg-open ENOENT"),
-    );
+  it.runIf(process.platform === "linux")(
+    "returns missing xdg-open launcher failure as a headless environment error",
+    async () => {
+      const warn = vi.fn();
+      hoisted.execOpenPath.mockRejectedValueOnce(
+        Object.assign(
+          new Error("Command failed with ENOENT: xdg-open /tmp\nspawn xdg-open ENOENT"),
+          { code: "ENOENT" },
+        ),
+      );
 
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler(
-        "sessions.files.reveal",
-        { key: "agent:main:main" },
-        { logGateway: { warn } },
-      ),
-    );
+      const payload = expectOkPayload(
+        await invokeSessionFilesHandler(
+          "sessions.files.reveal",
+          { key: "agent:main:main" },
+          { logGateway: { warn } },
+        ),
+      );
 
-    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
-    expect(payload.error).toContain("headless environment");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("sessions.files.reveal failed path="),
-    );
-  });
+      expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
+      expect(payload.error).toContain("headless environment");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("sessions.files.reveal failed path="),
+      );
+    },
+  );
 
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
     const nestedCwd = path.join(workspaceRoot, "packages/app");

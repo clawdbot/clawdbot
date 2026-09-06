@@ -28,6 +28,89 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+test.each([
+  { sessionKey: "global", transcript: false },
+  { sessionKey: "unknown", transcript: false },
+  { sessionKey: "global", transcript: true },
+  { sessionKey: "unknown", transcript: true },
+])(
+  "keeps the selected unscoped $sessionKey row's owner (transcript=$transcript)",
+  async ({ sessionKey, transcript }) => {
+    const ownerId = ensureProfileForEmail("aggregate-owner@example.test").id;
+    const cfg: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          main: { default: true, model: { primary: "openai/gpt-5.4" } },
+          research: { model: { primary: "openai/gpt-5.5" } },
+        },
+      },
+    };
+    const storePath = resolveStorePath(undefined, { agentId: "research" });
+    const sessionId = `aggregate-${sessionKey}`;
+    await replaceSessionEntry(
+      { agentId: "research", sessionKey, storePath },
+      {
+        sessionId,
+        updatedAt: 42,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: ownerId },
+      },
+    );
+    await seedLinearSessionTranscript({
+      agentId: "research",
+      sessionKey,
+      sessionId,
+      storePath,
+      contents: ["Research transcript title", "Research latest message"],
+    });
+    const client = identifiedClient(ownerId);
+    const context = requestContext(cfg);
+    const request = {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: transcript,
+      includeLastMessage: transcript,
+    };
+    const result = await listSessions({ client, context, request });
+    expect.soft(result.sessions).toHaveLength(1);
+    expect.soft(result.sessions[0]).toMatchObject({
+      key: sessionKey,
+      sessionId,
+      agentId: "research",
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      ...(transcript
+        ? {
+            derivedTitle: "Research transcript title",
+            lastMessagePreview: "Research latest message",
+          }
+        : {}),
+      visibility: "draft",
+      sharingRole: "owner",
+    });
+    const searched = await listSessions({
+      client,
+      context,
+      request: { ...request, search: "gpt-5.5" },
+    });
+    expect.soft(searched.sessions.map((row) => row.sessionId)).toEqual([sessionId]);
+    if (sessionKey === "global") {
+      const scoped = await listSessions({
+        client,
+        context,
+        request: { ...request, agentId: "research" },
+      });
+      expect(scoped.sessions[0]).toMatchObject({
+        agentId: "research",
+        model: "gpt-5.5",
+        visibility: "draft",
+        sharingRole: "owner",
+      });
+    }
+  },
+);
+
 test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
   const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
   const foreignKey = "agent:main:foreign-role-read";

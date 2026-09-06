@@ -13,7 +13,6 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
@@ -23,7 +22,7 @@ import {
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -78,7 +77,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     const store = sessionPullRequestsForGateway(scope.context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       sessionKey,
       scopedAgentParamsForSession(scope.state, sessionKey).agentId ??
         resolveChatAgentId(scope.state),

@@ -13,6 +13,8 @@ export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
   md.inline.ruler.enableOnly(["image"]);
   const parseImage = expectDefined(md.inline.ruler.getRules("")[0], "Markdown image rule");
   md.configure("commonmark");
+  // The offset pass below owns inline parsing; retain block/reference normalization here.
+  md.core.ruler.disable("inline");
   // Media normalization owns URL spelling and allowlist matching, not the renderer.
   md.normalizeLink = (url) => url;
   md.validateLink = () => true;
@@ -59,11 +61,7 @@ export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
   // Parse the same inline content as the renderer. Reintroducing container
   // markers can change inline HTML/code semantics and hide valid images.
   for (const block of blocks) {
-    if (
-      block.type !== "inline" ||
-      !block.map ||
-      !block.children?.some((token) => token.type === "image")
-    ) {
+    if (block.type !== "inline" || !block.map || !block.content.includes("![")) {
       continue;
     }
     source = block.content;

@@ -106,7 +106,6 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
           model: "",
           store,
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
         },
       },
       agents: {

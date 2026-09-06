@@ -324,7 +324,11 @@ export async function hydrateChatHistory(
       );
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
       const liveToolIds = currentLiveToolCallIds(state);
-      if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
+      if (
+        state.chatRunId &&
+        (hasVisibleStream || liveToolIds.length > 0) &&
+        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+      ) {
         reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }
       const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);

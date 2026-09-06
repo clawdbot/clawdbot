@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -91,12 +92,13 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     state = "closed";
-    await send({ type: "closing", reason });
     if (hardKill) {
-      // The live anchor is the sole authority: PID/PGID never leave this process as a kill target.
+      // Killing the observer cannot confirm descendant death. Missing closure
+      // leaves the host's existing ownership receipt uncertain.
       process.kill(0, "SIGKILL");
       return;
     }
+    await send({ type: "closing", reason });
     control?.end(() => process.exit(0));
   };
 
@@ -124,6 +126,7 @@ export function runServiceChildGroupAnchor(): void {
     }
     state = "closing";
     forceCleanup = signal === "SIGKILL";
+    const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (!forceCleanup) {
       // The anchor catches its own signal while every command-group member receives it.
@@ -141,7 +144,7 @@ export function runServiceChildGroupAnchor(): void {
     if (state !== "closing" || !start) {
       return;
     }
-    if (lineageClosed && rootExit && !forceCleanup) {
+    if (rootExit && !forceCleanup) {
       // Output can outlive lineage and the root. It may preserve the authentic root
       // result only within the existing TERM grace, and KILL must wake this wait.
       await Promise.race([rootSettledDone.promise, termGraceDone, forceCleanupRequested.promise]);
@@ -149,8 +152,27 @@ export function runServiceChildGroupAnchor(): void {
         return;
       }
     }
-    // Lineage EOF records descriptor closure, not group extinction. Once cleanup owns the
-    // group, only the live in-group anchor may finish it after the TERM grace boundary.
+    for (;;) {
+      // Process and control events can change these facts during the awaited observation.
+      if (forceCleanup || !rootExit || !stdoutDrained || !stderrDrained || !lineageClosed) {
+        break;
+      }
+      const remainingMs = cleanupDeadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      // This census only schedules retirement or escalation; it cannot certify closure.
+      // The outside-group host must observe kernel group disappearance after we exit.
+      if (hasLiveOwnedProcessGroupMembers(remainingMs) === false) {
+        await closeAuthority(reason, false);
+        return;
+      }
+      const nextObservationMs = Math.min(100, cleanupDeadline - Date.now());
+      if (nextObservationMs <= 0) {
+        break;
+      }
+      await Promise.race([delay(nextObservationMs), forceCleanupRequested.promise]);
+    }
     await closeAuthority(reason, true);
   };
 
@@ -268,7 +290,7 @@ export function runServiceChildGroupAnchor(): void {
       await rootResultDelivery;
       rootSettledDone.resolve();
       if (lineageClosed && state === "active") {
-        await closeAuthority("lineage-closed", false);
+        await requestCleanup("lineage-lost");
       }
     };
     // Output EOF is independent of lineage EOF. Pipeline closes each forwarded stream

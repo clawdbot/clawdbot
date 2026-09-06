@@ -61,7 +61,6 @@ describe("browser tab discovery poll abort", () => {
       profile: runtime.profile,
       runtime,
       getCdpControlPolicy: () => undefined,
-      ensureBrowserAvailable: async () => {},
       listTabs,
       openTab: async () => tabWithoutWsUrl,
     });
@@ -98,7 +97,6 @@ describe("browser tab discovery poll abort", () => {
       profile: runtime.profile,
       runtime,
       getCdpControlPolicy: () => undefined,
-      ensureBrowserAvailable: async () => {},
       listTabs,
       openTab: async () => tab,
     });

@@ -3,19 +3,31 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { MediaUnderstandingProvider } from "./types.js";
+
+// Defaults follow the selected immutable manifest generation, including retained
+// owners. Configured model overrides remain outside this projection.
+const registriesByManifest = new WeakMap<
+  PluginManifestRegistry,
+  Map<string, MediaUnderstandingProvider>
+>();
 
 /** Builds a media provider registry from trusted manifest metadata without loading plugin code. */
 export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
   workspaceDir?: string,
 ): Map<string, MediaUnderstandingProvider> {
-  const registry = new Map<string, MediaUnderstandingProvider>();
   const snapshot = loadManifestMetadataSnapshot({
     config: cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
   });
+  const cached = registriesByManifest.get(snapshot.manifestRegistry);
+  if (cached) {
+    return cached;
+  }
+  const registry = new Map<string, MediaUnderstandingProvider>();
   for (const plugin of snapshot.plugins) {
     // Metadata only counts when the manifest also declares the provider contract.
     const declaredProviders = new Set(
@@ -42,5 +54,6 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
       });
     }
   }
+  registriesByManifest.set(snapshot.manifestRegistry, registry);
   return registry;
 }

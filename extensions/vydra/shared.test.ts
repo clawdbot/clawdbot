@@ -214,6 +214,66 @@ describe("downloadVydraAsset", () => {
     expect(result).toBeInstanceOf(Error);
     expect(result).toMatchObject({ message: "broken success body" });
   });
+
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as a downloaded video", async ({ contentType, body }) => {
+    await expect(
+      downloadVydraAsset({
+        url: "https://cdn.vydra.example/generated/test.mp4",
+        kind: "video",
+        timeoutMs: 250,
+        fetchFn: async () =>
+          new Response(body, { status: 200, headers: { "content-type": contentType } }),
+        maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+      }),
+    ).rejects.toThrow("Vydra video download: malformed video response");
+  });
+
+  it("keeps valid downloads alive beyond the binary reader's default idle timeout", async () => {
+    vi.useFakeTimers();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          setTimeout(() => controller.close(), 31_000);
+        },
+      }),
+      { headers: { "content-type": "video/mp4" } },
+    );
+    const result = downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.mp4",
+      kind: "video",
+      timeoutMs: 45_000,
+      fetchFn: async () => response,
+      maxBytes: 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+    }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await result).toMatchObject({ buffer: Buffer.from([1, 2, 3]) });
+  });
+
+  it("labels malformed download rejections with the requested media kind", async () => {
+    await expect(
+      downloadVydraAsset({
+        url: "https://cdn.vydra.example/generated/test.png",
+        kind: "image",
+        timeoutMs: 250,
+        fetchFn: async () =>
+          new Response('{"error":"denied"}', {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+      }),
+    ).rejects.toThrow("Vydra image download: malformed image response");
+  });
 });
 
 it("preserves URL priority, traversal bounds and independent result arrays", () => {

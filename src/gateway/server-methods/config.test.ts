@@ -384,27 +384,30 @@ describe("config.openFile", () => {
     });
   });
 
-  it("returns actionable headless environment error when xdg-open is missing", async () => {
-    await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+  it.runIf(process.platform === "linux")(
+    "returns actionable headless environment error when xdg-open is missing",
+    async () => {
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
+        mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
 
-      const { respond, logGateway } = await invokeConfigOpenFile();
+        const { respond, logGateway } = await invokeConfigOpenFile();
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          ok: false,
-          path: "/tmp/config.json",
-          error:
-            "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
-        },
-        undefined,
-      );
-      expect(logGateway.warn).toHaveBeenCalledWith(
-        "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
-      );
-    });
-  });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            ok: false,
+            path: "/tmp/config.json",
+            error:
+              "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+          },
+          undefined,
+        );
+        expect(logGateway.warn).toHaveBeenCalledWith(
+          "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+        );
+      });
+    },
+  );
 
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;

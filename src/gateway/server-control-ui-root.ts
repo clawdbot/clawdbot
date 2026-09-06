@@ -3,15 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ensureControlUiAssetsBuilt,
+  inspectControlUiRootAssets,
   isPackageProvenControlUiRootSync,
-  isControlUiStartupAssetsReady,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveRuntimeServiceBuildId } from "../version.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
-import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "./control-ui-root-assets.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
 type GatewayControlUiRootParams = {
@@ -36,46 +36,39 @@ function resolveAutoRoot(): string | null {
   });
 }
 
-function createResolvedRootState(root: string, configured = false): ControlUiRootState {
-  const bundled =
-    !configured &&
-    isPackageProvenControlUiRootSync(root, {
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    });
-  return bundled
-    ? {
-        kind: "bundled",
-        path: root,
-        realPath: fs.realpathSync(root),
-        // Snapshot build metadata at the root lifecycle boundary, never per request.
-        publicAssetBuildId: new RegExp(
-          `${CONTROL_UI_BUILD_ID_ATTRIBUTE}="([a-zA-Z0-9._-]{1,161})"`,
-        ).exec(fs.readFileSync(path.join(root, "index.html"), "utf8"))?.[1],
-        retainedAssets: createControlUiAssetRetention(root),
-      }
-    : {
-        kind: "resolved",
-        path: root,
-        realPath: fs.realpathSync(root),
-      };
-}
-
-function prepareResolvedRootState(params: {
+function prepareResolvedRootState({
+  root,
+  configured = false,
+  publicAssetBuildId,
+  log,
+}: {
   root: string;
   configured?: boolean;
+  publicAssetBuildId?: string;
   log: GatewayControlUiRootParams["log"];
 }): ControlUiRootState {
   try {
-    return createResolvedRootState(params.root, params.configured);
+    const bundled =
+      !configured &&
+      isPackageProvenControlUiRootSync(root, {
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      });
+    const resolvedRoot = { path: root, realPath: fs.realpathSync(root) };
+    return bundled
+      ? {
+          kind: "bundled",
+          ...resolvedRoot,
+          publicAssetBuildId,
+          retainedAssets: createControlUiAssetRetention(root),
+        }
+      : { kind: "resolved", ...resolvedRoot };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const message = `Control UI assets are unavailable at ${params.root}: ${detail}`;
-    params.log.warn(`gateway: ${message}`);
-    return params.configured
-      ? { kind: "invalid", path: path.resolve(params.root) }
-      : { kind: "failed" };
+    const message = `Control UI assets are unavailable at ${root}: ${detail}`;
+    log.warn(`gateway: ${message}`);
+    return configured ? { kind: "invalid", path: path.resolve(root) } : { kind: "failed" };
   }
 }
 
@@ -83,6 +76,7 @@ function prepareResolvedRootState(params: {
 export function createGatewayControlUiRootLifecycle(
   params: GatewayControlUiRootParams,
 ): GatewayControlUiRootLifecycle {
+  const expectedBuildId = resolveRuntimeServiceBuildId();
   let state: ControlUiRootState = { kind: "preparing" };
   if (params.controlUiRootOverride) {
     const resolvedOverride = resolveControlUiRootOverrideSync(params.controlUiRootOverride);
@@ -99,9 +93,14 @@ export function createGatewayControlUiRootLifecycle(
     }
   } else if (params.controlUiEnabled) {
     const resolvedRoot = resolveAutoRoot();
+    const assets = resolvedRoot ? inspectControlUiRootAssets(resolvedRoot, expectedBuildId) : null;
     state =
-      resolvedRoot && isControlUiStartupAssetsReady(resolvedRoot)
-        ? prepareResolvedRootState({ root: resolvedRoot, log: params.log })
+      resolvedRoot && assets?.kind === "ready"
+        ? prepareResolvedRootState({
+            root: resolvedRoot,
+            publicAssetBuildId: assets.publicAssetBuildId,
+            log: params.log,
+          })
         : { kind: "preparing" };
   }
 
@@ -117,34 +116,37 @@ export function createGatewayControlUiRootLifecycle(
       if (state.kind === "preparing") {
         // Initially disabled gateways discover assets only when enabled. Reuse a
         // finished build after cancellation without reviving its retired preparer.
-        let resolvedRoot = resolveAutoRoot();
-        if (!resolvedRoot || !isControlUiStartupAssetsReady(resolvedRoot)) {
-          const result = await ensureControlUiAssetsBuilt(params.gatewayRuntime, { signal });
+        const resolvedRoot = resolveAutoRoot();
+        let assets = resolvedRoot
+          ? inspectControlUiRootAssets(resolvedRoot, expectedBuildId)
+          : null;
+        if (assets?.kind !== "ready") {
+          const result = await ensureControlUiAssetsBuilt(params.gatewayRuntime, {
+            assetRoot: resolvedRoot ?? undefined,
+            expectedBuildId,
+            moduleUrl: import.meta.url,
+            signal,
+          });
           if (isStopped()) {
             return;
           }
           if (!result.ok) {
             Object.assign(state, { kind: "failed" });
-            params.log.warn(
-              `gateway: ${result.message ?? "Control UI assets could not be built."}`,
-            );
+            params.log.warn(`gateway: ${result.message}`);
             return;
           }
-          resolvedRoot = resolveAutoRoot();
-        }
-        if (!resolvedRoot || !isControlUiStartupAssetsReady(resolvedRoot)) {
-          const message = resolvedRoot
-            ? `Control UI assets at ${resolvedRoot} remain incomplete.`
-            : "Control UI build completed, but its assets are still unavailable.";
-          Object.assign(state, { kind: "failed" });
-          params.log.warn(
-            `gateway: ${message} Run \`openclaw doctor --fix\` or reinstall OpenClaw.`,
-          );
-          return;
+          assets = result.assets;
         }
         // Listeners retain this object from before bind; replacing it would strand
         // their routes in the preparing state after a successful background build.
-        Object.assign(state, createResolvedRootState(resolvedRoot));
+        Object.assign(
+          state,
+          prepareResolvedRootState({
+            root: path.dirname(assets.indexPath),
+            publicAssetBuildId: assets.publicAssetBuildId,
+            log: params.log,
+          }),
+        );
       }
     } catch (error) {
       if (!isStopped()) {

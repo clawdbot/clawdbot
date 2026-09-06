@@ -146,7 +146,6 @@ describe("config view", () => {
       lastRunCommit: "abc1234",
       lastRunCommand: "onboard",
       lastRunMode: "local",
-      localModelLeanAutoModel: "internal/model",
       securityAcknowledgedAt: "2026-08-29T12:00:00Z",
     };
     const schema = {
@@ -177,7 +176,6 @@ describe("config view", () => {
     expect(setup.open).toBe(false);
     setup.open = true;
     expect(setup.textContent).toContain(wizard.lastRunVersion);
-    expect(setup.textContent).not.toContain(wizard.localModelLeanAutoModel);
     expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
     expect(setup.querySelectorAll("input, textarea, select")).toHaveLength(0);
     expect(onFormPatch).not.toHaveBeenCalled();

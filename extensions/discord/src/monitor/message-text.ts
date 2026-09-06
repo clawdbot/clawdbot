@@ -29,12 +29,11 @@ export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(message.embeds);
-  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
   const rawText =
-    normalizeOptionalString(message.content) ||
-    embedText ||
-    componentText ||
+    resolveDiscordMessageMentionDocuments(message)
+      .map((text) => normalizeOptionalString(text))
+      .filter(Boolean)
+      .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
@@ -49,6 +48,56 @@ export function resolveDiscordMessageText(
     return forwardedText;
   }
   return `${baseText}\n${forwardedText}`;
+}
+
+export function resolveDiscordMessageMentionDocuments(message: Message): string[] {
+  const content = typeof message.content === "string" ? message.content : "";
+  if (content.trim()) {
+    return [content];
+  }
+  const embedDocuments = (message.embeds ?? []).flatMap(({ title, description }) =>
+    [title, description].filter(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    ),
+  );
+  if (embedDocuments.length > 0) {
+    return embedDocuments;
+  }
+  const componentDocuments: string[] = [];
+  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  return componentDocuments;
+}
+
+export function resolveDiscordMessageBatch(last: Message, preceding: readonly Message[]): Message {
+  if (preceding.length === 0) {
+    return last;
+  }
+  const content = [...preceding, last]
+    .map((message) => resolveDiscordMessageText(message, { includeForwarded: false }))
+    .filter(Boolean)
+    .join("\n");
+  return Object.create(Object.getPrototypeOf(last), {
+    ...Object.getOwnPropertyDescriptors(last),
+    content: { value: content, enumerable: true, configurable: true },
+    attachments: { value: [], enumerable: true, configurable: true },
+    message_snapshots: {
+      // SAFETY: This optional transport field stays opaque until snapshot normalization.
+      value: (last as { message_snapshots?: unknown }).message_snapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    messageSnapshots: {
+      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
+      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    rawData: {
+      value: { ...last.rawData },
+      enumerable: true,
+      configurable: true,
+    },
+  }) as Message; // SAFETY: The prototype and own fields retain the Message contract.
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
@@ -112,14 +161,17 @@ function resolveDiscordMessageComponents(message: Message): unknown {
 
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
-  collectDiscordTextDisplayContent(components, parts);
-  return parts.join("\n");
+  collectDiscordTextDisplayDocuments(components, parts);
+  return parts
+    .map((part) => normalizeOptionalString(part))
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
-function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void {
+function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {
   if (Array.isArray(value)) {
     for (const entry of value) {
-      collectDiscordTextDisplayContent(entry, parts);
+      collectDiscordTextDisplayDocuments(entry, parts);
     }
     return;
   }
@@ -132,14 +184,15 @@ function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void
     components?: unknown;
     component?: unknown;
   };
-  if (component.type === ComponentType.TextDisplay) {
-    const content = normalizeOptionalString(component.content);
-    if (content) {
-      parts.push(content);
-    }
+  if (
+    component.type === ComponentType.TextDisplay &&
+    typeof component.content === "string" &&
+    component.content.trim()
+  ) {
+    parts.push(component.content);
   }
-  collectDiscordTextDisplayContent(component.components, parts);
-  collectDiscordTextDisplayContent(component.component, parts);
+  collectDiscordTextDisplayDocuments(component.components, parts);
+  collectDiscordTextDisplayDocuments(component.component, parts);
 }
 
 function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {

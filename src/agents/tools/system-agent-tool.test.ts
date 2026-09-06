@@ -149,6 +149,76 @@ describe("openclaw tool", () => {
     });
   });
 
+  it("preserves an allowed gateway credential reference as an exact proposal", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "gateway-reference",
+      { action: "config_set_ref", path: "gateway.auth.token", envVar: "GATEWAY_TOKEN" },
+    );
+    expect(toolText(result)).toContain("needs-approval");
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set-ref",
+      path: "gateway.auth.token",
+      source: "env",
+      id: "GATEWAY_TOKEN",
+    });
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("does not stage a config proposal after its validation was cancelled", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const controller = new AbortController();
+    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "cancelled-proposal",
+      { action: "config_set", path: "gateway.port", value: "19001" },
+      controller.signal,
+    );
+    controller.abort(new Error("Setup cancelled"));
+    await expect(pending).rejects.toThrow("Setup cancelled");
+    expect(proposalRef).toEqual({});
+  });
+
+  it("preserves a different proposal staged while config validation yields", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "racing-proposal",
+      { action: "config_set", path: "gateway.port", value: "19001" },
+    );
+    const prior = { kind: "gateway-restart" as const };
+    proposalRef.operation = prior;
+    proposalRef.current = hashSystemAgentOperation(prior);
+    expect(toolText(await pending)).toContain("proposal-conflict");
+    expect(proposalRef.operation).toEqual(prior);
+  });
+
+  it.each([false, true])(
+    "preserves a proposal across rejected validation in-process and in the CLI mirror (approved=%s)",
+    async (approved) => {
+      const operation = {
+        kind: "config-set" as const,
+        path: "auth.profiles.invalid",
+        value: "true",
+      };
+      const original = { current: hashSystemAgentOperation(operation), operation };
+      const proposalRef = { ...original };
+      const args = { action: "config_set", path: operation.path, value: operation.value, approved };
+      let failure: unknown;
+      try {
+        await createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef }).execute(
+          "rejected-validation",
+          args,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(proposalRef).toEqual(original);
+      expect(
+        resolveSystemAgentProposalTransition({ args, resultText: String(failure) }),
+      ).toBeNull();
+    },
+  );
+
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
     const tool = createSystemAgentTool({ surface: "cli", proposalRef });
@@ -692,9 +762,12 @@ describe("openclaw tool", () => {
         resultText: "approval-mismatch: this call is not the operation the user approved.",
       }),
     ).toEqual({ proposal: undefined });
-    // An executed mutation consumes it.
+    // Only the admitted host directive consumes it; generic failures are not admission.
     expect(
-      resolveSystemAgentProposalTransition({ args, resultText: "Default model updated." }),
+      resolveSystemAgentProposalTransition({
+        args: { ...args, approved: true },
+        resultText: "directive:approved-operation: the host will apply this action.",
+      }),
     ).toEqual({ proposal: undefined });
     // A rejected second proposal must not overwrite the mirrored first
     // operation: the host keeps proposalRef untouched on a null transition.

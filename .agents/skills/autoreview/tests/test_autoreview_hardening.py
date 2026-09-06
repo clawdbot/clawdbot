@@ -21,6 +21,11 @@ import unittest
 from unittest import mock
 from pathlib import Path, PureWindowsPath
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "autoreview"
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -2125,7 +2130,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             'mcp_servers.review.command="touch /tmp/owned"',
             'notify=["sh", "-c", "touch /tmp/owned"]',
             'model_instructions_file="/tmp/hostile.md"',
-            'model_provider="credential-sink"',
+            'model_providers.review_api.auth.command="/tmp/credential-sink"',
             'hooks.PreToolUse.command="touch /tmp/owned"',
         ):
             with self.subTest(override=override), self.assertRaisesRegex(
@@ -2267,16 +2272,19 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir).resolve()
             repo = init_repo(root)
+            git(repo, "config", "core.autocrlf", "false")
             (repo / "behavior.py").write_text("def behavior(): return 'preexisting'\n", encoding="utf-8")
             git(repo, "add", "behavior.py")
             git(repo, "commit", "-qm", "initial behavior")
             initial = git(repo, "rev-parse", "HEAD").strip()
-            for value in ("before", "after"):
-                (repo / "unrelated.txt").write_text(value + "\n", encoding="utf-8")
+            for content in (b"before\n", b"after\r\n"):
+                (repo / "unrelated.txt").write_bytes(content)
                 git(repo, "add", "unrelated.txt")
                 git(repo, "commit", "-qm", "unrelated maintenance")
             expected_parent = git(repo, "rev-parse", "HEAD^").strip()
-            expected_patch = git(repo, "diff", *self.helper["SAFE_DIFF_FLAGS"], "HEAD^", "HEAD")
+            expected_patch = subprocess.check_output(
+                ["git", "diff", *self.helper["SAFE_DIFF_FLAGS"], "HEAD^", "HEAD"], cwd=repo,
+            ).decode("utf-8")
             for state, depth in (("missing", 1), ("available", 2), ("retained", None)):
                 with self.subTest(state=state):
                     checkout = root / state
@@ -3619,6 +3627,19 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
         self.assertNotIn("thinking", config)
         self.assertNotIn("hooks", config)
 
+    def test_kimi_written_config_round_trips_unicode_and_scalar_types(self) -> None:
+        config = {
+            "default_model": "review-🦞",
+            "models": {"review-🦞": {"provider": "provider-🦞", "max_context_size": 100000}},
+            "providers": {"provider-🦞": {
+                "label.🦞\x7f": 'Unicode 🦞 with "quotes", backslash \\, newline\n and DEL\x7f',
+                "values": [True, False, 42, 1.5, "🦞"],
+            }},
+        }
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path, _ = self.helper["write_kimi_review_files"](Path(tempdir), config)
+            self.assertEqual(tomllib.loads(config_path.read_text(encoding="utf-8")), config)
+
     def test_kimi_oauth_credentials_are_linked_outside_runtime_state(self) -> None:
         if os.name == "nt":
             self.skipTest("directory symlink privileges vary on Windows")
@@ -4910,6 +4931,55 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                 os.environ.clear()
                 os.environ.update(old)
 
+    @unittest.skipIf(os.name == "nt", "POSIX shared scratch roots")
+    def test_codex_rejects_shared_scratch_before_runtime_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            binary = write_executable(root / "codex", fake_codex_script())
+            source_home = root / "synthetic-auth-home"
+            source_home.mkdir()
+            source_auth = source_home / "auth.json"
+            source_auth.write_text('{"fixture":"synthetic"}')
+            auth_before = source_auth.read_bytes()
+            links_before = source_auth.stat().st_nlink
+            args = argparse.Namespace(
+                codex_bin=str(binary), model=None, tools=True, web_search=False,
+                thinking=None, codex_config=[], codex_speed=None,
+                stream_engine_output=False,
+            )
+            for scratch_root in ("/tmp", "/var/tmp"):
+                for entry in ("ensure_codex_isolation_supported", "run_codex"):
+                    with self.subTest(root=scratch_root, entry=entry), tempfile.TemporaryDirectory(
+                        prefix="autoreview-scratch-order.", dir=scratch_root,
+                    ) as scratch:
+                        runtime_auth = mock.Mock(wraps=self.helper["prepare_codex_runtime_auth"])
+                        with (
+                            mock.patch.dict(os.environ, {
+                                "PATH": os.environ["PATH"], "CODEX_HOME": str(source_home),
+                                "HOME": str(root),
+                            }, clear=True),
+                            mock.patch.object(sys, "platform", "darwin"),
+                            mock.patch.object(tempfile, "gettempdir", return_value=scratch),
+                            mock.patch.object(tempfile, "TemporaryDirectory", wraps=tempfile.TemporaryDirectory) as directories,
+                            mock.patch.object(tempfile, "NamedTemporaryFile", wraps=tempfile.NamedTemporaryFile) as files,
+                            mock.patch.dict(self.helper[entry].__globals__, {
+                                "prepare_codex_runtime_auth": runtime_auth,
+                            }),
+                        ):
+                            self.assertEqual(self.helper["safe_temp_root"](repo), Path(scratch).resolve())
+                            with self.assertRaisesRegex(SystemExit, "outside shared scratch"):
+                                if entry == "run_codex":
+                                    self.helper[entry](args, repo, "synthetic review input")
+                                else:
+                                    self.helper[entry](args, repo)
+                            runtime_auth.assert_not_called()
+                            directories.assert_not_called()
+                            files.assert_not_called()
+                        self.assertEqual(list(Path(scratch).iterdir()), [])
+                        self.assertEqual(source_auth.read_bytes(), auth_before)
+                        self.assertEqual(source_auth.stat().st_nlink, links_before)
+
     def test_codex_isolation_restricts_tool_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -4933,14 +5003,38 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             "shell_environment_policy.experimental_use_profile=false",
             "allow_login_shell=false",
             'default_permissions="autoreview"',
-            'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read"}',
         ):
             self.assertIn(required, flags)
+        filesystem = '":minimal"="read",":workspace_roots"="read"'
+        if sys.platform == "darwin":
+            filesystem += ',"/tmp{,/**}"="deny","/private/tmp{,/**}"="deny","/var/tmp{,/**}"="deny","/private/var/tmp{,/**}"="deny"'
+        self.assertIn(f"permissions.autoreview.filesystem={{{filesystem}}}", flags)
         set_flag = next(
             flag for flag in flags if flag.startswith("shell_environment_policy.set=")
         )
         for key, value in self.helper["codex_tool_git_env"]().items():
             self.assertIn(f"{key}={json.dumps(value)}", set_flag)
+
+    def test_codex_isolation_overrides_round_trip_unicode_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = root / "repo-🦞"
+            repo.mkdir()
+            runtime = root / "runtime-🦞"
+            tool_env = {"GIT_CONFIG_VALUE_0": "value-🦞\x7f"}
+            with mock.patch.dict(self.helper["codex_config_isolation_flags"].__globals__, {
+                "codex_tool_git_env": lambda: tool_env,
+            }):
+                flags = self.helper["codex_config_isolation_flags"](repo, runtime)
+            parsed = tomllib.loads("\n".join(flags[1::2]))
+            self.assertEqual(parsed["sqlite_home"], str((runtime / "state").resolve()))
+            self.assertEqual(parsed["log_dir"], str((runtime / "log").resolve()))
+            self.assertEqual(parsed["projects"], {str(repo.resolve()): {"trust_level": "untrusted"}})
+            self.assertEqual(parsed["shell_environment_policy"]["set"], tool_env)
+            expected = {":minimal": "read", ":workspace_roots": "read"}
+            if sys.platform == "darwin":
+                expected.update({f"{path}{{,/**}}": "deny" for path in self.helper["CODEX_MACOS_SCRATCH_ROOTS"]})
+            self.assertEqual(parsed["permissions"]["autoreview"]["filesystem"], expected)
 
     def test_safe_engine_env_excludes_repo_local_path_entries(self) -> None:
         old_path = os.environ.get("PATH", "")
@@ -5482,7 +5576,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             found = argparse.Namespace(engine="codex", codex_bin="codex")
             with mock.patch.dict(
                 os.environ,
-                {"PATH": f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"},
+                {"PATH": f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", "CODEX_HOME": str(root)},
             ):
                 available, reason = resolve_engine_binary(found, repo)
             self.assertTrue(available, reason)
@@ -5752,7 +5846,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
             )
             # Dry run scans the exact prompt too, so use a deterministic
             # scanner instead of relying on the host installation.
-            env = os.environ.copy()
+            env = {**os.environ, "CODEX_HOME": str(root)}
             add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
@@ -5844,7 +5938,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 root / "codex",
                 fake_codex_script(),
             )
-            env = os.environ.copy()
+            env = {**os.environ, "CODEX_HOME": str(root)}
             env["PATH"] = path_excluding_command("trufflehog")
 
             result = subprocess.run(
@@ -6007,7 +6101,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 root / "codex",
                 fake_codex_script(),
             )
-            env = os.environ.copy()
+            env = {**os.environ, "CODEX_HOME": str(root)}
             add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
@@ -6520,7 +6614,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 root / "codex",
                 fake_codex_script(),
             )
-            env = os.environ.copy()
+            env = {**os.environ, "CODEX_HOME": str(root)}
             add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
@@ -6565,7 +6659,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 root / "codex",
                 fake_codex_script(),
             )
-            env = os.environ.copy()
+            env = {**os.environ, "CODEX_HOME": str(root)}
             add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(

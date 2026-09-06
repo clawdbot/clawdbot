@@ -40,7 +40,7 @@ if (
 if (JSON.stringify(args) === JSON.stringify([mode, "--yes", "--bg=false", "19000"])) {
   const state = await readFile(marker, "utf8");
   const status = JSON.parse(state);
-  if (status.TCP?.["443"]) {
+  if ([status, ...Object.values(status.Foreground ?? {})].some((config) => config.TCP?.["443"])) {
     process.stderr.write("listener already exists for port 443\n");
     process.exit(1);
   }

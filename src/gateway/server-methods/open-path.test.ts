@@ -164,40 +164,37 @@ describe("execOpenPath", () => {
 });
 
 describe("isHeadlessOpenPathError", () => {
-  it("detects xdg-open no method available diagnostic", () => {
-    expect(
-      isHeadlessOpenPathError("xdg-open: no method available for opening '/tmp/workspace'"),
-    ).toBe(true);
+  it.each([
+    { platform: "linux", command: "xdg-open", code: "ENOENT", expected: true },
+    { platform: "linux", command: "xdg-open", code: "EACCES", expected: false },
+    { platform: "linux", command: "other-opener", code: "ENOENT", expected: false },
+    { platform: "darwin", command: "open", code: "ENOENT", expected: false },
+    { platform: "win32", command: "powershell.exe", code: "ENOENT", expected: false },
+    { platform: "freebsd", command: "xdg-open", code: "ENOENT", expected: false },
+  ] as const)("classifies $platform $command $code", ({ platform, command, code, expected }) => {
+    const error = Object.assign(new Error("Launcher failed"), { code });
+    expect(isHeadlessOpenPathError(error, { command, args: ["/tmp/workspace"] }, platform)).toBe(
+      expected,
+    );
   });
 
-  it("detects missing xdg-open command (ENOENT)", () => {
+  it("preserves the installed xdg-open handlerless diagnostic", () => {
     expect(
       isHeadlessOpenPathError(
-        "Command failed with ENOENT: xdg-open /tmp/workspace\nspawn xdg-open ENOENT",
+        new Error("xdg-open: no method available for opening '/tmp/workspace'"),
+        resolveOpenPathCommand("/tmp/workspace", "linux"),
+        "linux",
       ),
     ).toBe(true);
   });
 
-  it("returns false for xdg-open permission errors", () => {
+  it("does not classify a handler diagnostic containing ENOENT as a missing launcher", () => {
     expect(
       isHeadlessOpenPathError(
-        "Command failed with EACCES: xdg-open /tmp/workspace\nspawn xdg-open EACCES",
+        new Error("Command failed with exit code 1: xdg-open /tmp/ENOENT-workspace"),
+        resolveOpenPathCommand("/tmp/ENOENT-workspace", "linux"),
+        "linux",
       ),
     ).toBe(false);
-  });
-
-  it("returns false for missing launcher errors on other platforms", () => {
-    expect(
-      isHeadlessOpenPathError("Command failed with ENOENT: open /tmp/workspace\nspawn open ENOENT"),
-    ).toBe(false);
-    expect(
-      isHeadlessOpenPathError(
-        "Command failed with ENOENT: powershell.exe /tmp/workspace\nspawn powershell.exe ENOENT",
-      ),
-    ).toBe(false);
-  });
-
-  it("returns false for unrelated errors", () => {
-    expect(isHeadlessOpenPathError("Permission denied: /tmp/workspace")).toBe(false);
   });
 });

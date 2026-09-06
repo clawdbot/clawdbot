@@ -1,4 +1,3 @@
-// OpenClaw SDK tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { EventHub, OpenClaw, normalizeGatewayEvent } from "./index.js";
 import type {
@@ -267,6 +266,26 @@ describe("OpenClaw SDK", () => {
     expect(result.status).toBe("cancelled");
   });
 
+  it("keeps superseded writer runs cancelled in both events and waits", async () => {
+    const event = normalizeGatewayEvent(
+      createAgentEvent("run_superseded", 1, 123, "lifecycle", {
+        phase: "end",
+        aborted: true,
+        status: "superseded",
+        stopReason: "superseded",
+        endedAt: 123,
+      }),
+    );
+    const result = await waitForSnapshot("run_superseded", {
+      status: "error",
+      stopReason: "superseded",
+      endedAt: 123,
+    });
+
+    expect.soft(event.type).toBe("run.cancelled");
+    expect(result.status).toBe("cancelled");
+  });
+
   it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
     const result = await waitForSnapshot("run_hard_timeout", {
       stopReason: "rpc",
@@ -330,6 +349,17 @@ describe("OpenClaw SDK", () => {
     const result = await waitForSnapshot("run_still_active");
 
     expect(result.runId).toBe("run_still_active");
+    expect(result.status).toBe("accepted");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("keeps queued wait snapshots non-terminal", async () => {
+    const result = await waitForSnapshot("run_queued", {
+      status: "pending",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+
     expect(result.status).toBe("accepted");
     expect(result.error).toBeUndefined();
   });
@@ -1216,7 +1246,7 @@ describe("OpenClaw SDK", () => {
     expect(completed.data).toEqual({ phase: "end" });
 
     const aborted = normalize(4, { phase: "end", aborted: true });
-    expect(aborted.type).toBe("run.timed_out");
+    expect(aborted.type).toBe("run.cancelled");
     expect(aborted.runId).toBe("run_1");
     expect(aborted.data).toEqual({ phase: "end", aborted: true });
 
@@ -1289,6 +1319,7 @@ describe("OpenClaw SDK", () => {
 
     const providerStartedError = normalize(10, {
       phase: "error",
+      executionSettled: true,
       error: "provider authentication failed",
       providerStarted: true,
     });
@@ -1296,6 +1327,7 @@ describe("OpenClaw SDK", () => {
     expect(providerStartedError.runId).toBe("run_1");
     expect(providerStartedError.data).toEqual({
       phase: "error",
+      executionSettled: true,
       error: "provider authentication failed",
       providerStarted: true,
     });
@@ -1324,11 +1356,17 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const authRevoked = normalize(13, { phase: "end", aborted: true, stopReason: "auth-revoked" });
+    const authRevoked = normalize(13, {
+      phase: "end",
+      status: "cancelled",
+      aborted: true,
+      stopReason: "auth-revoked",
+    });
     expect(authRevoked.type).toBe("run.cancelled");
     expect(authRevoked.runId).toBe("run_1");
     expect(authRevoked.data).toEqual({
       phase: "end",
+      status: "cancelled",
       aborted: true,
       stopReason: "auth-revoked",
     });

@@ -168,7 +168,7 @@ function pruneFlowsNotInSnapshot(params: { db: DatabaseSync; ids: readonly strin
   params.db.exec(`DELETE FROM ${tempTableName}`);
 }
 
-function selectFlowRows(db: DatabaseSync): FlowRegistryRow[] {
+function readTaskFlowRegistrySnapshot(db: DatabaseSync): TaskFlowRegistryStoreSnapshot {
   const query = getFlowRegistryKysely(db)
     .selectFrom("flow_runs")
     .select([
@@ -194,7 +194,12 @@ function selectFlowRows(db: DatabaseSync): FlowRegistryRow[] {
     ])
     .orderBy("created_at", "asc")
     .orderBy("flow_id", "asc");
-  return executeSqliteQuerySync(db, query).rows;
+  const flows = new Map<string, TaskFlowRecord>();
+  // Finish native reads before decoding so SQLite errors retain precedence.
+  for (const row of executeSqliteQuerySync(db, query).rows) {
+    flows.set(row.flow_id, rowToFlowRecord(row));
+  }
+  return { flows };
 }
 
 export function upsertTaskFlowRowInDatabase(db: DatabaseSync, row: BoundTaskFlowRecord): void {
@@ -259,22 +264,15 @@ function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
 }
 
 export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
-  const { db } = openFlowRegistryDatabase();
-  const rows = selectFlowRows(db);
-  return {
-    flows: new Map(rows.map((row) => [row.flow_id, rowToFlowRecord(row)])),
-  };
+  return readTaskFlowRegistrySnapshot(openFlowRegistryDatabase().db);
 }
 
 /** Loads task flows without creating or migrating shared state. */
 export function loadTaskFlowRegistryStateFromSqliteReadOnly(): TaskFlowRegistryStoreSnapshot {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const rows = selectFlowRows(db);
-      return {
-        flows: new Map(rows.map((row) => [row.flow_id, rowToFlowRecord(row)])),
-      };
-    }) ?? { flows: new Map() }
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => readTaskFlowRegistrySnapshot(db)) ?? {
+      flows: new Map(),
+    }
   );
 }
 

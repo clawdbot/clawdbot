@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,7 +23,7 @@ import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
   normalizeSessionKeyForUiComparison,
-  resolveAgentIdFromSessionKey,
+  parseAgentSessionKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.ts";
@@ -200,13 +201,25 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!state || !this.presented) {
       return;
     }
-    const parentKey = this.resolveBoardSessionKey();
+    const target = this.resolveChatReadTarget();
+    if (!target) {
+      this.swarmHydrator?.dispose();
+      this.swarmHydrator = null;
+      return;
+    }
+    const { sessionKey: parentKey, agentId } = target;
+    const client = state.client;
+    if (!client) {
+      return;
+    }
     const sourceEpoch = state.connectionEpoch;
     const isCurrent = () =>
       this.state === state &&
       this.presented &&
+      state.client === client &&
       state.connectionEpoch === sourceEpoch &&
-      parentKey === this.resolveBoardSessionKey();
+      parentKey === this.resolveChatReadTarget()?.sessionKey &&
+      agentId === this.resolveChatReadTarget()?.agentId;
     void import("../../lib/sessions/swarm-roster.ts").then(
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (!isCurrent()) {
@@ -214,10 +227,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         }
         const enabled =
           state.connected &&
-          isSwarmEnabledInConfig(
-            this.context.runtimeConfig?.state.configSnapshot?.config,
-            resolveAgentIdFromSessionKey(parentKey),
-          );
+          isSwarmEnabledInConfig(this.context.runtimeConfig?.state.configSnapshot?.config, agentId);
         if (!enabled) {
           if (this.swarmHydrator) {
             this.swarmHydrator.dispose();
@@ -230,7 +240,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         this.swarmHydrator.update({
           sessions: this.context.sessions,
           parentKey,
+          agentId,
           sourceEpoch,
+          readParent: () =>
+            client
+              .request<{ session: GatewaySessionRow | null }>("sessions.describe", {
+                key: parentKey,
+                ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
+              })
+              .then((result) => result.session),
           currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
           onRows: () => {
             if (isCurrent()) {
@@ -290,10 +308,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.requestUpdate();
   }
 
+  protected isBoardPanelAvailable(board = this.resolveBoardView()): boolean {
+    return board.available && Boolean(this.resolveBoardSessionKey(board.snapshot.sessionKey));
+  }
+
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const session = this.resolveBoardConversation();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
-    if (!board.available || !sessionKey) {
+    if (!this.isBoardPanelAvailable(board)) {
       return nothing;
     }
     if (!board.provider.hasLoadedSnapshot) {
@@ -302,6 +324,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         ${error ? t("dashboardDocument.loadFailed", { error }) : t("common.loading")}
       </div>`;
     }
+    // Only the loaded board acknowledgment supplies a missing owner; its display key
+    // must not replace the original session target (notably global versus a literal key).
+    session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({

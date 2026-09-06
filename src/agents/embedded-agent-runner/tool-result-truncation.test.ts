@@ -69,7 +69,7 @@ function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
     frozen: new Set(),
     ambiguousBaseKeys: new Set(),
     restoredCacheTtl: new Map(),
-    sourceTextByKey: new Map(),
+    sourceHashByKey: new Map(),
   };
 }
 
@@ -888,19 +888,16 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
     // Provider-specific filtering is not authoritative; the removed result can return on fallback.
     truncateOversizedToolResultsInMessages([retained], 128_000, 5_000, 20_000, state);
-    expect(state.sourceTextByKey.size).toBe(2);
+    expect(state.sourceHashByKey.size).toBe(2);
 
     preparePromptProjectionStateForTest({ sessionId, messages: [], state, raw: true });
-    expect(state.sourceTextByKey.size).toBe(2);
+    expect(state.sourceHashByKey.size).toBe(2);
 
     preparePromptProjectionStateForTest({ sessionId, messages: [retained], state });
 
-    expect(state.sourceTextByKey.size).toBe(1);
+    expect(state.sourceHashByKey.size).toBe(1);
     expect(state.frozen.size).toBe(1);
     expect(state.replacements.size).toBe(1);
-    expect([...state.sourceTextByKey.values()].flat()).not.toContain(
-      getFirstToolResultText(removed),
-    );
     expect(
       truncateOversizedToolResultsInMessages([retained], 128_000, 5_000, 20_000, state).messages,
     ).toEqual(projected.messages.slice(1));
@@ -940,7 +937,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(first.aggregateTruncatedCount).toBe(0);
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(
       second.messages.slice(0, history.length).map((message) => JSON.stringify(message)),
     ).toEqual(frozenBytes);
@@ -948,7 +945,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       (message): message is ToolResultMessage =>
         message.role === "toolResult" && message.toolCallId === "current",
     );
-    expect(current && getToolResultTextLength(current)).toBeLessThan(6_000);
+    expect(current && getFirstToolResultText(current)).toBe("c".repeat(6_000));
   });
 
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
@@ -1017,7 +1014,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(totalChars).toBeLessThanOrEqual(32_100);
   });
 
-  it("recovers from a fresh tool result before frozen history through a runtime carrier", () => {
+  it("preserves fresh tool content through a runtime carrier under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
@@ -1077,15 +1074,13 @@ describe("truncateOversizedToolResultsInMessages", () => {
       0,
     );
     expect(historicalResults).toEqual(firstHistoricalResults);
-    const freshNotice = freshResult ? getFirstToolResultText(freshResult) : "";
-    expect(freshNotice).not.toBe("");
-    expect(freshNotice).toContain("truncated");
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_100);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + freshOutput.length);
   });
 
-  it("recovers from multiple fresh tool results before frozen history and queued steering", () => {
+  it("preserves fresh tool content through queued steering under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
@@ -1132,13 +1127,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    for (const notice of freshResults.map(getFirstToolResultText)) {
-      expect(notice).not.toBe("");
-      expect(notice).toContain("truncated");
-    }
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshResults.map(getFirstToolResultText)).toEqual(freshOutputs);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_200);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + 234 + 4_000);
   });
 
   it("allows aggregate overflow rather than rewriting frozen history", () => {
@@ -1194,14 +1186,13 @@ describe("truncateOversizedToolResultsInMessages", () => {
         (message) => message.role === "toolResult" && message.toolCallId.startsWith("history_"),
       ),
     ).toEqual(first.messages.filter((message) => message.role === "toolResult"));
-    expect(freshText).not.toBe("");
-    expect(freshText).toContain("truncated");
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshText).toBe(freshOutput);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
     expect(totalChars).toBeGreaterThan(100);
   });
 
-  it("clears an oversized fresh result before rewriting saturated frozen history", () => {
+  it("bounds an oversized fresh result without clearing it under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const runtimeContextMessage = buildRuntimeContextCustomMessage("runtime context refresh");
     if (!runtimeContextMessage) {
@@ -1244,9 +1235,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(freshResult?.role).toBe("toolResult");
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    expect(freshText).not.toBe("");
+    expect(freshText).toContain("z".repeat(2_000));
     expect(freshText).toContain("truncated");
-    expect(totalChars).toBeLessThanOrEqual(32_100);
+    expect(freshText.length).toBeLessThanOrEqual(8_000);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + 8_000);
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {
@@ -1510,6 +1502,50 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ).toBeLessThan(15_000);
   });
 
+  it("retains bounded projection data while replaying current canonical metadata", () => {
+    const state = createPromptProjectionStateForTest();
+    const text = "x".repeat(100_000);
+    const source = makeToolResult(text, "retained-read", { content: text });
+    source.content.push({ type: "image", data: "a".repeat(100_000), mimeType: "image/png" });
+    // SAFETY: exercise malformed plugin content that the projection owner preserves.
+    source.content.push(null as never);
+    const first = truncateOversizedToolResultsInMessages([source], 128_000, 5_000, 20_000, state);
+    const retained = JSON.stringify(state, (_key, value) =>
+      value instanceof Map || value instanceof Set ? [...value.values()] : value,
+    );
+    expect(retained.length).toBeLessThan(6_000);
+    expect(first.messages[0]).toMatchObject({ details: source.details });
+
+    const current = { ...source, details: { revision: "current" } };
+    const replay = truncateOversizedToolResultsInMessages([current], 128_000, 5_000, 20_000, state)
+      .messages[0] as ToolResultMessage;
+    expect(replay.details).toBe(current.details);
+    expect(replay.content).toEqual((first.messages[0] as ToolResultMessage).content);
+    expect(source.content[0]).toEqual({ type: "text", text });
+  });
+
+  it.each([
+    [
+      ["ab", "c"],
+      ["a", "bc"],
+    ],
+    [["\ud800"], ["\ud801"]],
+  ])("invalidates rewritten canonical text with preserved framing: %j", (before, after) => {
+    const state = createPromptProjectionStateForTest();
+    const source = makeToolResult("", "rewritten-source");
+    const blocks = (parts: string[]) => parts.map((text) => ({ type: "text" as const, text }));
+    source.content = blocks(["x".repeat(15_000), ...before]);
+    truncateOversizedToolResultsInMessages([source], 128_000, 5_000, 20_000, state);
+    const rewritten = { ...source, content: blocks(["x".repeat(15_000), ...after]) };
+    preparePromptProjectionStateForTest({
+      sessionId: "rewritten-source",
+      messages: [rewritten],
+      state,
+    });
+    expect(state.replacements.size).toBe(0);
+    expect(state.frozen.size).toBe(0);
+  });
+
   it("freezes #99495 ambiguous-key projections across filtered history", () => {
     const projectionState = createPromptProjectionStateForTest();
     const duplicate = (text: string) => ({
@@ -1542,7 +1578,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       messages: [duplicate("b".repeat(100))],
       state: projectionState,
     });
-    expect(projectionState.sourceTextByKey.size).toBe(1);
+    expect(projectionState.sourceHashByKey.size).toBe(1);
     expect(projectionState.frozen.size).toBe(1);
     expect(projectionState.replacements.size).toBe(0);
     expect(projectionState.ambiguousBaseKeys.size).toBe(1);
@@ -1609,7 +1645,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(retainedAfterPrune.messages).toEqual(retainedWithStale.messages);
     expect(retainedAfterPrune.messages[0]).toEqual(first.messages[0]);
     expect(projectionState.frozen.size).toBe(1);
-    expect(projectionState.sourceTextByKey.size).toBe(1);
+    expect(projectionState.sourceHashByKey.size).toBe(1);
   });
 });
 
@@ -1780,7 +1816,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(projectionState.sourceTextByKey.size).toBe(0);
+    expect(projectionState.sourceHashByKey.size).toBe(0);
     expect(projectionState.replacements.size).toBe(0);
     expect(projectionState.frozen.size).toBe(0);
     preparePromptProjectionStateForTest({
@@ -1788,7 +1824,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       messages: SessionManager.open(scope).buildSessionContext().messages,
       state: staleProjectionState,
     });
-    expect(staleProjectionState.sourceTextByKey.size).toBe(0);
+    expect(staleProjectionState.sourceHashByKey.size).toBe(0);
     expect(staleProjectionState.replacements.size).toBe(0);
     expect(staleProjectionState.frozen.size).toBe(0);
     const activeToolResult = SessionManager.open(scope)
