@@ -9090,7 +9090,7 @@ class NodeRuntime private constructor(
       }
 
       "every" -> {
-        schedule.long("everyMs")?.let(::cronIntervalText) ?: nativeText("Repeating")
+        schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeText("Repeating")
       }
 
       "cron" -> {
@@ -9107,18 +9107,6 @@ class NodeRuntime private constructor(
         nativeText("Scheduled")
       }
     }
-
-  private fun cronIntervalText(everyMs: Long): NativeText {
-    val minutes = everyMs / 60_000L
-    val hours = minutes / 60L
-    val days = hours / 24L
-    return when {
-      days >= 1 && hours % 24L == 0L -> nativeText("Every \${days}d", days)
-      hours >= 1 && minutes % 60L == 0L -> nativeText("Every \${hours}h", hours)
-      minutes >= 1 -> nativeText("Every \${minutes}m", minutes)
-      else -> nativeText("Repeating")
-    }
-  }
 
   private fun cronPayloadPreview(payload: JsonObject?): NativeText {
     val text =
