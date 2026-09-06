@@ -674,40 +674,33 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledOnce();
   });
 
-  it("runs the login-shell probe in its own session so it cannot take over the caller's terminal", () => {
-    if (process.platform !== "linux" || !fs.existsSync("/bin/bash")) {
-      return;
-    }
-    const shell = "/bin/bash";
-    const env: NodeJS.ProcessEnv = { SHELL: shell };
-    const exec = vi.fn(
-      (file: string, args: string[], options: Parameters<typeof execFileSync>[2]) => {
-        expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
-        return execFileSync(
-          file,
-          [
-            "-lic",
-            'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0',
-          ],
-          options,
-        );
-      },
-    );
-
-    withEtcShells([shell], () => {
-      expect(
-        loadShellEnvFallback({
-          enabled: true,
-          env,
-          expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
-          exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-        }),
-      ).toEqual({ ok: true, applied: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"] });
-    });
-    // A session leader has no controlling terminal, so interactive bash startup cannot move
-    // the terminal's foreground process group away from the CLI (SIGTTOU on the next tcsetattr).
-    expect(env.OPENCLAW_PROBE_SID?.trim()).toBe(env.OPENCLAW_PROBE_PID);
-  });
+  it.skipIf(process.platform !== "linux" || !fs.existsSync("/bin/bash"))(
+    "runs the login-shell probe in its own session",
+    () => {
+      const shell = "/bin/bash";
+      const home = tempDirs.make("openclaw-shell-session-");
+      fs.writeFileSync(
+        path.join(home, ".bash_profile"),
+        'export OPENCLAW_PROBE_PID=$$\nexport OPENCLAW_PROBE_SID="$(ps -o sid= -p $$)"\n',
+      );
+      const env: NodeJS.ProcessEnv = { SHELL: shell };
+      const homedir = vi.spyOn(os, "homedir").mockReturnValue(home);
+      try {
+        withEtcShells([shell], () => {
+          expect(
+            loadShellEnvFallback({
+              enabled: true,
+              env,
+              expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
+            }),
+          ).toEqual({ ok: true, applied: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"] });
+        });
+        expect(env.OPENCLAW_PROBE_SID?.trim()).toBe(env.OPENCLAW_PROBE_PID);
+      } finally {
+        homedir.mockRestore();
+      }
+    },
+  );
 
   it("keeps Bash PATH discovery noninteractive and cached separately from env imports", () => {
     const shell = "/bin/bash";

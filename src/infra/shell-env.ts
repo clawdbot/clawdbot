@@ -99,10 +99,8 @@ function execLoginShellEnvZero(params: {
   const args = useInteractiveBash
     ? ["-lic", LOGIN_SHELL_ENV_COMMAND]
     : ["-l", "-c", LOGIN_SHELL_ENV_COMMAND];
-  // Own session: the probe must never hold the caller's controlling terminal. Interactive bash
-  // otherwise opens /dev/tty, moves the foreground process group to itself, and the CLI is
-  // stopped by SIGTTOU on its next terminal mode change (spinner, exit restore). execFileSync
-  // applies `detached` through the shared spawn option normalization; only its types omit it.
+  // Interactive Bash must not take the CLI's controlling terminal. execFileSync forwards
+  // detached to spawnSync, but its options type omits it.
   const options: ExecFileSyncOptionsWithBufferEncoding & { detached: boolean } = {
     encoding: "buffer",
     timeout: params.timeoutMs,
