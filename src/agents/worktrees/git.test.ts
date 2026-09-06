@@ -28,9 +28,9 @@ describe("Git execution environment", () => {
       MSYS: "winsymlinks:nativestrict noglob",
       CYGWIN: "disable_pcon noglob",
     });
-    expect(
-      gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS,
-    ).toBe("winsymlinks:nativestrict");
+    expect(gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS).toBe(
+      "winsymlinks:nativestrict",
+    );
   });
 
   it.each([
@@ -38,9 +38,9 @@ describe("Git execution environment", () => {
     ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
     ["winsymlinks:native noglob", "winsymlinks:native noglob"],
   ])("keeps noglob final for %s", (value, expected) => {
-    expect(
-      gitEnvironment({ MSYS: value }, ["rev-parse", "HEAD^{commit}"], "win32").MSYS,
-    ).toBe(expected);
+    expect(gitEnvironment({ MSYS: value }, ["rev-parse", "HEAD^{commit}"], "win32").MSYS).toBe(
+      expected,
+    );
   });
 
   it("merges inherited Windows runtime options before preserving revisions", () => {
@@ -120,7 +120,9 @@ describe("Git checkout discovery", () => {
       await fs.writeFile(path.join(repo, "README.md"), "base\n");
       expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
       expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
-      expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(0);
+      expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(
+        0,
+      );
       expect(
         (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
       ).toBe(0);

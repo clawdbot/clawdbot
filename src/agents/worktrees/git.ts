@@ -46,15 +46,14 @@ export function gitEnvironment(
     platform === "win32" && args.some((arg) => arg.endsWith("^{commit}"))
       ? mergeProcessEnv([inheritedEnv, env], platform)
       : undefined;
-  const windowsNoGlob =
-    effectiveWindowsEnv
-      ? {
-          // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
-          // expressions such as HEAD^{commit} literal within this Git owner.
-          MSYS: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "MSYS", platform)),
-          CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
-        }
-      : {};
+  const windowsNoGlob = effectiveWindowsEnv
+    ? {
+        // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
+        // expressions such as HEAD^{commit} literal within this Git owner.
+        MSYS: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "MSYS", platform)),
+        CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
+      }
+    : {};
   return {
     ...baseEnv,
     ...windowsNoGlob,
