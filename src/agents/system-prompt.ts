@@ -888,7 +888,9 @@ export function buildAgentSystemPrompt(params: {
     sessions_list: "List visible sessions; filters/last",
     sessions_history: "Read visible session/subagent history",
     sessions_search: availableTools.has("sessions_history")
-      ? "Search past sessions; use sessionKey with sessions_history"
+      ? availableTools.has("sessions_list")
+        ? "Search past sessions by keywords; for a time range (e.g. 'yesterday') list sessions with sessions_list, then read sessions_history"
+        : "Search past sessions; use sessionKey with sessions_history"
       : "Search past sessions",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled

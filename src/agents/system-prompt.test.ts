@@ -799,6 +799,42 @@ describe("buildAgentSystemPrompt", () => {
     expect(withYield).toContain("Wait with `sessions_yield`");
   });
 
+  it("routes temporal recall to sessions_list only when listing and history are both available", () => {
+    // Full availability matrix: the sessions_search summary must be final-set-aware
+    // so a time-range prompt ("what did we talk about yesterday?") is routed away
+    // from keyword text search toward sessions_list -> sessions_history, but only
+    // when both follow-up tools are actually available (gating, not static naming
+    // in the parameter schema, which would advertise tools authorization may filter).
+    const searchOnly = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_search"],
+    });
+    const searchWithHistory = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_search", "sessions_history"],
+    });
+    const searchWithList = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_search", "sessions_list"],
+    });
+    const fullMatrix = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_search", "sessions_list", "sessions_history"],
+    });
+
+    // search only: no recall path, no follow-up routing.
+    expect(searchOnly).toContain("- sessions_search: Search past sessions");
+    expect(searchOnly).not.toContain("for a time range");
+    // search + history: route by sessionKey, but no time-range route (no list).
+    expect(searchWithHistory).toContain("use sessionKey with sessions_history");
+    expect(searchWithHistory).not.toContain("for a time range");
+    // search + list without history: cannot read history, so no temporal route.
+    expect(searchWithList).not.toContain("for a time range");
+    // full matrix: temporal recall routes list -> history, away from text search.
+    expect(fullMatrix).toContain("for a time range");
+    expect(fullMatrix).toContain("list sessions with sessions_list, then read sessions_history");
+  });
+
   it("limits screen guidance to web/app tool surfaces", () => {
     const withoutScreen = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
