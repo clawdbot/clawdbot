@@ -8,6 +8,7 @@ import { getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
 
@@ -451,5 +452,50 @@ describe("runSqliteImmediateTransactionSync", () => {
         db.prepare("INSERT INTO entries(id) VALUES (?)").run("after-timeout");
       }),
     ).not.toThrow();
+  });
+});
+
+describe("runSqliteImmediateTransaction", () => {
+  it.each(["existing", "preparation"])(
+    "rejects a transaction from %s before admitting writes",
+    async (owner) => {
+      const db = createDatabase();
+      const write = vi.fn();
+      const prepare = vi.fn(async () => {
+        db.exec("BEGIN");
+        return write;
+      });
+      if (owner === "existing") {
+        db.exec("BEGIN");
+      }
+      await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toThrow(/transaction/);
+      expect(prepare).toHaveBeenCalledTimes(owner === "existing" ? 0 : 1);
+      expect(write).not.toHaveBeenCalled();
+      expect(db.isTransaction).toBe(true);
+      db.exec("ROLLBACK");
+    },
+  );
+
+  it("prepares without holding a transaction and never replays an admitted write", async () => {
+    const db = createDatabase();
+    db.exec("PRAGMA busy_timeout = 50");
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+    let calls = 0;
+    await expect(
+      runSqliteImmediateTransaction(db, async () => {
+        await Promise.resolve();
+        expect(db.isTransaction).toBe(false);
+        return () => {
+          calls += 1;
+          expect(db.isTransaction).toBe(true);
+          expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(50);
+          db.prepare("INSERT INTO entries(id, value) VALUES ('aborted', 'value')").run();
+          throw lockError;
+        };
+      }),
+    ).rejects.toBe(lockError);
+    expect(calls).toBe(1);
+    expect(readEntries(db)).toEqual([]);
+    expect(db.isTransaction).toBe(false);
   });
 });
