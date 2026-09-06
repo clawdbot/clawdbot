@@ -263,9 +263,6 @@ export async function admitMSTeamsMessage(params: {
   // "hello /status" and would hard-drop admitted DM senders who lack
   // command authorization. Authorization is still computed for actual
   // control commands via isControlCommand below.
-  const convType = normalizeOptionalLowercaseString(params.activity.conversation?.conversationType);
-  const messageIsDirectMessage =
-    convType === "personal" || (!convType && !params.activity.conversation?.isGroup);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
     activity: params.activity,
