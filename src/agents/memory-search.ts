@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import path from "node:path";
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
@@ -19,7 +23,7 @@ import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampNumber } from "../utils.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -348,6 +352,32 @@ export function resolveMemorySearchConfig(
     throw new Error(
       'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
     );
+  }
+  // Shared memory: when any agent shares the same workspace as the system agent,
+  // redirect store.databasePath to a shared sqlite keyed by workspace hash.
+  if (resolved.sources.includes("memory")) {
+    const systemAgentId = String(cfg.agents?.defaults?.systemAgent?.agentId || "").trim();
+    const defaultWorkspace = String(cfg.agents?.defaults?.workspace || "").trim();
+    if (systemAgentId && defaultWorkspace) {
+      const myWorkspace = resolveAgentWorkspaceDir(cfg, agentId);
+      const systemWorkspace = resolveAgentWorkspaceDir(cfg, systemAgentId);
+      if (
+        myWorkspace &&
+        systemWorkspace &&
+        path.resolve(myWorkspace) === path.resolve(systemWorkspace)
+      ) {
+        const stateDir = resolveStateDir(process.env);
+        const input = JSON.stringify({ workspace: path.resolve(myWorkspace) });
+        const scopeHash = createHash("sha256").update(input).digest("hex").slice(0, 16);
+        const sharedPath = path.join(
+          stateDir,
+          "state",
+          "memory",
+          "shared-" + scopeHash + ".sqlite",
+        );
+        resolved.store = { ...resolved.store, databasePath: sharedPath };
+      }
+    }
   }
   return resolved;
 }
