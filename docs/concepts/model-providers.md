@@ -556,6 +556,43 @@ openclaw plugins install @openclaw/llama-cpp-provider
 Both use `llama-cpp/<model>` references. See [llama.cpp](/plugins/llama-cpp) for setup,
 discovery, authentication, and managed local embeddings.
 
+### llmman
+
+llmman is configured via `models.providers` as an OpenAI-compatible local server. It pulls models as OCI artifacts and serves them through upstream `llama-server`, `vllm`, or `mlx-lm`, and can pair a local model with a hosted one under a single model id:
+
+- Provider: `llmman` (custom; `api: "openai-completions"`)
+- Auth: none enforced; set `LLMMAN_API_KEY=llmman-local` and use `apiKey: "${LLMMAN_API_KEY}"`
+- Default base URL: `http://127.0.0.1:17434/v1`
+- Example model: `llmman/qwen3.8`
+- Hybrid example: `llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna`
+
+```bash
+llmman pull qwen3.8
+llmman serve
+```
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "llmman/qwen3.8" } },
+  },
+  models: {
+    providers: {
+      llmman: {
+        baseUrl: "http://127.0.0.1:17434/v1",
+        apiKey: "${LLMMAN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "qwen3.8", name: "Qwen3.8 (llmman)", reasoning: true, input: ["text", "image"] },
+        ],
+      },
+    },
+  },
+}
+```
+
+See [/providers/llmman](/providers/llmman) for setup, hybrid local + hosted routing, vision, and troubleshooting.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:

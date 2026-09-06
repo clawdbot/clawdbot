@@ -1828,6 +1828,10 @@
     "target": "llmman（本地模型）"
   },
   {
+    "source": "llmman (local + hybrid local/hosted models)",
+    "target": "llmman（本地 + 本地/托管混合模型）"
+  },
+  {
     "source": "llama.cpp (managed or existing server)",
     "target": "llama.cpp（托管或现有服务器）"
   },

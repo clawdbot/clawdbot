@@ -142,6 +142,8 @@ openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "R
 openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
 openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model mistral/mistral-small-latest --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model openai/gpt-5.6-luna --prompt "Reply with exactly: pong" --json
@@ -205,6 +207,7 @@ Notes:
 - Use `--timeout-ms` for slow local vision models or cold Ollama starts.
 - For `image describe`, an explicit `--model` (must be an image-capable `<provider/model>`) runs first, then tries configured `agents.defaults.imageModel.fallbacks` if that call fails. Input-preparation errors (missing file, unsupported URL) fail before any fallback attempt, and the model must be image-capable in the model catalog or provider config.
 - For local Ollama vision models, pull the model first and set `OLLAMA_API_KEY` to any placeholder value, for example `ollama-local`. See [Ollama](/providers/ollama#vision-and-image-description).
+- For llmman vision models such as `llmman/gemma4:e4b`, configure the `llmman` provider with `input: ["text", "image"]` on the model entry and set `LLMMAN_API_KEY` to a placeholder such as `llmman-local`. See [llmman](/providers/llmman#vision-and-image-description).
 
 ## Audio
 

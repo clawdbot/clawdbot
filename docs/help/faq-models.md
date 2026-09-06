@@ -80,11 +80,17 @@ troubleshooting, see the main [FAQ](/help/faq).
     cloud models such as `kimi-k2.5:cloud` need no local pull. To switch
     manually: `openclaw models list`, then `openclaw models set ollama/<model>`.
 
+    [llmman](/providers/llmman) is the alternative when you want models pulled
+    from OCI registries or Hugging Face, unmodified upstream `llama-server`,
+    `vllm`, or `mlx-lm` engines, or hybrid routing that keeps small requests on
+    a local model such as `qwen3.8` and overflows large ones to a hosted model.
+
     Smaller/heavily quantized models are more vulnerable to prompt injection.
     Use large models for any bot with tool access; if you use small models
     anyway, enable sandboxing and strict tool allowlists.
 
-    Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
+    Docs: [Ollama](/providers/ollama), [llmman](/providers/llmman),
+    [Local models](/gateway/local-models),
     [Model providers](/concepts/model-providers), [Security](/gateway/security),
     [Sandboxing](/gateway/sandboxing).
 
