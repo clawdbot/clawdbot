@@ -221,6 +221,10 @@ export async function prepareUpdateCheckpointRestore(
               const currentDb = openNodeSqliteDatabase(currentCopy, { readOnly: true });
               try {
                 carryForwardUpdateCheckpointSqlite({
+                  databasePath: resource.sourcePath,
+                  pluginIndexMutations: (afterUpdate.manifest.pluginIndexMutations ?? []).filter(
+                    (receipt) => receipt.databasePath === resource.sourcePath,
+                  ),
                   checkpoint: oldDb,
                   afterUpdate: afterDb,
                   current: currentDb,

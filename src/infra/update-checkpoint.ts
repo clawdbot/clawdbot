@@ -22,6 +22,11 @@ import {
   syncCheckpointTree,
   type CheckpointFileState,
 } from "./update-checkpoint-files.js";
+import {
+  checkpointPluginIndexMutationsMatch,
+  UpdateCheckpointPluginIndexMutationSchema,
+  type UpdateCheckpointPluginIndexMutation,
+} from "./update-checkpoint-plugin-index.js";
 import { createUpdateCheckpointSqliteSnapshot } from "./update-checkpoint-sqlite.js";
 
 const absolutePath = z
@@ -68,6 +73,7 @@ const manifestSchema = z
     binding: bindingSchema,
     createdAtMs: z.number().int(),
     exclusions: z.array(z.string()),
+    pluginIndexMutations: z.array(UpdateCheckpointPluginIndexMutationSchema).max(1024).optional(),
     resources: z.array(
       resourceSchema
         .extend({
@@ -218,14 +224,35 @@ export async function captureUpdateCheckpoint(
     exclusions: readonly string[];
     /** When supplied, bind every replaceable non-SQLite source, including absence.
      * These facts do not grant authority; assertQuiescent must still be current.
-     * SQLite row provenance remains the owner's exclusive before/after boundary.
+     * Plugin row provenance is separately bound by pluginIndexMutations.
      */
     expectedSources?: readonly UpdateCheckpointSourceBinding[];
+    /** Retain success-settled writer receipts in commit order, never reconstruct by reading later. */
+    pluginIndexMutations?: readonly UpdateCheckpointPluginIndexMutation[];
   },
 ): Promise<UpdateCheckpointRef> {
   const binding = bindingSchema.parse(params.binding);
   absolutePath.parse(params.artifactRoot);
   assertResourceBoundaries(params.resources, params.artifactRoot);
+  const pluginIndexMutations = z
+    .array(UpdateCheckpointPluginIndexMutationSchema)
+    .max(1024)
+    .parse(params.pluginIndexMutations ?? []);
+  const sharedPath = path.join(binding.stateDir, "state", "openclaw.sqlite");
+  if (
+    pluginIndexMutations.some(
+      (mutation) =>
+        mutation.databasePath !== sharedPath ||
+        !params.resources.some(
+          (resource) =>
+            resource.sourcePath === sharedPath &&
+            resource.kind === "sqlite" &&
+            resource.restore === "replace",
+        ),
+    )
+  ) {
+    throw new Error("Checkpoint plugin-index mutation database mismatch");
+  }
   const expectedSources = new Map<string, CheckpointFileState | null>();
   if (params.expectedSources) {
     const files = params.resources.filter(
@@ -258,6 +285,7 @@ export async function captureUpdateCheckpoint(
     binding,
     createdAtMs: Date.now(),
     exclusions: [...params.exclusions],
+    pluginIndexMutations,
     resources: [],
   };
   const sourceStates = new Map<string, CheckpointFileState | null>();
@@ -288,6 +316,22 @@ export async function captureUpdateCheckpoint(
           })
         ).userVersion;
         captured = await inspectCheckpointFile(targetPath);
+        const db = openNodeSqliteDatabase(targetPath, { readOnly: true });
+        try {
+          if (
+            !checkpointPluginIndexMutationsMatch({
+              mutations: pluginIndexMutations.filter(
+                (mutation) => mutation.databasePath === resource.sourcePath,
+              ),
+              databasePath: resource.sourcePath,
+              afterUpdate: db,
+            })
+          ) {
+            throw new Error("Checkpoint plugin-index mutation after-image mismatch");
+          }
+        } finally {
+          db.close();
+        }
       } else {
         captured = await copyCheckpointFile(resource.sourcePath, targetPath, before);
       }
@@ -349,6 +393,21 @@ export async function reopenUpdateCheckpoint(
     throw new Error("Checkpoint binding mismatch");
   }
   assertResourceBoundaries(manifest.resources, access.artifactRoot);
+  if (
+    manifest.pluginIndexMutations?.some(
+      (mutation) =>
+        mutation.databasePath !== path.join(access.binding.stateDir, "state", "openclaw.sqlite") ||
+        !manifest.resources.some(
+          (resource) =>
+            resource.sourcePath === mutation.databasePath &&
+            resource.kind === "sqlite" &&
+            resource.artifact &&
+            resource.restore === "replace",
+        ),
+    )
+  ) {
+    throw new Error("Checkpoint plugin-index mutation database mismatch");
+  }
   for (const resource of manifest.resources) {
     if ((resource.artifact === null) !== (resource.captured === null)) {
       throw new Error("Checkpoint artifact presence mismatch");
@@ -363,6 +422,17 @@ export async function reopenUpdateCheckpoint(
     if (resource.kind === "sqlite") {
       const db = openNodeSqliteDatabase(file, { readOnly: true });
       try {
+        if (
+          !checkpointPluginIndexMutationsMatch({
+            mutations: (manifest.pluginIndexMutations ?? []).filter(
+              (mutation) => mutation.databasePath === resource.sourcePath,
+            ),
+            databasePath: resource.sourcePath,
+            afterUpdate: db,
+          })
+        ) {
+          throw new Error("Checkpoint plugin-index mutation after-image mismatch");
+        }
         if (readSqliteUserVersion(db) !== resource.userVersion) {
           throw new Error("Checkpoint schema identity mismatch");
         }

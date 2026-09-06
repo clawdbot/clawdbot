@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
+import type { UpdateCheckpointPluginIndexMutation } from "./update-checkpoint-plugin-index.js";
 import {
   inspectUpdateCheckpointRestoreResource,
   prepareUpdateCheckpointRestore,
@@ -56,10 +57,11 @@ async function fixture() {
   ];
   // This disposable fixture owns every mutation and captures its output facts
   // before tests permit independent operator/agent work.
-  const capture = async () =>
+  const capture = async (pluginIndexMutations?: readonly UpdateCheckpointPluginIndexMutation[]) =>
     captureUpdateCheckpoint({
       ...access,
       resources,
+      pluginIndexMutations,
       exclusions: ["workspace files are retained, never restored"],
       expectedSources: await Promise.all(
         resources
@@ -660,8 +662,8 @@ describe("update checkpoint artifacts and publication", () => {
   );
 
   it.each([false, true])(
-    "preserves owned recovery rows and newer work, with operator conflict (%s)",
-    async (operatorConflict) => {
+    "preserves owned recovery rows and newer work, with plugin row conflict (%s)",
+    async (pluginConflict) => {
       const f = await fixture(),
         file = path.join(f.stateDir, "state", "openclaw.sqlite");
       const mutate = (sql: string) => {
@@ -680,12 +682,22 @@ describe("update checkpoint artifacts and publication", () => {
       mutate(
         "PRAGMA user_version=2; INSERT INTO update_runs VALUES('current','applying'); UPDATE config_machine_state SET value_json='new-index', updated_at_ms=2 WHERE state_key='plugins.installedIndex'; UPDATE config_machine_state SET value_json='{\"revision\":2}', updated_at_ms=2 WHERE state_key='update.recovery.active'",
       );
-      if (operatorConflict) {
+      const afterUpdateRef = await f.capture([
+        {
+          databasePath: file,
+          before: {
+            state_key: "plugins.installedIndex",
+            value_json: "old-index",
+            updated_at_ms: 1,
+          },
+          after: { state_key: "plugins.installedIndex", value_json: "new-index", updated_at_ms: 2 },
+        },
+      ]);
+      if (pluginConflict) {
         mutate(
-          "UPDATE config_machine_state SET value_json='update-owned-change', updated_at_ms=2 WHERE state_key='operator'",
+          "UPDATE config_machine_state SET value_json='operator-plugin-edit',updated_at_ms=3 WHERE state_key='plugins.installedIndex'",
         );
       }
-      const afterUpdateRef = await f.capture();
       mutate(
         "INSERT INTO work VALUES(2,'online verification turn'); UPDATE config_machine_state SET value_json='new-operator-value', updated_at_ms=3 WHERE state_key='operator'; UPDATE config_machine_state SET value_json='{\"revision\":3}', updated_at_ms=3 WHERE state_key='update.recovery.active'",
       );
@@ -709,7 +721,7 @@ describe("update checkpoint artifacts and publication", () => {
           }
         },
       });
-      if (operatorConflict) {
+      if (pluginConflict) {
         expect(prepared).toEqual({ status: "unavailable", resource: "config_machine_state" });
         const live = new DatabaseSync(file, { readOnly: true });
         try {

@@ -1,7 +1,12 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import {
+  checkpointPluginIndexMutationsMatch,
+  type UpdateCheckpointPluginIndexMutation,
+} from "./update-checkpoint-plugin-index.js";
 
 /** Preserve the live SQLite family, including a closed WAL-mode source. */
 export async function createUpdateCheckpointSqliteSnapshot(params: {
@@ -90,70 +95,31 @@ function rowsMatch(left: DatabaseSync, right: DatabaseSync, table: string): bool
   return rowsEqual(readRows(left, table), readRows(right, table));
 }
 
-/** Undo only mutation-owned row differences; a third value is an unresolved conflict. */
+/** Shape-compatible rows stay current; only the exactly bound plugin row may rewind. */
 function mergeRows(
   checkpoint: DatabaseSync,
   afterUpdate: DatabaseSync,
   current: DatabaseSync,
   table: string,
 ): Row[] {
-  const beforeRows = readRows(checkpoint, table),
-    afterRows = readRows(afterUpdate, table),
-    currentRows = readRows(current, table);
-  if (rowsEqual(beforeRows, afterRows)) {
+  const currentRows = readRows(current, table);
+  if (table !== "config_machine_state") {
     return currentRows;
   }
-  const keys = checkpoint
-    .prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`)
-    .all()
-    .filter((column) => Number(column.pk) > 0)
-    .toSorted((a, b) => Number(a.pk) - Number(b.pk))
-    .map((column) => String(column.name));
-  if (keys.length === 0) {
-    if (rowsEqual(afterRows, currentRows)) {
-      return beforeRows;
-    }
+  const isIndex = (row: Row) => row.state_key === INSTALLED_PLUGIN_INDEX_STATE_KEY;
+  const before = readRows(checkpoint, table).find(isIndex);
+  const after = readRows(afterUpdate, table).find(isIndex);
+  if (rowJson(before) === rowJson(after)) {
+    return currentRows;
+  }
+  const live = currentRows.find(isIndex);
+  if (rowJson(live) === rowJson(before)) {
+    return currentRows;
+  }
+  if (rowJson(live) !== rowJson(after)) {
     throw new UpdateCheckpointPreservationUnavailable(table);
   }
-  const keyed = (rows: Row[]) => {
-    const result = new Map<string, Row>();
-    for (const row of rows) {
-      const key = rowJson(Object.fromEntries(keys.map((column) => [column, row[column]!])))!;
-      if (result.has(key) || keys.some((column) => row[column] === null)) {
-        throw new UpdateCheckpointPreservationUnavailable(table);
-      }
-      result.set(key, row);
-    }
-    return result;
-  };
-  const before = keyed(beforeRows),
-    after = keyed(afterRows),
-    live = keyed(currentRows);
-  const result: Row[] = [];
-  for (const key of new Set([...before.keys(), ...after.keys(), ...live.keys()])) {
-    const oldRow = before.get(key),
-      afterRow = after.get(key),
-      liveRow = live.get(key);
-    let chosen = liveRow;
-    // Recovery owns its exact machine rows and overlays them before publication.
-    // They advance during the update itself and must never be three-way reverted.
-    const recoveryOwned =
-      table === "config_machine_state" &&
-      [oldRow, afterRow, liveRow].some(
-        (row) => typeof row?.state_key === "string" && row.state_key.startsWith("update.recovery."),
-      );
-    if (!recoveryOwned && rowJson(oldRow) !== rowJson(afterRow)) {
-      if (rowJson(liveRow) === rowJson(afterRow)) {
-        chosen = oldRow;
-      } else if (rowJson(liveRow) !== rowJson(oldRow)) {
-        throw new UpdateCheckpointPreservationUnavailable(table);
-      }
-    }
-    if (chosen) {
-      result.push(chosen);
-    }
-  }
-  return result;
+  return [...currentRows.filter((row) => !isIndex(row)), ...(before ? [before] : [])];
 }
 
 export class UpdateCheckpointPreservationUnavailable extends Error {
@@ -210,9 +176,9 @@ export function selectUpdateCheckpointSqliteBase(params: {
 
 /**
  * Plan first, then carry CURRENT data into a checkpoint copy. Changed-schema tables
- * may rewind only when they still match the exact post-migration image. Unchanged
- * tables merge mutation-owned changes with current rows; edits/deletes and turns
- * outside that mutation are retained. Recovery rows have a separate owning carry-forward.
+ * may rewind only when they still match the exact post-migration image. Shape-compatible
+ * tables retain all current rows, including interval writes. Only the exact
+ * plugin-index receipt chain binds a row reversal. Recovery rows have a separate owning carry-forward.
  * No schema version is invented and no live database is mutated here.
  */
 export function carryForwardUpdateCheckpointSqlite(params: {
@@ -220,7 +186,21 @@ export function carryForwardUpdateCheckpointSqlite(params: {
   afterUpdate: DatabaseSync;
   current: DatabaseSync;
   staged: DatabaseSync;
+  databasePath?: string;
+  pluginIndexMutations?: readonly UpdateCheckpointPluginIndexMutation[];
 }): { preservedTables: string[]; restoredTables: string[] } {
+  if (
+    !checkpointPluginIndexMutationsMatch({
+      mutations: params.pluginIndexMutations ?? [],
+      databasePath: params.databasePath ?? "",
+      checkpoint: params.checkpoint,
+      afterUpdate: params.afterUpdate,
+    })
+  ) {
+    throw new UpdateCheckpointPreservationUnavailable(
+      params.databasePath ?? "config_machine_state",
+    );
+  }
   const previousObjects = schemaObjects(params.checkpoint);
   const afterObjects = schemaObjects(params.afterUpdate);
   const currentObjects = schemaObjects(params.current);
@@ -273,8 +253,7 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       if (virtual) {
         if (
           currentBase
-            ? !rowsMatch(params.checkpoint, params.afterUpdate, table) ||
-              !rowsMatch(params.current, params.staged, table)
+            ? !rowsMatch(params.current, params.staged, table)
             : !rowsMatch(params.checkpoint, params.current, table)
         ) {
           throw new UpdateCheckpointPreservationUnavailable(table);
@@ -349,12 +328,11 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       };
       for (const table of preservedTables) {
         const previous = sequence(params.checkpoint, table),
-          after = sequence(params.afterUpdate, table),
           current = sequence(params.current, table),
           staged = sequence(params.staged, table);
         // Undo mutation-owned lowering, retain the online high-water mark and
-        // any identity represented by rows selected by the three-way merge.
-        const chosen = current === after ? previous : current > previous ? current : previous;
+        // every identity represented by preserved current rows.
+        const chosen = current > previous ? current : previous;
         const seq = chosen > staged ? chosen : staged;
         if (seq > 0n) {
           params.staged.prepare("DELETE FROM sqlite_sequence WHERE name = ?").run(table);

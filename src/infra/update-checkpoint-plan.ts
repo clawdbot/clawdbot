@@ -4,7 +4,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { checkpointContentMatches } from "./update-checkpoint-files.js";
+import { checkpointPluginIndexMutationsMatch } from "./update-checkpoint-plugin-index.js";
 import {
   CheckpointFileStateSchema,
   reopenUpdateCheckpoint,
@@ -143,6 +145,39 @@ export async function reopenUpdateCheckpointRestorePlan(
           resource.recovery.stagedBinding.transactionId)
     ) {
       throw new Error("Restore recovery binding mismatch");
+    }
+    if (resource.sqlite && captured.artifact) {
+      const mutation = afterUpdate.manifest.resources.find(
+        (entry) => entry.sourcePath === captured.sourcePath && entry.kind === "sqlite",
+      );
+      if (!mutation?.artifact) {
+        throw new Error("Restore plugin-index mutation snapshot missing");
+      }
+      const beforeDb = openNodeSqliteDatabase(
+        path.join(path.dirname(plan.checkpointRef.manifestPath), captured.artifact),
+        { readOnly: true },
+      );
+      const afterDb = openNodeSqliteDatabase(
+        path.join(path.dirname(plan.afterUpdateRef.manifestPath), mutation.artifact),
+        { readOnly: true },
+      );
+      try {
+        if (
+          !checkpointPluginIndexMutationsMatch({
+            mutations: (afterUpdate.manifest.pluginIndexMutations ?? []).filter(
+              (entry) => entry.databasePath === resource.sourcePath,
+            ),
+            databasePath: resource.sourcePath,
+            checkpoint: beforeDb,
+            afterUpdate: afterDb,
+          })
+        ) {
+          throw new Error("Restore plan lacks bound plugin-index mutation facts");
+        }
+      } finally {
+        beforeDb.close();
+        afterDb.close();
+      }
     }
     if (!resource.sqlite) {
       const mutation = afterUpdate.manifest.resources.find(

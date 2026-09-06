@@ -43,7 +43,7 @@ describe("checkpoint database preservation", () => {
       afterUpdate = database(OPENCLAW_AGENT_SCHEMA_SQL),
       current = database(OPENCLAW_AGENT_SCHEMA_SQL),
       staged = database(OPENCLAW_AGENT_SCHEMA_SQL);
-    for (const db of [current, staged]) {
+    for (const db of [afterUpdate, current, staged]) {
       db.exec(
         "INSERT INTO session_transcript_fts(rowid, text, session_id, message_id, role, timestamp) VALUES(42, 'verification zebra', 'session', 'turn', 'assistant', 1)",
       );
@@ -84,18 +84,18 @@ describe("checkpoint database preservation", () => {
     expect(staged.prepare("INSERT INTO work(text) VALUES('next')").run().lastInsertRowid).toBe(101);
   });
 
-  it("reverts update-owned same-schema row changes without losing later work", () => {
+  it("preserves shape-compatible interval and later work without inferring mutation ownership", () => {
     const checkpoint = database(before),
       staged = database(before),
       afterUpdate = database(before),
       current = database(before);
-    afterUpdate.exec("UPDATE settings SET value='migration' WHERE key='migrated'");
+    afterUpdate.exec("UPDATE settings SET value='interval work' WHERE key='migrated'");
     current.exec(
-      "UPDATE settings SET value='migration' WHERE key='migrated'; INSERT INTO settings VALUES('online', 'operator work')",
+      "UPDATE settings SET value='interval work' WHERE key='migrated'; INSERT INTO settings VALUES('online', 'operator work')",
     );
     carryForwardUpdateCheckpointSqlite({ checkpoint, staged, afterUpdate, current });
     expect(staged.prepare("SELECT * FROM settings ORDER BY key").all()).toEqual([
-      { key: "migrated", value: "before" },
+      { key: "migrated", value: "interval work" },
       { key: "online", value: "operator work" },
     ]);
   });
