@@ -73,6 +73,15 @@ saved profiles. The picker remembers the most recently used profile. Every
 selection creates a new independent window, so the same Gateway can appear in
 multiple windows with different active sessions and navigation state.
 
+The main **Gateways** menu is always present. It lists the primary Gateway, when
+configured, then saved Gateways, with Command-1 through Command-9 in that order.
+Select an item to open its dashboard window or bring its existing window to the
+front. Hold Option for **New … Window**, or use Option-Command with the same digit,
+to open another independent window. The checkmark follows the frontmost dashboard
+window. **Manage Gateways…** opens **Connection → Gateways**, even when the list is
+empty. For SSH-tunneled primaries, the primary row uses the SSH host name rather
+than the loopback tunnel endpoint, unless a matching saved Gateway supplies its name.
+
 The dashboard also reopens your selected Gateway after an app restart.
 Choosing **Primary** switches startup back to the primary Gateway. Background
 connection refreshes do not change this selection.

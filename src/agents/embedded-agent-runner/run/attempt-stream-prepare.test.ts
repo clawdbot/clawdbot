@@ -726,16 +726,9 @@ describe("prepareEmbeddedAttemptStream", () => {
     const attemptAbortController = new AbortController();
     const runAbortController = new AbortController();
     const markExternalAbort = vi.fn();
-    const markAborted = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
-    const abortState = {
-      markAborted,
-      markExternalAbort,
-      markTimedOut: vi.fn(),
-      markTimedOutDuringCompaction: vi.fn(),
-      markTimedOutDuringToolExecution: vi.fn(),
-      readTimedOutDuringCompaction: vi.fn(() => false),
-      setPromptError: vi.fn(),
+    const abortState: Parameters<typeof createEmbeddedAttemptRunAbort>[0]["state"] = {
+      terminal: { kind: "ok" },
     };
     const externalAbortController = createEmbeddedAttemptExternalAbortController({
       abortSignal: attemptAbortController.signal,
@@ -784,9 +777,9 @@ describe("prepareEmbeddedAttemptStream", () => {
 
       expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
 
-      expect(markExternalAbort).toHaveBeenCalledTimes(2);
+      expect(markExternalAbort).toHaveBeenCalledOnce();
       expect(onAttemptAbort).toHaveBeenCalledOnce();
-      expect(markAborted).toHaveBeenCalledOnce();
+      expect(abortState.terminal).toEqual({ kind: "aborted", source: "external" });
       expect(abortActiveSession).toHaveBeenCalledOnce();
       expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });

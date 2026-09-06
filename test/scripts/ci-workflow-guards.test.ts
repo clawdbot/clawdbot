@@ -17297,6 +17297,14 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
 
   const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const abiScannerTest = expectDefined(
+    (prLinux.jobs.build.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Test packaged runtime ABI scanner",
+    ),
+    "pull request AppImage ABI scanner test",
+  );
+  expect(abiScannerTest.run).toContain("python3 -m unittest discover");
+  expect(abiScannerTest.run).toContain("-s apps/linux/tests -p 'test_packaged_runtime_smoke.py'");
   const workflowContracts = [
     {
       job: prLinux.jobs.build,

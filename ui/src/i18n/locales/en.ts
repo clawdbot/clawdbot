@@ -3159,6 +3159,12 @@ export const en: TranslationMap & {
       description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed",
+      finished: "{done} completed · {failed} failed",
+      childOutcome: "Child runs finished. Check the conversation for the final response.",
+      details: "Child details",
+      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      otherGroups: "{count} more active groups",
     },
     toolSearch: {
       title: "Tool Search for all models",

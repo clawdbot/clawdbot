@@ -290,6 +290,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
     ["the attempt yielded", { yieldDetected: true }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
+    ["Gateway storage is locked", { errorMessage: "database is locked", diagnostics: [] }],
     ["the provider requires authentication", { errorMessage: "401 unauthorized" }],
     [
       "the provider has exhausted its quota",
@@ -297,10 +298,15 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
     ["the continuation budget is spent", { retryAvailable: false }],
   ])("keeps the replay gate closed when %s", async (_label, scenario) => {
-    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop(scenario);
+    const {
+      recovery,
+      markOwnedTranscriptRetry,
+      continueFromCurrentTranscript,
+      failoverRetryController,
+    } = await recoverAfterTransportDrop(scenario);
 
     expect(recovery).toEqual({ action: "proceed" });
+    expect(failoverRetryController.transientRetryCount).toBe(0);
     expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
