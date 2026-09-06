@@ -375,7 +375,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuild failures (including forced preflight) leave the primary alone.
       if (!needsFullReindex) {
-        this.pruneEmbeddingCacheIfNeeded();
+        await this.pruneEmbeddingCacheIfNeeded();
       }
     }
   }
@@ -601,7 +601,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.writeMeta(nextMeta);
           // Bound the cache before copying it into the shared agent database;
           // deleting overflow afterward does not undo primary-file growth.
-          this.pruneEmbeddingCacheIfNeeded();
+          await this.pruneEmbeddingCacheIfNeeded();
           return {
             nextMeta,
             vectorIndexComplete,

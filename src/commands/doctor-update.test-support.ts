@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
   restartUpdatedGateway: vi.fn(),
   stopGatewayService: vi.fn(),
   waitForHealthyRestart: vi.fn(),
+  waitForHttpReadiness:
+    vi.fn<typeof import("../cli/daemon-cli/restart-health.js").waitForGatewayHttpReadiness>(),
+  runUpdateInferenceProbe:
+    vi.fn<typeof import("../cli/update-cli/update-command-inference.js").runUpdateInferenceProbe>(),
   doctorCommand: vi.fn(),
   createUpdateConfigSnapshot: vi.fn(),
   createServiceConfigIO: vi.fn(),
@@ -69,8 +73,12 @@ vi.mock("../cli/update-cli/update-command-config-snapshot.js", () => ({
 }));
 vi.mock("../cli/daemon-cli/restart-health.js", () => ({
   waitForGatewayHealthyRestart: mocks.waitForHealthyRestart,
+  waitForGatewayHttpReadiness: mocks.waitForHttpReadiness,
   renderRestartDiagnostics: () => ["gateway not ready"],
   terminateStaleGatewayPids: vi.fn(),
+}));
+vi.mock("../cli/update-cli/update-command-inference.js", () => ({
+  runUpdateInferenceProbe: mocks.runUpdateInferenceProbe,
 }));
 vi.mock("../cli/update-cli/update-command-launch-agent-recovery.js", () => ({
   recoverInstalledLaunchAgentAfterUpdate: async () => ({ attempted: false, recovered: false }),
@@ -212,6 +220,8 @@ export function installDoctorUpdateTestHooks(): void {
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
     });
+    mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+    mocks.runUpdateInferenceProbe.mockReset().mockResolvedValue(false);
     mocks.doctorCommand.mockReset();
     mocks.createUpdateConfigSnapshot.mockReset().mockResolvedValue(undefined);
     mocks.createServiceConfigIO

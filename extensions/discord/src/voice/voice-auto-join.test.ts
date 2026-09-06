@@ -23,7 +23,83 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     expectConnectedStatus,
     updateVoiceState,
+    startTranscripts,
+    stopTranscripts,
+    getSessionEntry,
+    beginSpeakerTurn,
+    lastRealtimeBridgeParams,
+    emitFinalRealtimeUserTranscript,
+    receiveRecordedSpeech,
+    agentCommandMock,
   }) => {
+    it.each(["capture-first", "voice-first"])(
+      "keeps explicit capture and wake-name conversation through occupancy (%s)",
+      async (order) => {
+        const client = createClient();
+        const human = {
+          guild_id: "g1",
+          user_id: "u-owner",
+          channel_id: "1001",
+          member: { user: { id: "u-owner", bot: false } },
+        };
+        let states: Array<Record<string, unknown>> = order === "voice-first" ? [human] : [];
+        configureVoiceStateGateway(client, () => states);
+        const manager = createManager(
+          makeVoiceConfig(
+            {
+              mode: "agent-proxy",
+              autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+              realtime: { provider: "openai", requireWakeName: true },
+            },
+            { groupPolicy: "open", allowFrom: ["discord:u-owner"] },
+          ),
+          client,
+        );
+        const onUtterance = vi.fn();
+        if (order === "voice-first") {
+          await manager.autoJoin();
+        }
+        expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
+        if (order === "capture-first") {
+          await manager.autoJoin();
+          expect(manager.status()).toEqual([]);
+          expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+          states = [human];
+          await updateVoiceState(manager, "u-owner", "1001", human.member);
+        }
+        for (const text of ["first occupation", "second occupation"]) {
+          expectConnectedStatus(manager, "1001");
+          const entry = getSessionEntry(manager);
+          expect(entry.realtimeLifecycle.status).toBe("active");
+          await receiveRecordedSpeech(manager, text);
+          await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), text);
+          expect(onUtterance).toHaveBeenCalledWith(
+            expect.objectContaining({ sessionId: "notes-1", text }),
+          );
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          states = [];
+          await updateVoiceState(manager, "u-owner", null, human.member);
+          expect(manager.status()).toEqual([]);
+          states = [human];
+          await updateVoiceState(manager, "u-owner", "1001", human.member);
+        }
+        beginSpeakerTurn(getSessionEntry(manager));
+        await emitFinalRealtimeUserTranscript(
+          lastRealtimeBridgeParams(),
+          "OpenClaw, what is the next step?",
+        );
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        states = [];
+        await updateVoiceState(manager, "u-owner", null, human.member);
+        expect(await stopTranscripts()).toMatchObject({ ok: true });
+        states = [human];
+        await updateVoiceState(manager, "u-owner", "1001", human.member);
+        const count = onUtterance.mock.calls.length;
+        await receiveRecordedSpeech(manager, "after capture stop");
+        await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "after capture stop");
+        expect(onUtterance).toHaveBeenCalledTimes(count);
+      },
+    );
     it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
       const manager = createManager({
         voice: {

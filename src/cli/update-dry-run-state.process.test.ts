@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -109,6 +111,57 @@ async function expectPreviewLedger(root: string, runId: string, before: string[]
 }
 
 describe("update process state", () => {
+  it("allows cleanup after an admitted updater dies without finishing its ledger", async () => {
+    const root = tempDirs.make("openclaw-cleanup-orphan-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const env = {
+      PATH: process.env.PATH,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+    };
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local"}}\n');
+    const entry = path.join(root, "admit.mjs");
+    const admissionModule = pathToFileURL(
+      path.resolve("src/cli/update-cli/update-command-run.ts"),
+    ).href;
+    await fs.writeFile(
+      entry,
+      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule)};
+const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
+process.stdout.write(JSON.stringify({ runId: run.runId }) + "\\n");
+process.stdin.resume();
+`,
+    );
+    const admitted = await runCliProcessChild({
+      nodeArgs: ["--import", path.resolve("scripts/tsx.mjs"), entry],
+      env,
+      interact: async (child) => {
+        await once(child.stdout, "data");
+        child.kill("SIGKILL");
+      },
+    });
+    expect(admitted.signal, formatCliProcessFailure({ reason: "updater death", ...admitted })).toBe(
+      "SIGKILL",
+    );
+    const { runId } = JSON.parse(admitted.stdout) as { runId: string };
+    expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
+
+    const cleanup = runUpdateProcess(root, ["update", "cleanup", "--yes", "--json"]);
+
+    expect(cleanup.error).toBeUndefined();
+    expect(JSON.parse(cleanup.stdout)).toMatchObject({
+      status: "complete",
+      artifacts: [],
+      totals: { removedFiles: 0 },
+    });
+    expect(cleanup.status, cleanup.stderr).toBe(0);
+    expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
+  });
+
   it.each([true, false])(
     "keeps cleanup preview/refusal byte-identical (dryRun=%s)",
     async (dryRun) => {

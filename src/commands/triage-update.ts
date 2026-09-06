@@ -38,7 +38,10 @@ const updateFailureSchema = z
             stderrTail: z.string().nullish(),
             termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
             advisory: z
-              .object({ kind: z.literal("package-post-install-doctor"), message: z.string() })
+              .object({
+                kind: z.enum(["package-post-install-doctor", "candidate-runtime-unavailable"]),
+                message: z.string(),
+              })
               .optional(),
           }),
         ),

@@ -118,21 +118,53 @@ diagnostics without launching an agent; `--update-result <path>` includes an
 updater's saved failure artifact. Printed handoff commands preserve installation
 selectors and use PowerShell on Windows or POSIX shells on macOS, Linux, and WSL.
 
-Git updates may restore and verify the original source and runtime before Doctor
-starts. Once candidate Doctor starts, subsequent failures retain that candidate
-and explicitly refuse recovery: code rollback cannot reverse state migrations.
-Package-manager and lifecycle commands can change state even while npm stages
-the candidate. After those commands start, restoring the original package and
-launchers does not authorize restarting them against possibly changed state.
-Only a fully verified candidate, including the required nonblocking Doctor
-result, can authorize activation. Failures before hooks can run, such as staging
-directory preparation errors, can still recover a verified original runtime.
+Staging and validation run while the old Gateway serves. The candidate runs
+Doctor lint, config and plugin planning, and an isolated canary boot against
+copied configuration and verified database snapshots. Migrations on these
+copies rehearse the upgrade without changing live state. A validation failure
+leaves the old Gateway running; an `already-current` no-op never stops it.
+Older targets that predate migration continuation record runtime validation as
+unavailable and use the [existing downgrade finalization path](/install/updating#roll-back-a-package-install).
+The detached helper also waits for the `activating` phase before parking its
+parent Gateway. The first activation window contains the swap, required live
+migrations, and service start. Plugin package download and sync run while the
+core Gateway serves. A changed plugin snapshot requires a second measured
+activation window: full Doctor migrations under exclusive maintenance, then
+restart and verification. Unchanged plugins do not run another full Doctor pass.
 
-An update failure does not by itself authorize a Gateway restart. The updater
-must explicitly verify that the installation is safe to activate. A blocking
-Doctor result leaves the Gateway stopped, including when a detached managed
-update helper is still running. Re-enabling Windows task autostart cannot
-bypass that decision.
+After activation, the updater verifies the managed service, the expected
+version/build identity, a 12-probe health settle, plugin activation, channels,
+and HTTP 200 from `/readyz`. A 15-second inference probe is advisory; provider
+unavailability alone records a warning and does not cause rollback. Verification
+facts and measured downtime are retained in the [update run report](/cli/update#run-history-and-reports).
+
+When a package fails verification, the updater compares the shared and affected
+per-agent SQLite `user_version` values and configuration content with their
+pre-activation values. If they are unchanged and the previous runtime was
+verified before activation, it restores the previous package, command shim,
+service definition, and config writer stamp, then starts that runtime and repeats
+the CLI verification checks. Successful recovery leaves that Gateway running
+and finishes `rolled-back`, with the failing check kept as the reason and
+downtime covering service stop through verified recovery. The writer-stamp guard
+does not block this intentional recovery; its allowance is scoped to rollback
+service commands and never persisted. See
+[Automatic rollback](/install/updating#automatic-schema-neutral-rollback).
+If configuration content or a schema version changed, automatic rollback is
+refused (`state-migrated-no-rollback`): a reachable candidate remains running for
+diagnosis, and an unreachable candidate remains stopped. Code rollback cannot
+reverse state migrations. An unavailable schema comparison also prevents
+automatic rollback (`rollback-state-unverified`). After migration,
+a fresh candidate process finishes verification and the same durable run report;
+the old updater does not reopen the newer database. Git activation failures before live migrations can restore
+the previous source and retained built runtime; later Git failures retain the
+candidate for diagnosis.
+
+An update failure does not by itself authorize a candidate restart. Candidate
+activation still requires successful validation; a blocking live Doctor result
+does not become a restart grant. The previous runtime was verified before the
+update, so rollback across unchanged configuration and schemas may restart it
+under that prior verification and must verify it again afterward. A detached
+helper or Windows task autostart cannot bypass this decision.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
@@ -156,11 +188,22 @@ than older helpers that restarted after an unclassified failure. Installing a ne
 target does not change an already-running historical helper; these checks apply
 to the helper version that started the update.
 
-A skipped update, such as a Git checkout with no upstream, can still require
-restoring the service parked by its detached helper. The helper uses the child's
-verified recovery decision and preserves the skip reason. A zero exit is retained
-only if recovery succeeds or the child already verified it; failed foreground
-recovery is terminal and is not retried.
+A skipped update before activation does not park or restart the Gateway. If an
+interruption occurs after parking, the helper uses the child's verified recovery
+decision and preserves the original reason. A zero exit is retained only if
+required recovery succeeds or the child already verified it.
+
+Updater exit code `79` keeps the Gateway parked only when the previous generation
+cannot be safely restored and verified. When the updater has restored the previous
+generation across unchanged configuration and schemas and supplies a verified
+recovery decision, the helper starts and verifies it instead of leaving it
+stopped. Helper recovery verifies service liveness, version/build identity,
+plugin activation, and channel health. It does not repeat the separate `/readyz`
+or inference probes; those report fields remain unverified.
+The run then finishes `rolled-back` with the previous version and measured
+downtime. Missing recovery proof, migrated state, or failed restoration still
+requires repair before restart. A service that is observed stopped is recorded
+as stopped; the report does not reuse its pre-activation running status.
 
 A failed update still exits nonzero when service recovery or the repair agent
 succeeds. Error and skip notifications are attempted before recovery; the helper

@@ -40,11 +40,13 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
-  const recovery = result.recovery;
+  if (!result.recovery) {
+    return undefined;
+  }
+  const recovery = { ...result.recovery };
   // Restored runtimes parse this object strictly, so persist only the pre-update shape.
-  return recovery?.serviceRestartSafe === false
-    ? { serviceRestartSafe: false, reason: recovery.reason }
-    : recovery;
+  delete recovery.packageRollbackVerified;
+  return recovery;
 }
 
 /** Build the restart sentinel payload written after update runs. */

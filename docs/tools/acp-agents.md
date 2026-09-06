@@ -586,9 +586,10 @@ config-the-default error).
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
   uses existing subagent model defaults (`agents.defaults.subagents.model` or
   `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
-  harness use its own default model. Other harnesses must advertise ACP
-  `models` and support `session/set_model`; otherwise OpenClaw/acpx fails
-  clearly instead of silently falling back to the target agent default.
+  harness use its own default model. Other harnesses must advertise ACP model
+  controls for an explicit selection. Without those controls, an explicit
+  selection fails; an inherited default may be omitted so the harness can use
+  its own default.
 </ParamField>
 <ParamField path="thinking" type="string">
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to low
@@ -854,15 +855,22 @@ does not accept a target token.
 | `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
 | `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
 | `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
-| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                                             |
+| `/acp cwd <path>`            | runtime cwd override                 | Applied on the next runtime operation, which closes the previous handle before replacing it.                                                                                                               |
 | `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
-| `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                                                          |
+| `/acp reset-options`         | clears all runtime overrides         | Closes a retained runtime without starting a new backend.                                                                                                                                                  |
 
 When a backend returns its accepted controls, OpenClaw keeps an already-selected
 thinking level in sync with that response. A model switch may lower the level or
 remove thinking support; subsequent turns and reconnects use the accepted
 selection instead of replaying the old level. Backend defaults do not become new
 session overrides, and the model reference keeps its OpenClaw provider prefix.
+Model overrides are validated before prompt submission, including after reconnect.
+Unsupported inherited defaults dropped during new session initialization are not
+saved as overrides.
+
+`/acp reset-options` also works after a restart when an old working directory or
+model override prevents backend startup. If closing a retained runtime fails,
+the options remain available for retry.
 
 ## acpx harness, plugin setup, and permissions
 

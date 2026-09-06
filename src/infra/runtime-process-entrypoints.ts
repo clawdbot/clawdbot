@@ -17,6 +17,21 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-integrity.worker",
     distWorkerPath: "infra/sqlite-integrity.worker.js",
   },
+  updateInferenceProbe: {
+    currentModuleUrl,
+    sourceWorkerName: "update-inference-probe.worker",
+    distWorkerPath: "infra/update-inference-probe.worker.js",
+  },
+  updateMigratedFinalize: {
+    currentModuleUrl,
+    sourceWorkerName: "update-migrated-finalize.worker",
+    distWorkerPath: "infra/update-migrated-finalize.worker.js",
+  },
+  updateCandidateState: {
+    currentModuleUrl,
+    sourceWorkerName: "update-candidate-state.worker",
+    distWorkerPath: "infra/update-candidate-state.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",
