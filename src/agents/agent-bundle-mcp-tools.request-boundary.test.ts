@@ -9,8 +9,12 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import { makeToolRuntime } from "./agent-bundle-mcp-tools.test-support.js";
-import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpToolCatalog,
+  McpToolCatalogDiagnostic,
+  SessionMcpRuntime,
+} from "./agent-bundle-mcp-types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyFinalEffectiveToolPolicy,
@@ -889,3 +893,55 @@ describe("a server that still materializes a tool stays out of the outage record
     expect(runtime.diagnostics).toBeUndefined();
   });
 });
+
+// Local copy of the materialize test fixture; #140312 removed the shared
+// `agent-bundle-mcp-tools.test-support` module in favor of per-file fixtures.
+function makeToolRuntime(
+  params: {
+    tools?: McpCatalogTool[];
+    serverName?: string;
+    diagnostics?: readonly McpToolCatalogDiagnostic[];
+  } = {},
+): SessionMcpRuntime {
+  const serverName = params.serverName ?? "bundleProbe";
+  const tools = params.tools ?? [
+    {
+      serverName,
+      safeServerName: serverName,
+      toolName: "bundle_probe",
+      description: "Bundle probe",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "Bundle probe",
+    },
+  ];
+  const peekCatalog = (): McpToolCatalog => ({
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      [serverName]: {
+        serverName,
+        launchSummary: serverName,
+        toolCount: tools.length,
+        supportsParallelToolCalls: false,
+      },
+    },
+    tools,
+    ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
+  });
+  return {
+    sessionId: "session-collision",
+    workspaceDir: "/tmp",
+    configFingerprint: "fingerprint",
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    getCatalog: async () => peekCatalog(),
+    peekCatalog,
+    callTool: async () => ({
+      content: [{ type: "text", text: "FROM-BUNDLE" }],
+      isError: false,
+    }),
+    joinCleanup: async () => {},
+    dispose: async () => {},
+  };
+}
