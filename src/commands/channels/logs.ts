@@ -39,6 +39,7 @@ type ManifestChannel = { id: string; pluginId: string };
 type FileCheckpoint = {
   file: string;
   identity: string;
+  size: number;
   cursor: number;
   prefixLength: number;
   prefix: string;
@@ -159,6 +160,26 @@ function installFollowSignalHandlers(controller: AbortController): () => void {
   };
 }
 
+function isOutputClosedError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "EPIPE" || code === "EIO";
+}
+
+function installFollowOutputHandlers(controller: AbortController): () => void {
+  const stop = () => controller.abort();
+  const handleError = (error: Error) => {
+    if (isOutputClosedError(error)) {
+      stop();
+    }
+  };
+  process.stdout.once("close", stop);
+  process.stdout.once("error", handleError);
+  return () => {
+    process.stdout.off("close", stop);
+    process.stdout.off("error", handleError);
+  };
+}
+
 async function readFileCheckpoint(
   file: string,
   cursor: number,
@@ -191,6 +212,7 @@ async function readFileCheckpoint(
     return {
       file,
       identity: `${stat.dev}:${stat.ino}`,
+      size,
       cursor: boundedCursor,
       prefixLength: boundedPrefixLength,
       prefix: await readWindow(0, boundedPrefixLength),
@@ -214,13 +236,7 @@ function isSameFileCheckpoint(
   previous: FileCheckpoint,
   current: FileCheckpoint | undefined,
 ): boolean {
-  return (
-    current?.file === previous.file &&
-    current.identity === previous.identity &&
-    current.prefixLength === previous.prefixLength &&
-    current.prefix === previous.prefix &&
-    current.boundary === previous.boundary
-  );
+  return isSameFileGeneration(previous, current) && current?.boundary === previous.boundary;
 }
 
 function isSameFileGeneration(
@@ -232,8 +248,11 @@ function isSameFileGeneration(
   return (
     current?.file === previous.file &&
     current.identity === previous.identity &&
+    current.size >= previous.size &&
     current.prefixLength >= previous.prefixLength &&
-    currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true
+    currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true &&
+    (current.size > previous.size ||
+      (current.mtimeNs === previous.mtimeNs && current.ctimeNs === previous.ctimeNs))
   );
 }
 
@@ -242,15 +261,20 @@ function isSameTailGeneration(
   generation: LogFileGeneration | undefined,
   current: FileCheckpoint | undefined,
 ): boolean {
+  if (generation === undefined) {
+    return current === undefined;
+  }
+  const currentPrefix = current ? Buffer.from(current.prefix, "base64") : undefined;
+  const generationPrefix = Buffer.from(generation.prefix, "base64");
   return (
-    generation !== undefined &&
     current?.file === file &&
     current.identity === generation.identity &&
-    current.prefixLength === generation.prefixLength &&
-    current.prefix === generation.prefix &&
+    current.size >= generation.size &&
+    current.prefixLength >= generation.prefixLength &&
+    currentPrefix?.subarray(0, generation.prefixLength).equals(generationPrefix) === true &&
     current.boundary === generation.boundary &&
-    current.mtimeNs === generation.mtimeNs &&
-    current.ctimeNs === generation.ctimeNs
+    (current.size > generation.size ||
+      (current.mtimeNs === generation.mtimeNs && current.ctimeNs === generation.ctimeNs))
   );
 }
 
@@ -258,14 +282,8 @@ function isSameFileGenerationAtValidationCursor(
   previous: FileCheckpoint,
   current: FileCheckpoint | undefined,
 ): boolean {
-  const changedWithoutCursorAdvance =
-    current !== undefined &&
-    current.cursor <= previous.cursor &&
-    (current.mtimeNs !== previous.mtimeNs || current.ctimeNs !== previous.ctimeNs);
   return (
-    isSameFileGeneration(previous, current) &&
-    current?.validationBoundary === previous.boundary &&
-    !changedWithoutCursorAdvance
+    isSameFileGeneration(previous, current) && current?.validationBoundary === previous.boundary
   );
 }
 
@@ -279,6 +297,7 @@ async function followChannelLogs(
 ): Promise<void> {
   const controller = new AbortController();
   const removeSignalHandlers = installFollowSignalHandlers(controller);
+  const removeOutputHandlers = installFollowOutputHandlers(controller);
   let cursor: number | undefined;
   let previousFile: string | undefined;
   let previousCheckpoint: FileCheckpoint | undefined;
@@ -334,7 +353,7 @@ async function followChannelLogs(
 
       const checkpointPrefixLength = reanchored
         ? undefined
-        : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.cursor));
+        : Math.max(previousCheckpoint?.prefixLength ?? 0, Math.min(64, tail.size));
       let checkpoint = await readFileCheckpoint(
         tail.file,
         tail.cursor,
@@ -427,6 +446,7 @@ async function followChannelLogs(
     }
   } finally {
     removeSignalHandlers();
+    removeOutputHandlers();
   }
 }
 

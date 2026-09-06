@@ -33,12 +33,12 @@ export type LogTailPayload = {
   truncated: boolean;
   reset: boolean;
   skippedBytes?: number;
-  generation?: LogFileGeneration;
 };
 
 /** File identity and content samples captured by the handle used for a tail read. */
 export type LogFileGeneration = {
   identity: string;
+  size: number;
   prefix: string;
   prefixLength: number;
   boundary: string;
@@ -47,8 +47,10 @@ export type LogFileGeneration = {
 };
 
 /** Redacted configured log tail with only parseable structured records. */
+type LogTailReadPayload = LogTailPayload & { generation?: LogFileGeneration };
 type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
+  generation?: LogFileGeneration;
 };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
@@ -88,7 +90,7 @@ async function readLogSlice(params: {
   limit: LogTailLimit;
   maxBytes: number;
   filter?: (line: string) => boolean;
-}): Promise<Omit<LogTailPayload, "file">> {
+}): Promise<Omit<LogTailReadPayload, "file">> {
   const handle = await fs.open(params.file, "r").catch(missingPathToNull);
   if (!handle) {
     return {
@@ -147,6 +149,7 @@ async function readLogSlice(params: {
       const boundaryStart = Math.max(0, boundedCursor - 64);
       return {
         identity: `${stat.dev}:${stat.ino}`,
+        size,
         prefix: await readWindow(0, prefixLength),
         prefixLength,
         boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
@@ -211,11 +214,10 @@ async function readLogSlice(params: {
   }
 }
 
-/** Reads and redacts the configured log tail with bounded bytes and line count. */
-export async function readConfiguredLogTail(
+async function readConfiguredLogTailInternal(
   params?: { cursor?: number; limit?: LogTailLimit; maxBytes?: number },
   filter?: (line: string) => boolean,
-): Promise<LogTailPayload> {
+): Promise<LogTailReadPayload> {
   const target = getResolvedLoggerFileTarget();
   const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
@@ -233,6 +235,16 @@ export async function readConfiguredLogTail(
   };
 }
 
+/** Reads and redacts the configured log tail with bounded bytes and line count. */
+export async function readConfiguredLogTail(
+  params?: { cursor?: number; limit?: LogTailLimit; maxBytes?: number },
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
+  const tail = await readConfiguredLogTailInternal(params, filter);
+  const { generation: _generation, ...publicTail } = tail;
+  return publicTail;
+}
+
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
   cursor?: number;
@@ -240,7 +252,7 @@ export async function readConfiguredParsedLogTail(params?: {
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
 }): Promise<ParsedLogTailPayload> {
-  const tail = await readConfiguredLogTail(params, (raw) => {
+  const tail = await readConfiguredLogTailInternal(params, (raw) => {
     const parsed = parseLogLine(raw);
     return parsed !== null && (params?.filter?.(parsed) ?? true);
   });
