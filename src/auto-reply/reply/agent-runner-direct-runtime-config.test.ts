@@ -540,11 +540,12 @@ describe("runReplyAgent runtime config", () => {
         expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
           runSessionCompactionIfNeededMock.mock.invocationCallOrder[0]!,
         );
-        expect(onBlockReply).toHaveBeenCalledWith(
+        expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
           expect.objectContaining({
             text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+            isCompactionNotice: true,
           }),
-        );
+        ]);
         expect(executeAgentTurnMock).toHaveBeenCalledOnce();
       });
     } finally {
