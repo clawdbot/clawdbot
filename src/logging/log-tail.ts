@@ -33,6 +33,17 @@ export type LogTailPayload = {
   truncated: boolean;
   reset: boolean;
   skippedBytes?: number;
+  generation?: LogFileGeneration;
+};
+
+/** File identity and content samples captured by the handle used for a tail read. */
+export type LogFileGeneration = {
+  identity: string;
+  prefix: string;
+  prefixLength: number;
+  boundary: string;
+  mtimeNs: string;
+  ctimeNs: string;
 };
 
 /** Redacted configured log tail with only parseable structured records. */
@@ -78,8 +89,8 @@ async function readLogSlice(params: {
   maxBytes: number;
   filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(missingPathToNull);
-  if (!stat) {
+  const handle = await fs.open(params.file, "r").catch(missingPathToNull);
+  if (!handle) {
     return {
       cursor: 0,
       size: 0,
@@ -88,55 +99,74 @@ async function readLogSlice(params: {
       reset: false,
     };
   }
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const size = Number(stat.size);
+    const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
+    const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
+    let cursor =
+      typeof params.cursor === "number" && Number.isFinite(params.cursor)
+        ? Math.max(0, Math.floor(params.cursor))
+        : undefined;
+    let reset = false;
+    let skippedBytes: number | undefined;
+    let truncated = false;
+    let start;
 
-  const size = stat.size;
-  const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
-  const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
-  let cursor =
-    typeof params.cursor === "number" && Number.isFinite(params.cursor)
-      ? Math.max(0, Math.floor(params.cursor))
-      : undefined;
-  let reset = false;
-  let skippedBytes: number | undefined;
-  let truncated = false;
-  let start;
-
-  if (cursor != null) {
-    if (cursor > size) {
-      // File rotated or shrank since the previous cursor; restart near the end.
-      reset = true;
+    if (cursor != null) {
+      if (cursor > size) {
+        // File rotated or shrank since the previous cursor; restart near the end.
+        reset = true;
+        start = Math.max(0, size - maxBytes);
+        truncated = start > 0;
+      } else {
+        start = cursor;
+        if (size - start > maxBytes) {
+          // Keep reset as the re-anchor signal for existing clients. The skipped byte count
+          // lets current clients distinguish this valid-cursor fast-forward from file shrink.
+          reset = true;
+          truncated = true;
+          const boundedStart = Math.max(0, size - maxBytes);
+          skippedBytes = boundedStart - start;
+          start = boundedStart;
+        }
+      }
+    } else {
       start = Math.max(0, size - maxBytes);
       truncated = start > 0;
-    } else {
-      start = cursor;
-      if (size - start > maxBytes) {
-        // Keep reset as the re-anchor signal for existing clients. The skipped byte count
-        // lets current clients distinguish this valid-cursor fast-forward from file shrink.
-        reset = true;
-        truncated = true;
-        const boundedStart = Math.max(0, size - maxBytes);
-        skippedBytes = boundedStart - start;
-        start = boundedStart;
-      }
     }
-  } else {
-    start = Math.max(0, size - maxBytes);
-    truncated = start > 0;
-  }
 
-  if (size === 0 || size <= start) {
-    return {
-      cursor: size,
-      size,
-      lines: [],
-      truncated,
-      reset,
-      skippedBytes,
+    const readWindow = async (windowStart: number, length: number) => {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - windowStart)));
+      const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
+      return buffer.toString("base64", 0, bytesRead);
     };
-  }
+    const buildGeneration = async (generationCursor: number): Promise<LogFileGeneration> => {
+      const boundedCursor = Math.min(Math.max(0, generationCursor), size);
+      const prefixLength = Math.min(64, size);
+      const boundaryStart = Math.max(0, boundedCursor - 64);
+      return {
+        identity: `${stat.dev}:${stat.ino}`,
+        prefix: await readWindow(0, prefixLength),
+        prefixLength,
+        boundary: await readWindow(boundaryStart, boundedCursor - boundaryStart),
+        mtimeNs: stat.mtimeNs.toString(),
+        ctimeNs: stat.ctimeNs.toString(),
+      };
+    };
 
-  const handle = await fs.open(params.file, "r");
-  try {
+    if (size === 0 || size <= start) {
+      return {
+        cursor: size,
+        size,
+        lines: [],
+        truncated,
+        reset,
+        skippedBytes,
+        generation: await buildGeneration(size),
+      };
+    }
+
     let prefix = "";
     if (start > 0) {
       const prefixBuf = Buffer.alloc(1);
@@ -174,6 +204,7 @@ async function readLogSlice(params: {
       truncated,
       reset,
       skippedBytes,
+      generation: await buildGeneration(cursor),
     };
   } finally {
     await handle.close();

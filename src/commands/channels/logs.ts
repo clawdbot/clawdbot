@@ -10,10 +10,15 @@ import {
 } from "../../channels/registry.js";
 import { isMissingPathError } from "../../infra/errno.js";
 import { readFileWindowFully } from "../../infra/file-read.js";
-import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
+import { readConfiguredParsedLogTail, type LogFileGeneration } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  defaultRuntime,
+  type RuntimeEnv,
+  writeRuntimeJson,
+  writeRuntimeStdout,
+} from "../../runtime.js";
 
 export type ChannelsLogsOptions = {
   channel?: string;
@@ -39,6 +44,8 @@ type FileCheckpoint = {
   prefix: string;
   boundary: string;
   validationBoundary: string;
+  mtimeNs: string;
+  ctimeNs: string;
 };
 
 function listManifestChannels(): ManifestChannel[] {
@@ -122,14 +129,24 @@ function parseIntervalOption(value: unknown): number {
   return parsed;
 }
 
-function writeChannelLogLine(runtime: RuntimeEnv, line: ParsedLogLine, json: boolean): void {
+function writeChannelLogLine(
+  runtime: RuntimeEnv,
+  line: ParsedLogLine,
+  json: boolean,
+  follow = false,
+): void {
   if (json) {
     writeRuntimeJson(runtime, { type: "log", ...line }, 0);
     return;
   }
   const ts = line.time ? `${line.time} ` : "";
   const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
-  runtime.log(`${ts}${level}${line.message}`.trim());
+  const output = `${ts}${level}${line.message}`.trim();
+  if (follow) {
+    writeRuntimeStdout(runtime, output);
+    return;
+  }
+  runtime.log(output);
 }
 
 function installFollowSignalHandlers(controller: AbortController): () => void {
@@ -158,15 +175,16 @@ async function readFileCheckpoint(
     return undefined;
   }
   try {
-    const stat = await handle.stat();
+    const stat = await handle.stat({ bigint: true });
+    const size = Number(stat.size);
     const readWindow = async (start: number, length: number) => {
-      const buffer = Buffer.alloc(Math.max(0, Math.min(length, stat.size - start)));
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - start)));
       const bytesRead = await readFileWindowFully(handle, buffer, start);
       return buffer.toString("base64", 0, bytesRead);
     };
-    const boundedCursor = Math.min(Math.max(0, cursor), stat.size);
-    const boundedValidationCursor = Math.min(Math.max(0, validationCursor), stat.size);
-    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? boundedCursor), stat.size);
+    const boundedCursor = Math.min(Math.max(0, cursor), size);
+    const boundedValidationCursor = Math.min(Math.max(0, validationCursor), size);
+    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? boundedCursor), size);
     const boundaryStart = Math.max(0, boundedCursor - 64);
     const validationBoundaryStart = Math.max(0, boundedValidationCursor - 64);
     const boundary = await readWindow(boundaryStart, boundedCursor - boundaryStart);
@@ -184,6 +202,8 @@ async function readFileCheckpoint(
               validationBoundaryStart,
               boundedValidationCursor - validationBoundaryStart,
             ),
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
     };
   } finally {
     await handle.close();
@@ -217,12 +237,35 @@ function isSameFileGeneration(
   );
 }
 
+function isSameTailGeneration(
+  file: string,
+  generation: LogFileGeneration | undefined,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return (
+    generation !== undefined &&
+    current?.file === file &&
+    current.identity === generation.identity &&
+    current.prefixLength === generation.prefixLength &&
+    current.prefix === generation.prefix &&
+    current.boundary === generation.boundary &&
+    current.mtimeNs === generation.mtimeNs &&
+    current.ctimeNs === generation.ctimeNs
+  );
+}
+
 function isSameFileGenerationAtValidationCursor(
   previous: FileCheckpoint,
   current: FileCheckpoint | undefined,
 ): boolean {
+  const changedWithoutCursorAdvance =
+    current !== undefined &&
+    current.cursor <= previous.cursor &&
+    (current.mtimeNs !== previous.mtimeNs || current.ctimeNs !== previous.ctimeNs);
   return (
-    isSameFileGeneration(previous, current) && current?.validationBoundary === previous.boundary
+    isSameFileGeneration(previous, current) &&
+    current?.validationBoundary === previous.boundary &&
+    !changedWithoutCursorAdvance
   );
 }
 
@@ -298,6 +341,18 @@ async function followChannelLogs(
         checkpointPrefixLength,
         previousCheckpoint?.cursor,
       );
+      if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+        checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
+        if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
+          checkpoint = undefined;
+        }
+      }
       if (
         !reanchored &&
         previousGeneration !== undefined &&
@@ -311,6 +366,9 @@ async function followChannelLogs(
         });
         reanchored = true;
         checkpoint = await readFileCheckpoint(tail.file, tail.cursor);
+        if (!isSameTailGeneration(tail.file, tail.generation, checkpoint)) {
+          checkpoint = undefined;
+        }
       }
 
       const fileChanged = previousFile !== undefined && tail.file !== previousFile;
@@ -334,21 +392,24 @@ async function followChannelLogs(
         }
       } else {
         if (firstRead || fileChanged) {
-          runtime.log(theme.info(`Log file: ${tail.file}`));
+          writeRuntimeStdout(runtime, theme.info(`Log file: ${tail.file}`));
           if (channel !== "all") {
-            runtime.log(theme.info(`Channel: ${channel}`));
+            writeRuntimeStdout(runtime, theme.info(`Channel: ${channel}`));
           }
         }
         if (tail.truncated) {
-          runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
+          writeRuntimeStdout(
+            runtime,
+            theme.warn("Log tail truncated; earlier entries were omitted."),
+          );
         }
         if (tail.reset || reanchored) {
-          runtime.log(theme.warn("Log file reset; re-reading the current tail."));
+          writeRuntimeStdout(runtime, theme.warn("Log file reset; re-reading the current tail."));
         }
       }
 
       for (const line of tail.lines) {
-        writeChannelLogLine(runtime, line, json);
+        writeChannelLogLine(runtime, line, json, true);
       }
       cursor = checkpoint ? tail.cursor : undefined;
       previousFile = tail.file;

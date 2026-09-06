@@ -235,6 +235,13 @@ describe("readConfiguredLogTail", () => {
           }
           return realStat(...args);
         });
+      } else if (boundary === "final stat") {
+        const realOpen = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await realOpen(...args);
+          vi.spyOn(handle, "stat").mockRejectedValueOnce(error);
+          return handle;
+        });
       } else {
         vi.spyOn(fs, "stat")
           .mockImplementationOnce((...args: Parameters<typeof fs.stat>) => realStat(...args))

@@ -381,6 +381,39 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("writes text follow output to stdout without re-entering the logger", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "text follow" }),
+      );
+      const writeStdout = vi.fn();
+      const followRuntime = {
+        ...runtime,
+        writeStdout,
+        writeJson: vi.fn(),
+      };
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10 },
+        followRuntime,
+      );
+
+      await vi.waitFor(() => expect(writeStdout).toHaveBeenCalledTimes(3));
+      expect(writeStdout.mock.calls.map(([value]) => String(value))).toEqual([
+        expect.stringContaining("Log file:"),
+        expect.stringContaining("Channel: slack"),
+        "2026-04-25T12:00:00.000Z info text follow",
+      ]);
+      expect(runtime.log).not.toHaveBeenCalled();
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not replay a short file when an append grows its prefix", async () => {
     vi.useFakeTimers();
     try {
@@ -556,7 +589,7 @@ describe("channelsLogsCommand", () => {
         if (armRace && armedOpenCount === 4) {
           await fs.writeFile(
             logPath,
-            logLine({ module: "gateway/channels/slack/receive", message: newMessage }),
+            logLine({ module: "gateway/channels/slack/send", message: newMessage }),
           );
         }
         return realOpen(...args);
@@ -602,6 +635,38 @@ describe("channelsLogsCommand", () => {
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
         openCount += 1;
         if (openCount === 2) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(openCount).toBeGreaterThanOrEqual(4));
+
+      process.emit("SIGINT");
+      await expect(follow).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues following when the tail open races a file rotation", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 4) {
           throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
         }
         return realOpen(...args);
