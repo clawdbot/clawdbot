@@ -2,13 +2,13 @@
 // casing a session recorded when its session key folded the peer id.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { extractDeliveryInfoMock, getChannelPluginMock } = vi.hoisted(() => ({
-  extractDeliveryInfoMock: vi.fn(),
+const { readDeliveryMock, getChannelPluginMock } = vi.hoisted(() => ({
+  readDeliveryMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/delivery-info.js", () => ({
-  extractDeliveryInfo: extractDeliveryInfoMock,
+  readExactSessionDeliveryContext: readDeliveryMock,
 }));
 
 vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
@@ -27,17 +27,17 @@ const SESSION_KEY = `agent:main:googlechat:group:${FOLDED_SPACE}`;
 
 describe("resolveEffectiveCurrentChannelContext", () => {
   beforeEach(() => {
-    extractDeliveryInfoMock.mockReset();
-    extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
+    readDeliveryMock.mockReset();
+    readDeliveryMock.mockReturnValue(undefined);
     getChannelPluginMock.mockReset();
     // Google Chat declares case-sensitive space ids (extensions/googlechat/src/channel.ts).
     getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "case-sensitive" } });
   });
 
   it("recovers the canonical space casing from the session's delivery metadata", () => {
-    extractDeliveryInfoMock.mockReturnValue({
-      deliveryContext: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-      threadId: undefined,
+    readDeliveryMock.mockReturnValue({
+      channel: "googlechat",
+      to: `googlechat:${CANONICAL_SPACE}`,
     });
 
     expect(
@@ -65,9 +65,9 @@ describe("resolveEffectiveCurrentChannelContext", () => {
   });
 
   it("keeps the session-derived target when the stored delivery names another space", () => {
-    extractDeliveryInfoMock.mockReturnValue({
-      deliveryContext: { channel: "googlechat", to: "googlechat:spaces/ZZZZ9z9Z9Zz" },
-      threadId: undefined,
+    readDeliveryMock.mockReturnValue({
+      channel: "googlechat",
+      to: "googlechat:spaces/ZZZZ9z9Z9Zz",
     });
 
     expect(
@@ -82,9 +82,9 @@ describe("resolveEffectiveCurrentChannelContext", () => {
   });
 
   it("keeps the session-derived target when the stored delivery names another channel", () => {
-    extractDeliveryInfoMock.mockReturnValue({
-      deliveryContext: { channel: "slack", to: `slack:${CANONICAL_SPACE}` },
-      threadId: undefined,
+    readDeliveryMock.mockReturnValue({
+      channel: "slack",
+      to: `slack:${CANONICAL_SPACE}`,
     });
 
     expect(
@@ -110,7 +110,7 @@ describe("resolveEffectiveCurrentChannelContext", () => {
       currentChannelId: FOLDED_SPACE,
       currentMessagingTarget: FOLDED_SPACE,
     });
-    expect(extractDeliveryInfoMock).not.toHaveBeenCalled();
+    expect(readDeliveryMock).not.toHaveBeenCalled();
   });
 
   it("leaves an inbound non-internal provider untouched", () => {
@@ -126,6 +126,6 @@ describe("resolveEffectiveCurrentChannelContext", () => {
       currentChannelId: CANONICAL_SPACE,
       currentMessagingTarget: CANONICAL_SPACE,
     });
-    expect(extractDeliveryInfoMock).not.toHaveBeenCalled();
+    expect(readDeliveryMock).not.toHaveBeenCalled();
   });
 });
