@@ -7,7 +7,12 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/resolve-fs-safe-native-contract.mjs");
 const tempDirectories = useAutoCleanupTempDirTracker(afterEach);
 
-function commitSource(version: string, defaults: string, extraSource?: string) {
+function commitSource(
+  version: string,
+  defaults: string,
+  extraSource?: string,
+  remoteBranch?: string,
+) {
   const root = tempDirectories.make("openclaw-fs-safe-contract-");
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@openclaw.local"], { cwd: root });
@@ -26,6 +31,11 @@ function commitSource(version: string, defaults: string, extraSource?: string) {
   }
   execFileSync("git", ["add", "."], { cwd: root });
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
+  if (remoteBranch) {
+    execFileSync("git", ["update-ref", `refs/remotes/origin/${remoteBranch}`, "HEAD"], {
+      cwd: root,
+    });
+  }
   return {
     root,
     ref: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
@@ -48,7 +58,12 @@ const legacyDefaults = 'import { configureFsSafePython } from "@openclaw/fs-safe
 
 describe("resolve-fs-safe-native-contract", () => {
   it("reports the actual 0.3 selected-source contract as not applicable when authorized", () => {
-    const { root, ref } = commitSource("0.3.0", legacyDefaults);
+    const { root, ref } = commitSource(
+      "0.3.0",
+      legacyDefaults,
+      undefined,
+      "extended-stable/2026.6.33",
+    );
     expect(resolveContract(root, ref)).toBe("not-applicable");
   });
 
@@ -60,7 +75,11 @@ describe("resolve-fs-safe-native-contract", () => {
     expect(resolveContract(root, ref)).toBe("required");
   });
 
-  it("keeps current, unauthorized, or sibling-native source contracts strict", () => {
+  it("keeps current, unapproved, unauthorized, or sibling-native source contracts strict", () => {
+    const unapproved = commitSource("0.3.0", legacyDefaults);
+    expect(resolveContract(unapproved.root, unapproved.ref)).toBe("required");
+    const currentRelease = commitSource("0.3.0", legacyDefaults, undefined, "release/2026.6.35");
+    expect(resolveContract(currentRelease.root, currentRelease.ref)).toBe("required");
     const unauthorized = commitSource("0.3.0", legacyDefaults);
     expect(resolveContract(unauthorized.root, unauthorized.ref, false)).toBe("required");
     expect(resolveContract(unauthorized.root, unauthorized.ref, true, unauthorized.ref)).toBe(
