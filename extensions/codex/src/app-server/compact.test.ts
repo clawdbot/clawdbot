@@ -513,6 +513,53 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
   });
 
+  it.each([
+    { label: "an edited catalog", refreshed: "catalog B" },
+    { label: "a withdrawn catalog", refreshed: undefined },
+  ])(
+    "records $label as reverted so the next turn re-delivers it after standalone compaction",
+    async ({ refreshed }) => {
+      const fake = createFakeCodexClient();
+      setCodexAppServerClientFactoryForTest(async () => fake.client);
+      const sessionFile = await writeTestBinding();
+      // The live thread was created with catalog A and refreshed in place, so
+      // only the injected message carries the current catalog.
+      const ephemeralPolicy = {
+        developerInstructions: "generic policy",
+        skillsInstructions: refreshed,
+        nativeSkillsInstructions: "catalog A",
+      };
+      await retainCodexAppServerLiveThread(
+        fake.client,
+        "thread-1",
+        undefined,
+        "config-thread-1",
+        null,
+        ephemeralPolicy,
+      );
+
+      await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+        ok: true,
+        compacted: true,
+      });
+
+      // Compaction discarded the injected refresh. Preserving the creation policy
+      // keeps the live thread from reading as policy drift, and the reverted
+      // catalog is what makes the next turn deliver the current one again.
+      await expect(
+        consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ephemeralPolicy: {
+            developerInstructions: "generic policy",
+            skillsInstructions: "catalog A",
+            nativeSkillsInstructions: "catalog A",
+          },
+        }),
+      );
+    },
+  );
+
   it("uses the exact prepared Platform key for native compaction", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
