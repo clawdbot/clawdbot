@@ -392,6 +392,52 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("derives legacy core fixture dialects only from an authorized selected source", () => {
+    const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
+    mkdirSync(path.join(root, "src/agents"), { recursive: true });
+    mkdirSync(path.join(root, "src/commands"), { recursive: true });
+    writeFileSync(
+      path.join(root, "src/agents/code-mode-namespaces.ts"),
+      'export const globals = ["ALL_TOOLS"];\n',
+    );
+    writeFileSync(
+      path.join(root, "src/commands/doctor-session-transcripts.ts"),
+      'const backup = ".pre-doctor-branch-repair-";\n',
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE"',
+        "test",
+        stageScriptPath,
+        root,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("jsonl legacy");
+  });
+
   it.each([
     "src/agents/subagent-announce.live.test.ts",
     "src/agents/subagents/announce/subagent-announce.live.test.ts",

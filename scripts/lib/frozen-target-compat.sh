@@ -118,8 +118,17 @@ openclaw_resolve_frozen_core_harness_capabilities() {
     export OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="agent"
   fi
 
-  export OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE
-  OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="$(openclaw_frozen_target_session_repair_mode "$source_root")"
+  if ! openclaw_frozen_target_source_has_path "$source_root" src/state/openclaw-agent-db-session-migrations.ts &&
+    openclaw_frozen_target_source_contains "$source_root" src/commands/doctor-session-transcripts.ts '.pre-doctor-branch-repair-'; then
+    export OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="jsonl"
+  fi
+
+  # The selected release exposes ALL_TOOLS to code mode but predates the
+  # catalog global. Its fixture must use the global the package actually ships.
+  if openclaw_frozen_target_source_contains "$source_root" src/agents/code-mode-namespaces.ts '"ALL_TOOLS"' &&
+    ! openclaw_frozen_target_source_contains "$source_root" src/agents/code-mode-namespaces.ts '"catalog"'; then
+    export OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE="legacy"
+  fi
 
   # The manager API and MCP App assertions were added after the selected
   # release. Run its still-packaged bundle-MCP contract instead of importing a

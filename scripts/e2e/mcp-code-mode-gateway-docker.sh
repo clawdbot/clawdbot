@@ -35,6 +35,9 @@ MCP_CODE_MODE_SEED_ENV_ARGS=()
 if [ "$OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE" = "agent" ]; then
   MCP_CODE_MODE_SEED_ENV_ARGS+=( -e "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=agent" )
 fi
+if [ "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" = "legacy" ]; then
+  MCP_CODE_MODE_SEED_ENV_ARGS+=( -e "OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE=legacy" )
+fi
 
 echo "Running in-container deterministic Gateway code-mode MCP API-file smoke..."
 set +e
