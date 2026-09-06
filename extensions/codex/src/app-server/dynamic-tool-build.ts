@@ -290,6 +290,11 @@ export async function buildDynamicTools(
     input.sandbox,
     input.nativeToolSurfaceEnabled,
   );
+  // Resolve the effective channel: messageChannel ?? messageProvider. Used for
+  // both the tools' messageProvider and the question prompt's channel so a turn
+  // that carries only messageProvider (e.g. a Telegram direct message with no
+  // explicit messageChannel) still delivers its protected link (#139809).
+  const resolvedMessageChannel = resolveCodexMessageToolProvider(params);
   const options: OpenClawCodingToolsOptions = {
     agentId: input.sessionAgentId,
     policyAgentId: input.policyAgentId,
@@ -306,7 +311,7 @@ export async function buildDynamicTools(
       : undefined,
     sandbox: input.sandbox,
     ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
-    messageProvider: resolveCodexMessageToolProvider(params),
+    messageProvider: resolvedMessageChannel,
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
     // Codex dispatches dynamic tools itself, so no tool-start handler reserves a
     // blocking question's prompt. Hand the tools this run's own way to show one.
@@ -314,7 +319,7 @@ export async function buildDynamicTools(
       ? {
           questionPrompt: {
             send: params.onToolResult,
-            ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
+            ...(resolvedMessageChannel ? { messageChannel: resolvedMessageChannel } : {}),
           },
         }
       : {}),
