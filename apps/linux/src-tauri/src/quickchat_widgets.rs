@@ -147,7 +147,8 @@ async fn with_gtk_widget(
 
 #[cfg(target_os = "linux")]
 async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
-    with_gtk_widget(webview, |primary| {
+    let app = webview.app_handle().clone();
+    with_gtk_widget(webview, move |primary| {
         let parent = primary
             .parent()
             .ok_or_else(|| "Quick Chat native view has no layout container.".to_string())?;
@@ -157,6 +158,10 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         let vbox = parent
             .downcast::<gtk::Box>()
             .map_err(|_| "Quick Chat native layout container is unavailable.".to_string())?;
+        let window = primary
+            .toplevel()
+            .and_then(|widget| widget.downcast::<gtk::Window>().ok())
+            .ok_or_else(|| "Quick Chat native window is unavailable.".to_string())?;
         let overlay = gtk::Overlay::new();
         let fixed = gtk::Fixed::new();
         let content: QuickChatContent = gtk::glib::Object::new();
@@ -174,6 +179,25 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         content.show();
         fixed.show();
         overlay.show();
+        let fixed = fixed.downgrade();
+        // Give WebKit's IME and widget handlers first refusal; an unhandled key is replayed by WebKit.
+        // Primary-view popovers keep their own Escape handling.
+        window.connect_key_press_event(move |window, event| {
+            if event.keyval() == gtk::gdk::keys::constants::Escape
+                && fixed.upgrade().is_some_and(|fixed| {
+                    window
+                        .focused_widget()
+                        .is_some_and(|focus| focus.is_ancestor(&fixed))
+                })
+            {
+                if !window.propagate_key_event(event) {
+                    crate::quickchat::request_hide(&app);
+                }
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
         Ok(())
     })
     .await
