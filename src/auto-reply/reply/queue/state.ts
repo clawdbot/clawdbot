@@ -174,8 +174,8 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
-  queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
+  queue.abortController.abort();
   for (const item of queue.items) {
     completeFollowupRunLifecycle(item);
   }

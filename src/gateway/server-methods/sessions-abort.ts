@@ -375,12 +375,15 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             if (clearQueued) {
               // Explicit full-session stops clear first so an aborting run cannot
               // promote queued work. Ordinary sessions.abort calls preserve it.
-              const cleared = clearSessionQueues([
-                key,
-                ...(requestedKeyAliases ?? []),
-                canonicalKey,
-                ...(persistedSessionId ? [persistedSessionId] : []),
-              ]);
+              const cleared = clearSessionQueues(
+                [
+                  key,
+                  ...(requestedKeyAliases ?? []),
+                  canonicalKey,
+                  ...(persistedSessionId ? [persistedSessionId] : []),
+                ],
+                { disposition: "stop" },
+              );
               queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
             }
             // Persisted channel replies are active session work even when they

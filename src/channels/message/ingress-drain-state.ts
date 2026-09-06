@@ -38,15 +38,16 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   closeProcessingClaim: () => void;
   /** Single settle owner for complete / fail / release / supersede / guillotine. */
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
+  isSettling: () => boolean;
 };
 
-export function createIngressSettleOwner<TPayload, TMetadata>(
-  state: ActiveHandlerState<TPayload, TMetadata>,
-  removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
-): (fn: () => Promise<void>) => Promise<void> {
+export function createIngressSettleOwner(onSettled: () => void): {
+  settleOnce: (fn: () => Promise<void>) => Promise<void>;
+  isSettling: () => boolean;
+} {
   let settlePromise: Promise<void> | undefined;
   let settled = false;
-  return async (fn) => {
+  const settleOnce = async (fn: () => Promise<void>) => {
     if (settled) {
       return;
     }
@@ -54,14 +55,14 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       await settlePromise;
       return;
     }
-    settlePromise = (async () => {
+    // Publish ownership before the writer can synchronously reenter a lifecycle callback.
+    settlePromise = Promise.resolve().then(async () => {
       // Only mark settled after the tombstone/fail/release write commits.
       // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
       await fn();
       settled = true;
-      state.phase = "settled";
-      removeActive(state);
-    })();
+      onSettled();
+    });
     try {
       await settlePromise;
     } catch (err) {
@@ -69,6 +70,7 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       throw err;
     }
   };
+  return { settleOnce, isSettling: () => settlePromise !== undefined && !settled };
 }
 
 export function activeClaimKey<TPayload, TMetadata>(

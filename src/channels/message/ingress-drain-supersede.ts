@@ -24,8 +24,37 @@ function isPreAdoptionState<TPayload, TMetadata>(
   return (
     (state.phase === "dispatching" || state.phase === "deferred") &&
     !state.guillotined &&
-    !state.superseded
+    !state.superseded &&
+    !state.isSettling()
   );
+}
+
+export function prepareIngressClaimDiscard<TPayload, TMetadata>(
+  params: Pick<
+    SupersedeActiveStatesParams<TPayload, TMetadata>,
+    "activeByClaim" | "laneOwnerByKey" | "clearStallTimer" | "completeClaim" | "formatError" | "log"
+  >,
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): (() => Promise<void>) | undefined {
+  if (
+    params.activeByClaim.get(activeClaimKey(state.claim)) !== state ||
+    !isPreAdoptionState(state) ||
+    (state.occupiesLane && params.laneOwnerByKey.get(state.laneKey) !== state)
+  ) {
+    return undefined;
+  }
+  state.superseded = true;
+  params.clearStallTimer(state);
+  return async () => {
+    state.abortController.abort(new Error("ingress-superseded"));
+    try {
+      await state.settleOnce(() => params.completeClaim(state.claim));
+    } catch (error) {
+      params.log(
+        `ingress drain: failed to tombstone superseded event ${state.eventId}: ${params.formatError(error)}`,
+      );
+    }
+  };
 }
 
 /** Supersede every accepted pre-adoption claim on one lane, including released deferrals. */
@@ -48,29 +77,11 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
       continue;
     }
     // Revalidate after the async predicate so a late true cannot kill adopted or replaced work.
-    if (
-      params.activeByClaim.get(activeClaimKey(pending.claim)) !== pending ||
-      !isPreAdoptionState(pending) ||
-      (pending.occupiesLane && params.laneOwnerByKey.get(params.laneKey) !== pending)
-    ) {
+    const discard = prepareIngressClaimDiscard(params, pending);
+    if (!discard) {
       continue;
     }
-    pending.superseded = true;
-    params.clearStallTimer(pending);
-    try {
-      pending.abortController.abort(new Error("ingress-superseded"));
-    } catch {
-      // ignore
-    }
-    try {
-      await pending.settleOnce(async () => {
-        await params.completeClaim(pending.claim);
-      });
-    } catch (error) {
-      params.log(
-        `ingress drain: failed to tombstone superseded event ${pending.eventId}: ${params.formatError(error)}`,
-      );
-    }
+    await discard();
     supersededAny = true;
   }
   return supersededAny && !params.laneOwnerByKey.has(params.laneKey);

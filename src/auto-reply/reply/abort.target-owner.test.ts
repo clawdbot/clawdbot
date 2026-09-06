@@ -1,6 +1,11 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+} from "../../channels/message/ingress-drain.test-helpers.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -16,7 +21,12 @@ import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
-import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
@@ -89,6 +99,91 @@ async function setupStop() {
 }
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it.each(["idle", "throwing"] as const)(
+    "does not replay a stopped ingress source with a %s backend",
+    async (backend) => {
+      await withTempState(async (stateDir) => {
+        const state = await setupStop();
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("stopped-source", { text: "queued input" });
+        const callbackEntered = createDeferred();
+        const releaseCallback = createDeferred();
+        const callbackReturned = createDeferred();
+        let callbackCount = 0;
+        let operation: ReturnType<typeof createReplyOperation> | undefined;
+        const runFollowup = async () => {
+          callbackCount += 1;
+          callbackEntered.resolve();
+          await releaseCallback.promise;
+          callbackReturned.resolve();
+        };
+        const drain = createChannelIngressDrain({
+          queue,
+          adoptionStallTimeoutMs: 30_000,
+          dispatchClaimedEvent: (claim, lifecycle) => {
+            const run = createQueueTestRun({ prompt: claim.payload.text, messageId: claim.id });
+            run.turnAdoptionLifecycle = lifecycle;
+            run.abortSignal = lifecycle.abortSignal;
+            enqueueFollowupRun(
+              sessionKey,
+              run,
+              { mode: "followup", debounceMs: 0, cap: 50, dropPolicy: "summarize" },
+              "message-id",
+              runFollowup,
+            );
+            return { kind: "deferred" };
+          },
+        });
+        try {
+          await drain.drainOnce();
+          await drain.waitForIdle();
+          scheduleFollowupDrain(sessionKey, runFollowup);
+          await callbackEntered.promise;
+          expect(await queue.listClaims()).toHaveLength(1);
+
+          if (backend === "throwing") {
+            operation = createReplyOperation({
+              sessionKey,
+              sessionId: "session-a",
+              resetTriggered: false,
+            });
+            operation.attachBackend({
+              kind: "embedded",
+              cancel: () => {
+                throw new Error("backend cancellation failed");
+              },
+              isStreaming: () => true,
+            });
+          }
+          const stopping =
+            pathKind === "fast"
+              ? tryFastAbortFromMessage(state)
+              : handleStopCommand(state.params, true);
+          if (backend === "throwing") {
+            await expect(stopping).rejects.toThrow("backend cancellation failed");
+          } else {
+            expect(await stopping).toMatchObject(
+              pathKind === "fast" ? { handled: true } : { shouldContinue: false },
+            );
+          }
+          await expect.poll(() => queue.listClaims()).toEqual([]);
+          expect(await queue.listPending()).toEqual([]);
+          expect((await queue.enqueue("stopped-source", { text: "redelivery" })).kind).toBe(
+            "completed",
+          );
+          releaseCallback.resolve();
+          await callbackReturned.promise;
+          expect(callbackCount).toBe(1);
+        } finally {
+          releaseCallback.resolve();
+          operation?.complete();
+          clearSessionQueues([sessionKey]);
+          drain.dispose();
+        }
+      });
+    },
+  );
+
   it("stops the selected agent's global session in an explicit roster", async () => {
     const state = await setupStop();
     const agentId = "selected";

@@ -30,7 +30,10 @@ import {
   type ActiveHandlerState,
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
-import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  prepareIngressClaimDiscard,
+  supersedeActiveStatesIfNeeded,
+} from "./ingress-drain-supersede.js";
 import { bindIngressProcessingClaim } from "./ingress-processing-handoff.js";
 import type {
   ChannelIngressQueue,
@@ -432,6 +435,10 @@ export function createChannelIngressDrain<
     laneKey: string,
   ): ActiveHandlerState<TPayload, TMetadata> => {
     const abortController = new AbortController();
+    const settleOwner = createIngressSettleOwner(() => {
+      state.phase = "settled";
+      removeActive(state);
+    });
     const state: ActiveHandlerState<TPayload, TMetadata> = {
       eventId: claim.id,
       laneKey,
@@ -444,6 +451,23 @@ export function createChannelIngressDrain<
       superseded: false,
       stallWatchdogRetired: false,
       closeProcessingClaim: bindIngressProcessingClaim(abortController.signal, {
+        prepareDiscard: () => {
+          if (isStopped()) {
+            return undefined;
+          }
+          const discard = prepareIngressClaimDiscard(
+            {
+              activeByClaim,
+              laneOwnerByKey,
+              clearStallTimer: retireClaimProcessing,
+              completeClaim: completeClaimWithRetry,
+              formatError,
+              log,
+            },
+            state,
+          );
+          return discard ? () => void discard() : undefined;
+        },
         start: () => {
           if (
             disposed ||
@@ -462,9 +486,8 @@ export function createChannelIngressDrain<
         },
       }),
       task: Promise.resolve(),
-      settleOnce: async () => {},
+      ...settleOwner,
     };
-    state.settleOnce = createIngressSettleOwner(state, removeActive);
     const lifecycle = createLifecycle(state);
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);

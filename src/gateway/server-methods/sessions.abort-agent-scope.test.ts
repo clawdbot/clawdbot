@@ -715,11 +715,14 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-queued-only-abort" },
     );
 
-    expect(clearSessionQueuesMock).toHaveBeenCalledWith([
-      "agent:main:openclaw-weixin:direct:queued-user",
-      "agent:main:openclaw-weixin:direct:queued-user",
-      "queued-session",
-    ]);
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith(
+      [
+        "agent:main:openclaw-weixin:direct:queued-user",
+        "agent:main:openclaw-weixin:direct:queued-user",
+        "queued-session",
+      ],
+      { disposition: "stop" },
+    );
     expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("queued-session");
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -750,7 +753,9 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-key-only-queue-abort" },
     );
 
-    expect(clearSessionQueuesMock).toHaveBeenCalledWith([sessionKey, sessionKey]);
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith([sessionKey, sessionKey], {
+      disposition: "stop",
+    });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -805,12 +810,10 @@ describe("sessions.abort agent scope", () => {
       },
     );
 
-    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith([
-      "agent:work:main",
-      "main",
-      "agent:work:main",
-      "work-session",
-    ]);
+    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith(
+      ["agent:work:main", "main", "agent:work:main", "work-session"],
+      { disposition: "stop" },
+    );
 
     clearSessionQueuesMock.mockClear();
     loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
@@ -825,11 +828,10 @@ describe("sessions.abort agent scope", () => {
       { context: createContext(), reqId: "req-foreign-legacy-alias-abort" },
     );
 
-    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith([
-      "agent:work:main",
-      "agent:work:main",
-      "work-session",
-    ]);
+    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith(
+      ["agent:work:main", "agent:work:main", "work-session"],
+      { disposition: "stop" },
+    );
   });
 
   it("leaves global-scope cleanup on chat.abort without an agent-qualified queue key", async () => {

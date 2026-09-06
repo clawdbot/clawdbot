@@ -8,6 +8,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 type IngressProcessingClaim = {
   live: boolean;
   start: () => boolean;
+  prepareDiscard: () => (() => void) | undefined;
   onClose: Set<() => void>;
 };
 
@@ -30,12 +31,12 @@ function processingState() {
   }));
 }
 
-/** Only the drain can register a live claim; retirement invalidates retained aggregates. */
+/** Only the drain registers claim authority; processing retirement does not settle that owner. */
 export function bindIngressProcessingClaim(
   signal: AbortSignal,
-  owner: { start: () => boolean },
+  owner: { start: () => boolean; prepareDiscard: () => (() => void) | undefined },
 ): () => void {
-  const claim: IngressProcessingClaim = { live: true, start: owner.start, onClose: new Set() };
+  const claim: IngressProcessingClaim = { live: true, ...owner, onClose: new Set() };
   const { claims } = processingState();
   const binding = [claim];
   claims.set(signal, binding);
@@ -45,8 +46,24 @@ export function bindIngressProcessingClaim(
       onClose();
     }
     claim.onClose.clear();
-    if (claims.get(signal) === binding) {
-      claims.delete(signal);
+    // Keep weak owner lookup through adoption finalization; the drain fences settled claims.
+  };
+}
+
+/** Fence the whole group before any abort can fan abandonment out to a sibling claim. */
+export function prepareDiscardIngressClaims(signals: readonly AbortSignal[]): () => void {
+  const { claims } = processingState();
+  const owners = new Set(signals.flatMap((signal) => claims.get(signal) ?? []));
+  const continuations: Array<() => void> = [];
+  for (const owner of owners) {
+    const discard = owner.prepareDiscard();
+    if (discard) {
+      continuations.push(discard);
+    }
+  }
+  return () => {
+    for (const discard of continuations) {
+      discard();
     }
   };
 }

@@ -303,6 +303,22 @@ export async function tryFastAbortFromMessage(params: {
                     : resolveStoredSessionId({ cfg, sessionKey: abortTargetKey })),
               ]),
             );
+            const sourceSessionId = sourceAbortKey
+              ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
+                resolveStoredSessionId({ cfg, sessionKey: sourceAbortKey }))
+              : undefined;
+            // Fence queued input before backend cancellation can throw or promote it.
+            const cleared = clearSessionQueues(
+              abortTargetKeys
+                .flatMap((abortTargetKey) => [abortTargetKey, sessionIdsByKey.get(abortTargetKey)])
+                .concat(sourceAbortKey, sourceSessionId),
+              { disposition: "stop" },
+            );
+            if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+              logVerbose(
+                `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+              );
+            }
             for (const abortTargetKey of abortTargetKeys) {
               const outcome = abortSessionRunTargetWithOutcome({
                 key: abortTargetKey,
@@ -311,10 +327,6 @@ export async function tryFastAbortFromMessage(params: {
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
             }
-            const sourceSessionId = sourceAbortKey
-              ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
-                resolveStoredSessionId({ cfg, sessionKey: sourceAbortKey }))
-              : undefined;
             if (sourceAbortKey) {
               const outcome = abortSessionRunTargetWithOutcome({
                 key: sourceAbortKey,
@@ -322,16 +334,6 @@ export async function tryFastAbortFromMessage(params: {
               });
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
-            }
-            const cleared = clearSessionQueues(
-              abortTargetKeys
-                .flatMap((abortTargetKey) => [abortTargetKey, sessionIdsByKey.get(abortTargetKey)])
-                .concat(sourceAbortKey, sourceSessionId),
-            );
-            if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-              logVerbose(
-                `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-              );
             }
           } finally {
             // The tree already holds queued reservations. Initiate ACP without awaiting

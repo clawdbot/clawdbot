@@ -160,6 +160,11 @@ attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
 
+An explicit `/stop`, or `sessions.abort` with `clearQueued: true`, discards
+the selected queued channel inputs. Their durable claims complete without
+agent-turn adoption, so those inputs do not replay after cancellation. Gateway
+restart and ordinary ownership transfer keep their existing recovery behavior.
+
 A queue callback can reserve a message before starting admission. Cancellation
 releases that unadmitted reservation even if the callback is still waiting.
 Admission already in progress keeps its owner until it settles; cancellation
