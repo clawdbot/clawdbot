@@ -18,6 +18,8 @@ import {
   beginForegroundSessionMaintenance,
   waitForSessionMaintenance,
 } from "../../agents/session-maintenance/coordinator.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -28,7 +30,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
@@ -764,15 +765,23 @@ describe("runReplyAgent auto-compaction token update", () => {
       });
       // The usage counters are from bounded QA metadata. This assembled prompt and
       // transcript are synthetic; their estimates are not an observed second-turn budget.
-      const terminalEvent = (input: number, output: number) => ({
-        type: "message",
-        message: {
-          role: "assistant",
+      const terminalMessage = (input: number, output: number) =>
+        makeAssistantMessageFixture({
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-6",
           content: [{ type: "text", text: "NO_REPLY" }],
           stopReason: "stop",
-          usage: { input, output, totalTokens: input + output },
-        },
-      });
+          errorMessage: undefined,
+          usage: {
+            input,
+            output,
+            totalTokens: input + output,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
       runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentInternalParams) => {
         expect(params.config?.models?.providers?.anthropic?.models).toEqual(
           config.models?.providers?.anthropic?.models,
@@ -780,7 +789,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         if (params.trigger === "memory") {
           memoryParams = params;
           memoryScope = getPluginRuntimeGatewayRequestScope();
-          await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
+          const privateTranscript = expectDefined(params.sessionManager, "memory transcript");
+          expect(privateTranscript.getSessionTarget()).toBeUndefined();
+          privateTranscript.appendMessage(terminalMessage(7_039, 34));
           return {
             payloads: [],
             meta: { agentMeta: { lastCallUsage: { input: 7_039, output: 34 } } },
@@ -807,7 +818,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         // with the queued turn so the selected model cannot escape into real catalog discovery.
         setRuntimeConfigSnapshot(config, config);
         await replaceSessionEntry(scope, sessionEntry);
-        await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
+        SessionManager.open(scope, tmp).appendMessage(terminalMessage(10_920, 10));
         const turn = createBaseRun({
           followup: { prompt },
           run: {
