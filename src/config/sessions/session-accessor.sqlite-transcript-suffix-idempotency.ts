@@ -70,7 +70,10 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
     params.database.db,
     db
       .selectFrom("transcript_events")
-      .select(sql<number>`coalesce(sum(OCTET_LENGTH(event_json) + 1), 0)`.as("serialized_bytes"))
+      .select(
+        /* kysely-allow-raw: bound idempotency-owner recovery by exact stored JSONL bytes. */
+        sql<number>`coalesce(sum(OCTET_LENGTH(event_json) + 1), 0)`.as("serialized_bytes"),
+      )
       .where("session_id", "=", params.resolved.sessionId)
       .where("seq", "<", params.startSeq),
   )?.serialized_bytes;
@@ -81,7 +84,9 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
   }
   const trimCharacters =
     " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
-  const extractedKey = sql<string>`CASE
+  const extractedKey =
+    /* kysely-allow-raw: select the canonical message idempotency key without hydrating prefix events. */
+    sql<string>`CASE
     WHEN json_valid(event.event_json)
       AND json_type(event.event_json, '$.message.idempotencyKey') = 'text'
     THEN trim(json_extract(event.event_json, '$.message.idempotencyKey'), ${trimCharacters})
@@ -106,7 +111,11 @@ export function prepareIncrementalSuffixIdempotencyMutation(params: {
       .with("latest", (query) =>
         query
           .selectFrom("candidates")
-          .select(["idempotency_key", sql<number>`max(seq)`.as("seq")])
+          .select([
+            "idempotency_key",
+            /* kysely-allow-raw: choose the newest retained duplicate as the replacement owner. */
+            sql<number>`max(seq)`.as("seq"),
+          ])
           .groupBy("idempotency_key"),
       )
       .selectFrom("candidates")

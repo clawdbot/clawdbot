@@ -79,6 +79,7 @@ export function canRebasePreparedAssistantInTransaction(
         .select([
           "identity.event_id",
           "identity.seq",
+          /* kysely-allow-raw: bound newer-message validation before hydrating event JSON. */
           sql<number>`OCTET_LENGTH(event.event_json)`.as("serialized_bytes"),
         ])
         .where("identity.session_id", "=", sessionId)
@@ -114,6 +115,7 @@ export function canRebasePreparedAssistantInTransaction(
         )
         .select([
           "identity.event_id",
+          /* kysely-allow-raw: validate the canonical message role without hydrating content. */
           sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
         ])
         .where("identity.session_id", "=", sessionId)
@@ -173,14 +175,22 @@ function transcriptEntryIsAncestor(
       .withRecursive("transcript_ancestors", (query) =>
         query
           .selectFrom("transcript_event_identities")
-          .select(["parent_id", sql<number>`1`.as("depth")])
+          .select([
+            "parent_id",
+            /* kysely-allow-raw: seed the bounded recursive ancestry depth. */
+            sql<number>`1`.as("depth"),
+          ])
           .where("session_id", "=", sessionId)
           .where("event_id", "=", leafId)
           .unionAll(
             query
               .selectFrom("transcript_event_identities as ti")
               .innerJoin("transcript_ancestors as ancestor", "ti.event_id", "ancestor.parent_id")
-              .select(["ti.parent_id", sql<number>`ancestor.depth + 1`.as("depth")])
+              .select([
+                "ti.parent_id",
+                /* kysely-allow-raw: increment the bounded recursive ancestry depth. */
+                sql<number>`ancestor.depth + 1`.as("depth"),
+              ])
               .where("ti.session_id", "=", sessionId)
               .where("ancestor.depth", "<", PREPARED_ASSISTANT_MAX_ANCESTORS),
           ),
