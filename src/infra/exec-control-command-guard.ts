@@ -261,22 +261,38 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
-// Mirrors POSIX shell parsing: an odd-count backslash run before a LF is a line
-// continuation (removed before word splitting); an even-count run is literal
-// backslashes followed by a real newline separator. Backslash-CR-LF is not a
-// continuation, so it is left untouched.
-function removeShellLineContinuations(command: string): string {
-  return command.replace(/\\+\n/g, (match) => {
-    const backslashes = match.length - 1;
-    return backslashes % 2 === 1 ? "\\".repeat((backslashes - 1) / 2) : match;
-  });
+// Join line continuations strictly *inside* shell words. tree-sitter-bash
+// word-breaks at `\<newline>` while POSIX sh joins, which hides control
+// words from the guard (e.g. `/appr\<newline>ove` executes as `/approve`
+// but parses as `/appr` + `ove`). A pair is joined only when an odd-length
+// backslash run at end-of-line is flanked by word characters on both sides:
+//   - comment lines are untouched (a `#` comment ends at the newline, so
+//     joining would swallow the following command); lines containing `#`
+//     anywhere before the pair are skipped too (a joined word keeping a
+//     literal `#` can never equal a `#`-free control word, so skipping is
+//     safe for control matching);
+//   - even runs are untouched (literal backslashes + a real separator);
+//   - `\` + CRLF is untouched (not a continuation for the shell).
+// The replacement keeps (N-1)/2 literal backslashes, mirroring incremental
+// shell tokenization (re-emitting the newline would falsely escape the
+// character that follows it in a fresh parse).
+function joinWordInternalLineContinuations(command: string): string {
+  return command.replace(
+    /^(?!\s*#)([^#\n]*?)([^\s;|&()<>"'`#$\n\\])(\\+)\n(?=[^\s;|&()<>"'`#$\n\\])/gm,
+    (match, prefix, before, run) => {
+      if (run.length % 2 === 0) {
+        return match;
+      }
+      return prefix + before + "\\".repeat((run.length - 1) / 2);
+    },
+  );
 }
 
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  const rawCommand = removeShellLineContinuations(command).trim();
+  const rawCommand = joinWordInternalLineContinuations(command).trim();
   let explanation: CommandExplanation | null = null;
   try {
     explanation = await explainShellCommand(rawCommand);
