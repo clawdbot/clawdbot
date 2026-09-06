@@ -697,6 +697,46 @@ describe("xai stream wrappers", () => {
   });
 
   it.each([
+    { text: ["first", "second"], output: "firstsecond" },
+    { text: ["", " "], output: " " },
+    { text: ["", ""], output: "(see attached image)" },
+    { text: ["\ud83d", "\ude48"], output: "🙈" },
+  ])("preserves interleaved text and image references for $output", ({ text, output }) => {
+    const firstImage = {
+      type: "input_image",
+      source: { type: "url", url: "https://example.com/first.png" },
+    };
+    const secondImage = { type: "input_image", image_url: "data:image/png;base64,QkJCQg==" };
+    const originalParts = [
+      { type: "input_text", text: text[0] },
+      firstImage,
+      { type: "input_text", text: text[1] },
+      secondImage,
+    ];
+    const originalBytes = JSON.stringify(originalParts);
+    const payload: Record<string, unknown> = {
+      input: [{ type: "function_call_output", call_id: "call_1", output: originalParts }],
+    };
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+
+    const input = payload.input as Array<Record<string, unknown>>;
+    expect(input[0]).toEqual({ type: "function_call_output", call_id: "call_1", output });
+    expect(input[1]).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "Image(s) from tool result #1:" },
+        firstImage,
+        secondImage,
+      ],
+    });
+    const replayParts = input[1]?.content as unknown[];
+    expect(replayParts[1]).toBe(firstImage);
+    expect(replayParts[2]).toBe(secondImage);
+    expect(JSON.stringify(originalParts)).toBe(originalBytes);
+  });
+
+  it.each([
     ["Grok OAuth proxy", XAI_GROK_OAUTH_BASE_URL],
     ["custom endpoint", "https://proxy.example/v1"],
   ])("counts every function output before replaying sparse images for %s", (_label, baseUrl) => {
