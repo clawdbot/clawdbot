@@ -107,7 +107,7 @@ suite.define(() => {
         });
         await waitForControlUiRoute(page, {
           pathname: "/settings/plugins",
-          routeId: "plugins",
+          routeId: "plugin-settings",
         });
 
         const workboardRow = page.locator('[data-plugin-id="workboard"]');

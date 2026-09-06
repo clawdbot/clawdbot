@@ -11,7 +11,6 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  clickRowAction,
   createClient,
   createContext,
   createGateway,
@@ -321,13 +320,13 @@ describe("PluginsPage lifecycle confirmation", () => {
     expect(showConfirmDialog).toHaveBeenCalledOnce();
     harness.emit(client, false);
     harness.emit(client, true);
-    await waitForFast(() =>
-      expect(page.querySelector('[data-plugin-id="community-thing"]')).not.toBeNull(),
-    );
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
 
-    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Install anyway");
+    void page.consentController.install(
+      { ...request, acknowledgeInstallPolicyWarning: true },
+      "plugin:community-thing",
+    );
     await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
     expect(installCalls).toBe(1);
 

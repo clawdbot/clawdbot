@@ -13,13 +13,15 @@ import {
   INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
+  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_WORKBOARD_PATH_PARAM,
+  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
-  pluginsHubTabFromPath,
+  pluginSettingsIdFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
   workboardBoardIdFromPath,
@@ -54,7 +56,7 @@ import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
-import { page as pluginsPage } from "./pages/plugins/route.ts";
+import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
@@ -114,7 +116,7 @@ const APP_ROUTE_TREE = [
   logsPage,
   skillWorkshopPage,
   skillsPage,
-  pluginsPage,
+  ...pluginsPages,
   cronPage,
   tasksPage,
   devicePage,
@@ -186,9 +188,11 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   if (memoryTab && memoryTab !== "overview") {
     return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
   }
-  const pluginsTab = pluginsHubTabFromPath(pathname, basePath);
-  if (pluginsTab === "discover") {
+  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
     return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
+  }
+  if (pluginSettingsIdFromPath(pathname, basePath)) {
+    return ["plugin-settings", INTERNAL_PLUGIN_SETTINGS_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;

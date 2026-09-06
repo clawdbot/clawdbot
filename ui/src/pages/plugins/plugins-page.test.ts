@@ -11,7 +11,6 @@ import type {
   PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResult,
 } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -25,7 +24,6 @@ import {
   createResult,
   createRuntimeConfigHarness,
   deferred,
-  mountClawHubSearchPage,
   mountPage,
   resetPluginsPageTestState,
   type RuntimeConfigTestState,
@@ -33,12 +31,6 @@ import {
 import type { PluginsRouteData } from "./plugins-page.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-
-function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
-  page
-    .querySelector(`#plugins-tab-${tab}`)
-    ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-}
 
 describe("PluginsPage", () => {
   beforeEach(async () => {
@@ -200,127 +192,6 @@ describe("PluginsPage", () => {
     expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
     expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
-  });
-
-  it("debounces two-character ClawHub searches and cancels stale input", async () => {
-    vi.useFakeTimers();
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.search") {
-        return { results: [] };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway),
-    );
-
-    clickHubTab(page, "discover");
-    const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
-    search.value = "w";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    search.value = "work";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    search.value = "workboard";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "plugins.search",
-      {
-        query: "workboard",
-        limit: 20,
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-  });
-
-  it.each([0, 1, 3])(
-    "announces %i completed ClawHub search results in the existing status",
-    async (count) => {
-      vi.useFakeTimers();
-      const response = deferred<{ results: PluginSearchResult[] }>();
-      const { client } = createClient(async (method) => {
-        if (method === "plugins.search") {
-          return response.promise;
-        }
-        throw new Error(`Unexpected method ${method}`);
-      });
-      const { page } = await mountClawHubSearchPage(client);
-      const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
-      search.value = "calendar";
-      search.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      const pending = page.querySelector('[role="status"]');
-      expect(pending?.textContent).toContain("Searching ClawHub");
-
-      const results: PluginSearchResult[] = Array.from({ length: count }, (_, index) => ({
-        score: 1,
-        package: {
-          name: `calendar-${index}`,
-          displayName: `Calendar ${index}`,
-          family: "code-plugin",
-          channel: "community",
-          isOfficial: false,
-        },
-      }));
-      response.resolve({ results });
-      await vi.waitFor(() => expect(page.searchResults).toEqual(results));
-      await page.updateComplete;
-
-      const completed = page.querySelector('[role="status"]');
-      expect(completed).toBe(pending);
-      expect(completed?.getAttribute("aria-live")).toBe("polite");
-      expect(completed?.textContent).toContain(
-        count === 0
-          ? "ClawHub has no results for “calendar”."
-          : `${count} result${count === 1 ? "" : "s"}`,
-      );
-      expect(completed?.classList.contains(count === 0 ? "settings-empty" : "sr-only")).toBe(true);
-      expect(page.querySelectorAll("[data-package-name]")).toHaveLength(count);
-    },
-  );
-
-  it("commits only the latest ClawHub search result", async () => {
-    vi.useFakeTimers();
-    const first = deferred<{ results: PluginSearchResult[] }>();
-    const second = deferred<{ results: PluginSearchResult[] }>();
-    const { client, request } = createClient(async (method, params) => {
-      if (method !== "plugins.search") {
-        throw new Error(`Unexpected method ${method}`);
-      }
-      return (params as { query: string }).query === "first" ? first.promise : second.promise;
-    });
-    const { page } = await mountClawHubSearchPage(client);
-    const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
-    search.value = "first";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    search.value = "second";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    expect(request).toHaveBeenCalledTimes(2);
-
-    const latest: PluginSearchResult = {
-      score: 1,
-      package: {
-        name: "latest-plugin",
-        displayName: "Latest Plugin",
-        family: "code-plugin",
-        channel: "community",
-        isOfficial: false,
-      },
-    };
-    second.resolve({ results: [latest] });
-    await vi.waitFor(() => expect(page.searchResults).toEqual([latest]));
-    first.resolve({ results: [] });
-    await Promise.resolve();
-
-    expect(page.searchResults).toEqual([latest]);
-    await page.updateComplete;
-    expect(page.querySelector('[role="status"]')?.textContent).toContain("1 result");
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {
@@ -507,43 +378,6 @@ describe("PluginsPage", () => {
         { pluginId: "workboard", enabled: true },
       ]);
     });
-  });
-
-  it("reschedules an active ClawHub query after reconnect", async () => {
-    vi.useFakeTimers();
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        return createResult();
-      }
-      if (method === "plugins.search") {
-        return { results: [] };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway),
-    );
-
-    clickHubTab(page, "discover");
-    const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
-    search.value = "calendar";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    harness.emit(client, false);
-    await vi.advanceTimersByTimeAsync(300);
-    expect(request.mock.calls.some(([method]) => method === "plugins.search")).toBe(false);
-
-    harness.emit(client, true);
-    await vi.advanceTimersByTimeAsync(300);
-    expect(request).toHaveBeenCalledWith(
-      "plugins.search",
-      {
-        query: "calendar",
-        limit: 20,
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
   });
 
   it("clears visible catalog loading when a mutation supersedes a manual refresh", async () => {
@@ -967,50 +801,6 @@ describe("PluginsPage", () => {
 
     expect(page.querySelector(".plugins-group-message")).toBeNull();
     expect(currentToggle.disabled).toBe(false);
-  });
-
-  it("shows connector add failures on the connector card", async () => {
-    const { client } = createClient(async () => createResult());
-    const gatewayHarness = createGateway(client);
-    const configHarness = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      { configFormDirty: false, lastError: null, configSnapshot: { sourceConfig: {}, hash: "h" } },
-    );
-    configHarness.runtimeConfig.patch.mockImplementation(async () => {
-      configHarness.runtimeConfig.state.lastError = "rate limit exceeded for config.patch";
-      return false;
-    });
-    const { page } = await mountPage(
-      createContext(
-        gatewayHarness.gateway,
-        configHarness.runtimeConfig.refresh,
-        configHarness.runtimeConfig.state,
-        configHarness,
-      ),
-      {
-        gateway: gatewayHarness.gateway,
-        gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
-    );
-
-    clickHubTab(page, "discover");
-    await page.updateComplete;
-    page
-      .querySelector<HTMLButtonElement>(
-        '[data-connector-id="context7"] .settings-row__control button',
-      )
-      ?.click();
-
-    await waitForFast(() =>
-      expect(
-        page.querySelector('[data-connector-id="context7"] [role="alert"]')?.textContent,
-      ).toContain("rate limit exceeded"),
-    );
-    // The MCP-section message stays clear; the failure belongs to the card.
-    expect(page.querySelector(".plugins-group-message")).toBeNull();
   });
 
   it("rejects invalid MCP server names before touching config", async () => {

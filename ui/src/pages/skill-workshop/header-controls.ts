@@ -96,6 +96,7 @@ export function renderSkillWorkshopHeaderControls(
         ariaLabel: t("skillWorkshop.header.view"),
         panelId: "skill-workshop-mode-panel",
         variant: "sub",
+        carapace: true,
         onSelect: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
       })}
     </div>

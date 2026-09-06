@@ -42,7 +42,8 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", () => ({
+vi.mock("./install-persistence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-persistence.js")>()),
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
@@ -186,6 +187,39 @@ describe("plugin management service", () => {
     const installed = await listManagedPlugins({ config: {}, env: {} });
     expect(installed.plugins).toHaveLength(1);
     expect(installed.plugins[0]).toMatchObject({ id: "diffs", installed: true, enabled: true });
+  });
+
+  it("projects missing required plugin config as needs setup", async () => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: false,
+        id: "needs-config",
+        configSchema: {
+          type: "object",
+          required: ["token"],
+          properties: { token: { type: "string" } },
+        },
+      }),
+    );
+
+    const missing = await listManagedPlugins({ config: {}, env: {} });
+    expect(missing.plugins[0]).toMatchObject({
+      id: "needs-config",
+      enabled: false,
+      state: "needs-setup",
+    });
+
+    const configured = await listManagedPlugins({
+      config: {
+        plugins: { entries: { "needs-config": { enabled: false, config: { token: "set" } } } },
+      },
+      env: {},
+    });
+    expect(configured.plugins[0]).toMatchObject({
+      id: "needs-config",
+      enabled: false,
+      state: "disabled",
+    });
   });
 
   it("does not transfer bundled endorsement to a package identity impostor", async () => {

@@ -300,9 +300,6 @@ suite.define(() => {
       await github.click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({});
       await expect
-        .poll(() => menu.getByRole("menuitem", { name: "Browse connectors" }).isDisabled())
-        .toBe(false);
-      await expect
         .poll(() => menu.getByRole("menuitem", { name: /Add MCP server/ }).isDisabled())
         .toBe(false);
 
@@ -610,10 +607,7 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isDisabled())
         .toBe(true);
-      const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
-      await expect.poll(() => browse.isDisabled()).toBe(true);
-      await browse.hover();
-      await expect.poll(() => tooltipTitleText(browse)).toContain("Admin access");
+      expect(await menu.getByRole("menuitem", { name: "Browse connectors" }).count()).toBe(0);
       const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
       await expect.poll(() => addServer.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(addServer)).toContain("Admin access");

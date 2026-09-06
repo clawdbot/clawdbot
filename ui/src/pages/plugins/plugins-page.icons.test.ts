@@ -93,7 +93,7 @@ describe("PluginsPage icon routing", () => {
     const { client } = createClient(async () => createResult());
     const harness = createGateway(client);
     harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    const catalogPlugin = (
+    const installedPlugin = (
       id: string,
       name: string,
       origin: "official" | "registry" = "official",
@@ -103,16 +103,16 @@ describe("PluginsPage icon routing", () => {
         name,
         origin,
         hasIcon: true,
-        installed: false,
+        installed: true,
         enabled: false,
-        state: "not-installed",
+        state: "disabled",
       });
     const result = {
       plugins: [
-        catalogPlugin("@openclaw/brave-plugin", "Brave Search"),
-        catalogPlugin("@openclaw/deepseek-provider", "DeepSeek"),
-        catalogPlugin("@openclaw/discord", "Discord"),
-        catalogPlugin("@vendor/brave-plugin", "Vendor Brave", "registry"),
+        installedPlugin("@openclaw/brave-plugin", "Brave Search"),
+        installedPlugin("@openclaw/deepseek-provider", "DeepSeek"),
+        installedPlugin("@openclaw/discord", "Discord"),
+        installedPlugin("@vendor/brave-plugin", "Vendor Brave", "registry"),
       ],
       diagnostics: [],
       mutationAllowed: true,
@@ -120,11 +120,7 @@ describe("PluginsPage icon routing", () => {
 
     const { page } = await mountPage(
       createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        result,
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
+      createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation("/plugins")),
     );
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalled());

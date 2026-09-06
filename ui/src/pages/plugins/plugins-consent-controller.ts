@@ -48,6 +48,7 @@ type PluginsConsentControllerHost = {
   closeDetails: () => void;
   applyMutationResult: (result: PluginMutationResult) => void;
   refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
+  reconnectAfterMutation: (rowKey: string) => void;
   requestUpdate: () => void;
 };
 
@@ -304,7 +305,7 @@ export class PluginsConsentController {
         await this.host.refreshCatalogAfterMutation(client);
         if (isCurrent() && !result.restartRequired) {
           // Plugin tabs come from hello; reconnect after the registry refresh.
-          this.host.getContext().gateway.connect();
+          this.host.reconnectAfterMutation(key);
         }
       },
       {},

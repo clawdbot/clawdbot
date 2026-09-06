@@ -1,7 +1,7 @@
 ---
 summary: "Manage OpenClaw plugins from the Control UI or CLI"
 read_when:
-  - You want to browse, install, enable, or disable plugins in the Control UI
+  - You want to browse, configure, enable, or disable plugins in the Control UI
   - You want quick plugin list, install, update, inspect, or uninstall examples
   - You want to choose a plugin install source
   - You want the right reference for publishing plugin packages
@@ -10,10 +10,11 @@ sidebarTitle: "Manage plugins"
 doc-schema-version: 1
 ---
 
-The Control UI covers the common discovery, install, enable, and disable
-workflow. The CLI adds update, uninstall, advanced configuration, and explicit
-install-source controls. For its full command contract, flags, source-selection
-rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
+The Control UI covers installed-plugin inventory, details, enablement, and
+disablement. The CLI adds discovery, install, update, uninstall, advanced
+configuration, and explicit install-source controls. For its full command
+contract, flags, source-selection rules, and edge cases, see
+[`openclaw plugins`](/cli/plugins).
 
 Typical CLI workflow: find a package, install it from ClawHub, npm, git, or a
 local path, let the managed Gateway auto-restart (or restart it manually), then
@@ -21,35 +22,30 @@ verify the plugin's runtime registrations.
 
 ## Use the Control UI
 
-Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
-configured Control UI base path. For example, a base path of `/openclaw` uses
-`/openclaw/settings/plugins`. The page has two tabs:
+Open **Plugins** in the Control UI, or use `/plugins` relative to the configured
+Control UI base path. For example, a base path of `/openclaw` uses
+`/openclaw/plugins`.
 
-- **Installed** shows the full local inventory grouped by category (channels,
-  model providers, memory, tools). Each row opens a detail view; its overflow
-  (`…`) menu enables or disables the plugin and, for externally installed
-  plugins, offers **Remove**. The tab also lists the configured
-  [MCP servers](/cli/mcp) with the same menu-driven enable, disable, and remove
-  actions, editing `mcp.servers` in the Gateway configuration.
-- **Discover** is the store: featured plugins included with OpenClaw, official
-  external plugins, and a curated connector shelf. Connector cards either add a
-  hosted MCP server in one click (GitHub, Notion, Linear, Sentry,
-  Home Assistant) or jump into a prefilled ClawHub search. Typing in the search
-  box queries [ClawHub](https://clawhub.ai/plugins) inline and appends a **From
-  ClawHub** section with download counts and source-verification badges.
+**Installed plugins** shows up to 12 installed plugins, prioritizing enabled plugins,
+plugins that need setup, and plugins that need attention. Use search to filter
+the full inventory or choose **Show all** to browse every installed plugin. Each
+card shows the plugin description. Choose a card to open its settings, where
+administrators can enable or disable it and read-only operators can inspect it.
 
-Included plugins do not need a package install. Their menu action is **Enable**
-or **Disable**. Workboard, for example, is included with OpenClaw and disabled
-by default, so choose **Enable** to turn it on. Bundled plugins cannot be
-removed, only disabled.
+Choose a card to open that plugin's details. Use the settings action beside
+**Installed plugins**, or open `/settings/plugins`, for
+the complete plugin inventory. The settings page also lists configured
+[MCP servers](/cli/mcp), editing `mcp.servers` in the Gateway configuration.
 
-Catalog and search access require `operator.read`. Install, enable, disable,
-remove, and MCP server changes require `operator.admin`. A ClawHub install is
-performed by the Gateway and preserves its trust, integrity, and plugin-install
-policy checks. Enabling an installed plugin as an administrator also records
-that explicit trust by adding the selected plugin to an existing restrictive
-`plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
-must be removed before enabling the plugin.
+Included plugins do not need a package install. Workboard, for example, is
+included with OpenClaw and disabled by default. Bundled plugins can be disabled
+but not removed.
+
+Inventory access requires `operator.read`. Enable, disable, and MCP server
+changes require `operator.admin`. Enabling an installed plugin as an
+administrator also records that explicit trust by adding the selected plugin to
+an existing restrictive `plugins.allow` list. An explicit `plugins.deny` entry
+remains authoritative and must be removed before enabling the plugin.
 
 Installing, updating, or removing plugin code requires a Gateway restart.
 Enablement changes for plugins in the startup inventory can be applied without

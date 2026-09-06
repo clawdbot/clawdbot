@@ -23,7 +23,7 @@ async function activeRouteFetchCount(page: import("playwright").Page): Promise<n
 }
 
 suite.define(() => {
-  it("loads the Plugins Discover deep link once and preserves it through reconnect", async () => {
+  it("canonicalizes the retired Plugins Discover deep link once through reconnect", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["plugins.list"],
@@ -35,9 +35,10 @@ suite.define(() => {
           },
         },
       });
-      const pathname = "/settings/plugins/discover";
+      const legacyPathname = "/settings/plugins/discover";
+      const pathname = "/plugins";
 
-      const response = await page.goto(`${suite.server.baseUrl}${pathname.slice(1)}`);
+      const response = await page.goto(`${suite.server.baseUrl}${legacyPathname.slice(1)}`);
       expect(response?.status()).toBe(200);
       await waitForControlUiRoute(page, { pathname, routeId: "plugins" });
       expect(await activeRouteFetchCount(page)).toBe(1);

@@ -152,6 +152,7 @@ export const PluginCatalogEntrySchema = closedObject({
   state: Type.Union([
     Type.Literal("enabled"),
     Type.Literal("disabled"),
+    Type.Literal("needs-setup"),
     Type.Literal("not-installed"),
     Type.Literal("error"),
   ]),

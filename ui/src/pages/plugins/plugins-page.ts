@@ -4,7 +4,11 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { pathForPluginsHubTab } from "../../app-route-paths.ts";
+import {
+  pathForPluginSettings,
+  pathForRoute,
+  pluginSettingsIdFromPath,
+} from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -21,7 +25,6 @@ import {
   type PluginCatalogItem,
   type PluginListResult,
   type PluginMutationResult,
-  type PluginSearchResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
@@ -30,19 +33,16 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { renderInstalledPlugins } from "./installed-plugins.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
-import type { PluginsHubTab } from "./plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsMcpController } from "./plugins-mcp-controller.ts";
 import { pluginArtPath } from "./presentation.ts";
-import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
-import {
-  renderPlugins,
-  type InstalledFilter,
-  type PluginRowMessage,
-  type PluginsTab,
-} from "./view.ts";
+import { renderPlugins, type InstalledFilter, type PluginRowMessage } from "./view.ts";
+
+type PluginsPageSurface = "discovery" | "settings";
 
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -74,13 +74,14 @@ class PluginsPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: PluginsRouteData;
+  @property({ attribute: false }) surface: PluginsPageSurface = "settings";
 
   @state() private result: PluginListResult | null = null;
   @state() private error: string | null = null;
-  @state() private activeTab: PluginsTab = "installed";
   @state() private query = "";
   @state() private installedFilter: InstalledFilter = "all";
-  @state() private debouncedSearchQuery = "";
+  @state() private inventoryExpanded = false;
+  @state() private inventorySearchOpen = false;
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private detail: {
@@ -91,8 +92,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
   private routeDataConsumed = false;
-  private normalizedLocation = "";
-  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private preserveMessageKeyOnReconnect: string | null = null;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -102,9 +102,12 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
+      const preservedKey = this.preserveMessageKeyOnReconnect;
+      const preservedMessage = preservedKey ? this.messages[preservedKey] : undefined;
+      this.preserveMessageKeyOnReconnect = null;
       this.result = null;
       this.error = null;
-      this.messages = {};
+      this.messages = preservedKey && preservedMessage ? { [preservedKey]: preservedMessage } : {};
       this.pageNotice = null;
     },
     invalidateRequests: (change) =>
@@ -128,6 +131,12 @@ class PluginsPage extends OpenClawLightDomElement {
     },
     applyMutationResult: (result) => this.applyMutationResult(result),
     refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
+    reconnectAfterMutation: (rowKey) => {
+      // The reconnect refreshes hello-owned plugin tabs. Keep only its committed
+      // outcome; unrelated Gateway identity changes still clear all row messages.
+      this.preserveMessageKeyOnReconnect = rowKey;
+      this.context.gateway.connect();
+    },
     requestUpdate: () => this.requestUpdate(),
   });
 
@@ -153,42 +162,20 @@ class PluginsPage extends OpenClawLightDomElement {
     setRowMessage: (rowKey, message) => this.setMessage(rowKey, message),
   });
 
-  private readonly searchTask = new Task(this, {
-    args: () =>
-      [
-        this.gateway.connected && this.activeTab === "discover" ? this.gateway.client : null,
-        this.debouncedSearchQuery,
-      ] as const,
-    task: async ([client, query], { signal }) => {
-      if (!client || query.length < 2) {
-        return initialState;
-      }
-      const response = await client.request<{ results: PluginSearchResult[] }>(
-        "plugins.search",
-        { query, limit: 20 },
-        { signal },
-      );
-      return response.results;
-    },
-  });
-
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
-      this.syncCanonicalLocation();
     }
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    this.syncCanonicalLocation();
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.mcpController.disconnect();
-    this.clearSearchTimer();
     this.resetPluginIcons();
     super.disconnectedCallback();
   }
@@ -245,7 +232,6 @@ class PluginsPage extends OpenClawLightDomElement {
       this.resetPluginIcons();
       this.busy = {};
       this.mcpController.resetFeedback();
-      this.debouncedSearchQuery = "";
     }
     if (shouldRefreshAfterChange) {
       void this.mcpController.refreshPage(() => this.refreshCatalog());
@@ -253,14 +239,6 @@ class PluginsPage extends OpenClawLightDomElement {
       this.ensureInitialData();
     }
     this.mcpController.ensureLoaded(snapshot.phase === "connected");
-    if (
-      !change.initial &&
-      (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
-      snapshot.phase === "connected" &&
-      this.activeTab === "discover"
-    ) {
-      this.scheduleSearch();
-    }
   }
 
   private applyRouteData() {
@@ -269,48 +247,27 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     this.routeDataConsumed = true;
-    const urlTab = pluginsHubTabForRoute(data.location, this.context.basePath);
-    if (urlTab !== this.activeTab) {
-      this.changeTab(urlTab);
-    }
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.ensureInitialData();
       return;
     }
     this.replaceResult(data.result);
     this.error = data.error;
+    const detailPluginId =
+      this.surface === "settings"
+        ? pluginSettingsIdFromPath(data.location.pathname, this.context.basePath)
+        : null;
+    if (detailPluginId !== this.detail?.pluginId) {
+      void this.showDetails(detailPluginId);
+    }
     this.ensureInitialData();
   }
 
-  private syncCanonicalLocation() {
-    const context = this.context;
-    const location = this.routeData?.location;
-    if (!context || !location) {
-      return;
-    }
-    const canonical = canonicalPluginsRouteLocation(location, context.basePath);
-    if (!canonical) {
-      this.normalizedLocation = "";
-      return;
-    }
-    const source = `${location.pathname}${location.search}${location.hash}`;
-    if (this.normalizedLocation === source) {
-      return;
-    }
-    // One source location gets one replace. Route-data updates clear the guard
-    // once the canonical path arrives, so returning to an old link still works.
-    this.normalizedLocation = source;
-    context.replace("plugins", canonical);
-  }
-
   private invalidateRequests(invalidateCatalog = true) {
-    this.clearSearchTimer();
-    this.debouncedSearchQuery = "";
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
     }
     this.mcpController.invalidate();
-    void this.searchTask.run([null, ""]);
     // Inspection results belong to one connection epoch, including same-client reconnects.
     this.detail = null;
     this.consentController.reset();
@@ -453,40 +410,11 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconMisses.delete(pluginId);
   }
 
-  private clearSearchTimer() {
-    if (this.searchTimer) {
-      clearTimeout(this.searchTimer);
-      this.searchTimer = null;
-    }
-  }
-
   private get loading(): boolean {
     return (
       this.gateway.connected &&
       (!this.routeDataConsumed || this.catalogTask.status === TaskStatus.PENDING)
     );
-  }
-
-  private get searchResults(): PluginSearchResult[] | null {
-    return this.searchTask.status === TaskStatus.COMPLETE &&
-      this.debouncedSearchQuery === this.query.trim()
-      ? (this.searchTask.value ?? null)
-      : null;
-  }
-
-  private get searchLoading(): boolean {
-    return (
-      this.activeTab === "discover" &&
-      this.debouncedSearchQuery.length >= 2 &&
-      this.searchTask.status === TaskStatus.PENDING
-    );
-  }
-
-  private get searchError(): string | null {
-    return this.searchTask.status === TaskStatus.ERROR &&
-      this.debouncedSearchQuery === this.query.trim()
-      ? formatUiError(this.searchTask.error)
-      : null;
   }
 
   private ensureInitialData() {
@@ -514,59 +442,17 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "installed" || tab === "discover") {
-      this.changeTab(tab);
-      this.context.navigate("plugins", {
-        pathname: pathForPluginsHubTab(tab, this.context.basePath),
-      });
+    if (tab === "plugins") {
+      if (this.surface !== "discovery") {
+        this.context.navigate("plugins");
+      }
       return;
     }
-    this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
-  }
-
-  private changeTab(tab: PluginsTab) {
-    this.activeTab = tab;
-    this.clearSearchTimer();
-    this.debouncedSearchQuery = "";
-    void this.searchTask.run([null, ""]);
-    if (tab === "discover") {
-      this.scheduleSearch();
-    }
+    this.context.navigate("skills");
   }
 
   private changeQuery(query: string) {
     this.query = query;
-    this.clearSearchTimer();
-    this.debouncedSearchQuery = "";
-    void this.searchTask.run([null, ""]);
-    if (this.activeTab === "discover") {
-      this.scheduleSearch();
-    }
-  }
-
-  private openClawHubSearch(query: string) {
-    this.query = query;
-    this.changeTab("discover");
-  }
-
-  private scheduleSearch() {
-    const query = this.query.trim();
-    if (query.length < 2 || !this.gateway.connected || !this.gateway.client) {
-      return;
-    }
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = null;
-      void this.searchClawHub(query);
-    }, 300);
-  }
-
-  private async searchClawHub(query: string) {
-    const client = this.gateway.client;
-    if (!client || !this.gateway.connected || query.length < 2) {
-      return;
-    }
-    this.debouncedSearchQuery = query;
-    await this.searchTask.run([client, query]);
   }
 
   private mutationBlockedReason(): string | null {
@@ -674,55 +560,124 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
+    const discovery = this.surface === "discovery";
     return html`
       ${renderPluginsHubHeader({
-        active: this.activeTab,
+        active: "plugins",
         onSelect: (tab) => this.selectHubTab(tab),
       })}
       ${renderSettingsWorkspace(html`
-        ${renderPlugins({
-          connected: this.gateway.connected,
-          loading: this.loading,
-          result: this.result,
-          error: this.mcpController.pageError(this.error),
-          activeTab: this.activeTab,
-          query: this.query,
-          installedFilter: this.installedFilter,
-          searchResults: this.searchResults,
-          searchLoading: this.searchLoading,
-          searchError: this.searchError,
-          busy: this.busy,
-          messages: this.messages,
-          detailPluginId: this.detail?.pluginId ?? null,
-          detailInspection: this.detail?.inspection ?? null,
-          detailInspectionError: this.detail?.error ?? null,
-          consent: this.consentController.consent,
-          consentInspection: this.consentController.inspection,
-          consentInspectionLoading: this.consentController.inspectionLoading,
-          consentInspectionError: this.consentController.inspectionError,
-          iconUrls: this.iconUrls,
-          canMutate: this.canMutate(),
-          mutationBlockedReason: blockedReason,
-          pageNotice: this.pageNotice,
-          ...this.mcpController.viewState,
-          onQueryChange: (query) => this.changeQuery(query),
-          onFilterChange: (filter) => {
-            this.installedFilter = filter;
-          },
-          onRefresh: () => void this.mcpController.refreshPage(() => this.refreshCatalog()),
-          onIconError: (pluginId) => this.handlePluginIconError(pluginId),
-          onShowDetails: (pluginId) => void this.showDetails(pluginId),
-          onSetEnabled: (pluginId, enabled, rowKey) =>
-            void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (request, installIdentity) =>
-            void this.consentController.install(request, installIdentity),
-          onCancelConsent: () => this.consentController.close(),
-          onConfirmConsent: () => this.consentController.confirm(),
-          onRetryConsentInspection: () => void this.consentController.inspect(),
-          onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
-          onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
-          onSearchClawHub: (query) => this.openClawHubSearch(query),
-        })}
+        ${
+          discovery
+            ? html`<wa-tab-panel
+                id=${PLUGINS_HUB_PANEL_ID}
+                name="plugins"
+                active
+                aria-labelledby="plugins-tab-plugins"
+                >${renderInstalledPlugins({
+                  connected: this.gateway.connected,
+                  loading: this.loading,
+                  result: this.result,
+                  error: this.mcpController.pageError(this.error),
+                  expanded: this.inventoryExpanded,
+                  searchOpen: this.inventorySearchOpen,
+                  query: this.query,
+                  busy: this.busy,
+                  iconUrls: this.iconUrls,
+                  canMutate: this.canMutate(),
+                  mutationBlockedReason: blockedReason,
+                  consent: this.consentController.consent,
+                  consentInspection: this.consentController.inspection,
+                  consentInspectionLoading: this.consentController.inspectionLoading,
+                  consentInspectionError: this.consentController.inspectionError,
+                  onExpandedChange: (expanded) => {
+                    this.inventoryExpanded = expanded;
+                  },
+                  onSearchOpenChange: (open) => {
+                    this.inventorySearchOpen = open;
+                    if (!open) {
+                      this.query = "";
+                    }
+                  },
+                  onQueryChange: (query) => {
+                    this.query = query;
+                  },
+                  onRefresh: () => void this.refreshCatalog(),
+                  settingsHref: (pluginId) =>
+                    `${pathForPluginSettings(pluginId, this.context.basePath)}?from=plugins`,
+                  onOpenSettings: (pluginId) => {
+                    this.context.navigate("plugin-settings", {
+                      pathname: pluginId
+                        ? pathForPluginSettings(pluginId, this.context.basePath)
+                        : pathForRoute("plugin-settings", this.context.basePath),
+                      search: pluginId ? "?from=plugins" : "",
+                    });
+                  },
+                  onIconError: (pluginId) => this.handlePluginIconError(pluginId),
+                  onCancelConsent: () => this.consentController.close(),
+                  onConfirmConsent: () => this.consentController.confirm(),
+                  onRetryConsentInspection: () => void this.consentController.inspect(),
+                })}</wa-tab-panel
+              >`
+            : renderPlugins({
+                connected: this.gateway.connected,
+                loading: this.loading,
+                result: this.result,
+                error: this.mcpController.pageError(this.error),
+                activeTab: "installed",
+                query: this.query,
+                installedFilter: this.installedFilter,
+                searchResults: null,
+                searchLoading: false,
+                searchError: null,
+                busy: this.busy,
+                messages: this.messages,
+                detailPluginId: this.detail?.pluginId ?? null,
+                detailInspection: this.detail?.inspection ?? null,
+                detailInspectionError: this.detail?.error ?? null,
+                consent: this.consentController.consent,
+                consentInspection: this.consentController.inspection,
+                consentInspectionLoading: this.consentController.inspectionLoading,
+                consentInspectionError: this.consentController.inspectionError,
+                iconUrls: this.iconUrls,
+                canMutate: this.canMutate(),
+                mutationBlockedReason: blockedReason,
+                pageNotice: this.pageNotice,
+                ...this.mcpController.viewState,
+                onQueryChange: (query) => this.changeQuery(query),
+                onFilterChange: (filter) => {
+                  this.installedFilter = filter;
+                },
+                onRefresh: () => void this.mcpController.refreshPage(() => this.refreshCatalog()),
+                onIconError: (pluginId) => this.handlePluginIconError(pluginId),
+                onShowDetails: (pluginId) => {
+                  const routeOwnsDetail = Boolean(
+                    pluginSettingsIdFromPath(
+                      this.routeData?.location.pathname ?? "",
+                      this.context.basePath,
+                    ),
+                  );
+                  if (pluginId || !routeOwnsDetail) {
+                    void this.showDetails(pluginId);
+                    return;
+                  }
+                  this.detail = null;
+                  this.context.replace("plugin-settings", {
+                    pathname: pathForRoute("plugin-settings", this.context.basePath),
+                  });
+                },
+                onSetEnabled: (pluginId, enabled, rowKey) =>
+                  void this.updateEnabled(pluginId, enabled, rowKey),
+                onInstall: (request, installIdentity) =>
+                  void this.consentController.install(request, installIdentity),
+                onCancelConsent: () => this.consentController.close(),
+                onConfirmConsent: () => this.consentController.confirm(),
+                onRetryConsentInspection: () => void this.consentController.inspect(),
+                onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
+                onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
+                onSearchClawHub: () => this.context.navigate("plugins"),
+              })
+        }
       `)}
     `;
   }

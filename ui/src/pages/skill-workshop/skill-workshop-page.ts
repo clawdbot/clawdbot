@@ -3,6 +3,7 @@ import { initialState, Task } from "@lit/task";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -20,7 +21,6 @@ import {
   runSkillWorkshopPageHistoryScan,
 } from "./history-scan-page-controller.ts";
 import type { SkillWorkshopRenderContext, SkillWorkshopRevisionRequest } from "./page-types.ts";
-import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -70,15 +70,19 @@ function renderSkillWorkshopPage(
   return html`
     <section class=${pageClass}>
       ${renderPluginsHubHeader({
-        active: "workshop",
-        onSelect: (tab) => selectPluginsHubTab(context, tab),
+        active: "skills",
+        onSelect: (tab) => context.navigate(tab),
+        secondaryAction: {
+          label: t("pluginsPage.backToSkills"),
+          onClick: () => context.navigate("skills"),
+        },
       })}
       <wa-tab-panel
         id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
-        name="workshop"
+        name="skills"
         active
-        aria-labelledby="plugins-tab-workshop"
+        aria-labelledby="plugins-tab-skills"
       >
         <div class="sw-workshop-toolbar">
           ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}

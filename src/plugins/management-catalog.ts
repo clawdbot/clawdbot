@@ -44,7 +44,7 @@ export type ManagedPluginCatalogEntry = {
   origin?: string;
   installed: boolean;
   enabled: boolean;
-  state: "enabled" | "disabled" | "not-installed" | "error";
+  state: "enabled" | "disabled" | "needs-setup" | "not-installed" | "error";
   featured?: boolean;
   featuredAt?: number;
   order?: number;

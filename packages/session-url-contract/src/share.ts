@@ -35,6 +35,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.free
   "new",
   "nodes",
   "plugin",
+  "plugins",
   "portals",
   "profile",
   "sessions",

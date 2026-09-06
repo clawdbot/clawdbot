@@ -23,6 +23,7 @@
     "@noble/ed25519": "3.1.0",
     "@noble/hashes": "2.3.0",
     "@novnc/novnc": "1.7.0",
+    "@openclaw/carapace": "github:openclaw/carapace#6c38d2a9b558104957d581033bce5a127632d60e",
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/libterminal": "0.3.2",

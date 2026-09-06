@@ -8,7 +8,7 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI Plugins hub navigation",
+  name: "Control UI Plugins workspace navigation",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
@@ -17,7 +17,7 @@ const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let proofDir: string;
 beforeEach(() => {
   if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("plugins-hub-shell");
+    proofDir = createControlUiE2eArtifactDir("plugins-workspace-shell");
   }
 });
 
@@ -34,7 +34,7 @@ const methodResponses = {
   "config.get": {
     config: {},
     sourceConfig: {},
-    hash: "plugins-hub-config",
+    hash: "plugins-workspace-config",
     issues: [],
     raw: "{}",
     valid: true,
@@ -76,21 +76,12 @@ const methodResponses = {
   },
 };
 
-type HubGeometry = {
-  contentLeft: number;
-  contentWidth: number;
+type HeaderGeometry = {
   height: number;
   left: number;
   title: string;
-  titleVisible: boolean;
   top: number;
   width: number;
-};
-
-type ControlGeometry = {
-  bottom: number;
-  height: number;
-  top: number;
 };
 
 async function createContext(viewport: { height: number; width: number }): Promise<BrowserContext> {
@@ -102,87 +93,46 @@ async function createContext(viewport: { height: number; width: number }): Promi
   });
 }
 
-async function hubGeometry(page: Page): Promise<HubGeometry> {
-  const tabs = page.locator(".plugins-hub-tabs");
-  await tabs.waitFor({ state: "visible" });
-  return tabs.evaluate((element) => {
+async function headerGeometry(page: Page): Promise<HeaderGeometry> {
+  const header = page.locator(".plugins-hub-header");
+  await header.waitFor({ state: "visible" });
+  return header.evaluate((element) => {
     const rect = element.getBoundingClientRect();
-    const title = document.querySelector<HTMLElement>(".content-header .page-title");
-    const workshop = document.querySelector<HTMLElement>(".content--skill-workshop");
-    const contentColumn =
-      workshop && workshop.getClientRects().length > 0
-        ? workshop
-        : document.querySelector<HTMLElement>(".settings-page--wide");
-    if (!contentColumn) {
-      throw new Error("Plugins hub content column did not render");
-    }
-    const contentRect = contentColumn.getBoundingClientRect();
     return {
-      contentLeft: contentRect.left,
-      contentWidth: contentRect.width,
       height: rect.height,
       left: rect.left,
-      title: title?.textContent?.trim() ?? "",
-      titleVisible: (title?.getClientRects().length ?? 0) > 0,
+      title: element.querySelector("h1")?.textContent?.trim() ?? "",
       top: rect.top,
       width: rect.width,
     };
   });
 }
 
-function expectStableGeometry(actual: HubGeometry, expected: HubGeometry) {
-  expect(actual.title).toBe("Plugins");
-  expect(actual.titleVisible).toBe(true);
+function expectStableHeader(actual: HeaderGeometry, expected: HeaderGeometry) {
   expect(Math.abs(actual.left - expected.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.top - expected.top)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.contentLeft - expected.contentLeft)).toBeLessThanOrEqual(1);
-  expect(Math.abs(actual.contentWidth - expected.contentWidth)).toBeLessThanOrEqual(1);
 }
 
-async function skillsToolbarGeometry(page: Page): Promise<ControlGeometry[]> {
-  const selectors = [
-    ".plugins-toolbar--fields > .settings-segmented",
-    ".skills-toolbar__agent .agent-select__trigger",
-    ".skills-toolbar__search .settings-input",
-    ".plugins-toolbar--fields > .plugins-toolbar__hint",
-    ".plugins-toolbar--fields > .btn",
-  ];
-  return page.locator(selectors.join(", ")).evaluateAll((elements) =>
-    elements.map((element) => {
-      const rect = element.getBoundingClientRect();
-      return { bottom: rect.bottom, height: rect.height, top: rect.top };
-    }),
+async function expectHeaderCopy(page: Page, active: "plugins" | "skills") {
+  const expected =
+    active === "plugins"
+      ? {
+          title: "Plugins",
+          subtitle: "Manage plugins and add capabilities from ClawHub.",
+          docs: "https://docs.openclaw.ai/plugins/manage-plugins",
+        }
+      : {
+          title: "Skills",
+          subtitle: "Manage agent skills and find new ones on ClawHub.",
+          docs: "https://docs.openclaw.ai/tools/skills",
+        };
+  const header = page.locator(".plugins-hub-header");
+  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
+  expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
+    expected.docs,
   );
-}
-
-function expectAlignedControlRow(controls: ControlGeometry[]) {
-  expect(controls).toHaveLength(5);
-  for (const metric of ["top", "bottom", "height"] as const) {
-    const values = controls.map((control) => control[metric]);
-    expect(
-      Math.max(...values) - Math.min(...values),
-      `${metric}: ${values.join(", ")}`,
-    ).toBeLessThanOrEqual(1);
-  }
-}
-
-async function expectStatusFilterContained(page: Page) {
-  const geometry = await page
-    .locator(".plugins-toolbar--fields > .settings-segmented")
-    .evaluate((element) => ({
-      containerTop: element.getBoundingClientRect().top,
-      containerBottom: element.getBoundingClientRect().bottom,
-      optionTop: Math.min(
-        ...Array.from(element.children, (child) => child.getBoundingClientRect().top),
-      ),
-      optionBottom: Math.max(
-        ...Array.from(element.children, (child) => child.getBoundingClientRect().bottom),
-      ),
-    }));
-  expect(geometry.optionTop).toBeGreaterThanOrEqual(geometry.containerTop - 1);
-  expect(geometry.optionBottom).toBeLessThanOrEqual(geometry.containerBottom + 1);
 }
 
 async function captureScreenshot(page: Page, name: string) {
@@ -197,26 +147,42 @@ async function captureScreenshot(page: Page, name: string) {
   );
 }
 
-async function selectHubTab(
-  page: Page,
-  name: "Installed" | "Discover" | "Skills" | "Workshop",
-  target: { pathname: string; routeId: string },
-) {
-  await page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).click();
-  await waitForControlUiRoute(page, target);
-  await expect
-    .poll(() => page.getByRole("tab", { name: new RegExp(`^${name}`, "u") }).getAttribute("active"))
-    .not.toBeNull();
+async function expectActivePanelLabel(page: Page, labelId: string) {
+  const panel = page.locator("#plugins-hub-panel");
+  await panel.waitFor({ state: "visible" });
+  expect(await panel.getAttribute("aria-labelledby")).toBe(labelId);
+  expect(await page.locator(`#${labelId}`).count()).toBe(1);
 }
 
 suite.define(() => {
+  it("redirects the retired discovery URL to the Plugins workspace", async () => {
+    const context = await createContext({ height: 768, width: 1366 });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["config.get", "plugins.list"],
+      methodResponses,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/plugins/discover?query=calendar#featured`);
+      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+      const location = new URL(page.url());
+      expect(`${location.pathname}${location.search}${location.hash}`).toBe(
+        "/plugins?query=calendar#featured",
+      );
+      await page.getByRole("heading", { name: "Installed plugins", exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([
     { label: "desktop", viewport: { height: 1053, width: 2048 } },
     { label: "laptop", viewport: { height: 768, width: 1366 } },
     { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
-    "keeps the hub shell fixed through every $label tab transition",
+    "keeps the Plugins/Skills shell coherent through every $label transition",
     async ({ label, viewport }) => {
       const context = await createContext(viewport);
       const page = await context.newPage();
@@ -233,115 +199,65 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}settings/plugins`);
+        await page.goto(`${suite.server.baseUrl}plugins`);
         await page.addStyleTag({
           content:
             "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
         });
-        await waitForControlUiRoute(page, { pathname: "/settings/plugins", routeId: "plugins" });
-        const installed = await hubGeometry(page);
-        expect(installed.title).toBe("Plugins");
-        expect(installed.titleVisible).toBe(true);
-        const layout = await page.evaluate(() => {
-          const title = document.querySelector<HTMLElement>(".hub-page-header__title");
-          const tabs = document.querySelector<HTMLElement>(".plugins-hub-tabs");
-          const content = document.querySelector<HTMLElement>("#plugins-global-search");
-          if (!title || !tabs || !content) {
-            throw new Error("Plugins hub layout did not render");
-          }
-          return {
-            aboveTabs: tabs.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
-            belowTabs: content.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
-            contentLeft: content.getBoundingClientRect().left,
-            tabsLeft: tabs.getBoundingClientRect().left,
-            titleLeft: title.getBoundingClientRect().left,
-          };
-        });
-        expect(Math.abs(layout.tabsLeft - layout.titleLeft)).toBeLessThanOrEqual(1);
-        expect(layout.aboveTabs).toBeGreaterThan(0);
-        expect(Math.abs(layout.belowTabs - layout.aboveTabs)).toBeLessThanOrEqual(1);
-        if (label === "desktop") {
-          expect(Math.abs(layout.tabsLeft - layout.contentLeft)).toBeLessThanOrEqual(1);
-        }
-        await captureScreenshot(page, `${label}-01-installed.png`);
+        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+        await page.getByRole("heading", { name: "Installed plugins" }).waitFor();
+        const pluginsHeader = await headerGeometry(page);
+        expect(pluginsHeader.title).toBe("Plugins");
+        await expectHeaderCopy(page, "plugins");
+        expect(await page.getByRole("tab").count()).toBe(2);
+        expect(
+          await page.getByRole("tab", { name: "Plugins", exact: true }).getAttribute("active"),
+        ).not.toBeNull();
+        expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
+        expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(1);
+        const tabBox = await page.locator(".plugins-tabs").boundingBox();
+        const pluginTabBox = await page
+          .getByRole("tab", { name: "Plugins", exact: true })
+          .boundingBox();
+        const titleBox = await page.locator(".plugins-hub-header .page-title").boundingBox();
+        expect(tabBox).not.toBeNull();
+        expect(pluginTabBox).not.toBeNull();
+        expect(titleBox).not.toBeNull();
+        expect((tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBeLessThanOrEqual(titleBox?.y ?? 0);
+        expect(Math.abs((tabBox?.x ?? 0) - (titleBox?.x ?? 0))).toBeLessThanOrEqual(1);
+        expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
+        await expectActivePanelLabel(page, "plugins-tab-plugins");
+        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
 
-        await selectHubTab(page, "Discover", {
-          pathname: "/settings/plugins/discover",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await captureScreenshot(page, `${label}-02-discover.png`);
-
-        await selectHubTab(page, "Skills", { pathname: "/skills", routeId: "skills" });
-        expectStableGeometry(await hubGeometry(page), installed);
-        const needsSetupFilter = page.locator(
-          'wa-radio.settings-segmented__btn[value="needs-setup"]',
+        await page.getByRole("tab", { name: "Skills", exact: true }).click();
+        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        await expectActivePanelLabel(page, "plugins-tab-skills");
+        expect(await page.getByRole("button", { name: "Workshop", exact: true }).isVisible()).toBe(
+          true,
         );
-        await needsSetupFilter.click();
-        await expect
-          .poll(() =>
-            needsSetupFilter.evaluate((element) =>
-              element.classList.contains("settings-segmented__btn--active"),
-            ),
-          )
-          .toBe(true);
-        if (label === "desktop") {
-          expectAlignedControlRow(await skillsToolbarGeometry(page));
-        }
-        await expectStatusFilterContained(page);
-        await captureScreenshot(page, `${label}-03-skills.png`);
+        await captureScreenshot(page, `${label}-02-skills.png`);
 
-        await selectHubTab(page, "Workshop", {
+        await page.getByRole("button", { name: "Workshop", exact: true }).click();
+        await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
-        await captureScreenshot(page, `${label}-04-workshop-today.png`);
-        expectStableGeometry(await hubGeometry(page), installed);
-        const workshopShellBottom = await page
-          .locator(".plugins-hub-header")
-          .evaluate((element) => element.getBoundingClientRect().bottom);
-        const workshopControlsTop = await page
-          .locator(".sw-header-controls")
-          .evaluate((element) => element.getBoundingClientRect().top);
-        expect(workshopControlsTop).toBeGreaterThanOrEqual(workshopShellBottom);
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        await expectActivePanelLabel(page, "plugins-tab-skills");
+        expect(
+          await page.getByRole("button", { name: "Back to Skills", exact: true }).isVisible(),
+        ).toBe(true);
+        await captureScreenshot(page, `${label}-03-workshop.png`);
 
-        await page.locator("#skill-workshop-mode-tab-board").click();
-        await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-board").getAttribute("active"))
-          .not.toBeNull();
-        expectStableGeometry(await hubGeometry(page), installed);
-        const boardLayout = await page.locator(".content--skill-workshop").evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { display: style.display, overflow: style.overflow };
-        });
-        expect(boardLayout).toEqual({ display: "flex", overflow: "hidden" });
-        await captureScreenshot(page, `${label}-05-workshop-board.png`);
-
-        await page.locator("#skill-workshop-mode-tab-today").click();
-        await expect
-          .poll(() => page.locator("#skill-workshop-mode-tab-today").getAttribute("active"))
-          .not.toBeNull();
-        expectStableGeometry(await hubGeometry(page), installed);
-        const todayLayout = await page
-          .locator(".content--skill-workshop-today")
-          .evaluate((element) => {
-            const style = getComputedStyle(element);
-            return { display: style.display, overflowY: style.overflowY };
-          });
-        expect(todayLayout).toEqual({ display: "block", overflowY: "auto" });
-
-        await selectHubTab(page, "Skills", { pathname: "/skills", routeId: "skills" });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await selectHubTab(page, "Discover", {
-          pathname: "/settings/plugins/discover",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
-        await selectHubTab(page, "Installed", {
-          pathname: "/settings/plugins",
-          routeId: "plugins",
-        });
-        expectStableGeometry(await hubGeometry(page), installed);
+        await page.getByRole("button", { name: "Back to Skills", exact: true }).click();
+        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        await page.getByRole("tab", { name: "Plugins", exact: true }).click();
+        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "plugins");
       } finally {
         await context.close();
       }

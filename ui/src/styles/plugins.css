@@ -1,3 +1,11 @@
+@import "@openclaw/carapace/tokens.css";
+@import "@openclaw/carapace/components.css";
+@import "@openclaw/carapace/candidate/controls.css";
+@import "@openclaw/carapace/candidate/feedback.css";
+@import "@openclaw/carapace/candidate/data.css";
+@import "@openclaw/carapace/candidate/application.css";
+@import "./carapace-control-ui.css";
+
 /* Plugins hub page-specifics layered on the settings design language
  * (styles/settings.css): art tiles, row messages, the detail overlay, and the
  * MCP inline form. Structural layout comes from .settings-page/.settings-row. */
@@ -7,15 +15,48 @@
 }
 
 .content-header.hub-page-header.plugins-hub-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "tabs tabs"
+    "title actions";
+  align-items: start;
+  row-gap: var(--space-4);
   width: 100%;
   max-width: 1120px;
+  max-height: none;
   margin-inline: auto;
   padding-inline: var(--settings-header-inline-padding, var(--space-4));
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-5);
-  max-height: none;
+}
+
+.content-header.plugins-hub-header .hub-page-header__tabs {
+  grid-area: tabs;
+  justify-self: start;
+}
+
+.content-header.plugins-hub-header .hub-page-header__title {
+  grid-area: title;
+}
+
+.content-header.plugins-hub-header .hub-page-header__actions {
+  grid-area: actions;
+}
+
+.plugins-tabs.oc-segmented {
+  width: max-content;
+  max-width: 100%;
+  align-self: start;
+  --track-color: transparent;
+  --indicator-color: transparent;
+}
+
+.plugins-tabs.oc-segmented wa-tab.hub-tab {
+  min-height: 0;
+  padding: 0;
+}
+
+.plugins-tabs.oc-segmented wa-tab.hub-tab::part(base) {
+  min-height: 28px;
+  padding: 3px var(--space-2);
 }
 
 .plugins-hub-header + .settings-workspace {
@@ -23,9 +64,241 @@
   margin-top: 0;
 }
 
-@media (max-width: 400px) {
-  .content-header.hub-page-header.plugins-hub-header {
-    gap: var(--space-4);
+.plugins-hub-header__secondary {
+  flex: 0 0 auto;
+}
+
+/* ---------- Installed plugins ---------- */
+
+.installed-plugins {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.installed-plugins__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.installed-plugins__header h2,
+.installed-plugins-card h3,
+.installed-plugins-card p {
+  margin: 0;
+}
+
+.installed-plugins__header h2 {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+}
+
+.installed-plugins__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__icon-action {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__icon-action:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.installed-plugins__search {
+  position: relative;
+  width: min(280px, 42vw);
+}
+
+.installed-plugins__search input {
+  width: 100%;
+  height: var(--settings-control-height);
+  padding-inline: 34px;
+}
+
+.installed-plugins__search-icon,
+.installed-plugins__search-close {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+}
+
+.installed-plugins__search-icon {
+  left: 10px;
+  display: inline-flex;
+  width: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.installed-plugins__search-icon svg,
+.installed-plugins__search-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__search-close {
+  right: 3px;
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__search-close:hover:not(:disabled) {
+  border-color: transparent;
+}
+
+.installed-plugins__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+a.installed-plugins-card {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.installed-plugins-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.installed-plugins-card__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.installed-plugins-card__art {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.installed-plugins-card__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.installed-plugins-card__art img.plugins-icon {
+  object-fit: contain;
+  padding: 7px;
+}
+
+.installed-plugins-card__art--fallback {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  color: var(--primary-foreground);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+}
+
+.installed-plugins-card__identity {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.installed-plugins-card__identity h3,
+.installed-plugins-card__identity p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.installed-plugins-card__identity h3 {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.installed-plugins-card__identity p {
+  display: -webkit-box;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.installed-plugins-card__error,
+.installed-plugins-card__message {
+  grid-column: 1 / -1;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.installed-plugins-card__message--success {
+  color: var(--ok);
+}
+
+.installed-plugins-card__message--warning {
+  color: var(--warn);
+}
+
+.installed-plugins__more {
+  display: flex;
+  justify-content: center;
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__more-action {
+  min-height: 0;
+  padding: var(--space-1) var(--space-2);
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-page.oc-app-surface .btn.installed-plugins__more-action:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  filter: brightness(1.35);
+}
+
+@media (max-width: 900px) {
+  .installed-plugins__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .installed-plugins__grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

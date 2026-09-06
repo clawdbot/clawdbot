@@ -19,6 +19,8 @@ type HubTabsProps<T extends string> = {
   ariaLabel: string;
   panelId: string;
   className?: string;
+  /** Opts this strip into Carapace's segmented-control presentation. */
+  carapace?: boolean;
   variant?: "primary" | "sub";
   onSelect: (tab: T) => void;
   onActivate?: (element: HTMLElement) => void;
@@ -64,7 +66,7 @@ function reclaimFocus(hubId: string, tab: string, element: Element | undefined) 
 
 export function renderHubTabs<T extends string>(props: HubTabsProps<T>): TemplateResult {
   const variant = props.variant ?? "primary";
-  const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.className ? ` ${props.className}` : ""}`;
+  const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.carapace ? " oc-segmented" : ""}${props.className ? ` ${props.className}` : ""}`;
   const fallbackFocusValue =
     props.active === null ? props.tabs.find((tab) => !tab.disabled)?.value : null;
   return html`
@@ -83,7 +85,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             id=${`${props.id}-tab-${tab.value}`}
             panel=${tab.value}
             aria-controls=${props.panelId}
-            class="hub-tab"
+            class="hub-tab ${props.carapace ? "oc-segmented-item" : ""}"
             ?active=${selected}
             ?disabled=${tab.disabled}
             .tabIndex=${selected || tab.value === fallbackFocusValue ? 0 : -1}

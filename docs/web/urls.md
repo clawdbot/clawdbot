@@ -371,7 +371,8 @@ no route-specific URL parameters.
 | Logs                | `/logs`                         | -                         | -                                                                 |
 | Skill Workshop      | `/skills/workshop`              | -                         | -                                                                 |
 | Skills              | `/skills`                       | -                         | -                                                                 |
-| Plugins             | `/settings/plugins`             | -                         | `/settings/plugins/discover`                                      |
+| Plugins             | `/plugins`                      | -                         | -                                                                 |
+| Plugin settings     | `/settings/plugins`             | -                         | `/settings/plugins/<pluginId>`                                    |
 | Automations         | `/automations`                  | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                        |
 | Tasks               | `/tasks`                        | -                         | -                                                                 |
 | Devices             | `/settings/devices`             | `/nodes`                  | Shared settings parameters below                                  |
@@ -394,9 +395,9 @@ with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
 any setting anchor.
 
-Plugin catalog tabs also use paths instead of `?tab=`. Older links with
-`?tab=discover|installed` are replaced once with the corresponding path while
-keeping other query parameters and the fragment.
+The retired `/settings/plugins/discover` path and older plugin links with
+`?tab=discover|installed` are replaced once with `/plugins` while keeping other
+query parameters and the fragment.
 
 Agent selection and its `overview|files|tools|skills|channels|cron|memory`
 panels use paths. Older links with `?agent=<agentId>` are replaced once with

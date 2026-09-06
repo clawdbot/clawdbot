@@ -15,9 +15,9 @@
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  box-sizing: border-box;
   width: 100%;
   max-width: 1120px;
+  box-sizing: border-box;
   height: 100%;
   margin-inline: auto;
   min-height: 0;
@@ -26,7 +26,10 @@
 }
 
 .content--skill-workshop .content-header {
+  width: 100%;
   flex-shrink: 0;
+  padding-inline: 0;
+  transform: none;
 }
 
 .sw-hub-panel {

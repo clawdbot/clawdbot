@@ -232,7 +232,7 @@ suite.define(() => {
       menu = await openSkills(page);
       await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/u }).click();
-      await menu.getByRole("menuitem", { name: "Browse connectors", exact: true }).waitFor();
+      await menu.getByRole("menuitem", { name: "Add MCP server…", exact: true }).waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
       expect(await menu.locator('wa-dropdown-item[value^="library-"]').count()).toBe(0);

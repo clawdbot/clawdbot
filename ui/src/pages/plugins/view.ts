@@ -54,7 +54,7 @@ import {
   type ConnectorSuggestion,
 } from "./presentation.ts";
 
-export type PluginsTab = "installed" | "discover";
+type PluginsTab = "installed" | "discover";
 
 export type InstalledFilter = "all" | "enabled" | "disabled" | "issues";
 
@@ -261,9 +261,9 @@ function installedPlugins(
         case "enabled":
           return plugin.enabled && plugin.state !== "error";
         case "disabled":
-          return !plugin.enabled && plugin.state !== "error";
+          return !plugin.enabled && plugin.state !== "error" && plugin.state !== "needs-setup";
         case "issues":
-          return plugin.state === "error";
+          return plugin.state === "error" || plugin.state === "needs-setup";
         default:
           return true;
       }
@@ -335,6 +335,8 @@ function stateLabel(plugin: PluginCatalogItem): string {
       return t("pluginsPage.enabled");
     case "disabled":
       return t("pluginsPage.disabled");
+    case "needs-setup":
+      return t("pluginsPage.setupRequired");
     case "error":
       return t("pluginsPage.needsAttention");
     case "not-installed":
@@ -345,14 +347,21 @@ function stateLabel(plugin: PluginCatalogItem): string {
 }
 
 function stateStatus(plugin: PluginCatalogItem) {
-  const kind = plugin.state === "enabled" ? "ok" : plugin.state === "error" ? "danger" : "muted";
+  const kind =
+    plugin.state === "enabled"
+      ? "ok"
+      : plugin.state === "error"
+        ? "danger"
+        : plugin.state === "needs-setup"
+          ? "warn"
+          : "muted";
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
 }
 
-/** Rows pair the status with an Enable/Disable button that already implies the
- * healthy states, so only the error status earns a pill next to the actions. */
+/** Rows pair healthy states with an Enable/Disable button, so only states that
+ * need operator action earn a pill next to the controls. */
 function rowStateStatus(plugin: PluginCatalogItem) {
-  return plugin.state === "error" ? stateStatus(plugin) : nothing;
+  return plugin.state === "error" || plugin.state === "needs-setup" ? stateStatus(plugin) : nothing;
 }
 
 function requestInstall(
@@ -661,7 +670,9 @@ function renderCatalogActions(
 /** Segmented filter doubling as the inventory overview: label + live count per state. */
 function renderInstalledFilter(props: PluginsViewProps) {
   const installed = (props.result?.plugins ?? []).filter((plugin) => plugin.installed);
-  const issues = installed.filter((plugin) => plugin.state === "error").length;
+  const issues = installed.filter(
+    (plugin) => plugin.state === "error" || plugin.state === "needs-setup",
+  ).length;
   const enabled = installed.filter((plugin) => plugin.enabled && plugin.state !== "error").length;
   const counts: Record<InstalledFilter, number> = {
     all: installed.length,
@@ -1411,9 +1422,9 @@ export function renderPlugins(props: PluginsViewProps) {
       <wa-tab-panel
         id="plugins-hub-panel"
         class="plugins-panel"
-        name=${props.activeTab}
+        name="plugins"
         active
-        aria-labelledby=${`plugins-tab-${props.activeTab}`}
+        aria-labelledby="plugins-tab-plugins"
       >
         ${
           panelState === "loading"

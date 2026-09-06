@@ -1,0 +1,240 @@
+/* Control UI owns theme selection; Carapace owns the semantic component roles.
+ * Keeping this bridge pointed at the resolved Control UI tokens makes every
+ * shipped theme family, mode, and imported custom theme work without a
+ * Carapace-side copy of the product theme catalog. */
+:root {
+  --oc-bg-page: var(--bg);
+  --oc-bg-surface: var(--card);
+  --oc-bg-elevated: var(--bg-elevated);
+  --oc-bg-recessed: var(--bg-accent);
+  --oc-bg-contrast: var(--text-strong);
+
+  --oc-accent-primary: var(--accent);
+  --oc-accent-primary-hover: var(--accent-hover);
+  --oc-accent-primary-deep: var(--primary-hover);
+  --oc-accent-secondary: var(--accent-2);
+  --oc-accent-secondary-deep: var(--accent-2-muted);
+
+  --oc-text-primary: var(--text-strong);
+  --oc-text-secondary: var(--text);
+  --oc-text-muted: var(--muted);
+  --oc-text-inactive: color-mix(in srgb, var(--muted) 62%, transparent);
+  --oc-text-inverse: var(--accent-foreground);
+  --oc-text-link: var(--link);
+  --oc-text-on-accent: var(--primary-foreground);
+
+  --oc-border-subtle: var(--border);
+  --oc-border-strong: var(--border-strong);
+  --oc-border-accent: color-mix(in srgb, var(--accent) 42%, transparent);
+
+  --oc-surface-card: var(--card);
+  --oc-surface-card-strong: var(--popover);
+  --oc-surface-overlay: var(--popover);
+  --oc-surface-modal-backdrop: color-mix(in srgb, var(--bg) 66%, transparent);
+  --oc-surface-interactive: var(--bg-elevated);
+  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-control-bg: var(--input);
+  --oc-control-bg-hover: var(--bg-hover);
+  --oc-surface-accent-soft: var(--accent-subtle);
+  --oc-surface-secondary-soft: var(--accent-2-subtle);
+  --oc-chart-line: var(--grid-line);
+  --oc-selection-bg: var(--selection-bg);
+  --oc-focus-ring: var(--ring);
+
+  --oc-status-success-bg: var(--ok-subtle);
+  --oc-status-success-fg: var(--ok);
+  --oc-status-warning-bg: var(--warn-subtle);
+  --oc-status-warning-fg: var(--warn);
+  --oc-status-error-bg: var(--danger-subtle);
+  --oc-status-error-fg: var(--danger);
+  --oc-status-info-bg: var(--info-subtle);
+  --oc-status-info-fg: var(--info);
+
+  --oc-input-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --oc-input-border: var(--input);
+  --oc-input-placeholder: var(--muted);
+  --oc-input-focus-border: var(--ring);
+  --oc-input-focus-ring: var(--focus);
+
+  --oc-font-body: var(--font-body);
+  --oc-font-display: var(--font-display);
+  --oc-font-mono: var(--mono);
+  --oc-font-size-xs: var(--control-ui-text-xs);
+  --oc-font-size-sm: var(--control-ui-text-sm);
+  --oc-font-size-base: var(--control-ui-text-md);
+  --oc-font-size-md: var(--control-ui-text-md);
+  --oc-font-size-lg: var(--control-ui-text-lg);
+
+  --oc-space-1: var(--space-1);
+  --oc-space-2: var(--space-2);
+  --oc-space-3: var(--space-3);
+  --oc-space-4: var(--space-4);
+  --oc-space-5: var(--space-5);
+  --oc-space-6: var(--space-6);
+  --oc-space-7: var(--space-7);
+  --oc-space-8: var(--space-8);
+
+  --oc-radius-sm: var(--radius-sm);
+  --oc-radius-md: var(--radius-md);
+  --oc-radius-lg: var(--radius-lg);
+  --oc-radius-xl: var(--radius-xl);
+  --oc-radius-full: var(--radius-full);
+  --oc-radius-surface: var(--radius-lg);
+  --oc-radius-control: var(--radius-md);
+  --oc-radius-inset: var(--radius-sm);
+  --oc-radius-round: var(--radius-full);
+
+  --oc-shadow-sm: var(--shadow-sm);
+  --oc-shadow-md: var(--shadow-md);
+  --oc-shadow-lg: var(--shadow-lg);
+  --oc-layer-popover: var(--z-dropdown);
+  --oc-layer-notification: var(--z-toast);
+  --oc-duration-fast: var(--duration-fast);
+  --oc-duration-ui: var(--duration-normal);
+  --oc-ease-out: var(--ease-out);
+  --oc-control-min-height: var(--settings-control-height, 2.75rem);
+}
+
+/* Carapace's settings primitives assume a two-child grid row. Control UI's
+ * established settings row also supports a leading artwork slot, so the
+ * adapter retains that flex contract while sourcing its visual values from
+ * Carapace semantic tokens. */
+.settings-page.oc-app-surface {
+  background: transparent;
+}
+
+.settings-section.oc-settings-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--oc-space-3);
+}
+
+.settings-section__header.oc-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-3);
+  padding: 0;
+}
+
+.settings-section__copy.oc-settings-section-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--oc-space-1);
+}
+
+.settings-section__heading.oc-settings-section-title {
+  color: var(--oc-text-muted);
+  font-family: var(--oc-font-body);
+  font-size: var(--oc-font-size-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-group.oc-settings-group {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
+  border-radius: var(--oc-radius-surface);
+  background: var(--oc-bg-surface);
+  box-shadow: none;
+}
+
+.settings-row.oc-settings-row {
+  display: flex;
+  min-width: 0;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-4);
+  padding: calc(var(--oc-space-3) - 2px) var(--oc-space-4);
+}
+
+.settings-row__text.oc-settings-row-content {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row__title.oc-settings-row-title {
+  color: var(--oc-text-primary);
+  font-size: var(--oc-font-size-base);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-row__desc.oc-settings-row-description {
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-sm);
+  line-height: 1.45;
+}
+
+.settings-row__control.oc-settings-row-control {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  max-width: 60%;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--oc-space-2);
+}
+
+.settings-row--stacked.oc-settings-row,
+.settings-row--stacked-on-narrow.oc-settings-row {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+.settings-row--stacked.oc-settings-row .oc-settings-row-control,
+.settings-row--stacked-on-narrow.oc-settings-row .oc-settings-row-control {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+}
+
+.settings-page.oc-app-surface .btn.oc-action {
+  min-height: 0;
+  gap: 6px;
+  padding: 8px 14px;
+  border-color: var(--oc-border-subtle);
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-bg-elevated);
+  color: var(--oc-text-primary);
+  font-size: var(--oc-font-size-sm);
+  font-weight: 500;
+  line-height: normal;
+}
+
+.settings-page.oc-app-surface .btn.btn--sm.oc-action {
+  padding: 6px 10px;
+  font-size: var(--oc-font-size-xs);
+}
+
+.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled) {
+  border-color: var(--oc-border-strong);
+  background: var(--oc-surface-interactive-hover);
+  color: var(--oc-text-primary);
+}
+
+.settings-page.oc-app-surface .btn.oc-action-icon {
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+}
+
+/* The Control UI radio carries selection as a class while Carapace's generic
+ * item waits for aria-selected/is-active. Keep the shared helper's state
+ * contract and apply Carapace's interactive surface at that adapter seam. */
+.settings-segmented__btn.oc-segmented-item.settings-segmented__btn--active {
+  background: var(--oc-surface-interactive);
+}

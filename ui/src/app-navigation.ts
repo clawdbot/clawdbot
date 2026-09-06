@@ -13,7 +13,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
-// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
@@ -202,7 +202,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
+    routes: ["agents", "labs", "model-providers", "plugin-settings", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -223,7 +223,7 @@ const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "memory"],
+    routes: ["agents", "model-providers", "plugin-settings", "memory"],
   },
   { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
   {
@@ -308,6 +308,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
   skills: ["zap", "tabs.skills", "subtitles.skills"],
   plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
+  "plugin-settings": ["puzzle", "tabs.plugins", "subtitles.plugins"],
   "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
   device: ["monitor", "tabs.device", "subtitles.device"],
   "device-permissions": ["shieldCheck", "tabs.devicePermissions", "subtitles.devicePermissions"],

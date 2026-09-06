@@ -26,6 +26,7 @@ export function metadataSnapshot(params: {
   packageBuild?: { bundledDist?: boolean };
   packageDependencies?: Record<string, string>;
   iconPath?: string;
+  configSchema?: PluginManifestRecord["configSchema"];
 }) {
   const id = params.id ?? "workboard";
   const origin = params.origin ?? "bundled";
@@ -48,6 +49,7 @@ export function metadataSnapshot(params: {
     rootDir: `/tmp/${id}`,
     source: `/tmp/${id}/index.ts`,
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
   };
   return {
     index: {

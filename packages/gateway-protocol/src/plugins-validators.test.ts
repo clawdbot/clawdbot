@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+  PluginsListResultSchema,
   PluginsInspectResultSchema,
   buildCapabilityConsentErrorDetails,
   readCapabilityConsentErrorDetails,
@@ -75,6 +76,30 @@ describe("plugin lifecycle protocol validators", () => {
   it("keeps list params closed", () => {
     expect(validatePluginsListParams({})).toBe(true);
     expect(validatePluginsListParams({ unexpected: true })).toBe(false);
+  });
+
+  it("accepts the owner-projected needs-setup catalog state", () => {
+    const result = {
+      plugins: [
+        {
+          id: "needs-config",
+          name: "Needs Config",
+          installed: true,
+          enabled: false,
+          state: "needs-setup",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    };
+
+    expect(Value.Check(PluginsListResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(PluginsListResultSchema, {
+        ...result,
+        plugins: [{ ...result.plugins[0], state: "setup-maybe" }],
+      }),
+    ).toBe(false);
   });
 
   it("requires exactly one non-empty plugin id for inspection", () => {

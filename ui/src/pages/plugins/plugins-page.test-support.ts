@@ -42,6 +42,7 @@ type GatewayHarness = {
 };
 
 type TestPluginsPage = HTMLElement & {
+  surface: "discovery" | "settings";
   routeData?: PluginsRouteData;
   updateComplete: Promise<boolean>;
   result: PluginListResult | null;
@@ -312,18 +313,6 @@ export async function mountPage(
   document.body.append(provider);
   await page.updateComplete;
   return { page, provider };
-}
-
-export async function mountClawHubSearchPage(client: GatewayBrowserClient) {
-  const harness = createGateway(client);
-  return mountPage(
-    createContext(harness.gateway),
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins/discover"),
-    ),
-  );
 }
 
 export function deferred<T>() {
