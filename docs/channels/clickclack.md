@@ -55,9 +55,19 @@ For guided setup, run:
 openclaw onboard
 ```
 
-Select ClickClack, then enter the server URL, bot token, and workspace when
-prompted. Guided setup checks the server, token, and workspace after saving; a
-failed check does not discard the configuration.
+or `openclaw channels add --channel clickclack`.
+
+Select ClickClack. The first prompt is the **setup URL** from ClickClack
+(**Workspace settings → Integrations → OpenClaw → Setup code**), for example
+`https://clickclack.example.com/#XXXX-XXXX-XXXX`. OpenClaw claims that
+one-time code, writes token / server URL / workspace, and skips the later
+credential prompts. Leave the setup URL **blank** to use the manual path
+instead: bot token (or env), server URL, then workspace.
+
+Guided setup checks the server, token, and workspace after saving; a failed
+check does not discard the configuration. Android and other `wizard.start`
+clients use this same flow — the Gateway claims the code; the client never
+stores the bot token.
 
 ### Alternative: manual token
 

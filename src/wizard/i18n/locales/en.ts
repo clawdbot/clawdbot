@@ -759,6 +759,14 @@ export const en = {
       envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
       helpCreateToken:
         "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+      helpCreateSetupCode:
+        "In ClickClack: Workspace settings → Integrations → OpenClaw → Setup code (recommended) → copy the setup URL",
+      setupCodeInput: "ClickClack setup URL",
+      setupCodePlaceholder: "https://clickclack.example/#XXXX-XXXX-XXXX",
+      setupCodeTitle: "ClickClack setup code",
+      setupCodeLeaveBlank: "Leave blank to enter a bot token, server URL, and workspace instead.",
+      setupCodeUrlRequired:
+        "Paste the full ClickClack setup URL (https://…/#CODE). Bare codes need a server URL.",
       invalidToken:
         "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
       validationWarningTitle: "ClickClack connection check",

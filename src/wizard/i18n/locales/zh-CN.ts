@@ -734,6 +734,13 @@ export const zh_CN = {
       envPrompt: "检测到 CLICKCLACK_BOT_TOKEN。使用环境变量？",
       helpCreateToken:
         "在 ClickClack 中：工作区设置 → Integrations → OpenClaw → 创建 bot → 复制 token",
+      helpCreateSetupCode:
+        "在 ClickClack 中：工作区设置 → Integrations → OpenClaw → Setup code（推荐）→ 复制设置 URL",
+      setupCodeInput: "ClickClack 设置 URL",
+      setupCodePlaceholder: "https://clickclack.example/#XXXX-XXXX-XXXX",
+      setupCodeTitle: "ClickClack 设置码",
+      setupCodeLeaveBlank: "留空则改为输入 bot token、服务器 URL 和工作区。",
+      setupCodeUrlRequired: "请粘贴完整的 ClickClack 设置 URL（https://…/#CODE）。单独的码需要服务器 URL。",
       invalidToken: "ClickClack 拒绝了 bot token（401）。复制当前 token 后重新运行设置。",
       validationWarningTitle: "ClickClack 连接检查",
       workspaceHelp: "可使用 wsp_… ID、工作区 slug 或显示名称。",

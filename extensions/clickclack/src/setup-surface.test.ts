@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   me: vi.fn(),
   resolveWorkspaceId: vi.fn(),
   workspaces: vi.fn(),
+  claimClickClackSetupCode: vi.fn(),
 }));
 
 vi.mock("./http-client.js", () => ({
@@ -30,6 +31,10 @@ vi.mock("./http-client.js", () => ({
 
 vi.mock("./resolve.js", () => ({
   resolveWorkspaceId: mocks.resolveWorkspaceId,
+}));
+vi.mock("./setup-claim.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-claim.js")>()),
+  claimClickClackSetupCode: mocks.claimClickClackSetupCode,
 }));
 
 import { clickClackSetupPlugin } from "./channel.setup.js";
@@ -60,6 +65,7 @@ describe("ClickClack setup wizard", () => {
     mocks.me.mockReset();
     mocks.resolveWorkspaceId.mockReset();
     mocks.workspaces.mockReset();
+    mocks.claimClickClackSetupCode.mockReset();
     mocks.me.mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
     mocks.resolveWorkspaceId.mockResolvedValue("wsp_default");
     mocks.workspaces.mockResolvedValue([
@@ -162,6 +168,53 @@ describe("ClickClack setup wizard", () => {
     ).toBe(false);
   });
 
+  it("asks for a setup-code URL before token entry and allows skipping to manual token", () => {
+    expect(clickClackSetupWizard.stepOrder).toBe("text-first");
+    const codeInput = clickClackSetupWizard.textInputs?.[0];
+    expect(codeInput?.inputKey).toBe("code");
+    expect(codeInput?.sensitive).toBe(true);
+    expect(codeInput?.required).toBe(false);
+    expect(typeof codeInput?.applySet).toBe("function");
+    expect(
+      codeInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: {},
+      }),
+    ).toBe(true);
+    expect(
+      codeInput?.shouldPrompt?.({
+        cfg: configuredAccount,
+        accountId: "default",
+        credentialValues: {},
+      }),
+    ).toBe(false);
+    expect(
+      codeInput?.validate?.({
+        value: "",
+        cfg: {},
+        accountId: "default",
+        credentialValues: {},
+      }),
+    ).toBeUndefined();
+    expect(
+      codeInput?.validate?.({
+        value: "ABCD-EFGH-IJKL",
+        cfg: {},
+        accountId: "default",
+        credentialValues: {},
+      }),
+    ).toEqual(expect.any(String));
+    expect(
+      codeInput?.validate?.({
+        value: "https://clickclack.example/#ABCD-EFGH-IJKL",
+        cfg: {},
+        accountId: "default",
+        credentialValues: {},
+      }),
+    ).toBeUndefined();
+  });
+
   it("switches the default account to env auth before URL and workspace prompts", async () => {
     const credential = tokenCredential();
     const next = await credential.applyUseEnv?.({
@@ -188,7 +241,7 @@ describe("ClickClack setup wizard", () => {
 
   it("saves URL, token, and workspace through the guided flow", async () => {
     const queued = createQueuedWizardPrompter({
-      textValues: ["ccb_guided", "https://clickclack.example/", "default"],
+      textValues: ["", "ccb_guided", "https://clickclack.example/", "default"],
     });
 
     const result = await runSetupWizardConfigure({
@@ -206,6 +259,47 @@ describe("ClickClack setup wizard", () => {
     });
     expect(mocks.me).toHaveBeenCalledTimes(1);
     expect(mocks.resolveWorkspaceId).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims a setup-code URL and skips token, server URL, and workspace prompts", async () => {
+    mocks.claimClickClackSetupCode.mockResolvedValue({
+      token: "ccb_claimed",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {
+        defaultTo: "channel:general",
+        allowFrom: ["*"],
+        agentActivity: true,
+      },
+    });
+    const queued = createQueuedWizardPrompter({
+      textValues: ["https://clickclack.example/#abcd-efgh-jkmn"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: createPluginSetupWizardConfigure(clickClackSetupPlugin),
+      cfg: {} as CoreConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.clickclack).toMatchObject({
+      enabled: true,
+      token: "ccb_claimed",
+      baseUrl: "https://clickclack.example",
+      workspace: "wsp_1",
+      defaultTo: "channel:general",
+    });
+    expect(mocks.claimClickClackSetupCode).toHaveBeenCalledWith({
+      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
+      code: "ABCDEFGHJKMN",
+    });
+    expect(queued.text).toHaveBeenCalledTimes(1);
   });
 
   it("reports the resolved bot and workspace after live validation", async () => {

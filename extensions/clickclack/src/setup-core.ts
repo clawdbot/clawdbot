@@ -339,6 +339,24 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
+/** Wizard text steps skip prepareAccountConfigInput; claim the setup URL here instead. */
+export async function applyClickClackWizardSetupCode(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  code: string;
+}): Promise<OpenClawConfig> {
+  const prepared = await clickClackSetupAdapter.prepareAccountConfigInput!({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: { code: params.code },
+  } as Parameters<NonNullable<ChannelSetupAdapter["prepareAccountConfigInput"]>>[0]);
+  return clickClackSetupAdapter.applyAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: prepared,
+  });
+}
+
 export const clickClackSetupContract = defineChannelSetupContract({
   fields: {
     code: {
