@@ -891,10 +891,10 @@ describe("github-copilot plugin", () => {
     });
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       "https://copilot-reenabled.test/models",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({ Authorization: "Bearer gh_test_token" }),
-      }),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer gh_test_token",
     );
   });
 
@@ -1024,10 +1024,10 @@ describe("github-copilot plugin", () => {
     ]);
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       "https://copilot-unified.test/models",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({ Authorization: "Bearer gh_test_token" }),
-      }),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer gh_test_token",
     );
   });
 
