@@ -281,7 +281,9 @@ it.each(["registry", "main-key"] as const)(
       );
       expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(false);
     } finally {
-      if (tick) clearImmediate(tick);
+      if (tick) {
+        clearImmediate(tick);
+      }
       open.mockRestore();
     }
   },
