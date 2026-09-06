@@ -194,6 +194,233 @@ describe("update process state", () => {
     }).toEqual(markerHashesBefore);
   });
 
+  it("describes Doctor migrations but refuses without staged candidate identity", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    const execPath = path.join(stateDir, "exec-approvals.json");
+    const tuiPath = path.join(stateDir, "tui", "last-session.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.dirname(tuiPath), { recursive: true });
+    await fs.writeFile(configPath, '{ "plugins": { "entries": { "candidate": {} } } }\n');
+    await fs.writeFile(
+      execPath,
+      '{ "version": 1, "defaults": { "security": "allowlist", "ask": "on-miss" } }\n',
+    );
+    await fs.writeFile(
+      tuiPath,
+      '{ "terminal": { "sessionKey": "agent:main:tui:plan", "updatedAt": 1 } }\n',
+    );
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--snapshot-state",
+      stateDir,
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    const plan = JSON.parse(result.stdout) as {
+      mutationAllowed: boolean;
+      outcome: string;
+      refusal: { code: string };
+      candidate: {
+        root: string;
+        version: string;
+        artifact: { outcome: string; refusal: { code: string } };
+      };
+      snapshot: { configDigest: string; stateDigest: string };
+      steps: Array<{ id: string; outcome: string }>;
+    };
+    expect(plan).toMatchObject({
+      mutationAllowed: false,
+      outcome: "refused",
+      refusal: { code: "candidate-artifact-digest-required" },
+      candidate: {
+        root: path.resolve("."),
+        version: expect.any(String),
+        artifact: {
+          outcome: "deferred",
+          refusal: { code: "candidate-artifact-digest-required" },
+        },
+      },
+      snapshot: {
+        configDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+        stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      },
+    });
+    expect(plan.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "exec-approvals", outcome: "planned" }),
+        expect.objectContaining({ id: "tui-last-session", outcome: "planned" }),
+        expect.objectContaining({ id: "plugin-doctor-state", outcome: "deferred" }),
+      ]),
+    );
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("preserves snapshot path bytes and rejects blank snapshot paths", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-paths-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, " copied state ");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}\n");
+    const before = await snapshotTree(root);
+
+    const runPlan = (snapshotState: string) =>
+      runUpdateProcess(
+        root,
+        [
+          "update",
+          "migration-plan",
+          "--snapshot-home",
+          root,
+          "--snapshot-config",
+          configPath,
+          "--snapshot-state",
+          snapshotState,
+          "--json",
+        ],
+        { OPENCLAW_STATE_DIR: snapshotState },
+      );
+
+    const valid = runPlan(stateDir);
+    expect(valid.error).toBeUndefined();
+    expect(valid.status, valid.stderr).toBe(1);
+    expect(JSON.parse(valid.stdout)).toMatchObject({
+      outcome: "refused",
+      snapshot: { stateDir },
+    });
+
+    const blank = runPlan(" \t ");
+    expect(blank.error).toBeUndefined();
+    expect(blank.status).toBe(1);
+    expect(blank.stderr).toContain("--snapshot-state must not be blank");
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("refuses configured session stores outside the copied state snapshot", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-session-root-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    const externalStore = path.join(root, "external", "sessions.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.dirname(externalStore), { recursive: true });
+    await fs.writeFile(externalStore, "{}\n");
+    const runPlan = () =>
+      runUpdateProcess(root, [
+        "update",
+        "migration-plan",
+        "--snapshot-home",
+        root,
+        "--snapshot-config",
+        configPath,
+        "--snapshot-state",
+        stateDir,
+        "--json",
+      ]);
+
+    await fs.writeFile(configPath, `${JSON.stringify({ session: { store: externalStore } })}\n`);
+    const external = runPlan();
+    expect(external.error).toBeUndefined();
+    expect(external.status, external.stderr).toBe(1);
+    expect(JSON.parse(external.stdout)).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "session-target-outside-snapshot" },
+      steps: [
+        {
+          id: "agent-migration-targets",
+          source: expect.arrayContaining([{ kind: "path", path: externalStore }]),
+          target: [],
+          outcome: "deferred",
+          refusal: { code: "session-target-outside-snapshot" },
+        },
+      ],
+    });
+
+    const copiedStore = path.join(stateDir, "sessions.json");
+    await fs.writeFile(copiedStore, "{}\n");
+    await fs.writeFile(configPath, `${JSON.stringify({ session: { store: copiedStore } })}\n`);
+    const copied = runPlan();
+    expect(copied.error).toBeUndefined();
+    expect(copied.status, copied.stderr).toBe(1);
+    expect(JSON.parse(copied.stdout)).toMatchObject({
+      refusal: { code: "candidate-artifact-digest-required" },
+      steps: expect.arrayContaining([expect.objectContaining({ id: "orphan-session-keys" })]),
+    });
+  });
+
+  it("rejects caller-supplied snapshot identity without touching the copy", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-identity-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}\n");
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--snapshot-state",
+      stateDir,
+      "--config-digest",
+      "sha256:caller-claim",
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('does not recognize option "--config-digest"');
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("refuses a copied state path that is not a directory", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-unbound-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "copied-state-file");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.join(root, "state"));
+    await fs.writeFile(configPath, "{}\n");
+    await fs.writeFile(stateDir, "not a state directory\n");
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--snapshot-state",
+      stateDir,
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mutationAllowed: false,
+      outcome: "refused",
+      refusal: { code: "snapshot-identity-unavailable" },
+      snapshot: { configDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) },
+    });
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
   it.each(["update", "repair"])(
     "keeps rejected %s arguments from touching legacy state",
     async (command) => {

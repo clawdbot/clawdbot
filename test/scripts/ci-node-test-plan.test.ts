@@ -1651,6 +1651,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-session-transcript-headers.test.ts",
       "src/commands/doctor-session-transcript-labels.test.ts",
       "src/commands/doctor-session-transcripts.incident.test.ts",
+      "src/commands/doctor-session-transcripts.sqlite.test.ts",
       "src/commands/doctor-session-transcripts.test.ts",
     ]);
     const commandFiles = commandShards.flatMap((shard) => shard.includePatterns ?? []).toSorted();
@@ -1866,6 +1867,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
     const doctorRuntimeTargets = [
       "src/commands/doctor-config-preflight.process.test.ts",
+      "src/commands/doctor-config-preflight.refusal.process.test.ts",
       "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
     ];
     const runtimeTargets = [

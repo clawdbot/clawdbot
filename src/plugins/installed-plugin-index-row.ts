@@ -1,4 +1,8 @@
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
@@ -14,7 +18,7 @@ export function readPersistedInstalledPluginIndexRowSync(
   if (options.filePath?.endsWith(".json")) {
     return undefined;
   }
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+  const read = ({ db }: { db: DatabaseSync }) => {
     if (!tableExists(db, "config_machine_state")) {
       return undefined;
     }
@@ -24,5 +28,9 @@ export function readPersistedInstalledPluginIndexRowSync(
         // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
         .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined
     );
-  }, resolveInstalledPluginIndexStateDatabaseOptions(options));
+  };
+  const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);
+  return options.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, databaseOptions)
+    : withExistingOpenClawStateDatabaseReadOnly(read, databaseOptions);
 }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
+import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -31,12 +32,16 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
   })),
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown): Promise<StateMigrationResult> => ({
-    migrated: true,
-    skipped: false,
-    changes: ["imported"],
-    warnings: [],
-  })),
+  vi.fn(
+    async (_params?: {
+      onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+    }): Promise<StateMigrationResult> => ({
+      migrated: true,
+      skipped: false,
+      changes: ["imported"],
+      warnings: [],
+    }),
+  ),
 );
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => ({
@@ -533,7 +538,22 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("runs full state migrations after reading the config snapshot", async () => {
-    await runDoctorConfigPreflight({
+    const receipt: LegacyStateMigrationStepReceipt = {
+      id: "plugin-doctor-state",
+      phase: "shared",
+      source: [{ kind: "owner", id: "plugin:test:import" }],
+      target: [{ kind: "owner", id: "plugin:test:doctor-state" }],
+      requiredness: "required",
+      reversibility: "checkpoint-required",
+      outcome: "completed",
+      changes: ["imported"],
+      warnings: [],
+    };
+    autoMigrateLegacyState.mockImplementationOnce(async (params) => {
+      params?.onStepReceipt?.(receipt);
+      return { migrated: true, skipped: false, changes: receipt.changes, warnings: [] };
+    });
+    const result = await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
     });
@@ -546,10 +566,14 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
+      configIncludedPaths: [],
       env: process.env,
+      log: undefined,
       recoverCorruptTargetStore: undefined,
       doctorOnlyStateMigrations: undefined,
+      onStepReceipt: expect.any(Function),
     });
+    expect(result.stateMigrationStepReceipts).toEqual([receipt]);
     expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
   });

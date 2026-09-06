@@ -2646,8 +2646,6 @@ src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/session-transcript-search.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	2
-src/config/sessions/targets-path-validation.ts	1
-src/config/sessions/targets.ts	2
 src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
@@ -2731,7 +2729,7 @@ src/flows/channel-setup.ts	7
 src/flows/doctor-core-checks.runtime.ts	5
 src/flows/doctor-core-checks.ts	4
 src/flows/doctor-health-contributions-final.ts	1
-src/flows/doctor-health-contributions.ts	2
+src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
 src/flows/health-check-adapter.ts	1
 src/flows/search-setup.ts	6

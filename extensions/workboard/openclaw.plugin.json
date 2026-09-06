@@ -8,7 +8,7 @@
     }
   ],
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "workboard-28-kv-to-sqlite" }]
   },
   "enabledByDefault": false,
   "activation": {
