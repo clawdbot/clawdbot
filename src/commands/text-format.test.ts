@@ -22,6 +22,15 @@ describe("shortenText", () => {
 
 describe("formatTextCell raw output bound", () => {
   it.each([
+    ["abc", 5, "abc  "],
+    ["表", 4, "表  "],
+    ["e\u0301", 3, "e\u0301  "],
+    ["\u001b[31mred\u001b[0m", 4, "\u001b[31mred\u001b[0m "],
+  ])("pads fitting %j to %s visible columns", (input, width, expected) => {
+    expect(formatTextCell(input, width)).toBe(expected);
+  });
+
+  it.each([
     ["zero-width overflow", "\u200b".repeat(32), "\u200b".repeat(14) + "… "],
     ["exact zero-width raw boundary", "\u200b".repeat(14), "\u200b".repeat(14) + "  "],
     ["one oversized combining cluster", "e" + "\u0301".repeat(16), "… "],

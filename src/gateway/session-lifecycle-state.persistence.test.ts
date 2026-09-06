@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
@@ -55,6 +56,68 @@ const silentLog: SubsystemLogger = {
   raw: vi.fn(),
   child: () => silentLog,
 };
+
+it.each([
+  { stopReason: "restart", status: "running", recovery: "recoverable", timeoutPhase: undefined },
+  { stopReason: "aborted", status: "killed", recovery: "inactive", timeoutPhase: undefined },
+  { stopReason: "restart", status: "timeout", recovery: "inactive", timeoutPhase: "provider" },
+])(
+  "retains $stopReason cancellation as $status after reopening a store without a shutdown marker",
+  async ({ stopReason, status, recovery, timeoutPhase }) => {
+    const tempDirs = createTempDirTracker();
+    const target = {
+      storePath: path.join(tempDirs.make("openclaw-restart-terminal-"), "sessions.json"),
+      sessionKey: "agent:main:restart-terminal",
+    };
+    const runId = "interrupted-run";
+    routing.loadSessionEntry.mockImplementation(() => ({
+      ...target,
+      canonicalKey: target.sessionKey,
+      entry: loadSessionEntry(target),
+    }));
+    try {
+      await replaceSessionEntry(target, {
+        sessionId: "restart-terminal-session",
+        lifecycleRunId: runId,
+        status: "running",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+      });
+      // The bulk shutdown marker failed; cancellation is the remaining durable writer.
+      await lifecycleState.persistGatewaySessionLifecycleEvent({
+        sessionKey: target.sessionKey,
+        event: {
+          runId,
+          sessionId: "restart-terminal-session",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          ts: 2_000,
+          data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
+        },
+      });
+      closeOpenClawAgentDatabasesForTest();
+      const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
+      expect(restored?.status).toBe(status);
+      if (recovery === "recoverable") {
+        expect(restored?.restartRecoveryForceSafeTools).toBe(true);
+        expect(restored?.endedAt).toBeUndefined();
+      }
+      if (!restored) {
+        throw new Error("session did not survive store reopen");
+      }
+      const observed = transitionMainSessionRecovery(restored, {
+        kind: "observe",
+        cycleId: "next-recovery-cycle",
+        lifecycleGeneration: "next-gateway-generation",
+        sessionKey: target.sessionKey,
+      });
+      expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
+    } finally {
+      routing.loadSessionEntry.mockReset();
+      closeOpenClawAgentDatabasesForTest();
+      tempDirs.cleanup();
+    }
+  },
+);
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const tempDirs = createTempDirTracker();

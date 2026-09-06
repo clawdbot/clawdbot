@@ -91,6 +91,11 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+When every eligible OAuth candidate fails preparation, discovery reports
+`unavailable` with the attempted profile identities instead of treating the
+provider as unconfigured. Compatible prior inventory remains available. A usable
+fallback credential still supplies its own catalog result.
+
 API-key-oriented and full-auth catalog callbacks retain their existing source
 priorities. Plugins must keep credential bytes and their authentication mode from
 the same selection. Catalog failure and recovery preserve the

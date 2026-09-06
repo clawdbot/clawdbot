@@ -531,7 +531,6 @@ async function resolveImageCompressionPolicy(params: {
 
 function matchesImageTimeoutEntry(params: {
   entry: MediaUnderstandingModelConfig;
-  source: "capability" | "shared";
   provider: string;
   model: string;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
@@ -544,7 +543,6 @@ function matchesImageTimeoutEntry(params: {
   if (
     !matchesMediaEntryCapability({
       entry: params.entry,
-      source: params.source,
       capability: "image",
       providerRegistry: params.providerRegistry,
     })
@@ -571,7 +569,6 @@ function resolveImageToolTimeoutMs(params: {
   const sharedEntry = params.cfg.tools?.media?.models?.find((entry) =>
     matchesImageTimeoutEntry({
       entry,
-      source: "shared",
       provider: params.provider,
       model: params.model,
       providerRegistry: params.providerRegistry,

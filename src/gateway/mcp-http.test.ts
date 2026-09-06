@@ -27,6 +27,7 @@ import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEventWithReceipt,
@@ -648,20 +649,15 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 
 type McpToolCacheParams = Parameters<McpLoopbackToolCache["resolve"]>[0];
 
-function makeMcpToolCacheParams(overrides: Partial<McpToolCacheParams> = {}): McpToolCacheParams {
+function makeMcpToolCacheParams({
+  cfg = {} as OpenClawConfig,
+  ...context
+}: Partial<
+  McpToolCacheParams["context"] & Pick<McpToolCacheParams, "cfg">
+> = {}): McpToolCacheParams {
   return {
-    cfg: {} as never,
-    sessionKey: "agent:main:direct:test",
-    messageProvider: undefined,
-    currentChannelId: undefined,
-    currentThreadTs: undefined,
-    currentMessageId: undefined,
-    currentInboundAudio: undefined,
-    accountId: undefined,
-    inboundEventKind: undefined,
-    sourceReplyDeliveryMode: undefined,
-    senderIsOwner: true,
-    ...overrides,
+    cfg,
+    context: { sessionKey: "agent:main:direct:test", senderIsOwner: true, ...context },
   };
 }
 
@@ -1313,14 +1309,9 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.surface).toBe("loopback");
     expect(call.includeNodeExecTool).toBe(false);
-    expect(Array.from(call.excludeToolNames ?? [])).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-    ]);
+    expect(new Set(call.excludeToolNames)).toEqual(
+      new Set(["read", "write", "edit", "ls", "apply_patch", "exec", "process"]),
+    );
   });
 
   it("normalizes whitespace, duplicate, and empty client capability headers", async () => {
@@ -2290,14 +2281,26 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const unknownFirst = await cache.resolve({ ...baseParams, senderIsOwner: undefined });
-    const nonOwnerSecond = await cache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownFirst = await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderIsOwner: undefined },
+    });
+    const nonOwnerSecond = await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderIsOwner: false },
+    });
     expect(unknownFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
     expect(nonOwnerSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
 
     const secondCache = new McpLoopbackToolCache();
-    const nonOwnerFirst = await secondCache.resolve({ ...baseParams, senderIsOwner: false });
-    const unknownSecond = await secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerFirst = await secondCache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderIsOwner: false },
+    });
+    const unknownSecond = await secondCache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderIsOwner: undefined },
+    });
     expect(nonOwnerFirst.toolSchema.map((tool) => tool.name)).not.toContain("cron");
     expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
 
@@ -2317,16 +2320,25 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const withoutExec = await cache.resolve({ ...baseParams, nodeExecAllowed: false });
+    const withoutExec = await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, nodeExecAllowed: false },
+    });
     const withExec = await cache.resolve({
       ...baseParams,
-      nodeExecAllowed: true,
-      execSession: { execHost: "node", execNode: "mac-a" },
+      context: {
+        ...baseParams.context,
+        nodeExecAllowed: true,
+        execSession: { execHost: "node", execNode: "mac-a" },
+      },
     });
     await cache.resolve({
       ...baseParams,
-      nodeExecAllowed: true,
-      execSession: { execHost: "node", execNode: "mac-b" },
+      context: {
+        ...baseParams.context,
+        nodeExecAllowed: true,
+        execSession: { execHost: "node", execNode: "mac-b" },
+      },
     });
 
     expect(withoutExec.toolSchema.map((tool) => tool.name)).not.toContain("exec");
@@ -2351,25 +2363,43 @@ describe("mcp loopback server", () => {
 
     const readOnly = await cache.resolve({
       ...baseParams,
-      execSession: { permissionMode: "read-only" },
+      context: {
+        ...baseParams.context,
+        execSession: { permissionMode: "read-only" },
+      },
     });
     const fullSession = await cache.resolve({
       ...baseParams,
-      execSession: { permissionMode: "full" },
+      context: {
+        ...baseParams.context,
+        execSession: { permissionMode: "full" },
+      },
     });
-    const deniedOverride = await cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } });
-    const fullOverride = await cache.resolve({ ...baseParams, execOverrides: { mode: "full" } });
+    const deniedOverride = await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, execOverrides: { mode: "deny" } },
+    });
+    const fullOverride = await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, execOverrides: { mode: "full" } },
+    });
 
     expect(readOnly.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(fullSession.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(deniedOverride.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(fullOverride.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(
-      await cache.resolve({ ...baseParams, execSession: { permissionMode: "read-only" } }),
+      await cache.resolve({
+        ...baseParams,
+        context: { ...baseParams.context, execSession: { permissionMode: "read-only" } },
+      }),
     ).toBe(readOnly);
-    expect(await cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } })).toBe(
-      deniedOverride,
-    );
+    expect(
+      await cache.resolve({
+        ...baseParams,
+        context: { ...baseParams.context, execOverrides: { mode: "deny" } },
+      }),
+    ).toBe(deniedOverride);
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
   });
 
@@ -2389,20 +2419,32 @@ describe("mcp loopback server", () => {
 
     const openAi = await cache.resolve({
       ...baseParams,
-      modelProvider: "openai",
-      modelId: "gpt-5.5",
+      context: {
+        ...baseParams.context,
+        modelProvider: "openai",
+        modelId: "gpt-5.5",
+      },
     });
     const blockedAnthropic = await cache.resolve({
       ...baseParams,
-      modelProvider: "anthropic",
-      modelId: "claude-opus-4-7",
+      context: {
+        ...baseParams.context,
+        modelProvider: "anthropic",
+        modelId: "claude-opus-4-7",
+      },
     });
     const allowedAnthropic = await cache.resolve({
       ...baseParams,
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
+      context: {
+        ...baseParams.context,
+        modelProvider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+      },
     });
-    await cache.resolve({ ...baseParams, modelProvider: "openai", modelId: "gpt-5.5" });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, modelProvider: "openai", modelId: "gpt-5.5" },
+    });
 
     expect(openAi.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(blockedAnthropic.toolSchema.map((tool) => tool.name)).not.toContain("exec");
@@ -2419,19 +2461,43 @@ describe("mcp loopback server", () => {
     });
 
     await cache.resolve(baseParams);
-    await cache.resolve({ ...baseParams, execOverrides: { host: "gateway" } });
-    await cache.resolve({ ...baseParams, senderName: "Guest Name" });
-    await cache.resolve({ ...baseParams, senderUsername: "guest-user" });
-    await cache.resolve({ ...baseParams, senderE164: "+15550001111" });
-    await cache.resolve({ ...baseParams, groupId: "group-a" });
-    await cache.resolve({ ...baseParams, groupChannel: "ops" });
-    await cache.resolve({ ...baseParams, groupSpace: "guild-a" });
-    await cache.resolve({ ...baseParams, spawnedBy: "agent:main:discord:channel:parent" });
     await cache.resolve({
       ...baseParams,
-      runtimePolicySessionKey: "agent:main:discord:default:direct:guest",
+      context: { ...baseParams.context, execOverrides: { host: "gateway" } },
     });
-    await cache.resolve({ ...baseParams, agentId: "worker", sessionKey: "agent:worker:main" });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderName: "Guest Name" },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderUsername: "guest-user" },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, senderE164: "+15550001111" },
+    });
+    await cache.resolve({ ...baseParams, context: { ...baseParams.context, groupId: "group-a" } });
+    await cache.resolve({ ...baseParams, context: { ...baseParams.context, groupChannel: "ops" } });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, groupSpace: "guild-a" },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, spawnedBy: "agent:main:discord:channel:parent" },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: {
+        ...baseParams.context,
+        runtimePolicySessionKey: "agent:main:discord:default:direct:guest",
+      },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: { ...baseParams.context, agentId: "worker", sessionKey: "agent:worker:main" },
+    });
     await cache.resolve(baseParams);
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(11);
@@ -2447,29 +2513,41 @@ describe("mcp loopback server", () => {
     await cache.resolve(baseParams);
     await cache.resolve({
       ...baseParams,
-      bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
-    });
-    await cache.resolve({
-      ...baseParams,
-      bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
-    });
-    await cache.resolve({
-      ...baseParams,
-      bashElevated: {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
-        fullAccessAvailable: true,
+      context: {
+        ...baseParams.context,
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
       },
     });
     await cache.resolve({
       ...baseParams,
-      bashElevated: {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "runtime",
+      context: {
+        ...baseParams.context,
+        bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: {
+        ...baseParams.context,
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: true,
+        },
+      },
+    });
+    await cache.resolve({
+      ...baseParams,
+      context: {
+        ...baseParams.context,
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
       },
     });
     await cache.resolve(baseParams);
@@ -2492,20 +2570,29 @@ describe("mcp loopback server", () => {
     for (let index = 0; index < 257; index += 1) {
       await cache.resolve({
         ...baseParams,
-        currentMessageId: `message-${index}`,
+        context: {
+          ...baseParams.context,
+          currentMessageId: `message-${index}`,
+        },
       });
     }
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(257);
 
     await cache.resolve({
       ...baseParams,
-      currentMessageId: "message-0",
+      context: {
+        ...baseParams.context,
+        currentMessageId: "message-0",
+      },
     });
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
 
     await cache.resolve({
       ...baseParams,
-      currentMessageId: "message-256",
+      context: {
+        ...baseParams.context,
+        currentMessageId: "message-256",
+      },
     });
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
   });

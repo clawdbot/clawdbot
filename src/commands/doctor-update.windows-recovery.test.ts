@@ -19,6 +19,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     "stopped-mutation-throws",
     "restore-fails",
     "restart-fails",
+    "verify-fails",
   ] as const)("finishes Windows task recovery after a Doctor update: %s", async (outcome) => {
     mockGitCheckout();
     let taskEnabled = false;
@@ -29,6 +30,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     const recovery = {
       suspended: Promise.resolve(true),
       interrupted: () => false,
+      handoff: vi.fn(),
       beginMutation: vi.fn(),
       restore: vi.fn(async (safe?: boolean) => {
         expect(safe).toBe(true);
@@ -37,7 +39,13 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         }
         taskEnabled = true;
       }),
-      complete: vi.fn(() => {
+      complete: vi.fn(async (safe?: boolean) => {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (safe === false) {
+          taskEnabled = false;
+        }
         recoveryClosed = true;
       }),
     };
@@ -69,14 +77,23 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.maybeRestartServiceAfterFailedMutableUpdate.mockImplementation(async () => {
       expect(taskEnabled).toBe(true);
+      expect(recovery.complete).not.toHaveBeenCalled();
       return safeRecoveryFails ? "failed" : "healthy";
     });
     mocks.restartUpdatedGateway.mockImplementation(async () => {
       expect(taskEnabled).toBe(true);
+      expect(recovery.complete).not.toHaveBeenCalled();
       if (outcome === "restart-fails") {
         throw failure;
       }
     });
+    if (outcome === "verify-fails") {
+      mocks.waitForHealthyRestart.mockResolvedValue({
+        healthy: false,
+        runtime: { status: "stopped" },
+        staleGatewayPids: [],
+      });
+    }
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -94,7 +111,8 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       outcome === "safe-error" ||
       safeRecoveryFails ||
       outcome === "restore-fails" ||
-      outcome === "restart-fails";
+      outcome === "restart-fails" ||
+      outcome === "verify-fails";
     if (terminalFailure) {
       await expect(offer).rejects.toEqual(new ExitError(1));
     } else {
@@ -108,8 +126,13 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     expect(recovery.beginMutation).toHaveBeenCalledOnce();
     const restoreAttempted = !unsafe && !mutationThrows;
     const restoreVerified = restoreAttempted && outcome !== "restore-fails";
-    expect(taskEnabled).toBe(restoreVerified);
-    expect(recovery.complete).toHaveBeenCalledWith(restoreVerified);
+    const restartVerified =
+      restoreVerified &&
+      !safeRecoveryFails &&
+      outcome !== "restart-fails" &&
+      outcome !== "verify-fails";
+    expect(taskEnabled).toBe(restartVerified);
+    expect(recovery.complete).toHaveBeenCalledWith(restartVerified);
     if (!restoreAttempted) {
       expect(recovery.restore).not.toHaveBeenCalled();
     }

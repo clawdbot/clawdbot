@@ -72,7 +72,7 @@ describe("process supervisor scope extinction", () => {
     createChildAdapterMock.mockResolvedValue(adapter);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:one-shot-late-join";
-    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
     const run = await spawnChild(supervisor, {
       sessionId: scopeKey,
       scopeKey,
@@ -92,7 +92,7 @@ describe("process supervisor scope extinction", () => {
     }
     // The released owner must neither poison a new run nor retain the old admission.
     await expect(
-      supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true })(),
+      supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" })(),
     ).resolves.toBeUndefined();
     if (failed) {
       await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
@@ -101,7 +101,7 @@ describe("process supervisor scope extinction", () => {
     }
   });
 
-  it.each(["child", "pty", "external"] as const)(
+  it.each(["child", "external"] as const)(
     "keeps %s execution available but reports unsupported one-shot cleanup",
     async (mode) => {
       const adapter = createStubChildAdapter();
@@ -109,9 +109,9 @@ describe("process supervisor scope extinction", () => {
       createPtyAdapterMock.mockResolvedValue(adapter);
       const supervisor = createProcessSupervisor();
       const scopeKey = `scope:unsupported-${mode}`;
-      const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+      const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
       const run = await supervisor.spawn({
-        mode: mode === "pty" ? "pty" : "child",
+        mode: "child",
         argv: createSilentIdleArgv(),
         backendId: "test",
         sessionId: scopeKey,
@@ -137,7 +137,7 @@ describe("process supervisor scope extinction", () => {
     createChildAdapterMock.mockResolvedValue(adapter);
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:graceful-one-shot";
-    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
     const run = await spawnChild(supervisor, {
       sessionId: scopeKey,
       scopeKey,
@@ -164,7 +164,9 @@ describe("process supervisor scope extinction", () => {
       createChildAdapterMock.mockReturnValueOnce(startup.promise);
       const supervisor = createProcessSupervisor();
       const scopeKey = "scope:timed-out-construction";
-      const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: false });
+      const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, {
+        processTree: "transport-only",
+      });
       const pending = spawnChild(supervisor, {
         sessionId: "timed-out-construction",
         scopeKey,
@@ -287,7 +289,7 @@ describe("process supervisor scope extinction", () => {
 
       const supervisor = createProcessSupervisor();
       const cleanupScope = supervisor.acquireScopeCleanup("scope:failed-drain", {
-        requireProcessTree: false,
+        processTree: "transport-only",
       });
       const sharedId = reuseRunId ? { runId: "same-agent-run" } : {};
       const firstPending = spawnChild(supervisor, {
@@ -350,6 +352,67 @@ describe("process supervisor scope extinction", () => {
       sibling.settle(0);
       await replacement.wait();
       await supervisor.shutdown();
+    }
+  });
+  it.each([false, true])(
+    "preserves native PTY without a tree requirement (scoped=%s)",
+    async (scoped) => {
+      const supervisor = createProcessSupervisor();
+      const scopeKey = "scope:pty-transport";
+      const cleanup = scoped
+        ? supervisor.acquireScopeCleanup(scopeKey, { processTree: "transport-only" })
+        : undefined;
+      const pty = createStubChildAdapter();
+      createPtyAdapterMock.mockResolvedValue(pty);
+      const run = await supervisor.spawn({
+        mode: "pty",
+        argv: createSilentIdleArgv(),
+        sessionId: scopeKey,
+        scopeKey,
+        backendId: "test",
+      });
+      try {
+        expect(createPtyAdapterMock).toHaveBeenCalledOnce();
+        expect(createChildAdapterMock).not.toHaveBeenCalled();
+        pty.emitStdout("interactive output");
+        pty.settle(0);
+        await expect(run.wait()).resolves.toMatchObject({
+          exitCode: 0,
+          stdout: "interactive output",
+        });
+        await cleanup?.();
+      } finally {
+        pty.settle(0);
+        await supervisor.shutdown();
+      }
+    },
+  );
+
+  it("keeps a required-all scope dominant over owned-only backend cleanup", async () => {
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:strict-backend-owner";
+    const ownedCleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+    const strictCleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
+    const external = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(external);
+    try {
+      const run = await supervisor.spawn({
+        mode: "child",
+        argv: createSilentIdleArgv(),
+        sessionId: scopeKey,
+        scopeKey,
+        backendId: "sandbox-transport",
+        cleanupOwnership: "external",
+      });
+      external.settle(0);
+      await run.wait();
+      await expect(ownedCleanup()).resolves.toBeUndefined();
+      await expect(strictCleanup()).rejects.toThrow(
+        "cannot confirm owned execution-tree settlement",
+      );
+    } finally {
+      external.settle(0);
+      await Promise.allSettled([ownedCleanup(), strictCleanup(), supervisor.shutdown()]);
     }
   });
 });

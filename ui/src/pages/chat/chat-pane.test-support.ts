@@ -89,7 +89,7 @@ export type TestChatPane = HTMLElement & {
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
+  refreshSessionPullRequests: (options?: { refresh?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   taskSuggestions: TaskSuggestion[];
@@ -416,7 +416,11 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
-  onTestFinished(() => pane.disconnectedCallback());
+  onTestFinished(async () => {
+    pane.disconnectedCallback();
+    // Let lazy pane imports observe disconnect before Vitest removes their environment.
+    await vi.dynamicImportSettled();
+  });
   return {
     pane,
     requestUpdate,

@@ -947,12 +947,16 @@ describe("kitchen-sink RPC caller loading", () => {
     try {
       mkdirSync(path.join(root, "dist"));
       writeFileSync(path.join(root, "dist", "call-Abc123.js"), "");
+      writeFileSync(path.join(root, "dist", "call-Abc123.mjs"), "");
       writeFileSync(path.join(root, "dist", "call.runtime-Def456.js"), "");
+      writeFileSync(path.join(root, "dist", "call.runtime-Def456.mjs"), "");
       writeFileSync(path.join(root, "dist", "index.js"), "");
 
       expect(findDistCallGatewayModuleFiles(root)).toEqual([
         "call-Abc123.js",
+        "call-Abc123.mjs",
         "call.runtime-Def456.js",
+        "call.runtime-Def456.mjs",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

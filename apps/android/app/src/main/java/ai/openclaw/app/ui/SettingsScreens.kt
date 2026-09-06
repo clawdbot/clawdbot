@@ -48,7 +48,6 @@ import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawAgentAvatar
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -329,7 +328,7 @@ private fun CronJobsSettingsScreen(
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textSubtle,
+      color = ClawTheme.colors.textMuted,
     )
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -371,7 +370,7 @@ private fun CronSummaryStrip(rows: List<SettingsMetric>) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       rows.forEach { row ->
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+          Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
           Text(text = row.value, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
@@ -2642,7 +2641,7 @@ private fun ExecApprovalCard(
       approval.warningText?.let { warningText ->
         Text(text = warningText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
-      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
       approval.errorText?.let { errorText ->
         Text(text = gatewayExecApprovalTextForDisplay(errorText), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       }
@@ -2721,7 +2720,7 @@ private fun ExecApprovalNotice(
         Text(
           text = nativeString("Approval \${notice.approvalId}", notice.approvalId),
           style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
+          color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -2741,7 +2740,7 @@ private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
 @Composable
 private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
-  ClawDetailRow(
+  ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
     leading = { ClawIconBadge(icon = Icons.Default.Lock) },
@@ -2774,7 +2773,7 @@ internal fun usageRefreshVisible(
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
-  ClawDetailRow(
+  ClawListItem(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
     leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
@@ -2787,7 +2786,7 @@ private fun CronJobListRow(
   job: GatewayCronJobSummary,
   onClick: () -> Unit,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
@@ -2963,7 +2962,7 @@ private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) nativeString("Default assistant") else nativeString("Ready"),
     leading = {

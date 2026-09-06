@@ -68,4 +68,14 @@ describe("ManagedWorktreeService branch discovery", () => {
       }),
     ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "lists branches when Windows Git emits MSYS paths and preserves HEAD^{commit}",
+    async () => {
+      const result = await service.listRepositoryBranches(repo);
+
+      expect(result.headBranch).toBe("main");
+      expect(result.branches).toContainEqual({ name: "main", kind: "local" });
+    },
+  );
 });

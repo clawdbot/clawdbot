@@ -142,7 +142,7 @@ export function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
 }
 
-function isAssistantInternalReasoningContentType(type: unknown): boolean {
+export function isAssistantInternalReasoningContentType(type: unknown): boolean {
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 

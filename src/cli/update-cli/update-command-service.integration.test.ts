@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
@@ -21,6 +22,7 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   readyRecoveryHealth,
@@ -49,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
+  stopAllowances: [] as Array<string | undefined>,
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
   restart: vi.fn(async () => {
     mocks.events.push("native restart");
@@ -119,6 +122,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,
   stopSystemdService: async () => {
+    mocks.stopAllowances.push(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS);
     mocks.events.push("native stop");
     mocks.running = false;
   },
@@ -153,6 +157,15 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
+  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
+}));
+vi.mock("./update-command-inference.js", () => ({
+  runUpdateInferenceProbe: async () => true,
+}));
+vi.mock("./update-command-convergence.js", () => ({
+  convergeUpdatePlugins: async (params: { result: unknown }) => ({
+    resultWithPostUpdate: params.result,
+  }),
 }));
 vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
   appendServiceLifecycleRepairAudit: vi.fn(),
@@ -183,6 +196,7 @@ beforeEach(async () => {
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_LAUNCHD_LABEL",
     "OPENCLAW_UPDATE_IN_PROGRESS",
+    "OPENCLAW_UPDATE_RUN_HANDOFF",
     "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
     "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
   ];
@@ -200,9 +214,15 @@ beforeEach(async () => {
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
+    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
   );
   await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+  const worker = "dist/infra/update-candidate-state.worker.js";
+  await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
+  await fs.writeFile(
+    path.join(root, worker),
+    `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+  );
   await writeConfig(VERSION);
   mocks.ports.mockImplementation(async (port) => ({
     port,
@@ -219,6 +239,7 @@ beforeEach(async () => {
   });
   mocks.handoff.mockReturnValue({ ok: true, value: Promise.resolve(true) });
   mocks.events = [];
+  mocks.stopAllowances = [];
   mocks.capability.mockResolvedValue({ kind: "sealed", reason: "foreign-owner" });
   mocks.command.mockResolvedValue({
     programArguments: [
@@ -451,11 +472,7 @@ describe("preserved update activation with real version guards", () => {
         );
         expect(verification.length).toBe(retried ? 2 : 1);
         expect(verification.every(([args]) => args.requireRunningService === true)).toBe(true);
-        expect(
-          verification.every(
-            ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
-          ),
-        ).toBe(true);
+        expect(verification.every(([args]) => args.expectedBuildId === "new-build")).toBe(true);
         expect(mocks.call).toHaveBeenCalled();
         expect(
           mocks.call.mock.calls.every(
@@ -560,6 +577,8 @@ describe("preserved update activation with real version guards", () => {
   });
 
   registerRecoveryTests({ root: () => root, configPath: () => configPath, mocks });
+
+  registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
   registerInstallRootTransitionTests(() => ({ root, mocks }));
 

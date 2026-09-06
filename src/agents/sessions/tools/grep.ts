@@ -130,7 +130,7 @@ function formatGrepResult(
 export function createGrepToolDefinition(
   cwd: string,
   options?: GrepToolOptions,
-): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
+): ToolDefinition<typeof grepSchema, GrepToolDetails> {
   const customOps = options?.operations;
   const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -455,7 +455,7 @@ export function createGrepToolDefinition(
                   settle(() =>
                     resolve({
                       content: [{ type: "text", text: "No matches found" }],
-                      details: undefined,
+                      details: { content: "No matches found" },
                     }),
                   );
                   return;
@@ -512,7 +512,7 @@ export function createGrepToolDefinition(
                 // Apply byte truncation. There is no line limit here because the match limit already capped rows.
                 const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
                 let output = truncation.content;
-                const details: GrepToolDetails = {};
+                const details: Omit<GrepToolDetails, "content"> = {};
                 // Build actionable notices for truncation and match limits.
                 const notices: string[] = [];
                 if (matchLimitReached) {
@@ -535,7 +535,7 @@ export function createGrepToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: output }],
-                    details: Object.keys(details).length > 0 ? details : undefined,
+                    details: { ...details, content: output },
                   }),
                 );
               })().catch((err: unknown) => {
@@ -563,6 +563,6 @@ export function createGrepToolDefinition(
 export function createGrepTool(
   cwd: string,
   options?: GrepToolOptions,
-): AgentTool<typeof grepSchema> {
+): AgentTool<typeof grepSchema, GrepToolDetails> {
   return wrapToolDefinition(createGrepToolDefinition(cwd, options));
 }

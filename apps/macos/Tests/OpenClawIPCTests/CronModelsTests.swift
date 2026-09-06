@@ -18,7 +18,7 @@ struct CronModelsTests {
 
     @Test func `menu list ignores Gateway owned payload shapes and skips malformed rows`() throws {
         let json = #"""
-        {"jobs":[
+        {"total":4,"jobs":[
           {"id":"command","name":"Command job","enabled":true,"state":{},
            "payload":{"kind":"command","argv":["printf","done"]}},
           {"id":"script","name":"Script job","enabled":true,"state":{},
@@ -28,7 +28,8 @@ struct CronModelsTests {
           {"id":"malformed","name":"Missing enabled","state":{}}
         ]}
         """#
-        let jobs = try GatewayConnection.decodeCronListResponse(Data(json.utf8))
-        #expect(jobs.map(\.id) == ["command", "script", "future"])
+        let summary = try JSONDecoder().decode(CronJobsSummary.self, from: Data(json.utf8))
+        #expect(summary.total == 4)
+        #expect(summary.jobs.map(\.id) == ["command", "script", "future"])
     }
 }

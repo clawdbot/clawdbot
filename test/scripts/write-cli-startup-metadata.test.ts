@@ -869,52 +869,58 @@ describe("write-cli-startup-metadata", () => {
     expect(existsSync(outputPath)).toBe(false);
   });
 
-  it("selects the root-help bundle that exports the renderer", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-bundle-selection-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
-    const renderSourceRootHelpText = vi.fn(() => "Usage: source fallback\n");
+  it.each([
+    { rendererExtension: "js", helperExtension: "mjs" },
+    { rendererExtension: "mjs", helperExtension: "js" },
+  ])(
+    "selects the .$rendererExtension root-help renderer beside a .$helperExtension helper",
+    async ({ rendererExtension, helperExtension }) => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-bundle-selection-");
+      const distDir = path.join(tempRoot, "dist");
+      const extensionsDir = path.join(tempRoot, "extensions");
+      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      const renderSourceRootHelpText = vi.fn(() => "Usage: source fallback\n");
 
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(tempRoot, "package.json", '{"type":"module"}\n');
-    writeFixtureFile(
-      distDir,
-      "root-help-live-config-fixture.js",
-      "async function loadRootHelpRenderOptionsForConfigSensitivePlugins() { return null; }\nexport { loadRootHelpRenderOptionsForConfigSensitivePlugins };\n",
-    );
-    writeFixtureFile(
-      distDir,
-      "root-help-renderer-fixture.js",
-      "async function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n",
-    );
+      writeStartupMetadataSourceSignatureFixture(tempRoot);
+      writeFixtureFile(tempRoot, "package.json", '{"type":"module"}\n');
+      writeFixtureFile(
+        distDir,
+        `root-help-live-config-fixture.${helperExtension}`,
+        "async function loadRootHelpRenderOptionsForConfigSensitivePlugins() { return null; }\nexport { loadRootHelpRenderOptionsForConfigSensitivePlugins };\n",
+      );
+      writeFixtureFile(
+        distDir,
+        `root-help-renderer-fixture.${rendererExtension}`,
+        `import "./root-help-live-config-fixture.${helperExtension}";\nasync function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n`,
+      );
 
-    await testing.writeCliStartupMetadata({
-      distDir,
-      outputPath,
-      extensionsDir,
-      sourceRootDir: tempRoot,
-      renderSourceRootHelpText,
-      renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-      renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-      renderSourceSubcommandHelpTextRecord: () => ({
-        config: "Usage: openclaw config\n",
-        doctor: "Usage: openclaw doctor\n",
-        gateway: "Usage: openclaw gateway\n",
-        models: "Usage: openclaw models\n",
-        plugins: "Usage: openclaw plugins\n",
-        sessions: "Usage: openclaw sessions\n",
-        tasks: "Usage: openclaw tasks\n",
-      }),
-    });
+      await testing.writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderSourceRootHelpText,
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      rootHelpText: string;
-    };
-    expect(written.rootHelpText).toBe("Usage: bundled renderer\n");
-    expect(renderSourceRootHelpText).not.toHaveBeenCalled();
-  });
+      const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+        rootHelpText: string;
+      };
+      expect(written.rootHelpText).toBe("Usage: bundled renderer\n");
+      expect(renderSourceRootHelpText).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders independent startup help snapshots concurrently", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-concurrency-");

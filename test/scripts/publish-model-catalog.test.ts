@@ -1445,11 +1445,11 @@ globalThis.fetch = async (url) => {
   return Response.json({ data: [] });
 };`,
     );
+    const runtimeArgs = process.versions.bun ? [] : ["--import", "tsx"];
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...runtimeArgs,
         "--import",
         preload,
         "scripts/publish-model-catalog.mts",

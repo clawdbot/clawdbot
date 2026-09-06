@@ -52,7 +52,7 @@ export type ManagedRun = {
 };
 
 export type ManagedRunStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  write: (data: string | Buffer, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;
@@ -145,11 +145,17 @@ type SpawnAnchoredShellInput = SpawnBaseInput & {
 
 export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
+/**
+ * required-all includes external execution; owned-only leaves explicit backend
+ * lifetimes with that backend; transport-only makes no execution-tree claim.
+ */
+export type ProcessScopeCleanupPolicy = "required-all" | "owned-only" | "transport-only";
+
 export interface ProcessSupervisor {
   /** Register before spawning; close caller admission before joining this exact cleanup owner. */
   acquireScopeCleanup(
     scopeKey: string,
-    options: { requireProcessTree: boolean },
+    options: { processTree: ProcessScopeCleanupPolicy },
   ): () => Promise<void>;
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;

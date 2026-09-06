@@ -32,21 +32,18 @@ function scopedToolFixture(names: string[]) {
   };
 }
 
-function scopeParams(overrides: Record<string, unknown> = {}) {
+type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+
+function scopeParams({
+  cfg = {} as OpenClawConfig,
+  grantToken,
+  ...context
+}: Partial<ScopeParams["context"] & Pick<ScopeParams, "cfg" | "grantToken">> = {}): ScopeParams {
   return {
-    cfg: {} as OpenClawConfig,
-    sessionKey: "agent:main:recall",
-    messageProvider: undefined,
-    currentChannelId: undefined,
-    currentThreadTs: undefined,
-    currentMessageId: undefined,
-    currentInboundAudio: undefined,
-    accountId: undefined,
-    inboundEventKind: undefined,
-    sourceReplyDeliveryMode: undefined,
-    senderIsOwner: false,
-    ...overrides,
-  } as Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+    cfg,
+    grantToken,
+    context: { sessionKey: "agent:main:recall", senderIsOwner: false, ...context },
+  };
 }
 
 beforeEach(() => {
@@ -432,8 +429,8 @@ describe("McpLoopbackToolCache", () => {
     expect(denied.tools).toHaveLength(0);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
 
-    // Same allowlist reuses the cached row.
-    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
+    // Duplicate entries do not change the granted set.
+    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search", "memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
@@ -486,7 +483,10 @@ describe("McpLoopbackToolCache", () => {
     );
 
     for (const pinnedWidgetAuthoring of [true, undefined, true, false]) {
-      const result = await cache.resolve({ ...params, pinnedWidgetAuthoring });
+      const result = await cache.resolve({
+        ...params,
+        context: { ...params.context, pinnedWidgetAuthoring },
+      });
       expect(result.tools.map((tool) => tool.name)).toEqual(
         pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
       );
@@ -542,9 +542,9 @@ describe("McpLoopbackToolCache", () => {
     });
 
     await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
+    await cache.resolve({ ...params, context: { ...params.context, sourceReplyOnly: true } });
     await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
+    await cache.resolve({ ...params, context: { ...params.context, sourceReplyOnly: true } });
 
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");

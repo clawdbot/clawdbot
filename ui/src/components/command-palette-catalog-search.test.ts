@@ -1,11 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
+  filterCommandPaletteItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
 } from "./command-palette-catalog-search.ts";
 
 describe("command palette catalog search", () => {
+  it("opens meeting transcripts from search without querying agent chat history", () => {
+    const items = filterCommandPaletteItems({
+      query: "meeting",
+      includeSlashCommands: false,
+      sessionItems: [],
+      catalogItems: [],
+      desktopAvailable: false,
+      custodianAvailable: false,
+    });
+    expect(items).toContainEqual(
+      expect.objectContaining({ label: "Meetings", action: "nav:meetings" }),
+    );
+  });
   it("exposes app cards and permission-filtered settings sections without RPCs", () => {
     const regular = getStaticCommandPaletteCatalogItems(false);
     const admin = getStaticCommandPaletteCatalogItems(true);
@@ -18,6 +32,14 @@ describe("command palette catalog search", () => {
     );
     expect(regular.some((item) => item.routeId === "security")).toBe(false);
     expect(admin.some((item) => item.routeId === "security")).toBe(true);
+    expect(regular.some((item) => item.label === "Meeting capture")).toBe(false);
+    expect(admin).toContainEqual(
+      expect.objectContaining({
+        label: "Meeting capture",
+        routeId: "communications",
+        search: "?section=transcripts",
+      }),
+    );
   });
 
   it("loads bounded name and description catalogs in parallel", async () => {
@@ -71,7 +93,7 @@ describe("command palette catalog search", () => {
       }
     });
 
-    const items = await loadCommandPaletteCatalogItems({
+    const { items } = await loadCommandPaletteCatalogItems({
       client: { request } as unknown as GatewayBrowserClient,
       agentId: "main",
       agents: async () => ({

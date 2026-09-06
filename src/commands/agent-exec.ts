@@ -361,7 +361,7 @@ export async function agentExecCommand(
     if (processScopeKey) {
       const { getProcessSupervisor } = await import("../process/supervisor/index.js");
       cleanupProcessScope = getProcessSupervisor().acquireScopeCleanup(processScopeKey, {
-        requireProcessTree: true,
+        processTree: "required-all",
       });
     }
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });

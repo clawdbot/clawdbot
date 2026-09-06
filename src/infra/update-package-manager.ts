@@ -10,6 +10,21 @@ import { applyPathPrepend } from "./path-prepend.js";
 // builds and can bootstrap pnpm when a managed checkout requires it.
 type BuildManager = "pnpm" | "bun" | "npm";
 
+export function resolvePnpmCandidateEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  virtualStoreDir: string,
+): NodeJS.ProcessEnv {
+  // A shared project store lets candidate installation prune the serving generation.
+  // Set every spelling: inherited lower-case keys can win over upper-case overrides.
+  return {
+    ...env,
+    PNPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,
+    pnpm_config_virtual_store_dir: virtualStoreDir,
+    NPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,
+    npm_config_virtual_store_dir: virtualStoreDir,
+  };
+}
+
 type UpdatePackageManagerFailureReason =
   | "preferred-manager-unavailable"
   | "pnpm-corepack-enable-failed"

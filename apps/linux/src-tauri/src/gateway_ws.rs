@@ -10,7 +10,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -730,7 +730,7 @@ impl GatewayClient {
         let mut reconnect_attempt = 0_u32;
         loop {
             if !driver_should_run(
-                app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                app.get_window(QUICKCHAT_LABEL).is_some(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
@@ -807,7 +807,7 @@ impl GatewayClient {
                 reconnect_attempt = 1;
             }
             if !driver_should_run(
-                app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                app.get_window(QUICKCHAT_LABEL).is_some(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 continue;
@@ -895,7 +895,7 @@ impl GatewayClient {
         loop {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
                 || !driver_should_run(
-                    app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                    app.get_window(QUICKCHAT_LABEL).is_some(),
                     self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
                 )
             {
@@ -1352,14 +1352,15 @@ async fn wait_for_connect_challenge(
     .map_err(|_| RequestFailure::transport("Gateway connect challenge timed out."))?
 }
 
-async fn request_on_socket<F>(
+async fn request_on_socket<T, F>(
     socket: &mut GatewaySocket,
     method: &str,
     params: Value,
     budget: Duration,
     dispatch: &F,
-) -> Result<Value, RequestFailure>
+) -> Result<T, RequestFailure>
 where
+    T: DeserializeOwned,
     F: Fn(&Value),
 {
     let id = Uuid::new_v4().to_string();
@@ -1381,7 +1382,11 @@ where
                 continue;
             }
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
-                return Ok(value.get("payload").cloned().unwrap_or(Value::Null));
+                // Decode before the driver releases this socket to another request.
+                let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+                return serde_json::from_value(payload).map_err(|error| {
+                    RequestFailure::transport(format!("Invalid {method} response: {error}"))
+                });
             }
             let message = value
                 .get("error")
@@ -1417,27 +1422,18 @@ where
             let params = serde_json::to_value(params).map_err(|error| {
                 RequestFailure::transport(format!("Could not encode chat.send: {error}"))
             })?;
-            let payload = request_on_socket(socket, "chat.send", params, budget, dispatch).await?;
-            serde_json::from_value(payload)
+            request_on_socket(socket, "chat.send", params, budget, dispatch)
+                .await
                 .map(GatewayResponse::ChatSend)
-                .map_err(|error| {
-                    RequestFailure::transport(format!("Invalid chat.send response: {error}"))
-                })
         }
         GatewayRequest::RefreshCanvasSurface { observed_url } => {
             let mut params = json!({ "surface": "canvas" });
             if let Some(observed_url) = observed_url {
                 params["observedUrl"] = Value::String(observed_url);
             }
-            let payload =
+            let response: PluginSurfaceRefreshResponse =
                 request_on_socket(socket, "plugin.surface.refresh", params, budget, dispatch)
                     .await?;
-            let response: PluginSurfaceRefreshResponse =
-                serde_json::from_value(payload).map_err(|error| {
-                    RequestFailure::transport(format!(
-                        "Invalid plugin.surface.refresh response: {error}"
-                    ))
-                })?;
             let canvas = response
                 .plugin_surface_urls
                 .and_then(|urls| urls.get("canvas").cloned())
@@ -1446,41 +1442,25 @@ where
             Ok(GatewayResponse::CanvasSurface(canvas))
         }
         #[cfg(target_os = "linux")]
-        GatewayRequest::SuspendPrepare { request_id } => {
-            let payload = request_on_socket(
-                socket,
-                "gateway.suspend.prepare",
-                json!({ "requestId": request_id }),
-                budget,
-                dispatch,
-            )
-            .await?;
-            serde_json::from_value(payload)
-                .map(GatewayResponse::SuspendPrepare)
-                .map_err(|error| {
-                    RequestFailure::transport(format!(
-                        "Invalid gateway.suspend.prepare response: {error}"
-                    ))
-                })
-        }
+        GatewayRequest::SuspendPrepare { request_id } => request_on_socket(
+            socket,
+            "gateway.suspend.prepare",
+            json!({ "requestId": request_id }),
+            budget,
+            dispatch,
+        )
+        .await
+        .map(GatewayResponse::SuspendPrepare),
         #[cfg(target_os = "linux")]
-        GatewayRequest::SuspendResume { suspension_id } => {
-            let payload = request_on_socket(
-                socket,
-                "gateway.suspend.resume",
-                json!({ "suspensionId": suspension_id }),
-                budget,
-                dispatch,
-            )
-            .await?;
-            serde_json::from_value(payload)
-                .map(GatewayResponse::SuspendResume)
-                .map_err(|error| {
-                    RequestFailure::transport(format!(
-                        "Invalid gateway.suspend.resume response: {error}"
-                    ))
-                })
-        }
+        GatewayRequest::SuspendResume { suspension_id } => request_on_socket(
+            socket,
+            "gateway.suspend.resume",
+            json!({ "suspensionId": suspension_id }),
+            budget,
+            dispatch,
+        )
+        .await
+        .map(GatewayResponse::SuspendResume),
     }
 }
 
@@ -1509,10 +1489,7 @@ async fn request_agents_list<F>(
 where
     F: Fn(&Value),
 {
-    let payload = request_on_socket(socket, "agents.list", json!({}), budget, dispatch).await?;
-    serde_json::from_value(payload).map_err(|error| {
-        RequestFailure::transport(format!("Invalid agents.list response: {error}"))
-    })
+    request_on_socket(socket, "agents.list", json!({}), budget, dispatch).await
 }
 
 async fn request_gateway_accent<F>(
@@ -1944,6 +1921,77 @@ esac
         // An unbalanced extra end saturates at zero instead of wrapping.
         client.end_sleep_cycle();
         assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[tokio::test]
+    async fn malformed_success_payloads_require_reconnection() {
+        let requests = [
+            ("agents.list", GatewayRequest::AgentsList),
+            (
+                "chat.send",
+                GatewayRequest::ChatSend(ChatSendParams {
+                    session_key: "agent:main:main".into(),
+                    agent_id: None,
+                    message: "hello".into(),
+                    idempotency_key: "fixture-request".into(),
+                }),
+            ),
+            (
+                "plugin.surface.refresh",
+                GatewayRequest::RefreshCanvasSurface { observed_url: None },
+            ),
+            #[cfg(target_os = "linux")]
+            (
+                "gateway.suspend.prepare",
+                GatewayRequest::SuspendPrepare {
+                    request_id: "fixture-sleep".into(),
+                },
+            ),
+            #[cfg(target_os = "linux")]
+            (
+                "gateway.suspend.resume",
+                GatewayRequest::SuspendResume {
+                    suspension_id: "fixture-sleep".into(),
+                },
+            ),
+        ];
+        for (method, request) in requests {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind websocket fixture");
+            let address = listener.local_addr().expect("fixture address");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept fixture");
+                let mut socket = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("accept websocket");
+                let message = socket.next().await.unwrap().unwrap();
+                let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                assert_eq!(frame["method"], method);
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "res", "id": frame["id"], "ok": true, "payload": 7,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .expect("send malformed payload");
+            });
+            let (mut socket, _) = connect_async(format!("ws://{address}"))
+                .await
+                .expect("connect fixture");
+            let failure = perform_request(&mut socket, request, None, &|_| {})
+                .await
+                .err()
+                .expect("typed response must reject a number");
+            assert!(failure.disconnect, "{method} must recycle the socket");
+            assert!(failure
+                .message
+                .starts_with(&format!("Invalid {method} response:")));
+            server.await.expect("fixture task");
+        }
     }
 
     #[tokio::test]

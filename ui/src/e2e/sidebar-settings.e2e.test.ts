@@ -1,8 +1,10 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
   captureSidebarUiProof,
@@ -368,7 +370,10 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["system.info"],
+      methodResponses: { "system.info": deviceSystemInfo },
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
@@ -397,6 +402,37 @@ suite.define(() => {
       expect(await password.getAttribute("type")).toBe("text");
       expect(await password.inputValue()).toBe("browser-proof-password");
       expect(await password.isEditable()).toBe(true);
+
+      await gateway.waitForRequest("system.info");
+      const reads = (await gateway.getRequests("system.info")).length;
+      const connections = (await gateway.getRequests("connect")).length;
+      await page.getByRole("button", { name: "Toggle token visibility", exact: true }).click();
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "synthetic reconnect");
+      const notice = page.locator('.connection-action-block[role="status"]');
+      await notice.waitFor();
+      expect(await gatewayToken.getAttribute("type")).toBe("password");
+      expect(await password.getAttribute("type")).toBe("password");
+      await gateway.waitForRequest("connect", { after: connections });
+      await gateway.resolveDeferred("connect");
+      await notice.waitFor({ state: "hidden" });
+      await gateway.waitForRequest("system.info", { after: reads });
+
+      for (const [input, value] of [
+        [gatewayUrl, "ws://gateway.example.test:18789"],
+        [gatewayToken, "browser-proof-token"],
+        [password, "browser-proof-password"],
+        [sessionKey, "browser-proof-session"],
+      ] as const) {
+        expect(await input.inputValue()).toBe(value);
+        expect(await input.isEditable()).toBe(true);
+      }
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "gateway-draft-reconnected.png"),
+        });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -12,6 +12,7 @@ import {
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   defaultBundleLspRuntimeDependencies,
   type BundleLspRuntimeDependencies,
@@ -67,13 +68,6 @@ type LspPositionParams = {
 const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
 const activeBundleLspSessions = new Set<LspSession>();
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, Math.max(1, ms));
-    timeout.unref?.();
-  });
-}
 
 function createLspSession(serverName: string, child: OwnedStdioProcess): LspSession {
   return {
@@ -377,7 +371,7 @@ function disposeSession(session: LspSession): Promise<void> {
     if (session.initialized && !session.failure) {
       try {
         const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
-        await Promise.race([shutdown, delay(LSP_SHUTDOWN_GRACE_MS)]);
+        await settlesWithin(shutdown, LSP_SHUTDOWN_GRACE_MS);
         session.process.stdin?.write(
           encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
         );

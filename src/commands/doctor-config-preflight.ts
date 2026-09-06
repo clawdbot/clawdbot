@@ -20,6 +20,12 @@ import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
+import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -70,6 +76,9 @@ export type DoctorConfigPreflightResult = {
   baseConfig: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
+  stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
+  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  postSessionPluginMigrationPlanBound?: boolean;
 };
 
 /** Returns true during updater-managed config rewrites where plugin validation may be stale. */
@@ -146,6 +155,9 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeatError: Error | undefined;
   const startupMigrationWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
+  const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
+  let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
+  let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
   let legacyConfigMigrationComplete = false;
   let configSnapshotRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
@@ -213,16 +225,30 @@ export async function runDoctorConfigPreflight(
     }, 60_000);
     startupMigrationHeartbeat.unref?.();
   };
-  const noteStartupStateMigrationResult = (result: {
-    changes: string[];
-    warnings: string[];
-    notices?: string[];
-  }) => {
+  const noteStartupStateMigrationResult = (result: MigrationMessages) => {
     startupMigrationWarnings.push(...result.warnings);
     noteStateMigrationResult({
       ...result,
       warnings: gatewayStartupCheckpointRequired ? [] : result.warnings,
     });
+  };
+  const migratePluginDoctorState = async (config: OpenClawConfig) => {
+    const { autoMigrateLegacyPluginDoctorState } =
+      await import("../infra/state-migrations.plugin-doctor.js");
+    noteStartupStateMigrationResult(
+      await measurePreflightStep("plugin-doctor-migrations", () =>
+        runWithPluginMetadataSnapshot({ config }, () =>
+          autoMigrateLegacyPluginDoctorState({
+            config,
+            env: process.env,
+            log: migrationLog,
+            ...(options.doctorOnlyStateMigrations === true
+              ? { doctorOnlyStateMigrations: true }
+              : {}),
+          }),
+        ),
+      ),
+    );
   };
   const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
     runWithPluginMetadataSnapshot({ config: snapshot.sourceConfig ?? snapshot.config ?? {} }, () =>
@@ -460,12 +486,21 @@ export async function runDoctorConfigPreflight(
     }
     startupMigrationLease?.heartbeat();
     if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
-      if (options.doctorOnlyStateMigrations === true) {
+      const pluginDoctorOnlyConfig =
+        stateMigrationInput?.pluginDoctorConfig ?? stateMigrationInput?.cfg;
+      const pluginDoctorOnly =
+        skipPristineCoreStateMigrations &&
+        pluginDoctorOnlyConfig &&
+        !cronMigration.retainStoreConfig(pluginDoctorOnlyConfig);
+      if (
+        options.doctorOnlyStateMigrations === true &&
+        (!stateMigrationInput?.cfg || pluginDoctorOnly)
+      ) {
         const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
           await import("../infra/state-migrations.exec-approvals.js");
         const stateDir = resolveStateDir(process.env);
-        // Exec approvals are state-root policy. Repair them before config validity
-        // decides which config-dependent migration graph is safe to run.
+        // State-root policy can recover even when config cannot drive the general graph.
+        // Otherwise that graph owns approvals ordering and must honor earlier refusals.
         noteStartupStateMigrationResult(
           await measurePreflightStep("exec-approvals-migration", () =>
             migrateLegacyExecApprovals({
@@ -489,34 +524,19 @@ export async function runDoctorConfigPreflight(
         );
       }
       const { autoMigrateLegacyTaskStateSidecars } = stateDirMigrations;
+      const migrateTaskStateSidecars = async () =>
+        noteStartupStateMigrationResult(
+          await measurePreflightStep("task-sidecar-migrations", () =>
+            autoMigrateLegacyTaskStateSidecars({ env: process.env, log: migrationLog }),
+          ),
+        );
       if (stateMigrationInput) {
-        const pluginDoctorOnlyConfig =
-          stateMigrationInput.pluginDoctorConfig ?? stateMigrationInput.cfg;
         // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
         // before config repair removes the only custom-partition evidence.
-        if (
-          skipPristineCoreStateMigrations &&
-          pluginDoctorOnlyConfig &&
-          !cronMigration.retainStoreConfig(pluginDoctorOnlyConfig)
-        ) {
+        if (pluginDoctorOnly) {
           // Core state is absent, but plugin paths may own external migration state.
           // Keep their doctor owner active without loading channel/session detectors.
-          const { autoMigrateLegacyPluginDoctorState } =
-            await import("../infra/state-migrations.plugin-doctor.js");
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("plugin-doctor-migrations", () =>
-              runWithPluginMetadataSnapshot({ config: pluginDoctorOnlyConfig }, () =>
-                autoMigrateLegacyPluginDoctorState({
-                  config: pluginDoctorOnlyConfig,
-                  env: process.env,
-                  log: migrationLog,
-                  ...(options.doctorOnlyStateMigrations === true
-                    ? { doctorOnlyStateMigrations: true }
-                    : {}),
-                }),
-              ),
-            ),
-          );
+          await migratePluginDoctorState(pluginDoctorOnlyConfig);
         } else if (stateMigrationInput.cfg) {
           const { autoMigrateLegacyState } = await import("../infra/state-migrations.doctor.js");
           const migrationConfig = stateMigrationInput.cfg;
@@ -546,18 +566,25 @@ export async function runDoctorConfigPreflight(
               autoMigrateLegacyState({
                 cfg: migrationConfig,
                 ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
+                configIncludedPaths: snapshot.includedPaths ?? [],
                 env: process.env,
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
                 ...(gatewayStartupCheckpointRequired
                   ? { allowLegacyDeviceIdentityImport: true }
                   : {}),
               }),
             ),
           );
+          postSessionPluginMigration = legacyStateResult.postSessionPluginMigration;
+          postSessionPluginMigrationPlanBound = options.doctorOnlyStateMigrations === true;
           doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
           noteStartupStateMigrationResult(legacyStateResult);
+          if (options.doctorOnlyStateMigrations === true) {
+            throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
+          }
         } else if (stateMigrationInput.pluginDoctorConfig) {
           const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
           const cronMigrationConfig = cronMigration.retainStoreConfig(pluginDoctorConfig);
@@ -582,40 +609,11 @@ export async function runDoctorConfigPreflight(
               migrateLegacyConfigMachineState({ config: pluginDoctorConfig, env: process.env }),
             );
           }
-          const { autoMigrateLegacyPluginDoctorState } =
-            await import("../infra/state-migrations.plugin-doctor.js");
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("plugin-doctor-migrations", () =>
-              runWithPluginMetadataSnapshot({ config: pluginDoctorConfig }, () =>
-                autoMigrateLegacyPluginDoctorState({
-                  config: pluginDoctorConfig,
-                  env: process.env,
-                  log: migrationLog,
-                  ...(options.doctorOnlyStateMigrations === true
-                    ? { doctorOnlyStateMigrations: true }
-                    : {}),
-                }),
-              ),
-            ),
-          );
-          noteStartupStateMigrationResult(
-            await measurePreflightStep("task-sidecar-migrations", () =>
-              autoMigrateLegacyTaskStateSidecars({
-                env: process.env,
-                log: migrationLog,
-              }),
-            ),
-          );
+          await migratePluginDoctorState(pluginDoctorConfig);
+          await migrateTaskStateSidecars();
         }
       } else {
-        noteStartupStateMigrationResult(
-          await measurePreflightStep("task-sidecar-migrations", () =>
-            autoMigrateLegacyTaskStateSidecars({
-              env: process.env,
-              log: migrationLog,
-            }),
-          ),
-        );
+        await migrateTaskStateSidecars();
       }
     }
     if (
@@ -749,6 +747,9 @@ export async function runDoctorConfigPreflight(
         ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }
         : {}),
       ...(cronCodexRuntimePolicyTargets.length > 0 ? { cronCodexRuntimePolicyTargets } : {}),
+      ...(stateMigrationStepReceipts.length > 0 ? { stateMigrationStepReceipts } : {}),
+      ...(postSessionPluginMigration ? { postSessionPluginMigration } : {}),
+      ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
     };
   } finally {
     if (startupMigrationHeartbeat) {

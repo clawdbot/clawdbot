@@ -32,6 +32,7 @@ const {
   runGatewayUpdatePreflightMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoffMock,
   versionMock,
 } = vi.hoisted(() => ({
   cancelManagedServiceUpdateHandoffMock: vi.fn<
@@ -62,6 +63,9 @@ const {
     handoffId: "auto-handoff-id",
     installRoot: "/opt/openclaw",
   })),
+  transferManagedServiceUpdateHandoffMock: vi.fn<
+    typeof import("./update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
+  >(async () => true),
   versionMock: { value: "1.0.0" },
 }));
 
@@ -147,6 +151,7 @@ vi.mock("./update-managed-service-handoff.js", async () => ({
   )),
   cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
 }));
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
@@ -292,6 +297,7 @@ describe("update-startup", () => {
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
     startManagedServiceUpdateHandoffMock.mockClear();
+    transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
     cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
     startManagedServiceUpdateHandoffMock.mockResolvedValue({
       status: "started",
@@ -1357,63 +1363,80 @@ describe("update-startup", () => {
     );
   });
 
-  it("keeps managed dev auto-update serving when target config preflight fails", async () => {
-    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
-    detectRespawnSupervisorMock.mockReturnValue("launchd");
-    runGatewayUpdatePreflightMock.mockResolvedValueOnce({
-      status: "error",
-      mode: "git",
-      reason: "preflight-no-good-commit",
-      steps: [],
-      durationMs: 1,
-    });
-    const log = { info: vi.fn() };
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+  it.each([
+    { status: "error", reason: "preflight-no-good-commit" },
+    { status: "skipped", reason: "already-current" },
+  ] as const)(
+    "keeps serving when managed dev preflight returns $reason",
+    async ({ status, reason }) => {
+      mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
+      detectRespawnSupervisorMock.mockReturnValue("launchd");
+      runGatewayUpdatePreflightMock.mockResolvedValueOnce({
+        status,
+        mode: "git",
+        reason,
+        steps: [],
+        durationMs: 1,
+      });
+      const log = { info: vi.fn() };
+      const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log,
-      isNixMode: false,
-      allowInTests: true,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
-        }
-      },
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(listUpdateRuns()).toEqual([
-      expect.objectContaining({
-        trigger: "campaign",
-        status: "failed",
-        reason: "preflight-no-good-commit",
-        phase: "finished",
-      }),
-    ]);
-    expect(log.info).toHaveBeenCalledWith(
-      "auto-update attempt failed",
-      expect.objectContaining({ reason: "preflight-no-good-commit" }),
-    );
-    expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
-      kind: "update",
-      status: "error",
-      doctorHint: expect.stringContaining(triageResult.hint),
-      stats: { reason: "preflight-no-good-commit" },
-    });
-    expect(runUpdateFailureTriageMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        mode: "json",
-        failure: {
-          result: expect.objectContaining({ status: "error", reason: "preflight-no-good-commit" }),
-          error: expect.any(String),
+      await runGatewayUpdateCheck({
+        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        log,
+        isNixMode: false,
+        allowInTests: true,
+        activeWorkInspectors: idleActiveWorkInspectors(),
+        onUpdateScheduleChange: (schedule) => {
+          if (!schedule.campaign) {
+            terminalSentinels.push(readRestartSentinel());
+          }
         },
-      }),
-    );
-  });
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+      expect(listUpdateRuns()).toEqual([
+        expect.objectContaining({
+          trigger: "campaign",
+          status: status === "skipped" ? "skipped" : "failed",
+          reason,
+          phase: "finished",
+        }),
+      ]);
+      expect(log.info).toHaveBeenCalledWith(
+        status === "skipped" ? "auto-update attempt skipped" : "auto-update attempt failed",
+        expect.objectContaining({ reason }),
+      );
+      expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
+        kind: "update",
+        status,
+        stats: { reason },
+      });
+      if (status === "skipped") {
+        expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
+        expect(log.info).not.toHaveBeenCalledWith("auto-update attempt failed", expect.anything());
+        expect((await terminalSentinels.at(-1))?.payload.message).toContain("already current");
+        return;
+      }
+      expect((await terminalSentinels.at(-1))?.payload.doctorHint).toContain(triageResult.hint);
+      expect(runUpdateFailureTriageMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          mode: "json",
+          failure: {
+            result: expect.objectContaining({
+              status: "error",
+              reason: "preflight-no-good-commit",
+            }),
+            error: expect.any(String),
+          },
+        }),
+      );
+    },
+  );
 
   it("continues managed dev campaigns from a detached tracked deployment", async () => {
     mockDevGitStatus({ branch: "HEAD", upstreamSource: "tracking" });
@@ -2351,6 +2374,7 @@ describe("update-startup", () => {
           }
         }
         expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+        expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
         expect(await readRestartSentinel()).toBeNull();
         expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
       } finally {
@@ -2397,6 +2421,45 @@ describe("update-startup", () => {
       expect(runUpdateFailureTriageMock).toHaveBeenCalledOnce();
     } finally {
       releaseTriage?.(triageResult);
+      await stop();
+    }
+  });
+
+  it("joins and cancels an ownership transfer that completes after scheduler stop", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+    const transferred = createDeferred<boolean>();
+    transferManagedServiceUpdateHandoffMock.mockReturnValueOnce(transferred.promise);
+    process.env.NODE_ENV = "production";
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log: { info: vi.fn() },
+      isNixMode: false,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
+      let stopped = false;
+      const stopping = stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+
+      transferred.resolve(true);
+      await stopping;
+
+      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+        kind: "managed-update-handoff",
+        handoffId: "auto-handoff-id",
+        installRoot: "/opt/openclaw",
+      });
+      expect(await readRestartSentinel()).toBeNull();
+      expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
+    } finally {
+      transferred.resolve(true);
       await stop();
     }
   });
@@ -2593,7 +2656,7 @@ describe("update-startup", () => {
     });
   });
 
-  it("hands supervised auto-updates to a detached service handoff before restarting", async () => {
+  it("transfers supervised auto-updates to validation while the gateway keeps serving", async () => {
     const installRoot = path.join(tempDir, "pnpm-store-target");
     const installOwner = path.join(tempDir, "pnpm-linked-owner");
     await fs.mkdir(installRoot);
@@ -2628,7 +2691,6 @@ describe("update-startup", () => {
         restartDrainTimeoutMs: 300_000,
         channel: "beta",
         tag: "2.0.0-beta.1",
-        restartDelayMs: 0,
         supervisor: "launchd",
         handoffId: expect.any(String),
         meta: {
@@ -2638,27 +2700,15 @@ describe("update-startup", () => {
         },
       }),
     );
-    const handoffCalls = startManagedServiceUpdateHandoffMock.mock.calls as unknown as Array<
-      [
-        {
-          handoffId?: string;
-          meta?: { handoffId?: string };
-        },
-      ]
-    >;
-    const [handoffParams] = handoffCalls[0] ?? [];
+    const [handoffParams] = startManagedServiceUpdateHandoffMock.mock.calls[0] ?? [];
     expect(handoffParams?.meta?.handoffId).toBe(handoffParams?.handoffId);
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: "update.auto",
-      successorOwner: {
-        kind: "managed-update-handoff",
-        handoffId: "started-auto-handoff-id",
-        installRoot: await fs.realpath(installRoot),
-      },
-      skipCooldown: true,
-      skipDeferral: true,
+    expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "managed-update-handoff",
+      handoffId: "started-auto-handoff-id",
+      installRoot: await fs.realpath(installRoot),
     });
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(cancelManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith(
       "update campaign waiting-for-idle",
       expect.objectContaining({
@@ -2766,6 +2816,7 @@ describe("update-startup", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
     expect(listUpdateRuns()).toEqual([
       expect.objectContaining({
@@ -2776,6 +2827,39 @@ describe("update-startup", () => {
       }),
     ]);
   });
+
+  it.each([false, true])(
+    "cancels an unsuccessful automatic ownership transfer when it throws=%s",
+    async (throws) => {
+      mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+      detectRespawnSupervisorMock.mockReturnValue("systemd");
+      if (throws) {
+        transferManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("pipe closed"));
+      } else {
+        transferManagedServiceUpdateHandoffMock.mockResolvedValueOnce(false);
+      }
+
+      await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
+
+      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+        kind: "managed-update-handoff",
+        handoffId: "auto-handoff-id",
+        installRoot: "/opt/openclaw",
+      });
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(listUpdateRuns()).toEqual([
+        expect.objectContaining({
+          status: "failed",
+          reason: "managed-service-handoff-failed",
+          phase: "finished",
+        }),
+      ]);
+      expect((await readRestartSentinel())?.payload).toMatchObject({
+        status: "error",
+        stats: { reason: "managed-service-handoff-failed" },
+      });
+    },
+  );
 
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {
     mockPackageInstallStatus();
@@ -2797,21 +2881,15 @@ describe("update-startup", () => {
         restartDrainTimeoutMs: 300_000,
         channel: "beta",
         tag: "2.0.0-beta.1",
-        restartDelayMs: 2000,
         supervisor: "systemd",
       }),
     );
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
-      delayMs: 2000,
-      reason: "update.auto",
-      successorOwner: {
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
-      },
-      skipCooldown: true,
-      skipDeferral: true,
+    expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "managed-update-handoff",
+      handoffId: "auto-handoff-id",
+      installRoot: "/opt/openclaw",
     });
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
   it("schedules an initial and recurring 24-hour extended-stable hint check with cleanup", async () => {

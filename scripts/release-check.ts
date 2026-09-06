@@ -20,7 +20,6 @@ import { basename, dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { extract } from "tar";
-import { tsImport } from "tsx/esm/api";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
@@ -31,6 +30,7 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
+import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
@@ -1279,7 +1279,9 @@ async function verifyPackedContents(
   const workerProducerPath = resolve("src/worker/worker-deploy-entry.ts");
   const workerBundlePath = resolve("src/shared/worker-bundle-hash.ts");
   const workerDeployEntrypoints = existsSync(workerProducerPath)
-    ? Object.entries(await tsImport(pathToFileURL(workerBundlePath).href, import.meta.url))
+    ? Object.entries(
+        await importToolingTypeScript(pathToFileURL(workerBundlePath).href, import.meta.url),
+      )
         .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
         .map(([name, value]) => {
           if (typeof value !== "string" || !value.trim()) {
@@ -1313,7 +1315,7 @@ async function verifyPackedContents(
   // Never infer legacy mode from missing output: current targets must rebuild missing metadata.
   const locatorModulePath = resolve("scripts/lib/gateway-run-chunk-metadata.mts");
   const locatorModule = existsSync(locatorModulePath)
-    ? await tsImport(pathToFileURL(locatorModulePath).href, import.meta.url)
+    ? await importToolingTypeScript(pathToFileURL(locatorModulePath).href, import.meta.url)
     : undefined;
   if (
     locatorModule &&

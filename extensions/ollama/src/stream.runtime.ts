@@ -325,10 +325,7 @@ type StreamModelDescriptor = {
   reasoning?: boolean;
 };
 
-type OllamaUsageFallback = {
-  input?: number;
-  output?: number;
-};
+type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => number)>>;
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
@@ -491,12 +488,17 @@ function estimateOllamaCompletionTokens(
   return estimateTokensFromChars(chars);
 }
 
-function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
+function resolveUsageCount(
+  value: number | undefined,
+  fallback: OllamaUsageFallback["input"],
+): number {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
-  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
-    return fallback;
+  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+  const estimate = typeof fallback === "function" ? fallback() : fallback;
+  if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
+    return estimate;
   }
   return 0;
 }
@@ -1319,12 +1321,15 @@ function createRawOllamaStreamFn(
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
 
+          const completedResponse = finalResponse;
           const usageFallback = {
-            input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
-            output: estimateOllamaCompletionTokens(
-              finalResponse,
-              estimateStringChars(suppressedThinking),
-            ),
+            input: () =>
+              estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
+            output: () =>
+              estimateOllamaCompletionTokens(
+                completedResponse,
+                estimateStringChars(suppressedThinking),
+              ),
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,

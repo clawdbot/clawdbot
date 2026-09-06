@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { settlesWithin } from "../shared/settle-within.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
 import type { SpawnProcessAdapter } from "./supervisor/types.js";
 
@@ -42,21 +43,6 @@ export async function createOwnedStdioProcess(params: {
       });
     }
     throw error;
-  }
-}
-
-async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
   }
 }
 

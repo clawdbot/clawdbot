@@ -1,6 +1,8 @@
-import { html } from "lit";
+import { html, type TemplateResult } from "lit";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { SkillWorkshopMode } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";
 import { saveSkillWorkshopMode } from "./storage.ts";
@@ -8,6 +10,8 @@ import { saveSkillWorkshopMode } from "./storage.ts";
 type SkillWorkshopHeaderProps = {
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
+  // The page owns what a section change resets, so the strip only reports it.
+  onModeChange: (mode: SkillWorkshopMode) => void;
 };
 
 export function setSkillWorkshopMode(
@@ -23,11 +27,24 @@ export function setSkillWorkshopMode(
   requestUpdate();
 }
 
+function sectionIcon(icon: TemplateResult) {
+  return html`<span class="sw-section-tabs__icon" aria-hidden="true">${icon}</span>`;
+}
+
 export function renderSkillWorkshopHeaderControls(
   state: SkillWorkshopState,
-  { selfLearning, onSelfLearningToggle }: SkillWorkshopHeaderProps,
-  requestUpdate: () => void,
+  { selfLearning, onSelfLearningToggle, onModeChange }: SkillWorkshopHeaderProps,
 ) {
+  // A failed or unfinished list read would otherwise publish a stale or
+  // zero count as if it were the current inventory.
+  const countsKnown =
+    state.skillWorkshopLoaded && !state.skillWorkshopLoading && !state.skillWorkshopError;
+  const countOf = (value: number) => (countsKnown ? value : null);
+  const pending = state.skillWorkshopProposals.filter(
+    (proposal) => proposal.status === "pending",
+  ).length;
+  const historyRecords = state.skillWorkshopProposals.length - pending;
+
   return html`
     <div class="sw-header-controls">
       ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle)}
@@ -36,33 +53,34 @@ export function renderSkillWorkshopHeaderControls(
         active: state.skillWorkshopMode,
         tabs: [
           {
-            value: "board",
+            value: "skills",
+            count: countOf(state.skillWorkshopInstalledSkills.length),
             label: html`
-              <svg viewBox="0 0 24 24" class="sw-mode-tabs__icon" aria-hidden="true">
-                <rect x="3" y="4" width="7" height="16" rx="1.5" />
-                <rect x="14" y="4" width="7" height="9" rx="1.5" />
-                <rect x="14" y="15" width="7" height="5" rx="1.5" />
-              </svg>
-              <span>${t("skillWorkshop.header.board")}</span>
+              ${sectionIcon(icons.book)}
+              <span>${t("skillWorkshop.sections.skills")}</span>
             `,
           },
           {
-            value: "today",
+            value: "suggestions",
+            count: countOf(pending),
             label: html`
-              <svg viewBox="0 0 24 24" class="sw-mode-tabs__icon" aria-hidden="true">
-                <circle cx="12" cy="12" r="4" />
-                <path
-                  d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
-                />
-              </svg>
-              <span>${t("skillWorkshop.header.today")}</span>
+              ${sectionIcon(icons.wandSparkles)}
+              <span>${t("skillWorkshop.sections.suggestions")}</span>
+            `,
+          },
+          {
+            value: "history",
+            count: countOf(historyRecords),
+            label: html`
+              ${sectionIcon(icons.rotateCcw)}
+              <span>${t("skillWorkshop.sections.history")}</span>
             `,
           },
         ],
-        ariaLabel: t("skillWorkshop.header.view"),
+        ariaLabel: t("skillWorkshop.sections.aria"),
         panelId: "skill-workshop-mode-panel",
         variant: "sub",
-        onSelect: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
+        onSelect: onModeChange,
       })}
     </div>
   `;
