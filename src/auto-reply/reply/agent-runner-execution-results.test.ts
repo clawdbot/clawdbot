@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -44,7 +44,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
     if (result.kind === "success") {
       expect(Boolean(result.terminalFailurePayload)).toBe(testCase.failureReply);
       if (testCase.failureReply) {
-        expect(result.terminalFailurePayload?.isError).toBe(true);
+        assert(result.terminalFailurePayload);
+        expect(result.terminalFailurePayload.isError).toBe(true);
         expect(
           getReplyPayloadMetadata(result.terminalFailurePayload)
             ?.deliverDespiteSourceReplySuppression,

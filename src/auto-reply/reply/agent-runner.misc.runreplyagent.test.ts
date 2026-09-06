@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
@@ -3281,7 +3281,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
       const payloads = normalizeReplyPayloads(result);
       expect(payloads).toEqual([expect.objectContaining({ text })]);
-      expect(getReplyPayloadMetadata(payloads[0])?.deliverDespiteSourceReplySuppression).toBe(true);
+      const [payload] = payloads;
+      assert(payload);
+      expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
       expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     },
   );
