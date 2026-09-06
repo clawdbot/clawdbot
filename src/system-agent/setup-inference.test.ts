@@ -6663,6 +6663,42 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
+  it("surfaces the underlying owner revalidation failure instead of generic drift", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: { profiles: { "openai:p1": { provider: "openai", mode: "api_key" } } },
+    } satisfies OpenClawConfig;
+    const profiles = {
+      "openai:p1": { type: "api_key" as const, provider: "openai", key: "key-1" },
+    };
+
+    const result = await verifySetupInferenceConfig({
+      config,
+      onVerifiedExecution: () => undefined,
+      deps: {
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+        runEmbeddedAgent: vi.fn(
+          async (params: {
+            onSuccessfulAuthBinding?: (binding: { authProfileId?: string }) => void;
+          }) => {
+            params.onSuccessfulAuthBinding?.({ authProfileId: "openai:p1" });
+            return successfulRun("openai", "gpt-5.5");
+          },
+        ) as never,
+        // What operators actually hit: the owner binding fails because the Codex
+        // runtime registry could not load, not because the owner really changed.
+        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
+          throw new Error("codex runtime registry failed to load");
+        }) as never,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "auth" });
+    // Pre-fix this was the bare sentence with no cause, which is what left operators
+    // unable to tell a real owner change from a broken runtime.
+    expect((result as { error?: string }).error).toMatch(/Retry the inference check\. \(.+\)/);
+  });
+
   it("returns a refreshed staged profile without changing the configured agent store", async () => {
     const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "configured-agent");
