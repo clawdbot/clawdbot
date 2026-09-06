@@ -18,7 +18,6 @@ import {
 } from "./update-runtime-relocation.js";
 
 export type NativePackageStage = {
-  prefix: string;
   projectRoot: string;
   liveProjectRoot: string;
   binDir: string;
@@ -141,7 +140,7 @@ export async function prepareNativePackageStage(params: {
   const fingerprint = await nativeProjectFingerprint(liveProjectRoot);
   // pnpm cleans unreferenced children of its global layout. Keep both the stage and
   // retained project backup outside that layout so validation cannot race its cleaner.
-  const prefix = await fs.mkdtemp(
+  const projectRoot = await fs.mkdtemp(
     path.join(
       path.dirname(liveProjectRoot),
       `.${path.basename(params.packageName)}-update-native-`,
@@ -149,10 +148,9 @@ export async function prepareNativePackageStage(params: {
   );
   // A sibling project preserves the depth of relative file:/link: dependency specs.
   // Its separate bin directory is disposable even after activation moves the project.
-  const projectRoot = prefix;
   let binDir: string | undefined;
   try {
-    binDir = await fs.mkdtemp(`${prefix}.bin-`);
+    binDir = await fs.mkdtemp(`${projectRoot}.bin-`);
     await fs.cp(liveProjectRoot, projectRoot, { recursive: true, verbatimSymlinks: true });
     await fs.chmod(projectRoot, (await fs.stat(liveProjectRoot)).mode);
     const relocations: RuntimeRelocation[] = [
@@ -203,7 +201,6 @@ export async function prepareNativePackageStage(params: {
     const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
     env[pathKey] = mergePathPrepend(env[pathKey], [binDir]);
     return {
-      prefix,
       projectRoot,
       liveProjectRoot,
       binDir,
@@ -220,7 +217,7 @@ export async function prepareNativePackageStage(params: {
       },
     };
   } catch (error) {
-    await fs.rm(prefix, { recursive: true, force: true });
+    await fs.rm(projectRoot, { recursive: true, force: true });
     if (binDir) {
       await fs.rm(binDir, { recursive: true, force: true });
     }

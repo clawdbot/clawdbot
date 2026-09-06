@@ -2690,7 +2690,7 @@ src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	4
 src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
-src/daemon/launchd-install.ts	7
+src/daemon/launchd-install.ts	6
 src/daemon/launchd-lifecycle.ts	4
 src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2

@@ -154,7 +154,7 @@ export async function validateUpdateCandidateCanary(params: {
     });
     let stdout = "";
     let outputExceeded = false;
-    child.stdout?.on("data", (chunk: Buffer) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       if (stdout.length + chunk.length <= 1024 * 1024) {
         stdout += chunk.toString("utf8");
       } else {
@@ -164,7 +164,7 @@ export async function validateUpdateCandidateCanary(params: {
     const flushers = [child.stdout, child.stderr].map((stream) => {
       let pending = "";
       let droppingLine = false;
-      stream?.on("data", (chunk: Buffer) => {
+      stream.on("data", (chunk: Buffer) => {
         let text = chunk.toString("utf8");
         if (droppingLine) {
           const newline = text.indexOf("\n");
@@ -433,8 +433,9 @@ export async function validateUpdateCandidateCanary(params: {
     capture(
       `${phase}: ${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`,
     );
-    if (!steps.length || steps.at(-1)?.exitCode === 0 || steps.at(-1)?.advisory) {
-      steps.push({
+    let failed = steps.at(-1);
+    if (!failed || failed.exitCode === 0 || failed.advisory) {
+      failed = {
         name:
           phase === "startup" || phase === "readiness"
             ? "candidate gateway canary"
@@ -443,13 +444,11 @@ export async function validateUpdateCandidateCanary(params: {
         cwd: params.root,
         durationMs: Date.now() - started,
         exitCode: 1,
-      });
+      };
+      steps.push(failed);
     }
-    const failed = steps.at(-1);
-    if (failed) {
-      failed.stderrTail = logTail.join("\n");
-      params.onStep?.(failed);
-    }
+    failed.stderrTail = logTail.join("\n");
+    params.onStep?.(failed);
     return {
       status: "error",
       reason:
