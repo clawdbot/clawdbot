@@ -74,6 +74,13 @@ export function generateHookToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
+/** Resolve the per-message body byte bound gog is provisioned with (`--max-bytes`). */
+export function resolveGmailHookMaxBytes(raw: number | undefined): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0
+    ? Math.floor(raw)
+    : DEFAULT_GMAIL_MAX_BYTES;
+}
+
 export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
   const next = new Set(normalizeUniqueStringEntries(existing));
   next.add(preset);
@@ -144,11 +151,7 @@ export function resolveGmailHookRuntimeConfig(
 
   const includeBody = overrides.includeBody ?? gmail?.includeBody ?? true;
 
-  const maxBytesRaw = overrides.maxBytes ?? gmail?.maxBytes;
-  const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
-      ? Math.floor(maxBytesRaw)
-      : DEFAULT_GMAIL_MAX_BYTES;
+  const maxBytes = resolveGmailHookMaxBytes(overrides.maxBytes ?? gmail?.maxBytes);
 
   const renewEveryMinutesRaw = overrides.renewEveryMinutes ?? gmail?.renewEveryMinutes;
   const renewEveryMinutes =

@@ -107,8 +107,21 @@ export class GatewayPageController implements ReactiveController {
 
   isRouteDataCurrent(data: GatewayRouteDataIdentity): boolean {
     const gateway = this.options.getGateway();
-    return Boolean(
-      gateway && data.gateway === gateway && data.gatewaySnapshot === gateway.snapshot,
+    if (!gateway || data.gateway !== gateway) {
+      return false;
+    }
+    const current = gateway.snapshot;
+    if (data.gatewaySnapshot === current) {
+      return true;
+    }
+    // Recovery-scope and shell metadata can clone a connected snapshot. The hello object
+    // identifies its transport epoch; accepting another hello would revive stale route work.
+    return (
+      data.gatewaySnapshot.phase === "connected" &&
+      current.phase === "connected" &&
+      data.gatewaySnapshot.client === current.client &&
+      data.gatewaySnapshot.hello !== null &&
+      data.gatewaySnapshot.hello === current.hello
     );
   }
 

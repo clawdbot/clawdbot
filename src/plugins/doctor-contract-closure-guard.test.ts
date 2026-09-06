@@ -17,6 +17,15 @@ type ClosureKind = "doctor-contract" | "legacy-setup";
 // still share sync runtime modules with these barrels and are a named follow-up.
 const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<ClosureKind> }>([
   [
+    "matrix-js-sdk/lib/matrix.js",
+    {
+      reason:
+        "the Matrix SDK barrel loads the live client, crypto and WebRTC graph; " +
+        "keep persisted-state codecs separate from live client stores",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
     FORBIDDEN_SPECIFIER,
     {
       reason:

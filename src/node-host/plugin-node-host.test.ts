@@ -6,6 +6,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
@@ -241,6 +242,22 @@ describe("plugin node-host registry", () => {
     expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
   });
 
+  it("notifies each shared plugin disconnect owner once", async () => {
+    const onDisconnect = vi.fn(async () => {});
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
+      pluginId: "computer",
+      pluginName: "Computer",
+      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
+      source: "test",
+    }));
+    setActivePluginRegistry(registry);
+
+    await notifyRegisteredNodeHostCommandDisconnect();
+
+    expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
   it("dispatches plugin-declared node-host commands", async () => {
     const handle = vi.fn(async (paramsJSON?: string | null) => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
@@ -269,7 +286,10 @@ describe("plugin node-host registry", () => {
       invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}', undefined, context),
     ).resolves.toBe('{"ok":true}');
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
-    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, context);
+    expect(handle).toHaveBeenCalledWith('{"ok":true}', undefined, {
+      ...context,
+      prepareExecAuthorization: expect.any(Function),
+    });
   });
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {

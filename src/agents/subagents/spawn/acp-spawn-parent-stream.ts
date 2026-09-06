@@ -2,11 +2,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  sliceUtf16Safe,
-  truncateUtf16Safe,
-  truncateWithMarker,
-} from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
@@ -17,7 +13,7 @@ import {
   type StreamingCompatEntry,
 } from "../../../channels/streaming.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { onAgentEvent } from "../../../infra/agent-events.js";
+import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
   type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
@@ -29,6 +25,7 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveNormalizedAccountEntry } from "../../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { normalizeAssistantPhase } from "../../../shared/chat-message-content.js";
+import { truncateUtf16WithEllipsis as truncate } from "../../../shared/text-truncate.js";
 import { recordTaskRunProgressByRunId } from "../../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
@@ -54,16 +51,6 @@ type AcpParentProgressStreamingConfig = StreamingCompatEntry & {
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function truncate(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -556,7 +543,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     emitStartNotice();
   }
 
-  const unsubscribe = onAgentEvent((event) => {
+  const unsubscribe = onAgentEventForRun(runId, (event) => {
     if (disposed || event.runId !== runId) {
       return;
     }

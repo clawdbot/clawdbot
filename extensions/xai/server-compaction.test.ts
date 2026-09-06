@@ -97,6 +97,7 @@ describe("xAI server compaction request preparation", () => {
       "/responses/compact",
       expect.objectContaining({ body: expect.objectContaining({ model: "grok-4-fast" }) }),
     );
+    expect(compacted.historyMode).toBe("compacted-prefix");
     captureOpenAIResponsesCompaction(
       owner,
       compacted.item,
@@ -129,8 +130,13 @@ describe("xAI server compaction request preparation", () => {
     await replayStream.result();
 
     expect(replayPayload?.model).toBe("grok-4-fast");
+    // The compact endpoint (a separate request, asserted above) still needs
+    // the system prompt embedded in its own input[0]. This replay is the
+    // normal streaming turn that follows it, on xAI's main route -- which
+    // carries the system prompt via top-level `instructions` instead, so it
+    // no longer appears in `input` at all.
+    expect(replayPayload?.instructions).toBe("Retain the conversation.");
     expect(replayPayload?.input).toEqual([
-      expect.objectContaining({ role: "system", type: "message" }),
       expect.objectContaining({ type: "compaction", encrypted_content: "opaque" }),
       expect.objectContaining({ role: "user", type: "message" }),
     ]);

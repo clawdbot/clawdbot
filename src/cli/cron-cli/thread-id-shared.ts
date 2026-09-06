@@ -5,11 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 
 export function parseCronThreadIdOption(value: unknown): number | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
+  if (typeof value !== "string") {
     return undefined;
   }
-  if (!/^\d+$/.test(raw)) {
+  const raw = normalizeOptionalString(value);
+  if (!raw || !/^\d+$/.test(raw)) {
     throw new Error("--thread-id must be a positive integer Telegram topic thread id");
   }
   const parsed = Number.parseInt(raw, 10);

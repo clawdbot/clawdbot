@@ -78,7 +78,7 @@ openclaw onboard --non-interactive \
 
 | Model ref                                              | Name           | Input        | Context | Max output | Thinking     |
 | ------------------------------------------------------ | -------------- | ------------ | ------- | ---------- | ------------ |
-| `fireworks/accounts/fireworks/routers/glm-5p2-fast`    | GLM 5.2 Fast   | text + image | 256,000 | 256,000    | On (default) |
+| `fireworks/accounts/fireworks/routers/glm-5p2-fast`    | GLM 5.2 Fast   | text         | 256,000 | 256,000    | On (default) |
 | `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6      | text + image | 262,144 | 262,144    | Forced off   |
 | `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Fast | text + image | 262,144 | 256,000    | Forced off   |
 
@@ -88,7 +88,7 @@ openclaw onboard --non-interactive \
 
 ## Custom Fireworks model ids
 
-OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input and the OpenAI-compatible API) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input.
+OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution uses the Fire Pass template's OpenAI-compatible API and marks GLM ids as text-only; other dynamic ids advertise text + image input. Thinking is disabled automatically when the id matches the Kimi pattern. For a model with different capabilities, configure a custom model entry with its supported input types.
 
 ```json5
 {

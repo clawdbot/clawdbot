@@ -313,6 +313,42 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("reports the original messages discarded during pairing repair", () => {
+    const orphan = {
+      role: "toolResult" as const,
+      toolCallId: "call_orphan",
+      toolName: "read",
+      content: [{ type: "text" as const, text: "orphan" }],
+      isError: false,
+    };
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      orphan,
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.discarded).toEqual([orphan]);
+  });
+
+  it("does not report preserved unframed results as discarded", () => {
+    const orphan = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_orphan",
+      toolName: "read",
+      content: [{ type: "text", text: "orphan" }],
+      isError: false,
+    });
+
+    const result = repairToolUseResultPairing([orphan], {
+      preserveUnframedToolResults: true,
+    });
+
+    expect(result.messages).toEqual([orphan]);
+    expect(result.discarded).toEqual([]);
+  });
+
   it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
     // When an assistant message has stopReason: "error", its tool_use blocks may be
     // incomplete/malformed. We should NOT create synthetic tool_results for them,
@@ -621,6 +657,7 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
         (message) => message.role === "toolResult" && message.toolCallId === "call_read",
       ),
     ).toMatchObject({ toolName: "exec" });
+    expect(result.discarded).toEqual([]);
   });
 
   it("handles a long valid repeated-id transcript as an unchanged linear pass", () => {
@@ -694,6 +731,20 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.isError).not.toBe(true);
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+    expect(result.discarded).toEqual([input[1]]);
+  });
+
+  it("returns discarded results in transcript order", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeSyntheticResult("call_1"),
+      makeRealResult("call_orphan", "orphan"),
+      makeRealResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.discarded).toEqual([input[1], input[2]]);
   });
 
   it("custom synthetic text first, real second → keeps real when configured", () => {
@@ -787,6 +838,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
     expect(toolResults[1]?.toolCallId).toBe("call_2");
     expect(toolResults[1]?.content?.[0]?.text).toBe("second output");
+    expect(result.discarded).toEqual([input[1]]);
   });
 
   it("two real results → keeps first (unchanged behavior)", () => {
@@ -803,6 +855,24 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     }>;
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.content?.[0]?.text).toBe("first real");
+  });
+
+  it("reports duplicate results discarded when preserving unframed results", () => {
+    const preservedUnframed = makeRealResult("call_orphan", "preserved unframed");
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeRealResult("call_1", "first real"),
+      makeRealResult("call_1", "second real"),
+      preservedUnframed,
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      preserveUnframedToolResults: true,
+    });
+
+    expect(result.messages).toEqual([input[0], input[1], preservedUnframed]);
+    expect(result.discarded).toEqual([input[2]]);
+    expect(result.droppedDuplicateCount).toBe(1);
   });
 
   it("two synthetic errors → keeps first (unchanged behavior)", () => {

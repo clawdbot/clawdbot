@@ -6,12 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  acquireLocalHeavyCheckLockSync,
-  applyLocalTsgoPolicy,
-  resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForTsgo,
-} from "./lib/local-heavy-check-runtime.mts";
+import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { TSGO_CORE_TEST_SHARDS, type TsgoCoreTestShard } from "./lib/tsgo-core-test-shards.mts";
@@ -170,43 +165,31 @@ function runTsgo(
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
     totalMemoryBytes: os.totalmem(),
   });
-  const releaseLock = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
-    ? acquireLocalHeavyCheckLockSync({
-        cwd: repoRoot,
-        env,
-        toolName: "tsgo-profile",
-      })
-    : () => {};
-
   const startedAt = Date.now();
-  try {
-    const tsgo = createManagedCommandInvocation({
-      args: finalArgs,
-      bin: tsgoPath,
-      env,
-    });
-    const result = spawnSync(tsgo.command, tsgo.args, {
-      cwd: repoRoot,
-      env,
-      encoding: "utf8",
-      maxBuffer: params.maxBuffer ?? 128 * 1024 * 1024,
-      shell: tsgo.shell,
-      windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
-    });
-    const elapsedMs = Date.now() - startedAt;
-    const stdout = result.stdout ?? "";
-    const stderr = result.stderr ?? "";
-    if (result.error) {
-      throw result.error;
-    }
-    if ((result.status ?? 1) !== 0) {
-      const output = [stdout, stderr].filter(Boolean).join("\n");
-      throw new Error(`${label} failed with exit code ${result.status ?? 1}\n${output}`);
-    }
-    return { elapsedMs, stdout, stderr };
-  } finally {
-    releaseLock();
+  const tsgo = createManagedCommandInvocation({
+    args: finalArgs,
+    bin: tsgoPath,
+    env,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    cwd: repoRoot,
+    env,
+    encoding: "utf8",
+    maxBuffer: params.maxBuffer ?? 128 * 1024 * 1024,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
+  const elapsedMs = Date.now() - startedAt;
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  if (result.error) {
+    throw result.error;
   }
+  if ((result.status ?? 1) !== 0) {
+    const output = [stdout, stderr].filter(Boolean).join("\n");
+    throw new Error(`${label} failed with exit code ${result.status ?? 1}\n${output}`);
+  }
+  return { elapsedMs, stdout, stderr };
 }
 
 function parseDiagnostics(output: string): Diagnostics {

@@ -11,6 +11,7 @@ suite.define(() => {
   it("scopes every initial Skills status request to the displayed default agent", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        deferredMethods: ["skills.status"],
         methodResponses: {
           "agents.list": {
             agents: [
@@ -31,12 +32,18 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await gateway.resolveDeferred("skills.status", {
+        workspaceDir: "/tmp/openclaw-e2e/workspace",
+        managedSkillsDir: "/tmp/openclaw-e2e/skills",
+        skills: [],
+      });
       await page.getByText("No skills found.").waitFor();
       const requests = await gateway.getRequests("skills.status");
-      expect(requests.length).toBeGreaterThan(0);
-      expect(requests.map((request) => request.params)).toEqual(
-        requests.map(() => ({ agentId: "main" })),
-      );
+      expect(requests).not.toHaveLength(0);
+      for (const request of requests) {
+        expect(request).toEqual(expect.objectContaining({ params: { agentId: "main" } }));
+      }
+      expect(requests).toHaveLength(1);
     });
   });
 });

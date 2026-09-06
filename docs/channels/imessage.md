@@ -335,9 +335,33 @@ If disabling SIP is not acceptable for your threat model:
     Mention gating for groups:
 
     - iMessage has no native mention metadata
-    - mention detection uses regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - with no configured patterns, mention gating cannot be enforced
+    - mention detection uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
+    - groups require a mention by default, even when no patterns were explicitly configured; an allowlisted sender's message can therefore be skipped unless it contains the agent's name or emoji
+    - an explicit `mentionPatterns: []` at the selected agent or global level suppresses identity-derived patterns; iMessage cannot enforce mention gating when no usable patterns remain
     - control commands from authorized senders bypass mention gating
+
+    To process every message from allowed senders in one group, set that chat's `requireMention` to `false`:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123", "+15555550124"],
+          groups: {
+            "*": {},
+            "123": { requireMention: false },
+          },
+        },
+      },
+    }
+    ```
+
+    Replace `123` with the numeric chat ID from `imsg chats --limit 20 --json`. Edit the map already supplying that account's group policy: `channels.imessage.groups`, or `channels.imessage.accounts.<account-id>.groups` when it overrides the root map. This also applies to `accounts.default.groups`; merely having an account entry does not mean its own `groups` map is needed. An empty account map inherits the root map only when at most one account is configured.
+
+    Preserve the existing wildcard and every per-group setting, changing only the target chat's `requireMention`. Account maps replace the whole inherited map, so if you intentionally create an account-specific override, first copy the complete inherited map, including all wildcard and per-group policies. When no map previously applied, `"*": {}` preserves admission to other groups while keeping their default mention requirement. Keep a restricted map restricted. `groupAllowFrom` still controls sender access.
+
+    A skipped message with no mention produces a warning at the default log level with the chat ID and the `requireMention: false` fix. Repeated warnings for the same chat are suppressed by a bounded in-memory cache; restarting the channel or evicting a cache entry allows the warning again.
 
     Per-group `systemPrompt`:
 
@@ -495,7 +519,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
   <Accordion title="Multi-account pattern">
     iMessage supports per-account config under `channels.imessage.accounts`.
 
-    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
+    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `dmPolicy`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists. Omitted account policies inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
   </Accordion>
 
@@ -540,11 +564,23 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - `chat_guid:...`
     - `chat_identifier:...`
 
-    Handle targets are also supported:
+    Direct handles are also supported:
 
+    - `+1555...`
+    - `tel:+1555...`
     - `imessage:+1555...`
     - `sms:+1555...`
     - `user@example.com`
+
+    Use a service-qualified target for a contact name or mixed alphanumeric alias:
+
+    - `auto:<contact>` lets Messages choose iMessage or SMS
+    - `imessage:<contact>` requires iMessage
+    - `sms:<contact>` requires SMS
+
+    Bare contact names and mixed alphanumeric aliases are rejected instead of being converted to
+    a phone number. If an existing automation uses one, add `auto:`, `imessage:`, or `sms:` to
+    make the intended delivery service explicit.
 
     ```bash
     imsg chats --limit 20
@@ -791,7 +827,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention pattern configuration (`agents.entries.*.groupChat.mentionPatterns`)
+    - mention gating: explicit patterns or the routed agent's identity name/emoji; set `requireMention: false` for the chat in the effective root or account `groups` map to process all messages from allowed senders
 
   </Accordion>
 

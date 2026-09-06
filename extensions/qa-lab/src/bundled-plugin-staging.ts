@@ -6,10 +6,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { coerce as coerceSemver } from "semver";
 
-const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
-  "image-generation-core",
-  "media-understanding-core",
-]);
+const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze(["image-generation-core"]);
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const QA_CLI_METADATA_ENTRY_BASENAMES = Object.freeze([

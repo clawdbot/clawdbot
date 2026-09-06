@@ -30,11 +30,7 @@ import {
 } from "./auto-reply/deliver-reply.js";
 import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import {
-  createTestLegacyFlatWebInboundMessage,
-  createTestWebInboundMessage,
-} from "./inbound/test-message.test-helper.js";
-import type { WebInboundMessageInput } from "./inbound/types.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
@@ -829,105 +825,46 @@ describe("web auto-reply connection", () => {
     scenario.assertAfterRun?.(context);
   });
 
-  it("passes the global inbound debounce into the live listener", async () => {
-    const capture = createWebListenerFactoryCapture();
+  it.each([undefined, 75])(
+    "keeps live debounce config and explicit transport override (%s)",
+    async (debounceMs) => {
+      const capture = createWebListenerFactoryCapture();
 
-    setLoadConfigMock({
-      messages: {
-        inbound: {
-          debounceMs: 250,
+      setLoadConfigMock({
+        messages: {
+          inbound: {
+            debounceMs: 250,
+          },
         },
-      },
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
             },
           },
         },
-      },
-    } as OpenClawConfig);
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
-    const capture = createWebListenerFactoryCapture();
-    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
-    const resolver = vi.fn().mockResolvedValue(undefined);
-
-    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
-    const onMessage = requireOnMessage(capture.getOnMessage());
-    const msg = createTestLegacyFlatWebInboundMessage({
-      from: "+1",
-      conversationId: "+1",
-      chatId: "+1",
-      to: "+2",
-      accessControlPassed: false,
-      reply,
-    });
-
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
-    expect(
-      capture
-        .getLastOptions()
-        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
-    ).toBe(false);
-    expect(
-      capture.getLastOptions()?.shouldDebounce?.(
-        createTestWebInboundMessage({
-          payload: {
-            body: "/stop\n\n[whatsapp attachment unavailable]",
-            commandBody: "/stop",
-          },
-          platform: { sendComposing, reply, sendMedia },
-        }),
-      ),
-    ).toBe(false);
-    await onMessage(msg);
-
-    expect(resolver).not.toHaveBeenCalled();
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        event: { id: "canonical-no-admission" },
-        payload: { body: "canonical" },
-        platform: {
-          chatJid: "+3",
-          recipientJid: "+4",
-          sendComposing,
-          reply,
-          sendMedia,
+      } as OpenClawConfig);
+      await monitorWebChannel(
+        false,
+        capture.listenerFactory as never,
+        false,
+        async () => ({ text: "ok" }),
+        undefined,
+        undefined,
+        {
+          accountId: "work",
+          debounceMs,
         },
-        from: "+3",
-        conversationId: "+3",
-        accountId: "default",
-        chatType: "direct",
-      }),
-    ).rejects.toThrow(/missing admission facts/);
+      );
 
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        ...msg,
-        id: "partial-msg",
-        payload: { body: "partial nested" },
-      } as unknown as WebInboundMessageInput),
-    ).rejects.toThrow(/legacy flat or canonical nested/);
-  });
+      resetLoadConfigMock();
+      expect(capture.getLastOptions()?.debounceMs).toBe(debounceMs);
+      expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
+      expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
+    },
+  );
 
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();

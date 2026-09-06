@@ -41,10 +41,7 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
-  for (let i = 0; i < len; i++) {
-    if (html.charCodeAt(i) !== 60) {
-      continue;
-    }
+  for (let i = html.indexOf("<"); i >= 0; i = html.indexOf("<", i + 1)) {
     const next = html.charCodeAt(i + 1);
     if (next === 33 || next === 63) {
       continue;
@@ -122,16 +119,17 @@ async function extractWithReadability(request: WebContentExtractionRequest) {
   try {
     const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
     const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
-    const reader = new Readability(document);
+    const textMode = request.extractMode === "text";
+    // Text mode consumes textContent; skip serializing the HTML it would discard.
+    const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
     const parsed = reader.parse();
-    if (!parsed?.content) {
+    if (!parsed) {
       return null;
     }
     const title = parsed.title || undefined;
-    const rendered =
-      request.extractMode === "text"
-        ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-        : htmlToMarkdown(parsed.content);
+    const rendered = textMode
+      ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
+      : htmlToMarkdown(parsed.content ?? "");
     const text = stripInvisibleUnicode(rendered.text);
     return text ? { text, title: title ?? rendered.title } : null;
   } catch {

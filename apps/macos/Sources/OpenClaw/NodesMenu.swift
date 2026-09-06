@@ -172,7 +172,6 @@ struct NodeMenuEntryFormatter {
 
 struct NodeMenuRowView: View {
     let entry: NodeInfo
-    let width: CGFloat
     @Environment(\.menuItemHighlighted) private var isHighlighted
 
     private var palette: MenuItemHighlightColors.Palette {
@@ -236,7 +235,7 @@ struct NodeMenuRowView: View {
         .padding(.vertical, 8)
         .padding(.leading, 18)
         .padding(.trailing, 12)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -266,34 +265,5 @@ struct AndroidMark: View {
                 .frame(width: headWidth, height: headHeight)
                 .position(x: headX + headWidth * 0.5, y: headY + headHeight * 0.5)
         }
-    }
-}
-
-struct NodeMenuMultilineView: View {
-    let label: String
-    let value: String
-    let width: CGFloat
-    @Environment(\.menuItemHighlighted) private var isHighlighted
-
-    private var palette: MenuItemHighlightColors.Palette {
-        MenuItemHighlightColors.palette(self.isHighlighted)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(self.label):")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(self.palette.secondary)
-
-            Text(self.value)
-                .font(.caption)
-                .foregroundStyle(self.palette.primary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 6)
-        .padding(.leading, 18)
-        .padding(.trailing, 12)
-        .frame(width: max(1, self.width), alignment: .leading)
     }
 }

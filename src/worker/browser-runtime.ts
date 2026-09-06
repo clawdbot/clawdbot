@@ -7,13 +7,13 @@ import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
 const WORKER_BROWSER_LAUNCH_TIMEOUT_MS = 30_000;
 const WORKER_BROWSER_LAUNCH_OUTPUT_LIMIT_BYTES = 64 * 1024;
 
-type BundledBrowserRuntimeSurface = {
+export type WorkerBrowserRuntime = {
   createAttachedBrowserToolRuntime: (params: {
     cdpUrl: string;
     ensureAttachTarget: () => Promise<void>;
     agentSessionKey?: string;
     agentDir?: string;
-    workspaceDir?: string;
+    workspaceDir: string;
   }) => Promise<{
     tool: AnyAgentTool;
     dispose: () => Promise<void>;
@@ -30,6 +30,7 @@ type CreateWorkerBrowserToolRuntimeParams = {
   sessionKey: string;
   stateDir: string;
   workspaceDir: string;
+  runtime?: WorkerBrowserRuntime;
 };
 
 function runWorkerBrowserLauncher(launcherPath: string): Promise<void> {
@@ -61,13 +62,13 @@ function runWorkerBrowserLauncher(launcherPath: string): Promise<void> {
 export async function createWorkerBrowserToolRuntime(
   params: CreateWorkerBrowserToolRuntimeParams,
 ): Promise<WorkerBrowserToolRuntime> {
-  const browserRuntime = loadBundledPluginPublicSurfaceModuleSyncCore<BundledBrowserRuntimeSurface>(
-    {
+  const browserRuntime =
+    params.runtime ??
+    loadBundledPluginPublicSurfaceModuleSyncCore<WorkerBrowserRuntime>({
       dirName: "browser",
       artifactBasename: "runtime-api.js",
       trackedPluginId: "browser",
-    },
-  );
+    });
   return await browserRuntime.createAttachedBrowserToolRuntime({
     cdpUrl: params.descriptor.cdpUrl,
     ensureAttachTarget: async () => await runWorkerBrowserLauncher(params.descriptor.launcherPath),

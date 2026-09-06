@@ -1,23 +1,40 @@
 // Covers plugin-owned model id normalization through selection surfaces.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+
+function normalizeLegacyFixtureModel({
+  provider,
+  context,
+}: {
+  provider: string;
+  context: { modelId?: string };
+}) {
+  return provider === "custom-provider" && context.modelId === "custom-legacy-model"
+    ? "custom-modern-model"
+    : undefined;
+}
+
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "model-selection-plugin-runtime-test-empty-plugin-metadata",
-  plugins: [
-    {
-      modelIdNormalization: {
-        providers: {
-          google: {
-            aliases: {
-              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+  ...createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "google-model-normalizer",
+        modelIdNormalization: {
+          providers: {
+            google: {
+              aliases: {
+                "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              },
             },
           },
         },
       },
-    },
-  ],
-}));
+    ],
+  }),
+};
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const loadPreparedModelCatalogSnapshotMock = vi.hoisted(() => vi.fn());
 
@@ -26,7 +43,8 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -38,11 +56,13 @@ vi.mock("./model-catalog.runtime.js", () => ({
 }));
 
 let createModelSelectionStateForTest: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
+let resolveSessionModelRef: typeof import("./session-model-ref.js").resolveSessionModelRef;
 
 describe("model-selection plugin runtime normalization", () => {
   beforeAll(async () => {
     ({ createModelSelectionState: createModelSelectionStateForTest } =
       await import("../auto-reply/reply/model-selection.js"));
+    ({ resolveSessionModelRef } = await import("./session-model-ref.js"));
   });
 
   beforeEach(() => {
@@ -54,15 +74,7 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("delegates provider-owned model id normalization to plugin runtime hooks", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const { parseModelRef } = await import("./model-selection.js");
 
@@ -94,15 +106,7 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const { resolveConfiguredModelRef } = await import("./model-selection.js");
 
@@ -127,86 +131,39 @@ describe("model-selection plugin runtime normalization", () => {
     });
   });
 
-  it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
-    // Visibility policy is a hot/static path. It preserves configured keys
-    // unless callers explicitly opt into runtime plugin normalization.
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
-
+  it.each([
+    ["keeps model visibility policy construction off plugin runtime hooks by default", undefined],
+    [
+      "propagates explicit plugin runtime normalization opt-in through model visibility policy",
+      true,
+    ],
+  ] as const)("%s", async (_name, allowPluginNormalization) => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
     const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
-
     const policy = createModelVisibilityPolicy({
       cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "custom-provider/custom-legacy-model": {},
-            },
-          },
-        },
+        agents: { defaults: { models: { "custom-provider/custom-legacy-model": {} } } },
       },
       catalog: [],
       defaultProvider: "custom-provider",
       defaultModel: "custom-legacy-model",
+      ...(allowPluginNormalization ? { allowPluginNormalization } : {}),
     });
 
-    expect(policy.allowedKeys.has("custom-provider/custom-legacy-model")).toBe(true);
-    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
-    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("propagates explicit plugin runtime normalization opt-in through model visibility policy", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
-
-    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
-
-    const policy = createModelVisibilityPolicy({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "custom-provider/custom-legacy-model": {},
-            },
-          },
-        },
-      },
-      catalog: [],
-      defaultProvider: "custom-provider",
-      defaultModel: "custom-legacy-model",
-      allowPluginNormalization: true,
-    });
-
-    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(true);
-    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+    if (allowPluginNormalization) {
+      expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(true);
+      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+    } else {
+      expect(policy.allowedKeys.has("custom-provider/custom-legacy-model")).toBe(true);
+      expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
+      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
     // Stored session overrides are runtime inputs, so provider-owned
     // normalization keeps old persisted ids usable without resetting them.
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const cfg = {
       agents: {
@@ -242,6 +199,45 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.provider).toBe("custom-provider");
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("keeps resolved persisted overrides off plugin runtime hooks", () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue("incorrectly-renormalized-model");
+
+    expect(
+      resolveSessionModelRef(
+        {},
+        {
+          providerOverride: "custom-provider",
+          modelOverride: "custom-modern-model",
+          modelOverrideRouteResolution: "resolved",
+        },
+        "main",
+      ),
+    ).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes raw persisted overrides through plugin runtime hooks", () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+
+    expect(
+      resolveSessionModelRef(
+        {},
+        {
+          providerOverride: "custom-provider",
+          modelOverride: "custom-legacy-model",
+        },
+        "main",
+      ),
+    ).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledOnce();
   });
 
   it("reuses one lifecycle metadata snapshot across auto-reply model normalization", async () => {

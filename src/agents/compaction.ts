@@ -17,14 +17,19 @@ import {
   BASE_CHUNK_RATIO,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
-  isOversizedForSummary,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
-import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
+import type {
+  AgentMessage,
+  CompactionSummaryPrompt,
+  StreamFn,
+  ThinkingLevel,
+} from "./runtime/index.js";
+import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
 
@@ -32,7 +37,6 @@ export {
   BASE_CHUNK_RATIO,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
-  isOversizedForSummary,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
@@ -41,10 +45,6 @@ export {
 const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
-
-type CompactionSummaryResult =
-  | { kind: "summary"; text: string }
-  | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
@@ -81,10 +81,12 @@ type CompactionSummaryParams = {
   maxChunkTokens: number;
   contextWindow: number;
   customInstructions?: string;
+  summaryPrompt?: CompactionSummaryPrompt;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
+  usageSink?: SessionModelUsageSink;
 };
 
 function resolveIdentifierPreservationInstructions(
@@ -143,6 +145,8 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
             summary,
             params.thinkingLevel,
             params.streamFn,
+            params.usageSink,
+            params.summaryPrompt,
           ),
         {
           attempts: 3,
@@ -294,10 +298,10 @@ export async function summarizeInStages(
     parts?: number;
     minMessagesForSplit?: number;
   },
-): Promise<CompactionSummaryResult> {
+): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
-    return { kind: "summary", text: await summarizeWithFallback(params) };
+    return await summarizeWithFallback(params);
   }
 
   const plan = await buildStageSplitPlanWithWorker({
@@ -309,7 +313,7 @@ export async function summarizeInStages(
   });
 
   if (plan.mode === "single") {
-    return { kind: "summary", text: await summarizeWithFallback(params) };
+    return await summarizeWithFallback(params);
   }
 
   const partialSummaries: string[] = [];
@@ -342,7 +346,7 @@ export async function summarizeInStages(
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return { kind: "summary", text: summary };
+    return summary;
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -376,14 +380,11 @@ export async function summarizeInStages(
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  return {
-    kind: "summary",
-    text: await summarizeWithFallback({
-      ...params,
-      messages: summaryMessages,
-      customInstructions: mergeInstructions,
-    }),
-  };
+  return await summarizeWithFallback({
+    ...params,
+    messages: summaryMessages,
+    customInstructions: mergeInstructions,
+  });
 }
 
 /** Resolves a positive context-window token count from model metadata. */

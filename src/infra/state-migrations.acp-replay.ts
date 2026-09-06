@@ -6,9 +6,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { isRecord } from "../utils.js";
 import { withFileLock } from "./file-lock.js";
 import {
   executeSqliteQuerySync,
@@ -63,6 +64,39 @@ type AcpReplayMigrationDatabase = Pick<
   "acp_replay_events" | "acp_replay_sessions"
 >;
 
+const legacyAcpReplayRecordSchema = z.custom<Record<string, unknown>>(isRecord);
+const legacyAcpReplayUpdateSchema = legacyAcpReplayRecordSchema.refine(
+  (update) => typeof update.sessionUpdate === "string",
+);
+const legacyAcpReplayEventSchema = z.looseObject({
+  seq: z
+    .number()
+    .refine(Number.isInteger)
+    .refine((value) => value >= 1),
+  at: z.number().finite(),
+  sessionId: z.string(),
+  sessionKey: z.string(),
+  runId: z.unknown().optional(),
+  update: legacyAcpReplayUpdateSchema,
+});
+const legacyAcpReplaySessionSchema = z.looseObject({
+  sessionId: z.string(),
+  sessionKey: z.string(),
+  cwd: z.string(),
+  complete: z.boolean(),
+  createdAt: z.number().finite(),
+  updatedAt: z.number().finite(),
+  nextSeq: z
+    .number()
+    .refine(Number.isInteger)
+    .refine((value) => value >= 1),
+  events: z.array(z.unknown()),
+});
+const legacyAcpReplayLedgerSchema = z.looseObject({
+  version: z.literal(LEGACY_LEDGER_VERSION),
+  sessions: legacyAcpReplayRecordSchema,
+});
+
 function resolveLegacyAcpReplayLedgerPath(stateDir: string): string {
   return path.join(stateDir, "acp", "event-ledger.json");
 }
@@ -87,76 +121,54 @@ export function detectLegacyAcpReplayLedger(params: {
 }
 
 function parseLegacyEvent(raw: unknown, sessionId: string): LegacyAcpReplayEvent {
-  if (!isRecord(raw) || !isRecord(raw.update)) {
+  const parsed = legacyAcpReplayEventSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) {
     throw new Error(`legacy ACP replay session ${sessionId} contains an invalid event`);
   }
-  if (
-    typeof raw.seq !== "number" ||
-    !Number.isInteger(raw.seq) ||
-    raw.seq < 1 ||
-    typeof raw.at !== "number" ||
-    !Number.isFinite(raw.at) ||
-    raw.sessionId !== sessionId ||
-    typeof raw.sessionKey !== "string" ||
-    typeof raw.update.sessionUpdate !== "string"
-  ) {
-    throw new Error(`legacy ACP replay session ${sessionId} contains an invalid event`);
-  }
-  if (raw.runId !== undefined && (typeof raw.runId !== "string" || raw.runId.length === 0)) {
+  const event = parsed.data;
+  if (event.runId !== undefined && (typeof event.runId !== "string" || event.runId.length === 0)) {
     throw new Error(`legacy ACP replay session ${sessionId} contains an invalid run id`);
   }
   return {
-    seq: raw.seq,
-    at: raw.at,
+    seq: event.seq,
+    at: event.at,
     sessionId,
-    sessionKey: raw.sessionKey,
-    ...(typeof raw.runId === "string" ? { runId: raw.runId } : {}),
-    update: structuredClone(raw.update) as SessionUpdate,
+    sessionKey: event.sessionKey,
+    ...(typeof event.runId === "string" ? { runId: event.runId } : {}),
+    update: structuredClone(event.update) as SessionUpdate,
   };
 }
 
 function parseLegacySession(raw: unknown, expectedSessionId: string): LegacyAcpReplaySession {
-  if (
-    !isRecord(raw) ||
-    raw.sessionId !== expectedSessionId ||
-    typeof raw.sessionKey !== "string" ||
-    typeof raw.cwd !== "string" ||
-    typeof raw.complete !== "boolean" ||
-    typeof raw.createdAt !== "number" ||
-    !Number.isFinite(raw.createdAt) ||
-    typeof raw.updatedAt !== "number" ||
-    !Number.isFinite(raw.updatedAt) ||
-    typeof raw.nextSeq !== "number" ||
-    !Number.isInteger(raw.nextSeq) ||
-    raw.nextSeq < 1 ||
-    !Array.isArray(raw.events)
-  ) {
+  const parsed = legacyAcpReplaySessionSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.sessionId !== expectedSessionId) {
     throw new Error(`legacy ACP replay session ${expectedSessionId} is invalid`);
   }
-  const events = raw.events.map((event) => parseLegacyEvent(event, expectedSessionId));
+  const session = parsed.data;
+  const events = session.events.map((event) => parseLegacyEvent(event, expectedSessionId));
   const sequences = new Set(events.map((event) => event.seq));
   const maxSeq = events.reduce((max, event) => Math.max(max, event.seq), 0);
-  if (sequences.size !== events.length || raw.nextSeq <= maxSeq) {
+  if (sequences.size !== events.length || session.nextSeq <= maxSeq) {
     throw new Error(`legacy ACP replay session ${expectedSessionId} has invalid sequencing`);
   }
   return {
     sessionId: expectedSessionId,
-    sessionKey: raw.sessionKey,
-    cwd: raw.cwd,
-    complete: raw.complete,
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
-    nextSeq: raw.nextSeq,
+    sessionKey: session.sessionKey,
+    cwd: session.cwd,
+    complete: session.complete,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    nextSeq: session.nextSeq,
     events: events.toSorted((left, right) => left.seq - right.seq),
   };
 }
 
 function parseLegacyLedger(raw: string): LegacyAcpReplaySession[] {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || parsed.version !== LEGACY_LEDGER_VERSION || !isRecord(parsed.sessions)) {
+  const parsed = legacyAcpReplayLedgerSchema.safeParse(JSON.parse(raw) as unknown);
+  if (!parsed.success) {
     throw new Error("legacy ACP replay ledger must be a version 1 JSON object");
   }
-  return Object.entries(parsed.sessions).map(([sessionId, session]) =>
+  return Object.entries(parsed.data.sessions).map(([sessionId, session]) =>
     parseLegacySession(session, sessionId),
   );
 }

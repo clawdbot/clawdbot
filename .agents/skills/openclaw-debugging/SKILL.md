@@ -98,6 +98,10 @@ SSH, or you need event-level detail):
 
 - Per-agent data plane: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
   Canonical schema: `src/state/openclaw-agent-schema.sql`.
+- Hosted/systemd installs keep state under the service user's home (e.g.
+  `/home/openclaw/.openclaw/...`), not root's — root may carry a separate
+  stray install with different agents. If the expected agent dir is missing,
+  locate the real DB: `find / -maxdepth 6 -name openclaw-agent.sqlite`.
 - Web chat URLs end in a session-id fragment: `/chat/<agentId>/<slug>-<hex>`.
   Resolve it in `session_nodes`: `session_key LIKE '%<hex>%'` →
   `current_session_id`, `display_name`. Key shape is
@@ -110,7 +114,13 @@ SSH, or you need event-level detail):
   not. Use this to separate operator-authored text from injected prompts.
 - Full-text search across transcripts: `session_transcript_fts`.
 - Attachments: `media://inbound/<file>` URLs map to
-  `~/.openclaw/media/inbound/<file>`.
+  `<state-dir>/media/inbound/<file>`.
+- User-attached images are not `image` content parts. They ride the message
+  envelope: `message.__openclaw.media[]` entries with `url`
+  (`media://inbound/<file>`), `contentType`, `kind`, `fileName`. A parts-only
+  extractor misses every image — grep raw `event_json` for `media://`. On a
+  remote host, scp the files locally (one remote path per scp argument) and
+  read them there.
 
 Hosts without a `sqlite3` binary still have Node: `node:sqlite` needs no
 dependencies.
@@ -150,7 +160,8 @@ work, copy the DB into a dev state dir first.
 - Worker/dist/lazy import/package surface: targeted tests plus `pnpm build`.
 - Live provider/model behavior: same provider/model with debug flags and a real
   key if available.
-- Docker/package/Linux/CI-parity: `$crabbox`.
+- Docker/package/Linux/CI-parity: current dedicated Linux worker when capable;
+  otherwise `$crabbox`.
 - CI failure: exact SHA, relevant job only, logs only after failure/completion.
 
 ## Output Habit

@@ -8,7 +8,7 @@ import type {
 export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
-  transcriptDetails?: { mcpAppPreview: unknown };
+  transcriptDetails?: unknown;
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
 
@@ -17,17 +17,13 @@ export function withDynamicToolTranscriptDetails<T extends CodexDynamicToolRunti
   response: T,
   details: unknown,
 ): T {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return response;
-  }
-  const mcpAppPreview = (details as Record<string, unknown>).mcpAppPreview;
-  if (!mcpAppPreview || typeof mcpAppPreview !== "object" || Array.isArray(mcpAppPreview)) {
+  if (details === undefined) {
     return response;
   }
   Object.defineProperty(response, "transcriptDetails", {
     configurable: true,
     enumerable: false,
-    value: { mcpAppPreview },
+    value: details,
   });
   return response;
 }

@@ -1,12 +1,24 @@
 // Verifies guarded session managers emit transcript update events with stable sequence ids.
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  listSessionPendingInputs,
+  persistCompactionBoundaryWithSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginHookBeforeMessageWriteEvent } from "../plugins/types.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
@@ -16,6 +28,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
@@ -31,11 +44,12 @@ async function openPersistedSessionManager() {
     sessionKey: `agent:main:${sessionId}`,
     storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
   };
+  const sessionEntry = { sessionId, updatedAt: Date.now() };
   await upsertSessionEntry({
     ...target,
-    entry: { sessionId, updatedAt: Date.now() },
+    entry: sessionEntry,
   });
-  return { root, sessionManager: SessionManager.open(target, root), target };
+  return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
 }
 
 afterEach(() => {
@@ -47,48 +61,224 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
-  it("records the admission anchor when adopting an ingress-persisted user", async () => {
-    const { root, target } = await openPersistedSessionManager();
-    const message = {
-      role: "user" as const,
-      content: "canonical prompt",
-      idempotencyKey: "canonical-run:user",
-      timestamp: Date.now(),
-    };
-    await appendTranscriptMessage(target, {
-      cwd: root,
-      eventId: "ingress-persisted-user",
-      message,
-      now: message.timestamp,
-    });
-    const recorder = createUserTurnTranscriptRecorder({
-      message,
-      target: {
-        ...target,
-        sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
+  it("persists compaction item identity under each current run across reload", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    for (const runId of ["run-first", "run-second"]) {
+      const guarded = guardSessionManager(sessionManager, { runId });
+      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
+      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+        itemId: `compaction-${runId}`,
+      });
+    }
+    const compactions = SessionManager.open(target, root)
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(compactions).toMatchObject([
+      {
+        __openclaw: { runId: "run-first", itemId: "compaction-run-first" },
+        details: { source: "hook" },
+        fromHook: true,
       },
-    });
-    const guarded = guardSessionManager(SessionManager.open(target, root), {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      preparedUserTurnMessage: message,
-      preparedUserTurnTranscriptRecorder: recorder,
-    });
-
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    guarded.appendMessage({ ...message });
-
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(recorder.getAdmissionReceipt()).toMatchObject({
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-      entryId: "ingress-persisted-user",
-      idempotencyKey: message.idempotencyKey,
-      role: "user",
-    });
+      {
+        __openclaw: { runId: "run-second", itemId: "compaction-run-second" },
+        details: { source: "hook" },
+        fromHook: true,
+      },
+    ]);
   });
+
+  it("reloads the session manager after atomic compaction persistence rolls back", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    const keptId = sessionManager.appendMessage({
+      role: "user",
+      content: "keep",
+      timestamp: 1,
+    });
+    const guarded = guardSessionManager(sessionManager, {
+      withCompactionPersistence: (append, validateAppend) =>
+        persistCompactionBoundaryWithSessionEntrySync(target, {
+          append,
+          transcriptByteCompactionLatch: {
+            activeBytes: 2048,
+            sessionId: target.sessionId,
+            maxBytes: 1024,
+          },
+          validateAppend: (entryId, appendedText) => {
+            expect(validateAppend(entryId, appendedText)).toBe(true);
+            return false;
+          },
+        }),
+    });
+
+    expect(() => guarded.appendCompaction("summary", keptId, 100)).toThrow(
+      "Compaction boundary validation failed",
+    );
+    expect(sessionManager.getLeafId()).toBe(keptId);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toEqual([]);
+    expect(
+      SessionManager.open(target, root)
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toEqual([]);
+  });
+
+  it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
+    const { root, target, sessionEntry } = await openPersistedSessionManager();
+    const recorderTarget = { ...target, sessionEntry };
+    const ambient = createUserTurnTranscriptRecorder({
+      input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
+      target: recorderTarget,
+    });
+    const source = createUserTurnTranscriptRecorder({
+      input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
+      target: recorderTarget,
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    });
+    const markRuntimePersisted = vi.spyOn(source, "markRuntimePersisted");
+    try {
+      await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
+      await ambient.persistApproved();
+      const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
+        if (message.role !== "user") {
+          return undefined;
+        }
+        return {
+          message: {
+            ...message,
+            content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
+          },
+        };
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "steered-input-approval",
+        hookName: "before_message_write",
+        source: "test",
+        handler: approvalHook,
+      });
+      initializeGlobalHookRunner(registry);
+      expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(true);
+      const approved = await source.resolveMessage();
+      if (!approved) {
+        throw new Error("Expected approved steering input");
+      }
+      const pending = listSessionPendingInputs(target);
+      expect(pending.total).toBe(1);
+      const guarded = guardSessionManager(SessionManager.open(target, root), {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        preparedUserTurnMessage: await ambient.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: ambient,
+        suppressNextUserMessagePersistence: true,
+      });
+      const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+        { role: "user", content: "Rendered steering prompt", timestamp: 2 },
+        { message: approved, recorder: source },
+      );
+
+      // The already-running turn's async context is not the steered input's custody.
+      const entryId = ambient.withPendingInput!(() => guarded.appendMessage(runtimeMessage));
+
+      expect(entryId).toBe(pending.items[0]?.id);
+      expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
+      expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        approved,
+        expect.objectContaining({ entryId }),
+        { appended: true },
+      );
+      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+      expect(approvalHook).toHaveBeenCalledOnce();
+
+      const unstagedId = guarded.appendMessage({
+        role: "user",
+        content: "Unstaged source",
+        timestamp: 3,
+      });
+      expect(approvalHook).toHaveBeenCalledTimes(2);
+      expect(guarded.getEntry(unstagedId)).toMatchObject({
+        message: { role: "user", content: "[approved] Unstaged source" },
+      });
+    } finally {
+      source.finishPendingInput?.("interrupted");
+      ambient.finishPendingInput?.("interrupted");
+      resetGlobalHookRunner();
+    }
+  });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "records replay admission without a fresh append (excluded: %s; stale manager: %s)",
+    async (excludeFromContext, staleManager) => {
+      const { root, target, sessionManager } = await openPersistedSessionManager();
+      if (staleManager) {
+        // The SDK persists model/thinking setup before prompt submission. Keep the user
+        // projection stale without creating a competing lazy header initializer.
+        sessionManager.appendModelChange("openai", "gpt-5.6-sol");
+        sessionManager.appendThinkingLevelChange("off");
+      }
+      const openedBeforeIngress = staleManager
+        ? SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 })
+        : undefined;
+      const message = {
+        role: "user" as const,
+        content: "canonical prompt",
+        idempotencyKey: "canonical-run:user",
+        ...(excludeFromContext ? { excludeFromContext: true as const } : {}),
+        timestamp: Date.now(),
+      };
+      await appendTranscriptMessage(target, {
+        cwd: root,
+        eventId: "ingress-persisted-user",
+        message,
+        now: message.timestamp,
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: {
+          ...target,
+          sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
+        },
+      });
+      const markRuntimePersisted = vi.spyOn(recorder, "markRuntimePersisted");
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const guarded = guardSessionManager(
+        openedBeforeIngress ??
+          SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 }),
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          preparedUserTurnMessage: message,
+          preparedUserTurnTranscriptRecorder: recorder,
+        },
+      );
+
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      guarded.appendMessage({ ...message });
+
+      expect(recorder.hasPersisted()).toBe(true);
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        message,
+        expect.objectContaining({ entryId: "ingress-persisted-user" }),
+        { appended: false },
+      );
+      expect(updates).toEqual([]);
+      expect(recorder.getAdmissionReceipt()).toMatchObject({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        entryId: "ingress-persisted-user",
+        idempotencyKey: message.idempotencyKey,
+        role: "user",
+      });
+    },
+  );
 
   it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
@@ -152,9 +342,10 @@ describe("guardSessionManager transcript updates", () => {
       ).toHaveLength(1);
       expect(updates).toEqual([]);
       expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
-      expect(markRuntimePersisted).toHaveBeenCalledWith(
-        expect.objectContaining({ idempotencyKey: "canonical-run:user" }),
-      );
+      expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+        idempotencyKey: "canonical-run:user",
+      });
+      expect(markRuntimePersisted.mock.calls[0]?.[2]).toEqual({ appended: false });
     },
   );
 
@@ -216,9 +407,51 @@ describe("guardSessionManager transcript updates", () => {
 
     guarded.appendMessage(runtimeMessage as Parameters<typeof guarded.appendMessage>[0]);
 
-    expect(markRuntimePersisted).toHaveBeenCalledWith(
-      expect.objectContaining({ display: false, role: "user" }),
-    );
+    expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
+    expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+      display: false,
+      role: "user",
+    });
+    expect(markRuntimePersisted.mock.calls[0]?.[2]).toEqual({ appended: true });
+  });
+
+  it("drops selected mentions when a write hook mutates their text in place", async () => {
+    const { target, sessionManager } = await openPersistedSessionManager();
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Hi @Taylor" }],
+      timestamp: 1,
+      __openclaw: {
+        humanMentions: [{ profileId: "profile-taylor", start: 3, end: 10 }],
+      },
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "rewrite-user-selection",
+      hookName: "before_message_write",
+      source: "test",
+      handler: ({ message: runtimeMessage }: PluginHookBeforeMessageWriteEvent) => {
+        if (runtimeMessage.role === "user" && Array.isArray(runtimeMessage.content)) {
+          Object.assign(runtimeMessage.content[0]!, { text: "Hi @Morgan" });
+        }
+        return { message: runtimeMessage };
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    try {
+      const guarded = guardSessionManager(sessionManager, {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        preparedUserTurnMessage: message,
+      });
+      const entryId = guarded.appendMessage(message);
+      expect(guarded.getEntry(entryId)).toMatchObject({
+        message: { role: "user", content: [{ type: "text", text: "Hi @Morgan" }] },
+      });
+      expect(guarded.getEntry(entryId)).not.toHaveProperty("message.__openclaw.humanMentions");
+    } finally {
+      resetGlobalHookRunner();
+    }
   });
 
   it("does not hide ordinary messages that mention memory flushes", () => {
@@ -355,6 +588,7 @@ describe("guardSessionManager transcript updates", () => {
     const guarded = guardSessionManager(sm, {
       agentId: target.agentId,
       sessionKey: target.sessionKey,
+      runId: "run-owning-final",
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
       message: AgentMessage,
@@ -379,8 +613,86 @@ describe("guardSessionManager transcript updates", () => {
       timestamp: Date.now(),
     } as AgentMessage);
 
+    expect(
+      sm
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => ({
+          role: entry.message.role,
+          runId: asNullableRecord(asNullableRecord(entry.message)?.["__openclaw"])?.runId,
+        })),
+    ).toEqual([
+      { role: "user", runId: undefined },
+      { role: "assistant", runId: "run-owning-final" },
+      { role: "toolResult", runId: "run-owning-final" },
+      { role: "assistant", runId: "run-owning-final" },
+    ]);
     expect(getBranchSpy).toHaveBeenCalledTimes(1);
     expect(updates.map((update) => update.messageSeq)).toEqual([2, 4]);
+    expect(
+      updates.map(
+        (update) => asNullableRecord(asNullableRecord(update.message)?.["__openclaw"])?.runId,
+      ),
+    ).toEqual(["run-owning-final", "run-owning-final"]);
+    expect(updates.map((update) => update.runId)).toEqual([undefined, "run-owning-final"]);
     getBranchSpy.mockRestore();
   });
+
+  it.each([false, true])(
+    "refreshes terminal run ownership with hooks skipped=%s",
+    async (skipBeforeMessageWriteHooks) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const { sessionManager, target } = await openPersistedSessionManager();
+
+      const firstRun = guardSessionManager(sessionManager, {
+        skipBeforeMessageWriteHooks,
+        agentId: target.agentId,
+        runId: "run-first",
+        sessionKey: target.sessionKey,
+        prepareAssistantTranscriptMessage: (message) =>
+          applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./first.json"] }),
+      });
+      firstRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof firstRun.appendMessage>[0]);
+
+      const secondRun = guardSessionManager(sessionManager, {
+        agentId: target.agentId,
+        runId: "run-second",
+        sessionKey: target.sessionKey,
+      });
+      secondRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "second reply" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof secondRun.appendMessage>[0]);
+
+      const unknownRun = guardSessionManager(sessionManager);
+      unknownRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "unowned reply" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof unknownRun.appendMessage>[0]);
+
+      expect(secondRun).toBe(firstRun);
+      expect(unknownRun).toBe(firstRun);
+      expect(updates[0]?.message).toMatchObject({
+        content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
+        openclawDelivery: { mediaUrls: ["./first.json"] },
+      });
+      expect(
+        updates.slice(1).some(({ message }) => Reflect.has(message as object, "openclawDelivery")),
+      ).toBe(false);
+      expect(
+        updates.map(({ messageId, messageSeq, runId }) => ({ messageId, messageSeq, runId })),
+      ).toEqual([
+        { messageId: expect.any(String), messageSeq: 1, runId: "run-first" },
+        { messageId: expect.any(String), messageSeq: 2, runId: "run-second" },
+        { messageId: expect.any(String), messageSeq: 3, runId: undefined },
+      ]);
+    },
+  );
 });

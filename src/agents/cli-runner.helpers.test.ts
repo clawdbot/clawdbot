@@ -8,10 +8,16 @@ import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "./cli-image-turn-correlation.js";
 import {
   buildCliArgs,
   prepareCliPromptImagePayload,
@@ -192,6 +198,27 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("does not hydrate media suppressed during current-turn admission", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "claude" },
+        prompt: "describe the attachment",
+        imagePrompt: "describe the attachment",
+        workspaceDir: "/workspace",
+        images: [],
+        imageOrder: [],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+        media: [
+          {
+            path: "/openclaw-test-missing/current.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+    ).resolves.toEqual({ prompt: "describe the attachment" });
   });
 
   it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
@@ -398,6 +425,41 @@ describe("writeCliImages", () => {
       });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("carries exact image-turn correlation beside Claude prompt paths", async () => {
+    const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { command: "claude", imageArg: "@" },
+      prompt: "describe this",
+      workspaceDir: "/workspace",
+      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageTurnKey: turnKey,
+    });
+
+    try {
+      expect(readCliImageTurnContext(prepared.prompt)).toBe(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).not.toContain(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).toContain(
+        `@${expectDefined(prepared.imagePaths?.[0], "correlated image path")}`,
+      );
+    } finally {
+      await fs.rm(expectDefined(prepared.imagePaths?.[0], "correlated image path"), {
+        force: true,
+      });
+    }
+  });
+
+  it("rejects conflicting or malformed image-turn correlation", () => {
+    const first = hashCliImageTurnEntryId("transcript-entry-1");
+    const second = hashCliImageTurnEntryId("transcript-entry-2");
+
+    expect(
+      readCliImageTurnContext(
+        `${formatCliImageTurnContext(first)}\n\n${formatCliImageTurnContext(second)}`,
+      ),
+    ).toBeUndefined();
+    expect(readCliImageTurnContext(formatCliImageTurnContext("not-a-key"))).toBeUndefined();
   });
 
   it("uses the shared media extension map for image formats beyond the tiny builtin list", async () => {
@@ -676,6 +738,10 @@ describe("writeCliImages", () => {
           },
         ],
         imageOrder: ["offloaded", "inline"],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+          suppressedFactIndexes: [],
+        },
         media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
       });
 
@@ -803,6 +869,19 @@ describe("resolveCliRunQueueKey", () => {
         ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:owner:abcd1234");
+  });
+
+  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "acme-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-third-party-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "third-party-owner",
+      }),
+    ).toBe("acme-cli:owner:third-party-owner");
   });
 
   it("keeps resumed Claude live sessions on the owner lane", () => {

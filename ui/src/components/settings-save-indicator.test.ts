@@ -20,6 +20,7 @@ function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSav
     applying: false,
     applyDisabled: false,
     onRetry: vi.fn(),
+    onSave: vi.fn(),
     onReload: vi.fn(),
     onApply: vi.fn(),
     ...overrides,
@@ -106,6 +107,17 @@ describe("settings save indicator", () => {
     expect(onReload).toHaveBeenCalledOnce();
   });
 
+  it("submits the paused draft through Save instead of retrying a failed patch", async () => {
+    const onSave = vi.fn();
+    const onRetry = vi.fn();
+    await update(props({ status: "paused", onSave, onRetry }));
+
+    button("Save")?.click();
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("applies pending changes and reports the in-flight state", async () => {
     const onApply = vi.fn();
     await update(props({ needsApply: true, onApply }));
@@ -121,14 +133,13 @@ describe("settings save indicator", () => {
 
   it("cleans the saved timer when disconnected", async () => {
     vi.useFakeTimers();
-    const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     await update(props({ status: "saving" }));
+    expect(vi.getTimerCount()).toBe(0);
     await update(props({ status: "saved" }));
+    expect(vi.getTimerCount()).toBe(1);
 
-    const callsBeforeDisconnect = clearTimeout.mock.calls.length;
     indicator.remove();
 
-    expect(clearTimeout).toHaveBeenCalledTimes(callsBeforeDisconnect + 1);
-    await vi.runAllTimersAsync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

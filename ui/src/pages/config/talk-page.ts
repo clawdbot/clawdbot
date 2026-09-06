@@ -6,10 +6,18 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
+import type { VoiceWakeEditorState } from "./talk-device.ts";
 import {
+  isTalkGptLiveModel,
+  resolveTalkRealtimeSelection,
+  talkProviderRejectsTransport,
+} from "./talk-schema.ts";
+import {
+  effectiveTalkValues,
   renderTalk,
   selectedTalkProviderOption,
   talkProviderConfigKeys,
@@ -25,8 +33,16 @@ type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["clie
  * (same shape as memory-page.ts).
  */
 type CatalogConnection = {
+  gatewayUrl: string;
   client: GatewayClient | null;
   connected: boolean;
+  voiceWake: boolean;
+};
+
+type VoiceWakeWrite = {
+  connection: CatalogConnection;
+  text: string;
+  next: string | null;
 };
 
 type TalkPageProps = {
@@ -46,6 +62,7 @@ function toProviderOption(
     aliases: provider.aliases ?? [],
     models: provider.models ?? [],
     voices: provider.voices ?? [],
+    voicesByModel: provider.voicesByModel,
     transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,
   };
@@ -53,6 +70,226 @@ function toProviderOption(
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
+
+function gptLiveRejectsTransport(model: string | null, transport: string): boolean {
+  return isTalkGptLiveModel(model) && transport === "provider-websocket";
+}
+
+// Drafts and write ordering belong to the application Gateway, not a route
+// element. Weak ownership retains them across navigation without durable storage.
+const voiceWakeOwners = new WeakMap<ApplicationContext["gateway"], VoiceWakeSettingsOwner>();
+
+class VoiceWakeSettingsOwner {
+  private value: VoiceWakeEditorState = { kind: "unavailable" };
+  private connection: CatalogConnection | null = null;
+  private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private voiceWakeWrite: VoiceWakeWrite | null = null;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(private readonly gateway: ApplicationContext["gateway"]) {
+    // This subscription shares the Gateway's lifetime, including route absences.
+    gateway.subscribe(() => this.sync());
+  }
+
+  get state() {
+    return this.value;
+  }
+
+  private update(nextState: VoiceWakeEditorState) {
+    this.value = nextState;
+    for (const notify of this.listeners) {
+      notify();
+    }
+  }
+
+  subscribe(notify: () => void) {
+    this.listeners.add(notify);
+    this.sync();
+    const connection = this.connection;
+    if (
+      connection?.connected &&
+      connection.voiceWake &&
+      this.state.kind !== "loading" &&
+      (this.state.kind !== "ready" || this.state.phase === "saved")
+    ) {
+      void this.loadVoiceWake(connection);
+    }
+    return () => {
+      this.listeners.delete(notify);
+    };
+  }
+
+  flush() {
+    if (this.voiceWakeTimer !== undefined) {
+      clearTimeout(this.voiceWakeTimer);
+      this.voiceWakeTimer = undefined;
+      void this.saveVoiceWake();
+    }
+  }
+
+  retry() {
+    if (this.state.kind === "ready") {
+      void this.saveVoiceWake();
+    } else if (this.connection) {
+      void this.loadVoiceWake(this.connection);
+    }
+  }
+
+  private sync() {
+    const snapshot = this.gateway.snapshot;
+    const gatewayUrl = this.gateway.connection.gatewayUrl;
+    const client = snapshot.client;
+    const connected = snapshot.phase === "connected";
+    const voiceWake =
+      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
+      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true;
+    if (
+      this.connection?.gatewayUrl === gatewayUrl &&
+      this.connection.client === client &&
+      this.connection.connected === connected &&
+      this.connection.voiceWake === voiceWake
+    ) {
+      return;
+    }
+    clearTimeout(this.voiceWakeTimer);
+    this.voiceWakeTimer = undefined;
+    if (this.voiceWakeWrite) {
+      this.voiceWakeWrite.next = null;
+      this.voiceWakeWrite = null;
+    }
+    // A reconnect changes request ownership, not draft ownership. A different
+    // Gateway drops the draft so its trigger words can never cross owners.
+    const draft =
+      this.connection?.gatewayUrl === gatewayUrl &&
+      this.state.kind === "ready" &&
+      this.state.phase !== "saved"
+        ? this.state
+        : null;
+    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
+    this.connection = connection;
+    this.update(
+      draft
+        ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
+        : { kind: "unavailable" },
+    );
+    if (client && connected && voiceWake && !draft && this.listeners.size > 0) {
+      void this.loadVoiceWake(connection);
+    }
+  }
+
+  private async loadVoiceWake(connection: CatalogConnection) {
+    if (!connection.client || !connection.voiceWake) {
+      return;
+    }
+    this.update({ kind: "loading" });
+    try {
+      const result = await connection.client.request<{ triggers: string[] }>("voicewake.get", {});
+      if (this.connection === connection) {
+        this.update({
+          kind: "ready",
+          text: result.triggers.join("\n"),
+          phase: "saved",
+          error: null,
+        });
+      }
+    } catch (error) {
+      if (this.connection === connection) {
+        this.update({
+          kind: "error",
+          error: t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }),
+        });
+      }
+    }
+  }
+
+  edit(text: string) {
+    if (this.state.kind !== "ready") {
+      return;
+    }
+    this.update({ kind: "ready", text, phase: "pending", error: null });
+    const write = this.voiceWakeWrite;
+    if (write?.connection === this.connection && write.next !== null) {
+      write.next = text === write.text ? null : text;
+    }
+    clearTimeout(this.voiceWakeTimer);
+    this.voiceWakeTimer = setTimeout(() => {
+      this.voiceWakeTimer = undefined;
+      void this.saveVoiceWake();
+    }, 400);
+  }
+
+  private async saveVoiceWake() {
+    const connection = this.connection;
+    const currentState = this.state;
+    if (currentState.kind !== "ready" || currentState.phase === "saved") {
+      return;
+    }
+    if (!connection?.client || !connection.connected || !connection.voiceWake) {
+      this.update({
+        ...currentState,
+        phase: "pending",
+        error: t("configPage.deviceTalk.triggerWordsDisconnected"),
+      });
+      return;
+    }
+    if (this.voiceWakeWrite?.connection === connection) {
+      this.voiceWakeWrite.next =
+        currentState.text === this.voiceWakeWrite.text ? null : currentState.text;
+      return;
+    }
+    const write: VoiceWakeWrite = { connection, text: currentState.text, next: currentState.text };
+    this.voiceWakeWrite = write;
+    // The editor remains writable. Coalesce elapsed debounces into one queued
+    // write, and drain a navigation flush against the same captured Gateway.
+    while (write.next !== null) {
+      write.text = write.next;
+      write.next = null;
+      const draft = this.state;
+      if (this.connection === connection && draft.kind === "ready" && draft.text === write.text) {
+        this.update({ ...draft, phase: "saving", error: null });
+      }
+      try {
+        const result = await connection.client.request<{ triggers: string[] }>("voicewake.set", {
+          triggers: write.text.split("\n"),
+        });
+        // The Gateway owns normalization; only apply its acknowledgment when
+        // the editable draft still matches the submitted text.
+        if (
+          this.connection === connection &&
+          this.state.kind === "ready" &&
+          this.state.text === write.text
+        ) {
+          this.update({
+            kind: "ready",
+            text: result.triggers.join("\n"),
+            phase: "saved",
+            error: null,
+          });
+        }
+      } catch (error) {
+        if (this.connection === connection && this.state.kind === "ready") {
+          this.update({
+            ...this.state,
+            phase: "pending",
+            error: t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
+          });
+        }
+      }
+    }
+    if (this.voiceWakeWrite === write) {
+      this.voiceWakeWrite = null;
+    }
+  }
+}
+
+function voiceWakeOwner(gateway: ApplicationContext["gateway"]): VoiceWakeSettingsOwner {
+  let owner = voiceWakeOwners.get(gateway);
+  if (!owner) {
+    owner = new VoiceWakeSettingsOwner(gateway);
+    voiceWakeOwners.set(gateway, owner);
+  }
+  return owner;
+}
 
 class TalkSettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -70,10 +307,24 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   private lastCatalogConfigHash: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
+      () => (this.context?.gateway ? voiceWakeOwner(this.context.gateway) : undefined),
+      (owner, notify) => owner.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.nativeDeviceSettings,
+      (capability, notify) => capability.subscribe(notify),
+    )
+    .watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) =>
-        this.syncCatalog(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
+        this.syncCatalog(
+          gateway.connection.gatewayUrl,
+          gateway.snapshot.client,
+          gateway.snapshot.phase === "connected",
+          isGatewayMethodAdvertised(gateway.snapshot, "voicewake.get") === true &&
+            isGatewayMethodAdvertised(gateway.snapshot, "voicewake.set") === true,
+        ),
     )
     .watch(
       () => this.context?.runtimeConfig,
@@ -100,19 +351,30 @@ class TalkSettingsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     window.removeEventListener("focus", this.refreshOnFocus);
+    voiceWakeOwner(this.context.gateway).flush();
     this.subscriptions.clear();
     this.connection = null;
     this.catalog = { kind: "unavailable" };
     super.disconnectedCallback();
   }
 
-  private syncCatalog(client: GatewayClient | null, connected: boolean) {
+  private syncCatalog(
+    gatewayUrl: string,
+    client: GatewayClient | null,
+    connected: boolean,
+    voiceWake: boolean,
+  ) {
     // connecting -> connected keeps the same client object; keying only on the
     // client would leave a page mounted mid-handshake without a catalog.
-    if (this.connection?.client === client && this.connection.connected === connected) {
+    if (
+      this.connection?.gatewayUrl === gatewayUrl &&
+      this.connection.client === client &&
+      this.connection.connected === connected &&
+      this.connection.voiceWake === voiceWake
+    ) {
       return;
     }
-    const connection: CatalogConnection = { client, connected };
+    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
     this.connection = connection;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
@@ -196,12 +458,24 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
-      // transport would make the just-picked model fail at session create, so
-      // clearing it lets the default client-owned WebRTC path apply.
-      const transport = this.liveSelection().transport;
-      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+      const selection = this.liveSelection();
+      const transport = selection.transport;
+      const provider = selectedTalkProviderOption(this.catalog, selection);
+      const rejectsTransport =
+        transport !== null &&
+        (gptLiveRejectsTransport(model, transport) ||
+          talkProviderRejectsTransport(provider?.transports, transport));
+      // Preserve configured transports unless the selected provider positively
+      // advertises that it cannot serve them.
+      if (isTalkGptLiveModel(model) && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+      } else if (
+        provider?.id === "openai" &&
+        isTalkGptLiveModel(model) &&
+        transport === "gateway-relay" &&
+        selection.consultRouting === "force-agent-consult"
+      ) {
+        runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
       }
       return;
     }
@@ -247,17 +521,17 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   /**
-   * Model, voice, and transport picks are provider-coupled (an xAI session
-   * cannot use a gpt-live model, marin, or webrtc), so a provider switch
-   * clears the top-level overrides instead of carrying them across. Each
-   * provider's own `talk.realtime.providers.<id>` entry survives untouched and
-   * supplies that provider's fallback values.
+   * Model and voice picks are provider-coupled, so a provider switch clears
+   * those top-level overrides. Transport survives when the target provider
+   * advertises it; an unavailable catalog is not evidence of incompatibility.
+   * Each provider's own entry survives and supplies its fallback values.
    */
   private changeProvider(providerId: string | null) {
     if (this.mutationDisabled) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
+    const selection = this.liveSelection();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
@@ -268,27 +542,55 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
       return;
     }
-    runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
-    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
-    // A relay-only provider (no client-owned transport) needs the transport
-    // written explicitly: an unset transport routes to talk.client.create,
-    // which such a provider cannot serve.
+    const configuredTransport = selection.transport;
     const option =
       this.catalog.kind === "ready"
         ? this.catalog.providers.find((provider) => provider.id === providerId)
         : undefined;
+    const targetModel =
+      effectiveTalkValues(
+        { ...selection, provider: providerId, model: null, speakerVoice: null },
+        option,
+      ).model ?? option?.defaultModel;
+    const rejectsTransport =
+      configuredTransport !== null &&
+      (gptLiveRejectsTransport(targetModel ?? null, configuredTransport) ||
+        talkProviderRejectsTransport(option?.transports, configuredTransport));
+    if (rejectsTransport) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+    }
+    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
+    // A relay-only provider (no client-owned transport) needs the transport
+    // written explicitly when the current selection cannot carry across.
     const relayOnly =
       option !== undefined &&
       option.transports.length > 0 &&
-      !option.transports.some((transport) => TALK_CLIENT_OWNED_TRANSPORTS.has(transport));
-    if (relayOnly) {
+      !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
+    let resultingTransport = rejectsTransport ? null : configuredTransport;
+    if (relayOnly && configuredTransport !== "gateway-relay") {
       runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
+      resultingTransport = "gateway-relay";
+    }
+    if (
+      option?.id === "openai" &&
+      isTalkGptLiveModel(targetModel ?? null) &&
+      resultingTransport === "gateway-relay" &&
+      selection.consultRouting === "force-agent-consult"
+    ) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
 
   override render() {
     const runtimeState = this.context.runtimeConfig.state;
+    const voiceWake = voiceWakeOwner(this.context.gateway);
     return renderTalk({
+      nativeDeviceSettings: this.context.nativeDeviceSettings,
+      voiceWake: {
+        state: voiceWake.state,
+        onInput: (text) => voiceWake.edit(text),
+        onRetry: () => voiceWake.retry(),
+      },
       selection: resolveTalkRealtimeSelection(this.configObject),
       catalog: this.catalog,
       configBusy:

@@ -19,6 +19,7 @@ import type {
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 /**
  * Plugin node-host command registry bridge.
@@ -41,11 +42,22 @@ export async function ensureNodeHostPluginRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  nodeHostPluginRegistry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
+  const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
   });
+  // Resolve this registry's native readiness before publishing the first manifest.
+  // No process-wide preparation cache: a replacement registry owns fresh resources.
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const prepare = new Set(registry.nodeHostCommands.map((entry) => entry.command.prepare));
+    await Promise.all(
+      [...prepare].map(async (callback) =>
+        callback?.({ config: params.config, env: params.env ?? process.env }),
+      ),
+    );
+  });
+  nodeHostPluginRegistry = registry;
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */
@@ -122,6 +134,33 @@ export function watchRegisteredNodeHostCommandAvailability(
     });
 }
 
+/** Release plugin command state before a reconnected Gateway can invoke it again. */
+export async function notifyRegisteredNodeHostCommandDisconnect(): Promise<void> {
+  const registry = resolveNodeHostPluginRegistry();
+  const callbacks = new Set(
+    (registry?.nodeHostCommands ?? [])
+      .map((entry) => entry.command.onDisconnect)
+      .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
+  );
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const results = await Promise.allSettled(
+      [...callbacks].map(async (callback) => await callback()),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length === 1) {
+      const failure = failures[0];
+      throw failure instanceof Error
+        ? failure
+        : new Error("node-host plugin disconnect cleanup failed", { cause: failure });
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "node-host plugin disconnect cleanup failed");
+    }
+  });
+}
+
 function isProviderSafeToolName(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
 }
@@ -168,19 +207,54 @@ export async function invokeRegisteredNodeHostCommand(
   if (!match) {
     return null;
   }
-  return await withPluginRuntimeRegistryScope(registry, async () => {
-    if (match.command.duplex === true) {
-      if (!io) {
-        throw new Error(`node command requires duplex transport: ${command}`);
-      }
-      return context
-        ? await match.command.handle(paramsJSON, io, context)
-        : await match.command.handle(paramsJSON, io);
+  let active = true;
+  const registeredCommand = match.command;
+  const pluginRecord = registry?.plugins.find((record) => record.id === match.pluginId);
+  const assertActive = () => {
+    if (
+      !active ||
+      match.command !== registeredCommand ||
+      io?.signal.aborted ||
+      context?.signal?.aborted ||
+      resolveNodeHostPluginRegistry() !== registry ||
+      !registry?.nodeHostCommands.includes(match) ||
+      !pluginRecord ||
+      !registry.plugins.includes(pluginRecord) ||
+      !pluginRecord.enabled ||
+      pluginRecord.status !== "loaded"
+    ) {
+      throw new Error("node plugin invocation authority is closed");
     }
-    return context
-      ? await match.command.handle(paramsJSON, undefined, context)
-      : await match.command.handle(paramsJSON);
-  });
+  };
+  const invokeContext = context
+    ? {
+        ...context,
+        prepareExecAuthorization: (source: "human-approved" | "session-full") =>
+          preparePluginExecAuthorization({
+            source,
+            command,
+            sessionKey: context.sessionKey,
+            assertActive,
+          }),
+      }
+    : undefined;
+  try {
+    return await withPluginRuntimeRegistryScope(registry, async () => {
+      if (match.command.duplex === true) {
+        if (!io) {
+          throw new Error(`node command requires duplex transport: ${command}`);
+        }
+        return invokeContext
+          ? await match.command.handle(paramsJSON, io, invokeContext)
+          : await match.command.handle(paramsJSON, io);
+      }
+      return invokeContext
+        ? await match.command.handle(paramsJSON, undefined, invokeContext)
+        : await match.command.handle(paramsJSON);
+    });
+  } finally {
+    active = false;
+  }
 }
 
 export function isRegisteredNodeHostCommandDuplex(command: string): boolean {

@@ -30,24 +30,26 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-auth-utils.js";
+import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  resolveHttpBrowserOriginPolicy,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
-  setControlUiPluginAuthCookieForRequest,
   type AuthorizedGatewayHttpRequest,
 } from "./http-auth-utils.js";
 
@@ -182,7 +184,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
@@ -195,7 +197,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   // Overrides must pass the same visibility policy as model picker surfaces;
   // otherwise API clients could target hidden plugin/provider models by header.
-  const catalog = await loadGatewayModelCatalog();
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
   const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -307,4 +309,35 @@ export function resolveGatewayRequestContext(params: {
     : params.defaultMessageChannel;
 
   return { agentId, sessionKey, messageChannel };
+}
+
+export function authorizeOpenAiCompatibleHttpSession(params: {
+  agentId: string;
+  sessionKey: string;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  senderIsOwner: boolean;
+}): { allowed: true } | { allowed: false; message: string } {
+  const cfg = getRuntimeConfig();
+  const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
+  const authorizationError = authorizeResolvedSessionMutation({
+    cfg,
+    client: createSyntheticPluginRuntimeClient({
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
+      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
+    }),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (authorizationError) {
+    return { allowed: false, message: authorizationError.message };
+  }
+  if (
+    !params.senderIsOwner &&
+    !authenticatedUserProfile &&
+    isResolvedIncognitoSession({ cfg, sessionKey: params.sessionKey, agentId: params.agentId })
+  ) {
+    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+  }
+  return { allowed: true };
 }

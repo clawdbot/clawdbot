@@ -22,6 +22,8 @@ export interface OpenClawNpmResumeValidationInput {
   run: ResumeRunRecord;
   tag: ResumeTagRecord;
   tagRef: ResumeTagRecord;
+  trustedWorkflowFullRef: unknown;
+  trustedWorkflowRef: unknown;
 }
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -79,14 +81,6 @@ function requiredSha(value: unknown, label: string): string {
   return sha;
 }
 
-function trustedWorkflowPath(path: string, branch: string): boolean {
-  return new Set([
-    WORKFLOW_PATH,
-    `${WORKFLOW_PATH}@${branch}`,
-    `${WORKFLOW_PATH}@refs/tags/${branch}`,
-  ]).has(path);
-}
-
 export function validateOpenClawNpmResumeRun({
   canonicalWorkflowId,
   compareStatus,
@@ -94,41 +88,50 @@ export function validateOpenClawNpmResumeRun({
   run,
   tag,
   tagRef,
+  trustedWorkflowFullRef,
+  trustedWorkflowRef,
 }: OpenClawNpmResumeValidationInput) {
   const url = requiredString(run?.html_url, "html_url");
-  const branch = requiredString(run?.head_branch, "head_branch");
-  const branchMatch = RELEASE_PUBLISH_REF_PATTERN.exec(branch);
-  if (!branchMatch) {
+  const workflowRef = requiredString(trustedWorkflowRef, "trusted workflow ref");
+  const workflowFullRef = requiredString(trustedWorkflowFullRef, "trusted workflow full ref");
+  const workflowRefMatch = RELEASE_PUBLISH_REF_PATTERN.exec(workflowRef);
+  if (!workflowRefMatch || workflowFullRef !== `refs/tags/${workflowRef}`) {
     fail(`OpenClaw npm resume run has an untrusted workflow ref: ${url}`);
   }
 
+  const branch = requiredString(run?.head_branch, "head_branch");
   const sha = requiredSha(run?.head_sha, "head_sha");
   const path = requiredString(run?.path, "path");
   if (
     run?.conclusion !== "success" ||
     run?.event !== "workflow_dispatch" ||
-    !trustedWorkflowPath(path, branch) ||
+    path !== WORKFLOW_PATH ||
     run?.workflow_id !== canonicalWorkflowId ||
-    sha.slice(0, 12) !== branchMatch[1]
+    branch !== workflowRef ||
+    sha.slice(0, 12) !== workflowRefMatch[1]
   ) {
     fail(`OpenClaw npm resume run has an untrusted workflow identity: ${url}`);
   }
 
   const tagObjectSha = requiredSha(tagRef?.object?.sha, "tooling tag object SHA");
-  if (tagRef?.object?.type !== "tag") {
-    fail(`OpenClaw npm resume run tooling ref is not a signed annotated tag: ${url}`);
-  }
-
-  const tagCommitSha = requiredSha(tag?.object?.sha, "tooling tag commit SHA");
-  if (
-    tag?.object?.type !== "commit" ||
-    tagCommitSha !== sha ||
-    tag?.verification?.verified !== true ||
-    (compareStatus !== "ahead" && compareStatus !== "identical")
-  ) {
-    fail(
-      `OpenClaw npm resume run is not bound to a real, main-reachable protected tooling tag: ${url}`,
-    );
+  if (tagRef?.object?.type === "commit") {
+    if (tagObjectSha !== sha) {
+      fail(`OpenClaw npm resume run protected tooling tag moved after dispatch: ${url}`);
+    }
+  } else if (tagRef?.object?.type === "tag") {
+    const tagCommitSha = requiredSha(tag?.object?.sha, "tooling tag commit SHA");
+    if (
+      tag?.object?.type !== "commit" ||
+      tagCommitSha !== sha ||
+      tag?.verification?.verified !== true ||
+      (compareStatus !== "ahead" && compareStatus !== "identical")
+    ) {
+      fail(
+        `OpenClaw npm resume run is not bound to a real, main-reachable protected tooling tag: ${url}`,
+      );
+    }
+  } else {
+    fail(`OpenClaw npm resume run tooling ref is not a protected tag: ${url}`);
   }
 
   if (
@@ -140,7 +143,7 @@ export function validateOpenClawNpmResumeRun({
 
   return {
     url,
-    workflowRef: `refs/tags/${branch}`,
+    workflowRef: workflowFullRef,
     workflowSha: sha,
     tagObjectSha,
   };
@@ -177,10 +180,14 @@ function runGhCommand(
 export function resolveOpenClawNpmResumeRun({
   repo,
   runId,
+  trustedWorkflowFullRef,
+  trustedWorkflowRef,
   runGh = runOpenClawNpmResumeGh,
 }: {
   repo: string;
   runId: string;
+  trustedWorkflowFullRef: string;
+  trustedWorkflowRef: string;
   runGh?: (args: string[]) => string;
 }) {
   if (!/^[1-9][0-9]*$/u.test(runId)) {
@@ -192,14 +199,21 @@ export function resolveOpenClawNpmResumeRun({
 
   const api = (endpoint: string): unknown =>
     parseJson(runGh(["api", `repos/${repo}/${endpoint}`, "--method", "GET"]), endpoint);
+  const trustedRefMatch = RELEASE_PUBLISH_REF_PATTERN.exec(trustedWorkflowRef);
+  if (!trustedRefMatch || trustedWorkflowFullRef !== `refs/tags/${trustedWorkflowRef}`) {
+    fail(
+      "OpenClaw npm resume trusted workflow identity must be an exact protected release-publish tag.",
+    );
+  }
+
   const run = resumeRunRecord(api(`actions/runs/${runId}`));
   const canonicalWorkflow = api(`actions/workflows/${WORKFLOW_PATH.split("/").at(-1)}`);
-  const branch = requiredString(run?.head_branch, "head_branch");
-  const tagRef = resumeTagRecord(api(`git/ref/tags/${branch}`));
+  const tagRef = resumeTagRecord(api(`git/ref/tags/${trustedWorkflowRef}`));
   const tagObjectSha = requiredSha(tagRef?.object?.sha, "tooling tag object SHA");
-  const tag = resumeTagRecord(api(`git/tags/${tagObjectSha}`));
   const sha = requiredSha(run?.head_sha, "head_sha");
-  const comparison = api(`compare/${sha}...main`);
+  const annotatedTag = tagRef?.object?.type === "tag";
+  const tag = annotatedTag ? resumeTagRecord(api(`git/tags/${tagObjectSha}`)) : {};
+  const comparison = annotatedTag ? api(`compare/${sha}...main`) : {};
   const jobs = resumeJobRecords(
     parseJson(
       runGh(["run", "view", runId, "--repo", repo, "--json", "jobs", "--jq", ".jobs"]),
@@ -214,17 +228,33 @@ export function resolveOpenClawNpmResumeRun({
     run,
     tag,
     tagRef,
+    trustedWorkflowFullRef,
+    trustedWorkflowRef,
   });
 }
 
-function parseArgs(argv: string[]): { repo: string; runId: string } {
-  const options = { repo: "", runId: "" };
+function parseArgs(argv: string[]): {
+  repo: string;
+  runId: string;
+  trustedWorkflowFullRef: string;
+  trustedWorkflowRef: string;
+} {
+  const options = {
+    repo: "",
+    runId: "",
+    trustedWorkflowFullRef: "",
+    trustedWorkflowRef: "",
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--repo") {
       options.repo = argv[(index += 1)] ?? "";
     } else if (arg === "--run-id") {
       options.runId = argv[(index += 1)] ?? "";
+    } else if (arg === "--trusted-workflow-ref") {
+      options.trustedWorkflowRef = argv[(index += 1)] ?? "";
+    } else if (arg === "--trusted-workflow-full-ref") {
+      options.trustedWorkflowFullRef = argv[(index += 1)] ?? "";
     } else {
       fail(`Unknown argument: ${arg}`);
     }

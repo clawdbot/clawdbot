@@ -15,6 +15,9 @@ import {
   isNativeExecApprovalsSnapshot,
   type ExecApprovalsAllowlistEntry,
   type ExecApprovalsFile,
+  type ExecApprovalsResolvedDefaults,
+  type ExecAsk,
+  type ExecSecurity,
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/index.ts";
 import {
@@ -23,16 +26,6 @@ import {
   type NodeTargetOption,
 } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
-
-type ExecSecurity = "deny" | "allowlist" | "full";
-type ExecAsk = "off" | "on-miss" | "always";
-
-type ExecApprovalsResolvedDefaults = {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  askFallback: ExecSecurity;
-  autoAllowSkills: boolean;
-};
 
 type ExecApprovalsAgentOption = {
   id: string;
@@ -64,6 +57,7 @@ type ExecApprovalsState = {
   onRemove: (path: Array<string | number>) => void;
   onLoad: () => void;
   onSave: () => void;
+  canAdmin: boolean;
 };
 
 const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
@@ -96,13 +90,19 @@ function normalizeAsk(value?: string): ExecAsk {
 
 function resolveExecApprovalsDefaults(
   form: ExecApprovalsFile | null,
+  reported: ExecApprovalsResolvedDefaults | undefined,
+  includeWildcard: boolean,
 ): ExecApprovalsResolvedDefaults {
   const defaults = form?.defaults ?? {};
+  const wildcard = includeWildcard ? (form?.agents?.["*"] ?? {}) : {};
   return {
-    security: normalizeSecurity(defaults.security),
-    ask: normalizeAsk(defaults.ask),
-    askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: defaults.autoAllowSkills ?? false,
+    security: normalizeSecurity(wildcard.security ?? defaults.security ?? reported?.security),
+    ask: normalizeAsk(wildcard.ask ?? defaults.ask ?? reported?.ask),
+    askFallback: normalizeSecurity(
+      wildcard.askFallback ?? defaults.askFallback ?? reported?.askFallback ?? "deny",
+    ),
+    autoAllowSkills:
+      wildcard.autoAllowSkills ?? defaults.autoAllowSkills ?? reported?.autoAllowSkills ?? false,
   };
 }
 
@@ -165,7 +165,6 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
   const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const form = nativePolicy ? null : (props.execApprovalsForm ?? fileSnapshot?.file ?? null);
   const ready = Boolean(form || nativePolicy);
-  const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
   const targetNodes = resolveExecApprovalsNodes(props.nodes);
   const target = props.execApprovalsTarget;
@@ -175,6 +174,11 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     targetNodeId = null;
   }
   const selectedScope = resolveExecApprovalsScope(props.execApprovalsSelectedAgent, agents);
+  const defaults = resolveExecApprovalsDefaults(
+    form,
+    fileSnapshot?.resolvedDefaults,
+    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE,
+  );
   const selectedAgent =
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
       ? (((form?.agents ?? {})[selectedScope] as Record<string, unknown> | undefined) ?? null)
@@ -184,7 +188,7 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     : [];
   return {
     ready,
-    disabled: props.execApprovalsSaving || props.execApprovalsLoading,
+    disabled: !props.canAdmin || props.execApprovalsSaving || props.execApprovalsLoading,
     dirty: props.execApprovalsDirty,
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
@@ -204,6 +208,7 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     onRemove: props.onExecApprovalsRemove,
     onLoad: props.onLoadExecApprovals,
     onSave: props.onSaveExecApprovals,
+    canAdmin: props.canAdmin,
   };
 }
 
@@ -220,19 +225,31 @@ export function renderExecApprovals(state: ExecApprovalsState) {
     </button>
   `;
   const rows = html`
-    ${renderExecApprovalsTarget(state)}
-    ${!ready
-      ? renderSettingsRow({
-          title: t("devices.execApprovals.loadHint"),
-          control: html`
-            <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
-              ${state.loading ? t("common.loading") : t("common.loadApprovals")}
-            </button>
-          `,
-        })
-      : state.nativePolicy
-        ? renderNativeExecApprovals(state.nativePolicy)
-        : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`}
+    ${
+      !state.canAdmin
+        ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") })
+        : html`
+            ${renderExecApprovalsTarget(state)}
+            ${
+              !ready
+                ? renderSettingsRow({
+                    title: t("devices.execApprovals.loadHint"),
+                    control: html`
+                      <button
+                        class="btn"
+                        ?disabled=${state.loading || !targetReady}
+                        @click=${state.onLoad}
+                      >
+                        ${state.loading ? t("common.loading") : t("common.loadApprovals")}
+                      </button>
+                    `,
+                  })
+                : state.nativePolicy
+                  ? renderNativeExecApprovals(state.nativePolicy)
+                  : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`
+            }
+          `
+    }
   `;
   return html`
     ${renderSettingsSection(
@@ -246,9 +263,14 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       },
       rows,
     )}
-    ${ready && !state.nativePolicy && state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
-      ? renderExecApprovalsAllowlist(state)
-      : nothing}
+    ${
+      state.canAdmin &&
+      ready &&
+      !state.nativePolicy &&
+      state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
+        ? renderExecApprovalsAllowlist(state)
+        : nothing
+    }
   `;
 }
 
@@ -317,34 +339,36 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
         </select>
       `,
     })}
-    ${state.target === "node"
-      ? renderSettingsRow({
-          title: t("devices.execApprovals.node"),
-          description: hasNodes ? undefined : t("devices.execApprovals.noNodes"),
-          control: html`
-            <select
-              class="settings-select"
-              aria-label=${t("devices.execApprovals.node")}
-              ?disabled=${state.disabled || !hasNodes}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value.trim();
-                state.onSelectTarget("node", value ? value : null);
-              }}
-            >
-              <option value="" ?selected=${nodeValue === ""}>
-                ${t("devices.execApprovals.selectNode")}
-              </option>
-              ${state.targetNodes.map(
-                (node) =>
-                  html`<option value=${node.id} ?selected=${nodeValue === node.id}>
-                    ${node.label}
-                  </option>`,
-              )}
-            </select>
-          `,
-        })
-      : nothing}
+    ${
+      state.target === "node"
+        ? renderSettingsRow({
+            title: t("devices.execApprovals.node"),
+            description: hasNodes ? undefined : t("devices.execApprovals.noNodes"),
+            control: html`
+              <select
+                class="settings-select"
+                aria-label=${t("devices.execApprovals.node")}
+                ?disabled=${state.disabled || !hasNodes}
+                @change=${(event: Event) => {
+                  const target = event.target as HTMLSelectElement;
+                  const value = target.value.trim();
+                  state.onSelectTarget("node", value ? value : null);
+                }}
+              >
+                <option value="" ?selected=${nodeValue === ""}>
+                  ${t("devices.execApprovals.selectNode")}
+                </option>
+                ${state.targetNodes.map(
+                  (node) =>
+                    html`<option value=${node.id} ?selected=${nodeValue === node.id}>
+                      ${node.label}
+                    </option>`,
+                )}
+              </select>
+            `,
+          })
+        : nothing
+    }
   `;
 }
 
@@ -405,11 +429,13 @@ function renderPolicySelect(
         }
       }}
     >
-      ${!options.isDefaults
-        ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
-            ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
-          </option>`
-        : nothing}
+      ${
+        !options.isDefaults
+          ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
+              ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
+            </option>`
+          : nothing
+      }
       ${options.values.map(
         (option) =>
           html`<option value=${option.value} ?selected=${options.currentValue === option.value}>
@@ -496,15 +522,17 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               value: autoEffective ? t("devices.execApprovals.on") : t("devices.execApprovals.off"),
             }),
       control: html`
-        ${!isDefaults && !autoIsDefault
-          ? html`<button
-              class="btn btn--sm"
-              ?disabled=${state.disabled}
-              @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
-            >
-              ${t("devices.execApprovals.useDefault")}
-            </button>`
-          : nothing}
+        ${
+          !isDefaults && !autoIsDefault
+            ? html`<button
+                class="btn btn--sm"
+                ?disabled=${state.disabled}
+                @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
+              >
+                ${t("devices.execApprovals.useDefault")}
+              </button>`
+            : nothing
+        }
         ${renderSettingsToggle({
           checked: autoEffective,
           disabled: state.disabled,

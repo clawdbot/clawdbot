@@ -2,6 +2,7 @@ import type {
   InternalBeforeToolBatchResult,
   InternalToolBatchCall,
   ToolLoopIntervention,
+  ToolLoopWarning,
 } from "@openclaw/agent-core";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
@@ -32,21 +33,20 @@ async function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
   stateOverride?: SessionState,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<ToolLoopIntervention | ToolLoopWarning | undefined> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return undefined;
   }
   const toolName = normalizeToolPolicyName(call.toolName || "tool");
   const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
     await loadBeforeToolCallRuntime();
-  const sessionState =
-    stateOverride ??
-    getDiagnosticSessionState({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-    });
+  // Project history for atomic admission, but keep warning buckets on the session owner.
+  const sessionState = getDiagnosticSessionState({
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+  });
   const result = detectToolCallLoop(
-    sessionState,
+    stateOverride ?? sessionState,
     toolName,
     call.params,
     ctx.loopDetection,
@@ -93,6 +93,11 @@ async function evaluateToolLoopCall(
       message: result.message,
       pairedToolName: result.pairedToolName,
     });
+    return {
+      kind: "tool-loop-warning",
+      toolCallId: call.toolCallId ?? "",
+      count: result.count,
+    };
   }
   return undefined;
 }
@@ -116,9 +121,9 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
 export async function admitSingleToolCallLoop(
   call: ToolLoopCall,
   ctx: HookContext,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<ToolLoopIntervention | ToolLoopWarning | undefined> {
   const intervention = await evaluateToolLoopCall(call, ctx);
-  if (!intervention) {
+  if (intervention?.kind !== "critical-tool-loop") {
     await recordToolLoopCall(call, ctx);
   }
   return intervention;
@@ -181,6 +186,7 @@ export async function admitToolCallBatch(
       projectedState.toolCallHistory?.push(projectedCall);
     }
   };
+  const warnings: ToolLoopWarning[] = [];
   for (const call of calls) {
     const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
@@ -192,7 +198,7 @@ export async function admitToolCallBatch(
       ctx,
       projectedState,
     );
-    if (intervention) {
+    if (intervention?.kind === "critical-tool-loop") {
       // Preserve only denial evidence. No call in this batch executed, but a
       // recovery retry must still see same-action siblings that crossed the
       // threshold. Unrelated skipped actions remain valid recovery choices.
@@ -206,6 +212,9 @@ export async function admitToolCallBatch(
         }
       }
       return { intervention };
+    }
+    if (intervention) {
+      warnings.push(intervention);
     }
     // A later sibling must assume this candidate makes no progress.
     projectLoopVeto(call);
@@ -249,6 +258,7 @@ export async function admitToolCallBatch(
     committedIds.add(readyCall.toolCallId);
   };
   return {
+    warnings,
     commitReadyCalls(readyCalls) {
       if (readyCalls.length === 1 && readyCalls[0]) {
         commitReadyCall(readyCalls[0]);

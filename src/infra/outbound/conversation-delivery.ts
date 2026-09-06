@@ -101,7 +101,7 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   return undefined;
 }
 
-function resultFromExistingOperation(
+export function resultFromExistingOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationMessageDeliveryResult | undefined {
   switch (operation.status) {
@@ -147,6 +147,8 @@ export async function sendGatewayConversationMessage(params: {
   operationKind: ConversationDeliveryRecord["operationKind"];
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
+  routeFingerprint: string;
+  onDeliveryAttempt: () => Promise<void>;
   signal?: AbortSignal;
 }): Promise<ConversationMessageDeliveryResult> {
   const scope = resolveConversationDeliveryStoreScope(params.context);
@@ -203,8 +205,10 @@ export async function sendGatewayConversationMessage(params: {
         agentId: scope.agentId,
         operationId: begun.record.operationId,
         ...(scope.storePath ? { storePath: scope.storePath } : {}),
+        routeFingerprint: params.routeFingerprint,
       },
       onDeliveryIntent,
+      onDeliveryAttempt: params.onDeliveryAttempt,
       ...(begun.record.preparedMessageId
         ? { preparedMessageId: begun.record.preparedMessageId }
         : {}),

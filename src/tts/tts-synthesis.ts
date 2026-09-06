@@ -2,6 +2,7 @@ import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabili
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { transcodeAudioBuffer } from "../media/media-services.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
@@ -204,7 +205,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   };
 }
 
-export async function synthesizeSpeech(params: {
+type SpeechSynthesisParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -214,8 +215,24 @@ export async function synthesizeSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
-}): Promise<TtsSynthesisResult> {
+};
+
+export async function synthesizeSpeech(params: SpeechSynthesisParams): Promise<TtsSynthesisResult> {
   assertSpeechRuntimeAvailable();
+  return synthesizeSpeechInternal(params);
+}
+
+/** Host-only Talk synthesis retains its own capability boundary instead of bypassing public TTS. */
+export async function synthesizeTalkSpeech(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisResult> {
+  assertSecretOwnerAvailable("capability", "talk:speech");
+  return synthesizeSpeechInternal(params);
+}
+
+async function synthesizeSpeechInternal(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
@@ -232,7 +249,7 @@ export async function synthesizeSpeech(params: {
 
   const { cfg, config, persona, providers } = setup;
   const target = resolveTtsSynthesisTarget(params.channel);
-  return await executeTtsProviderAttempts({
+  return executeTtsProviderAttempts({
     cfg,
     config,
     persona,

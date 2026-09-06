@@ -7,8 +7,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_IDS,
@@ -20,6 +21,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   inspectOtelParentGraph,
   isSpanId,
@@ -274,10 +276,7 @@ function traceparent(target: GenerationTarget): string {
   return `00-${target.traceId}-${target.parentSpanId}-01`;
 }
 
-async function runTracedTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  target: GenerationTarget,
-): Promise<void> {
+async function runTracedTurn(gateway: QaGatewayChild, target: GenerationTarget): Promise<void> {
   const client = await connectRawGateway({ token: gateway.token, wsUrl: gateway.wsUrl });
   try {
     const started = await requestRaw(client, {
@@ -438,19 +437,24 @@ function withOtelEndpoint(config: OpenClawConfig, endpoint: string): OpenClawCon
 async function updateWatchedEndpoint(configPath: string, endpoint: string): Promise<void> {
   const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
   const next = withOtelEndpoint(parsed, endpoint);
+  // Endpoint changes hot-apply; keep this separate full-restart generation proof explicit.
+  next.gateway = {
+    ...next.gateway,
+    controlUi: { ...next.gateway?.controlUi, basePath: "/otel-restart-proof" },
+  };
   await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
 
 async function stopResources(params: {
-  gateway?: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gatewayOwner: ReturnType<typeof createQaGatewayChild>;
   gatewayStopped: boolean;
   mock?: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
   receiverA?: LocalReceiver;
   receiverB?: LocalReceiver;
 }): Promise<void> {
   const failures: unknown[] = [];
-  if (params.gateway && !params.gatewayStopped) {
-    await params.gateway.stop().catch((error: unknown) => failures.push(error));
+  if (!params.gatewayStopped) {
+    await stopQaGatewayFixture(params.gatewayOwner).catch((error: unknown) => failures.push(error));
   }
   await params.mock?.stop().catch((error: unknown) => failures.push(error));
   await params.receiverA?.close().catch((error: unknown) => failures.push(error));
@@ -466,13 +470,14 @@ async function probeOtelGenerationConfigWatcher(
   let receiverA: LocalReceiver | undefined;
   let receiverB: LocalReceiver | undefined;
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let gatewayStopped = false;
   try {
     receiverA = await startReceiver();
     receiverB = await startReceiver();
     mock = await startQaMockOpenAiServer();
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -501,7 +506,7 @@ async function probeOtelGenerationConfigWatcher(
     const restartLogOffset = gateway.logs().length;
     await updateWatchedEndpoint(gateway.configPath, receiverB.baseUrl);
     const restartLogObserved = await waitFor({
-      label: "in-process config watcher restart",
+      label: "in-process restart for mixed endpoint and startup-owned Control UI path edit",
       timeoutMs: RESTART_TIMEOUT_MS,
       read: () =>
         gateway!
@@ -532,7 +537,7 @@ async function probeOtelGenerationConfigWatcher(
     await runTracedTurn(gateway, GENERATION_B);
     await waitForGeneration(receiverB, GENERATION_B);
     await sleep(1_000);
-    await gateway.stop();
+    await stopQaGatewayFixture(gatewayOwner);
     gatewayStopped = true;
     await sleep(POST_STOP_SETTLE_MS);
 
@@ -578,7 +583,7 @@ async function probeOtelGenerationConfigWatcher(
       restartLogObserved,
     };
   } finally {
-    await stopResources({ gateway, gatewayStopped, mock, receiverA, receiverB });
+    await stopResources({ gatewayOwner, gatewayStopped, mock, receiverA, receiverB });
   }
 }
 
@@ -591,7 +596,7 @@ function createWriter(options: RuntimeOptions) {
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
-      title: "OTEL generation config watcher",
+      title: "OTEL generation across a mixed restart-required config edit",
       sourcePath: SOURCE_PATH,
       docsRefs: ["docs/gateway/opentelemetry.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [

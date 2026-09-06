@@ -99,6 +99,7 @@ export default definePluginEntry({
                   ? (ctx.secretInputMode ?? "plaintext")
                   : ctx.secretInputMode,
               config: ctx.config,
+              workspaceDir: ctx.workspaceDir,
               expectedProviders: [PROVIDER_ID],
               provider: PROVIDER_ID,
               envLabel: PROVIDER_ENV_VAR,

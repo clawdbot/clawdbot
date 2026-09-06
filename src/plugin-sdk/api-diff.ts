@@ -9,7 +9,6 @@ const ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-entrypoints.json";
 const PRIVATE_ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-private-local-only-subpaths.json";
 const REPORT_ITEM_LIMIT = 40;
 const REPORT_TEXT_LINE_LIMIT = 20;
-const REPORT_AFFECTED_EXPORT_LIMIT = 5;
 const REPORT_BYTE_LIMIT = 64 * 1024;
 
 export type PluginSdkApiExportSnapshot = Pick<
@@ -246,22 +245,6 @@ function collectDeclarationChanges(
   return changes;
 }
 
-function exportSections(
-  surface: PluginSdkApiDiffSurface,
-  exportSurface: PluginSdkApiDiffExport | undefined,
-): PluginSdkApiDeclarationSection[] {
-  if (!exportSurface) {
-    return [];
-  }
-  return (exportSurface.closureSectionIds ?? []).map((id) => {
-    const section = surface.declarationSections[id];
-    if (!section) {
-      throw new Error(`Plugin SDK API render references missing declaration section ${id}`);
-    }
-    return section;
-  });
-}
-
 function moduleChange(moduleSurface: PluginSdkApiDiffModule): PluginSdkApiEntrypointChange {
   return {
     entrypoint: moduleSurface.entrypoint,
@@ -319,7 +302,7 @@ export function diffPluginSdkApi(
           after: snapshot(afterExport),
           before: null,
           change: "added",
-          declarationChanges: collectDeclarationChanges([], exportSections(after, afterExport)),
+          declarationChanges: [],
           entrypoint,
           exportName,
           importSpecifier: moduleSurface.importSpecifier,
@@ -331,7 +314,7 @@ export function diffPluginSdkApi(
           after: null,
           before: snapshot(beforeExport),
           change: "removed",
-          declarationChanges: collectDeclarationChanges(exportSections(before, beforeExport), []),
+          declarationChanges: [],
           entrypoint,
           exportName,
           importSpecifier: moduleSurface.importSpecifier,
@@ -349,10 +332,7 @@ export function diffPluginSdkApi(
           after: snapshot(afterExport),
           before: snapshot(beforeExport),
           change: "signature",
-          declarationChanges: collectDeclarationChanges(
-            exportSections(before, beforeExport),
-            exportSections(after, afterExport),
-          ),
+          declarationChanges: [],
           entrypoint,
           exportName,
           importSpecifier: moduleSurface.importSpecifier,
@@ -362,16 +342,23 @@ export function diffPluginSdkApi(
           after: snapshot(afterExport),
           before: snapshot(beforeExport),
           change: "reachable",
-          declarationChanges: collectDeclarationChanges(
-            exportSections(before, beforeExport),
-            exportSections(after, afterExport),
-          ),
+          declarationChanges: [],
           entrypoint,
           exportName,
           importSpecifier: moduleSurface.importSpecifier,
         });
       }
     }
+  }
+
+  // Exports already carry the complete affected surface. Keep the v1 declaration detail in
+  // its first canonical export instead of multiplying shared closure text across every export.
+  const firstExport = payload.exports[0];
+  if (firstExport) {
+    firstExport.declarationChanges = collectDeclarationChanges(
+      before.declarationSections,
+      after.declarationSections,
+    );
   }
 
   return {
@@ -446,22 +433,14 @@ function appendExportChanges(
   }
 }
 
-type DeclarationReportChange = PluginSdkApiDeclarationChange & { affectedExports: string[] };
-
 function collectDeclarationReportChanges(
   changes: readonly PluginSdkApiExportChange[],
-): DeclarationReportChange[] {
-  const grouped = new Map<string, DeclarationReportChange>();
+): PluginSdkApiDeclarationChange[] {
+  const grouped = new Map<string, PluginSdkApiDeclarationChange>();
   for (const change of changes) {
-    const affectedExport = `${change.importSpecifier} :: ${change.exportName}`;
     for (const declaration of change.declarationChanges) {
       const key = `${declaration.name}\0${declaration.before ?? ""}\0${declaration.after ?? ""}`;
-      const current = grouped.get(key);
-      if (current) {
-        current.affectedExports.push(affectedExport);
-      } else {
-        grouped.set(key, { ...declaration, affectedExports: [affectedExport] });
-      }
+      grouped.set(key, declaration);
     }
   }
   return [...grouped.values()].toSorted(
@@ -505,6 +484,14 @@ export function formatPluginSdkApiDiffReport(params: {
     }
   }
 
+  lines.push("", `## Affected exports (${diff.exports.length})`);
+  for (const change of diff.exports.slice(0, REPORT_ITEM_LIMIT)) {
+    lines.push("", `- \`${change.importSpecifier}\` — \`${change.exportName}\` (${change.change})`);
+  }
+  if (diff.exports.length > REPORT_ITEM_LIMIT) {
+    lines.push("", `… ${diff.exports.length - REPORT_ITEM_LIMIT} more affected exports`);
+  }
+
   appendExportChanges(
     lines,
     "Exports removed",
@@ -520,29 +507,13 @@ export function formatPluginSdkApiDiffReport(params: {
     "Signatures changed",
     diff.exports.filter((change) => change.change === "signature"),
   );
-
   const reachable = collectDeclarationReportChanges(diff.exports);
   if (reachable.length > 0) {
-    const affectedCount = diff.exports.filter(
-      (change) => change.declarationChanges.length > 0,
-    ).length;
-    lines.push(
-      "",
-      `## Reachable declarations changed (${reachable.length}; affects ${affectedCount} exports)`,
-    );
+    lines.push("", `## Reachable declarations changed (${reachable.length})`);
     for (const change of reachable.slice(0, REPORT_ITEM_LIMIT)) {
       lines.push("", `- \`${change.name}\``);
       appendText(lines, "before", change.before);
       appendText(lines, "after", change.after);
-      const affected = change.affectedExports.toSorted(compareText);
-      lines.push(
-        `    affects: ${affected
-          .slice(0, REPORT_AFFECTED_EXPORT_LIMIT)
-          .map((value) => `\`${value}\``)
-          .join(
-            ", ",
-          )}${affected.length > REPORT_AFFECTED_EXPORT_LIMIT ? ` (+${affected.length - REPORT_AFFECTED_EXPORT_LIMIT} more)` : ""}`,
-      );
     }
     if (reachable.length > REPORT_ITEM_LIMIT) {
       lines.push("", `… ${reachable.length - REPORT_ITEM_LIMIT} more reachable declarations`);

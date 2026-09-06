@@ -7,7 +7,7 @@ import {
 
 const EXPECTED_TRANSITIONS: Record<WorkerEnvironmentState, readonly WorkerEnvironmentState[]> = {
   requested: ["provisioning", "failed"],
-  provisioning: ["bootstrapping", "ready", "failed"],
+  provisioning: ["bootstrapping", "ready", "draining", "failed"],
   bootstrapping: ["ready", "draining", "orphaned"],
   ready: ["bootstrapping", "attached", "idle", "draining", "orphaned"],
   attached: ["idle", "draining", "orphaned"],

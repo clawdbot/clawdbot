@@ -56,7 +56,7 @@ function normalizeAssistantAvatar(value: string | null | undefined): string | nu
 
 export function normalizeAssistantIdentity(
   input?: Partial<AssistantIdentity> | null,
-): AssistantIdentity {
+): Required<AssistantIdentity> {
   const name = normalizeAssistantValue("name", input?.name) ?? DEFAULT_ASSISTANT_NAME;
   const avatar = normalizeAssistantAvatar(input?.avatar);
   const avatarSource = normalizeAssistantValue("avatarSource", input?.avatarSource) ?? null;

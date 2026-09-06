@@ -1,5 +1,5 @@
-// Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   isFastTestRuntimeEnv,
@@ -20,8 +20,14 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 beforeEach(() => {
-  loggerMocks.info.mockClear();
+  loggerMocks.info.mockReset();
 });
+
+function waitForNextLog(): Promise<void> {
+  const logged = createDeferred();
+  loggerMocks.info.mockImplementationOnce(() => logged.resolve());
+  return logged.promise;
+}
 
 describe("normalizeZaiEnv", () => {
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
@@ -92,7 +98,7 @@ describe("isFastTestRuntimeEnv", () => {
 
 describe("logAcceptedEnvOption", () => {
   it("logs accepted env options once with redaction and formatting", async () => {
-    loggerMocks.info.mockClear();
+    const logged = waitForNextLog();
 
     withEnv(
       {
@@ -114,17 +120,14 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
-    await vi.waitFor(() => {
-      expect(loggerMocks.info).toHaveBeenCalledTimes(1);
-    });
+    await withTestTimeout(logged, 1_000, "redacted accepted env option did not log");
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
     );
   });
 
   it("skips blank values and test-mode logging", () => {
-    loggerMocks.info.mockClear();
-
     withEnv(
       {
         VITEST: "1",
@@ -157,6 +160,7 @@ describe("logAcceptedEnvOption", () => {
   });
 
   it("keeps bounded non-secret values UTF-16 well-formed", async () => {
+    const logged = waitForNextLog();
     withEnv(
       {
         VITEST: "",
@@ -171,7 +175,8 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
-    await vi.waitFor(() => expect(loggerMocks.info).toHaveBeenCalledTimes(1));
+    await withTestTimeout(logged, 1_000, "UTF-16 accepted env option did not log");
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
     expect(loggerMocks.info).toHaveBeenCalledWith(
       `env: OPENCLAW_UTF16_TEST_ENV=${"x".repeat(159)}… (UTF-16 test)`,
     );

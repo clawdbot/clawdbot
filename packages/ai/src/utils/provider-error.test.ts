@@ -408,7 +408,6 @@ describe("projectProviderError", () => {
 
     expect(projected.stopReason).toBe("error");
     expect(projected.errorMessage).toBe("[Unserializable]");
-    expect(projected.errorMessage.length).toBeLessThanOrEqual(4096);
   });
 
   it("caps descriptor reads from hostile objects", () => {

@@ -153,6 +153,59 @@ describe("cron+hook capacity group", () => {
     await Promise.all(runs);
   });
 
+  it("does not let a sustained hook burst recapture capacity ahead of older cron work", async () => {
+    publish(HOOKS_ON);
+
+    const activeHookGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
+    const activeHooks = activeHookGates.map((g) =>
+      enqueueCommandInLane(CommandLane.HookDispatch, async () => await g.promise, {
+        priority: "background",
+        warnAfterMs: 10_000,
+      }),
+    );
+    await settle();
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+
+    const cronGate = gate();
+    const cronRun = enqueueCommandInLane(
+      CommandLane.CronNested,
+      async () => await cronGate.promise,
+      { priority: "background", warnAfterMs: 10_000 },
+    );
+    const lateHookGate = gate();
+    const lateHook = enqueueCommandInLane(
+      CommandLane.HookDispatch,
+      async () => await lateHookGate.promise,
+      { priority: "background", warnAfterMs: 10_000 },
+    );
+    await settle();
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
+
+    activeHookGates[0]?.release();
+    await activeHooks[0];
+    await settle();
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
+      activeCount: 1,
+      queuedCount: 0,
+      groupActive: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    });
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
+      activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
+      queuedCount: 1,
+    });
+
+    cronGate.release();
+    for (const g of activeHookGates.slice(1)) {
+      g.release();
+    }
+    lateHookGate.release();
+    await Promise.all([cronRun, ...activeHooks.slice(1), lateHook]);
+  });
+
   it("admits seven cron plus one hook, then gives freed capacity to a second hook", async () => {
     publish(HOOKS_ON);
 

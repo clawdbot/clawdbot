@@ -1,21 +1,27 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns subagent registration and queued collector launch transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import {
   createQueuedTaskRun,
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import type {
   SubagentProgressOrigin,
@@ -87,6 +93,7 @@ export type RegisterSubagentRunParams = {
   /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
       Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
   taskRowOwnership?: "required" | "gateway_best_effort";
+  gatewayContextResolver?: GatewayContextResolver;
 };
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
@@ -120,9 +127,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       taskRunId: runId,
-      ...(requesterTurnRunId && registerParams.expectsCompletionMessage === true
-        ? { requesterTurnRunId }
-        : {}),
+      ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,
@@ -181,6 +186,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     this.options.runs.set(runId, entry);
+    bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
     const registeredKillReconciliationSnapshots = new Map(
       [...killReconciliationSnapshots.keys()].map((candidate) => [
@@ -201,6 +207,12 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
     };
     const activateRegistrationLifecycle = () => {
+      bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
+        if (this.options.runs.get(entry.runId) === entry) {
+          emitSessionLifecycleEvent({ sessionKey: entry.childSessionKey, reason: "run-capacity" });
+        }
+      });
+      subagentRuns.commitOwnership(entry);
       this.options.ensureListener();
       // Session-mode and persistence-recovery runs also need TTL cleanup.
       this.options.startSweeper();
@@ -232,6 +244,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
           deliveryStatus:
             registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+          detail: createSubagentTaskBackingDetail(generation),
         } as const;
         const task = queued
           ? createQueuedTaskRun(taskParams)
@@ -274,6 +287,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     runId: string,
     gatewayRunId?: string,
     lifecycleGeneration?: string,
+    gatewayContextResolver?: GatewayContextResolver,
   ): boolean => {
     const key = runId.trim();
     const entry = this.findRunByIdentity(key);
@@ -367,6 +381,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     try {
       this.options.persistOrThrow(previousRunId, nextRunId);
       if (terminalBeforeAcceptance) {
+        bindGatewayContextResolver(entry, gatewayContextResolver);
         return true;
       }
       persistedRunning = true;
@@ -392,6 +407,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       }
       throw error;
     }
+    bindGatewayContextResolver(entry, gatewayContextResolver);
     const cfg = this.options.getRuntimeConfig();
     void this.waitForSubagentCompletion(
       nextRunId,

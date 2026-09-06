@@ -20,12 +20,9 @@ import {
   resolveMeetingInput,
   sendGoogleMeetGatewayError,
   shouldJoinCreatedMeet,
-  testing,
 } from "./src/plugin-registration.js";
 import { googleMeetConfigSchema, GoogleMeetToolSchema } from "./src/plugin-schema.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./src/transports/google-meet-platform-constants.js";
-
-export { testing };
 
 export default definePluginEntry({
   id: "google-meet",

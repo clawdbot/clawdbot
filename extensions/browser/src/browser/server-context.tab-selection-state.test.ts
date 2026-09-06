@@ -148,6 +148,7 @@ describe("browser server-context tab selection state", () => {
       browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
     });
     expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
+    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/"))).toBe(false);
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
@@ -221,7 +222,9 @@ describe("browser server-context tab selection state", () => {
     expect(profileState?.lastTargetId).not.toBe("BLOCKED");
     expect(profileState?.tabAliases).toEqual(aliasesBefore);
     expect(profileState?.tabAliases?.byTargetId.BLOCKED).toBeUndefined();
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/BLOCKED"))).toBe(false);
+    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/"))).toEqual([
+      "http://127.0.0.1:18800/json/close/BLOCKED",
+    ]);
 
     await expect(openclaw.ensureTabAvailable()).resolves.toEqual(
       expect.objectContaining({ targetId: "GOOD" }),

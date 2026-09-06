@@ -100,7 +100,7 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 }
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
-  return value as unknown as OpenClawConfig;
+  return asLegacyTtsConfig(value);
 }
 
 function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
@@ -182,11 +182,8 @@ async function withMockedSpeechFetch(
   audioLength: number,
 ) {
   const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    arrayBuffer: async () => new ArrayBuffer(audioLength),
-  }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn(async () => new Response(new Uint8Array(audioLength)));
+  globalThis.fetch = fetchMock;
   try {
     await run(fetchMock);
   } finally {
@@ -559,12 +556,12 @@ export function describeTtsConfigContract() {
         },
         {
           name: "override",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           expected: "audio-24khz-96kbitrate-mono-mp3",
         },
       ] as const)("$name", ({ cfg, expected, name }) => {
@@ -796,22 +793,22 @@ export function describeTtsConfigContract() {
         },
         {
           name: "config wins over env",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
           expected: "http://my-server:9000/v1",
         },
         {
           name: "config slash trimming",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               ...baseCfg.tts,
               openai: { baseUrl: "http://my-server:9000/v1///" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: undefined },
           expected: "http://my-server:9000/v1",
         },

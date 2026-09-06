@@ -15,6 +15,7 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
+import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   exerciseToolCardRendering,
@@ -25,6 +26,14 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
+const countFixtureCalls = (entries: FixtureLogEntry[], method: string) =>
+  entries.filter((entry) => entry.method === method).length;
+
+const countFixtureMessages = (entries: FixtureLogEntry[], message: string) =>
+  entries.filter(
+    (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+  ).length;
+
 it("rejects rendering oracle false positives", () => {
   const tokens = Array.from({ length: 64 }, (_, i) => `T${String(i).padStart(3, "0")}`);
   const promptFrame = [`burst streaming proof ${tokens.join(" ")}`, "local ready | idle"];
@@ -33,7 +42,7 @@ it("rejects rendering oracle false positives", () => {
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
 
-describe.sequential("TUI PTY harness", () => {
+describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let thinkingOverrideFixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -238,6 +247,12 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  registerTuiReconnectTests({
+    startupTimeoutMs: STARTUP_TIMEOUT_MS,
+    testTimeoutMs: TEST_TIMEOUT_MS,
+    startupTestTimeoutMs: STARTUP_TEST_TIMEOUT_MS,
+  });
+
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
     "recovers session subscription after $failures startup failures",
     async ({ failures }) => {
@@ -247,12 +262,8 @@ describe.sequential("TUI PTY harness", () => {
       try {
         await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
         const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
-          failures + 1,
-        );
-        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
-          failures,
-        );
+        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(failures + 1);
+        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(failures);
 
         await subscriptionFixture.run.write("after subscription recovery proof\r");
         await subscriptionFixture.run.waitForOutput(
@@ -267,10 +278,13 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "never reports ready after exhausting session subscription recovery",
+    "blocks submits after subscription exhaustion until reconnect succeeds",
     async () => {
       const subscriptionFixture = await startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5" },
+        env: {
+          OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5",
+          OPENCLAW_TUI_PTY_SUBSCRIBE_RECONNECT: "1",
+        },
       });
       try {
         await subscriptionFixture.run.waitForOutput(
@@ -278,14 +292,32 @@ describe.sequential("TUI PTY harness", () => {
           STARTUP_TIMEOUT_MS,
         );
         const entries = await readFixtureLog(subscriptionFixture.logPath);
-        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
-          5,
-        );
-        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
-          5,
-        );
+        expect(countFixtureCalls(entries, "subscribeSessionEvents")).toBe(5);
+        expect(countFixtureCalls(entries, "subscribeSessionFailure")).toBe(5);
         expect(entries.some((entry) => entry.method === "loadHistory")).toBe(false);
         expect(subscriptionFixture.run.visibleOutput()).not.toContain("local ready | idle");
+
+        const message = "after subscription reconnect proof";
+        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+        await subscriptionFixture.run.waitForOutput(
+          "local runtime not ready — message not sent",
+          STARTUP_TIMEOUT_MS,
+        );
+        const blockedEntries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(countFixtureMessages(blockedEntries, message)).toBe(0);
+
+        await subscriptionFixture.run.write("\x03", { delay: false });
+        await subscriptionFixture.run.waitForOutput("cleared input", STARTUP_TIMEOUT_MS);
+        await subscriptionFixture.run.write("/gateway-status\r", { delay: false });
+        await subscriptionFixture.waitForLogEntry(
+          (entry) => entry.method === "subscriptionReconnect",
+          STARTUP_TIMEOUT_MS,
+        );
+        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+        await subscriptionFixture.run.write(`${message}\r`, { delay: false });
+        await subscriptionFixture.run.waitForOutput(`PTY_RESPONSE: ${message}`, STARTUP_TIMEOUT_MS);
+        const reconnectedEntries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(countFixtureMessages(reconnectedEntries, message)).toBe(1);
       } finally {
         await subscriptionFixture.cleanup();
       }
@@ -704,12 +736,12 @@ describe.sequential("TUI PTY harness", () => {
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
       );
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
     },
     TEST_TIMEOUT_MS,
   );

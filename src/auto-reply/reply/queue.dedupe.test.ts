@@ -15,6 +15,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -250,6 +251,47 @@ describe("followup queue deduplication", () => {
       clearSessionQueues([key]);
       resetRecentQueuedMessageIdDedupe();
     }
+  });
+
+  it("does not leave an empty registry entry when rejecting a redelivery after the queue drained", async () => {
+    const key = `test-dedup-registry-leak-${Date.now()}`;
+    const { calls, done, runFollowup } = createFollowupCollector();
+
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(true);
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    // Let the drain finish and self-delete the empty queue from the registry.
+    await vi.waitFor(() => {
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+    });
+    expect(calls).toHaveLength(1);
+
+    // A provider redelivery of the same message must be rejected without
+    // recreating a registry entry that nothing would ever delete again.
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original (redelivery)",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(false);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 
   it("does not collide recent message-id keys when routing contains delimiters", async () => {

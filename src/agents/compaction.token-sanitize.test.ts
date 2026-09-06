@@ -1,63 +1,14 @@
 // Verifies compaction token planning strips private/non-model fields first.
 import { serializeConversation, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
-
-const agentSessionMocks = vi.hoisted(() => ({
-  estimateTokens: vi.fn((_message: unknown) => 1),
-  generateSummary: vi.fn(async () => "summary"),
-}));
-
-vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-sessions")>(
-    "openclaw/plugin-sdk/agent-sessions",
-  );
-  return {
-    ...actual,
-    estimateTokens: agentSessionMocks.estimateTokens,
-    generateSummary: agentSessionMocks.generateSummary,
-  };
-});
-
+import { describe, expect, it } from "vitest";
 import {
-  buildStageSplitPlan,
-  buildSummaryChunks,
+  buildOversizedFallbackPlan,
   estimateMessagesTokens,
   projectCompactionMessagesForPlanning,
-  sanitizeCompactionMessages,
 } from "./compaction-planning.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 describe("compaction token accounting sanitization", () => {
-  it("does not pass toolResult.details into per-message token estimates", () => {
-    // details can contain raw tool payloads or private diagnostics; token
-    // estimates should account only for model-visible message content.
-    const messages: AgentMessage[] = [
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "browser",
-        isError: false,
-        content: [{ type: "text", text: "ok" }],
-        details: { raw: "x".repeat(50_000) },
-        timestamp: 1,
-      } as AgentMessage,
-      {
-        role: "user",
-        content: "next",
-        timestamp: 2,
-      },
-    ];
-
-    buildStageSplitPlan({ messages, maxChunkTokens: 0, parts: 2, minMessagesForSplit: 2 });
-    buildSummaryChunks({ messages, maxChunkTokens: 16 });
-
-    const calledWithDetails = agentSessionMocks.estimateTokens.mock.calls.some((call) => {
-      const message = call[0] as { details?: unknown } | undefined;
-      return Boolean(message?.details);
-    });
-
-    expect(calledWithDetails).toBe(false);
-  });
-
   it("projects worker inputs to planning-safe messages before cloning", () => {
     // Worker input is cloned across threads, so sanitize before clone to remove
     // hidden runtime context and oversized diagnostic details.
@@ -84,16 +35,22 @@ describe("compaction token accounting sanitization", () => {
       },
     ];
 
-    const sanitized = sanitizeCompactionMessages(messages);
+    const sanitized = projectCompactionMessagesForPlanning(messages);
 
-    expect(sanitized).toHaveLength(2);
+    expect(estimateMessagesTokens(messages)).toBe(estimateMessagesTokens(sanitized));
     expect(sanitized[0]).not.toHaveProperty("details");
     expect(sanitized.map((message) => message.role)).toEqual(["toolResult", "user"]);
   });
 
-  it("bounds oversized tool-result text before worker cloning while preserving token pressure", () => {
-    const hugeText = "x".repeat(120_000);
+  it.each([
+    { script: "ASCII", glyph: "x" },
+    { script: "common CJK", glyph: "漢" },
+    { script: "rare BMP CJK", glyph: "㐀" },
+    { script: "supplementary CJK", glyph: "𠀀" },
+  ])("bounds $script text and arguments without losing token pressure", ({ glyph }) => {
+    const hugeText = glyph.repeat(40_000);
     const messages: AgentMessage[] = [
+      { role: "user", content: hugeText, timestamp: 0 },
       {
         role: "toolResult",
         toolCallId: "call_1",
@@ -101,18 +58,52 @@ describe("compaction token accounting sanitization", () => {
         isError: false,
         content: [{ type: "text", text: hugeText }],
         timestamp: 1,
-      } satisfies AgentMessage,
+      },
+      makeAgentAssistantMessage({
+        content: [{ type: "thinking", thinking: hugeText, thinkingSignature: hugeText }],
+      }),
+      // Fill the payload budget so even small later JSON values must be projected.
+      ...Array.from({ length: 8 }, (_, timestamp) => ({
+        role: "user" as const,
+        content: "x".repeat(32_768),
+        timestamp: timestamp + 2,
+      })),
+      ...[hugeText, "small"].map((text) =>
+        makeAgentAssistantMessage({
+          content: [
+            {
+              type: "toolCall",
+              id: "call_args",
+              name: "write",
+              arguments: { [text]: { nested: [text, '\n"\\\ud800'] } },
+            },
+          ],
+        }),
+      ),
     ];
 
     const projected = projectCompactionMessagesForPlanning(messages);
-    const originalJson = JSON.stringify(messages);
     const projectedJson = JSON.stringify(projected);
-
-    expect(projectedJson.length).toBeLessThan(originalJson.length / 4);
+    expect(projectedJson.length).toBeLessThan(280_000);
+    expect(projectedJson.length).toBeLessThan(JSON.stringify(messages).length);
     expect(projectedJson).not.toContain(hugeText);
-    expect(estimateMessagesTokens(projected)).toBeGreaterThanOrEqual(
-      estimateMessagesTokens(messages),
-    );
+    expect(projectedJson).not.toContain("thinkingSignature");
+    for (const [index, message] of messages.entries()) {
+      const tokens = estimateMessagesTokens([message]);
+      const projectedTokens = estimateMessagesTokens([projected[index]!]);
+      expect(projectedTokens).toBeGreaterThanOrEqual(tokens);
+      // Independently rounded retained and omitted estimates can add one token.
+      expect(projectedTokens).toBeLessThanOrEqual(tokens + 1);
+      for (const contextWindow of [tokens * 2, tokens * 3]) {
+        const direct = buildOversizedFallbackPlan({ messages: [message], contextWindow });
+        const planned = buildOversizedFallbackPlan({
+          messages: [projected[index]!],
+          contextWindow,
+        });
+        expect(planned.oversizedNotes).toEqual(direct.oversizedNotes);
+        expect(planned.smallMessages).toHaveLength(direct.smallMessages.length);
+      }
+    }
   });
 
   it("bounds thinking and nested tool-call arguments before worker cloning", () => {

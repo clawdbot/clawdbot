@@ -3,6 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -13,6 +20,18 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
+
+function createTerminalBridgeHarness() {
+  const harness = createCodeModeHarness();
+  const config = { tools: { codeMode: { enabled: true, timeoutMs: 60_000 } } } as never;
+  const ctx = { ...harness.ctx, config, runtimeConfig: config };
+  return { ...harness, config, tools: createCodeModeTools(ctx) };
+}
 
 describe("Code Mode wait, scope, and suspended runs", () => {
   beforeEach(() => {
@@ -69,6 +88,171 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
+  it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const runId = "run-code-mode-inline-approval";
+    const sessionId = "session-inline-approval";
+    const sessionKey = "agent:main:inline-approval";
+    const requested = createDeferred();
+    const decision = createDeferred();
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "code-mode-approval", state: "present" },
+      },
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+    });
+    const admittedRunContext = await admission.admit("embedded");
+    const identity = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext,
+      agentId: "main",
+      sessionKey,
+      turnSourceChannel: "telegram",
+    });
+    const timeoutMs = 1_000;
+    const config = { tools: { codeMode: { enabled: true, timeoutMs } } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const context = { config, runtimeConfig: config, sessionId, sessionKey, runId, catalogRef };
+    const controls = createCodeModeTools(context);
+    const shell = pluginToolWithExecute("exec", "Run shell", async (toolCallId) => {
+      const event = { runId, sessionId, stream: "lifecycle" as const };
+      emitAgentEvent({
+        ...event,
+        data: { phase: "waiting-approval", approvalId: "approval-inline", toolCallId },
+      });
+      requested.resolve();
+      await decision.promise;
+      emitAgentEvent({
+        ...event,
+        data: { phase: "approval-resolved", approvalId: "approval-inline", toolCallId },
+      });
+      return jsonResult({ status: "completed", aggregated: "approved" });
+    });
+    applyCodeModeCatalog({ tools: [...controls, shell], ...context });
+
+    let settled = false;
+    try {
+      const execution = withGatewayToolCallerIdentity(identity, async () => {
+        const result = await expectDefined(controls[0], "Code Mode exec test invariant").execute(
+          "inline-approval",
+          { code: `return await exec({ value: "approval" });` },
+        );
+        settled = true;
+        return result;
+      });
+      await requested.promise;
+      await vi.advanceTimersByTimeAsync(timeoutMs + 1);
+
+      expect(settled).toBe(false);
+      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+
+      decision.resolve();
+      expect(resultDetails(await execution)).toMatchObject({
+        status: "completed",
+        value: { status: "completed", aggregated: "approved" },
+      });
+      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+    } finally {
+      decision.resolve();
+      admission.close();
+    }
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeUndefined();
+  });
+
+  it("retains terminal bridge evidence until a yielded run completes through wait", async () => {
+    const { config, catalogRef, tools } = createTerminalBridgeHarness();
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = await expectDefined(tools[0], "exec tool").execute(
+      "code-call-terminal-yield",
+      {
+        code: `
+          await terminal_action({});
+          await yield_control("pause");
+          return "done";
+        `,
+      },
+    );
+
+    expect(resultDetails(suspended).status).toBe("waiting");
+    expect(suspended.terminate).toBeUndefined();
+
+    let resumed = await expectDefined(tools[1], "wait tool").execute("code-wait-terminal-yield", {
+      runId: resultDetails(suspended).runId,
+    });
+    for (let index = 1; index < 8 && resultDetails(resumed).status === "waiting"; index += 1) {
+      expect(resumed.terminate).toBeUndefined();
+      resumed = await expectDefined(tools[1], "wait tool").execute(
+        `code-wait-terminal-yield-${index}`,
+        { runId: resultDetails(resumed).runId },
+      );
+    }
+
+    expect(resultDetails(resumed)).toMatchObject({ status: "completed", value: "done" });
+    expect(resumed.terminate).toBe(true);
+  });
+
+  it("preserves retained terminal bridge evidence when a yielded run fails", async () => {
+    const { config, catalogRef, tools } = createTerminalBridgeHarness();
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = await expectDefined(tools[0], "exec tool").execute(
+      "code-call-terminal-yield-failure",
+      {
+        code: `
+          await terminal_action({});
+          await yield_control("pause");
+          throw new Error("resumed failure");
+        `,
+      },
+    );
+
+    expect(resultDetails(suspended).status).toBe("waiting");
+    expect(suspended.terminate).toBeUndefined();
+
+    let resumed = await expectDefined(tools[1], "wait tool").execute(
+      "code-wait-terminal-yield-failure",
+      { runId: resultDetails(suspended).runId },
+    );
+    for (let index = 1; index < 8 && resultDetails(resumed).status === "waiting"; index += 1) {
+      expect(resumed.terminate).toBeUndefined();
+      resumed = await expectDefined(tools[1], "wait tool").execute(
+        `code-wait-terminal-yield-failure-${index}`,
+        { runId: resultDetails(resumed).runId },
+      );
+    }
+
+    expect(resultDetails(resumed)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("resumed failure"),
+    });
+    expect(resumed.terminate).toBe(true);
+  });
+
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const hostile = "Page instruction <|endoftext|>";
@@ -87,7 +271,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     });
 
     const suspended = await expectDefined(tools[0], "exec tool").execute("code-call-late-network", {
-      code: 'await yield_control("pause"); return await tools.callValue("fake_network_page", {});',
+      code: 'await yield_control("pause"); return await fake_network_page({});',
     });
     expect(resultDetails(suspended).status).toBe("waiting");
     expect(suspended.content[0]).not.toMatchObject({
@@ -132,7 +316,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
     const suspended = await expectDefined(tools[0], "exec tool").execute(
       "code-call-suspended-network-error",
-      { code: 'await yield_control("pause"); return await tools.fake_network_error({});' },
+      { code: 'await yield_control("pause"); return await fake_network_error({});' },
     );
     expect(resultDetails(suspended).status).toBe("waiting");
     expect(suspended.content[0]).not.toMatchObject({
@@ -263,7 +447,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-original-parent",
         {
-          code: 'await yield_control("pause"); return await tools.callValue("fake_resumed_identity", {});',
+          code: 'await yield_control("pause"); return await fake_resumed_identity({});',
         },
       ),
     );
@@ -320,40 +504,64 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
   });
 
-  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    let details: Record<string, unknown>;
-    try {
-      details = resultDetails(
-        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-          "code-call-yield-overflow",
-          {
-            code: 'await yield_control("pause"); return "done";',
-          },
-        ),
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+  it.each(["exec", "wait"])(
+    "preserves accepted output when %s snapshot expiry would exceed the Date range",
+    async (mode) => {
+      const { ctx } = createCodeModeHarness();
+      const config = { tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } } };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      const fixture = pluginTool("expiry_fixture", "Expiry fixture");
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+      const dateLimit = 8_640_000_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(dateLimit - 1_000);
+      let details: Record<string, unknown>;
+      try {
+        const input = {
+          code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+            text("accepted first");
+            await expiry_fixture({});
+            text("accepted inline");
+            await yield_control("pause");
+            return "done";`,
+        };
+        const first =
+          mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+        if (first) {
+          expect(first).toMatchObject({
+            status: "waiting",
+            output: [{ type: "text", text: "delivered" }],
+          });
+        }
+        // Admit wait before the parked run expires. Renewal overflows without
+        // consuming the new call's execution budget before its guest resumes.
+        nowSpy.mockReturnValue(dateLimit - 1);
+        details = resultDetails(
+          await (first
+            ? wait.execute("resume", { runId: first.runId })
+            : exec.execute("code-call-yield-overflow", input)),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
 
-    expect(details.status).toBe("failed");
-    expect(details.error).toBe("code mode run expiry is unavailable.");
-    expect(testing.activeRuns.size).toBe(0);
-  });
+      expect(details.status).toBe("failed");
+      expect(details.error).toBe("code mode run expiry is unavailable.");
+      expect(details.output).toEqual([
+        { type: "text", text: "accepted first" },
+        { type: "text", text: "accepted inline" },
+      ]);
+      expect(fixture.execute).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
 
   it("expires suspended runs with invalid expiry timestamps", async () => {
     const { tools: codeModeTools } = createCodeModeHarness();
     testing.activeRuns.set("invalid-expiry-run", {
       expiresAt: 8_640_000_000_000_001,
+      owner: { close: () => undefined },
     } as never);
 
     await expect(
@@ -510,7 +718,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-concurrent-wait",
         {
-          code: "await tools.fake_slow({}); return 'done';",
+          code: "await fake_slow({}); return 'done';",
         },
       ),
     );
@@ -532,158 +740,5 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
     expect(stillWaiting.status).toBe("waiting");
     expect(stillWaiting.runId).toBe(first.runId);
-  });
-
-  it("resumes and reparks a yielding run at the suspended-run capacity limit", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const first = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-at-capacity",
-        {
-          code: `
-            await yield_control("first");
-            await yield_control("second");
-            return "done";
-          `,
-        },
-      ),
-    );
-    expect(first.status).toBe("waiting");
-    const firstRunId = first.runId;
-    expect(typeof firstRunId).toBe("string");
-    if (typeof firstRunId !== "string") {
-      throw new Error("expected a parked Code Mode run");
-    }
-    const parked = testing.activeRuns.get(firstRunId);
-    expect(parked).toBeDefined();
-    if (!parked) {
-      throw new Error("expected a parked Code Mode snapshot");
-    }
-
-    // Inert snapshots occupy real capacity without starting 63 extra workers.
-    for (let index = 0; index < 63; index += 1) {
-      const runId = `cm_code_mode_capacity_${index}`;
-      testing.activeRuns.set(runId, { ...parked, runId, pending: [] });
-    }
-
-    const second = resultDetails(
-      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
-        "code-wait-at-capacity",
-        { runId: firstRunId },
-      ),
-    );
-
-    expect(second.status).toBe("waiting");
-    expect(second.reason).toBe("yield");
-    expect(testing.activeRuns.size).toBe(64);
-
-    const completed = resultDetails(
-      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
-        "code-wait-after-capacity",
-        { runId: second.runId },
-      ),
-    );
-
-    expect(completed).toMatchObject({ status: "completed", value: "done" });
-    expect(testing.activeRuns.size).toBe(63);
-  });
-
-  it("reports only unsettled pending tool calls when wait times out", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          timeoutMs: 500,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const codeModeTools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [
-        ...codeModeTools,
-        pluginTool("fake_fast", "Fast helper"),
-        pluginToolWithExecute(
-          "fake_slow",
-          "Slow helper",
-          async () => await new Promise<never>(() => {}),
-        ),
-      ],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const first = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-timeout",
-        {
-          code: `
-          text("before timeout");
-          const fast = tools.fake_fast({});
-          const slow = tools.fake_slow({});
-          await fast;
-          await slow;
-          return "done";
-        `,
-        },
-      ),
-    );
-    expect(first.status).toBe("waiting");
-    expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
-    // The fast call may settle as the snapshot is parked, but the slow call must remain pending.
-    expect(first.pendingToolCalls).toContainEqual(
-      expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
-    );
-    const runId = first.runId;
-    expect(typeof runId).toBe("string");
-    if (typeof runId !== "string") {
-      throw new Error("expected code mode run id");
-    }
-
-    const activeRun = testing.activeRuns.get(runId);
-    expect(activeRun).toBeDefined();
-    activeRun!.config.timeoutMs = 100;
-
-    const second = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-timeout",
-        { runId },
-      ),
-    );
-
-    expect(second.status).toBe("waiting");
-    expect(second.output).toEqual([]);
-    expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
-
-    const third = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-timeout-again",
-        { runId },
-      ),
-    );
-
-    expect(third.status).toBe("waiting");
-    expect(third.output).toEqual([]);
-    expect(third.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
   });
 });

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
@@ -139,11 +140,14 @@ export function enqueueFollowupRun(
   if (options.steerCandidate) {
     run.steerAnchor = true;
   }
-  const queue = getFollowupQueue(key, settings);
+  // Peek before getFollowupQueue: rejecting a redelivery after the original
+  // queue drained and self-deleted must not recreate an empty registry entry,
+  // which nothing would ever delete again.
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && peekRecentQueueMessageId(recentMessageIdKey)) {
     return false;
   }
+  const queue = getFollowupQueue(key, settings);
 
   const dedupe =
     dedupeMode === "none"
@@ -212,7 +216,16 @@ export function enqueueFollowupRun(
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     inFlight: queue.inFlight,
-    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    summarize: (item) => {
+      const approved = item.userTurnTranscriptRecorder?.getPendingInputMessage?.();
+      // Capture the approved body before overflow stores its bounded preview.
+      return approved
+        ? (extractTextFromChatContent(approved.content, {
+            normalizeText: (text) => text,
+            joinWith: "\n",
+          }) ?? "")
+        : normalizeOptionalString(item.summaryLine) || item.prompt.trim();
+    },
     onSummaryElide: (lines) => elidedSummaryLines.push(...lines),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
@@ -333,7 +346,11 @@ function reapplyDeferredOverflow(key: string): void {
 }
 
 /** Remove an exactly committed steer while preserving every sibling's FIFO position. */
-function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
+function consumeParkedFollowupRun(
+  key: string,
+  run: FollowupRun,
+  disposition?: "consumed",
+): boolean {
   const queue = getExistingFollowupQueue(key);
   const index = queue?.items.indexOf(run) ?? -1;
   if (!queue || index < 0) {
@@ -345,7 +362,7 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
   delete run.protectFromQueueOverflow;
   delete run.steerAnchor;
   reapplyDeferredOverflow(key);
-  completeFollowupRunLifecycle(run);
+  completeFollowupRunLifecycle(run, disposition);
   if (
     !queue.draining &&
     queue.items.length === 0 &&
@@ -365,7 +382,7 @@ type ParkedSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
   fallback: () => void;
-  consume: () => void;
+  consume: (disposition?: "consumed") => void;
 };
 
 export function parkSteerCandidate(
@@ -400,7 +417,7 @@ export function parkSteerCandidate(
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
     fallback: () => settleParkedSteerAcceptance(key, run, false),
-    consume: () => consumeParkedFollowupRun(key, run),
+    consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
   };
 }
 

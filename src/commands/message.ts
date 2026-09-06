@@ -8,47 +8,43 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
+import {
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
+} from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-function extractMessageId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  const direct = normalizeOptionalString(record.messageId);
-  if (direct) {
-    return direct;
-  }
-  const result = record.result;
-  if (result && typeof result === "object") {
-    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
-    if (nested) {
-      return nested;
-    }
-  }
-  return undefined;
-}
-
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const messageId = extractMessageId(result.payload);
+  const messageId = resolveMessageActionMessageId(result.payload);
+  const sendResult = result.kind === "send" ? result.sendResult : undefined;
+  const outcome = resolveMessageActionOutcome(result);
   return {
+    ...(result.kind === "broadcast"
+      ? { ok: outcome.ok }
+      : !outcome.ok
+        ? {
+            ...formatCliJsonFailure(outcome.error),
+            ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+            ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
+          }
+        : {}),
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,
@@ -65,7 +61,6 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const loadedRaw = getRuntimeConfig();
-  const compatibilityAgentId = tryGetLegacyDefaultAgentId(loadedRaw);
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
@@ -108,7 +103,7 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const agentId = compatibilityAgentId ?? resolveSystemAgentTargetAgentId(cfg);
+  const agentId = resolveAmbientOwnerAgentId(cfg);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
@@ -158,7 +153,7 @@ export async function messageCommand(
 
   if (json) {
     writeRuntimeJson(runtime, buildMessageCliJson(result));
-    return;
+    return result;
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
@@ -166,4 +161,5 @@ export async function messageCommand(
   for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
+  return result;
 }

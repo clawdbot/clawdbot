@@ -1,9 +1,8 @@
 import {
-  createStreamingJsonPreviewState,
-  finalizeStreamingJsonPreview,
+  createToolArgumentPreviewSchedule,
   parseStreamingJson,
-  pushStreamingJsonPreview,
-  type StreamingJsonPreviewState,
+  parseTerminalToolCallArguments,
+  type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
@@ -14,6 +13,10 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  invalidateComputerFrameIfMissing,
+  type ComputerContextEpoch,
+} from "../agents/tools/computer-tool.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -21,28 +24,16 @@ import type {
   ToolCall,
 } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
+import { fitWorkerReplayImages } from "./replay-message-window.js";
+import {
+  isWorkerTranscriptMessageFrameSafe,
+  WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+} from "./transcript-message.js";
 import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
 type StreamingToolCall = ToolCall & {
-  partialJson?: string;
-  jsonPreview?: StreamingJsonPreviewState;
+  partialJson: string;
 };
-
-// Re-parsing the whole accumulated tool-call argument buffer on every single
-// forwarded delta makes total parse cost O(n^2) in the argument size (see
-// extensions/amazon-bedrock/stream.runtime.ts for the full explanation and
-// the shared fix - this adapter can receive the same raw per-delta stream
-// forwarded from that provider via Worker inference). `pushStreamingJsonPreview`
-// makes the JSON-repair step itself incremental, and additionally tracks the
-// structure of a flat top-level object as the deltas arrive, so the exposed
-// preview changes on *every* delta with no staleness window at all for the
-// shapes tool-call arguments actually take; the remaining (unavoidably
-// O(buffer-size)) JSON.parse/partial-json fallback is reserved for what the
-// tracker cannot model (numbers, nested containers) and draws on a work
-// budget proportional to the buffer size rather than elapsed time, so the
-// overall O(n) bound holds regardless of delta cadence - see
-// packages/ai/src/utils/json-parse.ts for the full rationale.
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -51,6 +42,7 @@ type WorkerInferenceStreamAdapterOptions = {
   runId: string;
   turnId: string;
   modelRef: WorkerInferenceModelRef;
+  computerContextEpoch?: ComputerContextEpoch;
 };
 
 type WorkerInferenceStreamRequest = {
@@ -83,6 +75,7 @@ function emptyAssistantMessage(modelRef: WorkerInferenceModelRef): AssistantMess
 function processInferenceEvent(
   payload: WorkerInferenceEventParams,
   partial: AssistantMessage,
+  toolArgumentPreviewSchedules: Map<number, ToolArgumentPreviewSchedule>,
   tolerateMissingState: boolean,
 ): AssistantMessageEvent | undefined {
   const event = payload.event;
@@ -170,13 +163,15 @@ function processInferenceEvent(
       };
     }
     case "toolcall_start": {
-      partial.content[event.contentIndex] = {
+      const content = {
         type: "toolCall",
         id: event.id,
         name: event.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies StreamingToolCall as ToolCall;
+      } satisfies StreamingToolCall;
+      partial.content[event.contentIndex] = content;
+      toolArgumentPreviewSchedules.set(event.contentIndex, createToolArgumentPreviewSchedule());
       return { type: "toolcall_start", contentIndex: event.contentIndex, partial };
     }
     case "toolcall_delta": {
@@ -188,9 +183,14 @@ function processInferenceEvent(
         throw new Error("worker inference tool delta has no active tool call");
       }
       const streaming = content as StreamingToolCall;
-      streaming.partialJson = `${streaming.partialJson ?? ""}${event.delta}`;
-      streaming.jsonPreview ??= createStreamingJsonPreviewState();
-      content.arguments = pushStreamingJsonPreview(streaming.jsonPreview, event.delta);
+      streaming.partialJson += event.delta;
+      const previewSchedule = toolArgumentPreviewSchedules.get(event.contentIndex);
+      if (!previewSchedule) {
+        throw new Error("worker inference tool delta has no preview schedule");
+      }
+      if (previewSchedule(streaming.partialJson.length)) {
+        content.arguments = parseStreamingJson(streaming.partialJson);
+      }
       return {
         type: "toolcall_delta",
         contentIndex: event.contentIndex,
@@ -207,15 +207,9 @@ function processInferenceEvent(
         throw new Error("worker inference tool end has no active tool call");
       }
       const streaming = content as StreamingToolCall;
-      // Always force one final, unthrottled resolution from the complete
-      // buffer here, regardless of the tracker or reparse budget applied to
-      // the live preview above - this guarantees correctness independent of
-      // stream timing.
-      content.arguments = streaming.jsonPreview
-        ? finalizeStreamingJsonPreview(streaming.jsonPreview)
-        : parseStreamingJson(streaming.partialJson);
-      delete streaming.partialJson;
-      delete streaming.jsonPreview;
+      content.arguments = parseTerminalToolCallArguments(streaming.partialJson);
+      toolArgumentPreviewSchedules.delete(event.contentIndex);
+      delete (content as Partial<StreamingToolCall>).partialJson;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }
@@ -254,6 +248,7 @@ export function createWorkerInferenceStreamAdapter(
   return (inferenceRequest) => {
     const stream = createAssistantMessageEventStream();
     const partial = emptyAssistantMessage(adapter.modelRef);
+    const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
     let streamHasGap = false;
     let settled = false;
     modelCallSeq += 1;
@@ -267,11 +262,25 @@ export function createWorkerInferenceStreamAdapter(
         WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH - turnSuffix.length,
       )}${turnSuffix}`,
     };
-    const request: WorkerInferenceStartParams = {
+    let request: WorkerInferenceStartParams = {
       ...identity,
       modelRef: inferenceRequest.modelRef,
       context: structuredClone(inferenceRequest.context),
       options: structuredClone(inferenceRequest.options),
+    };
+    const fail = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      partial.stopReason = inferenceRequest.signal?.aborted ? "aborted" : "error";
+      partial.errorMessage = error instanceof Error ? error.message : String(error);
+      stream.push({
+        type: "error",
+        reason: partial.stopReason,
+        error: transcriptSafeErrorMessage(adapter.modelRef, partial),
+      });
+      stream.end();
     };
     const finishAborted = () => {
       if (settled) {
@@ -304,6 +313,42 @@ export function createWorkerInferenceStreamAdapter(
       stream.end();
       return stream;
     }
+    try {
+      const messages = fitWorkerReplayImages(
+        request.context.messages,
+        (candidateMessages) =>
+          Buffer.byteLength(
+            JSON.stringify({
+              type: "req",
+              // The dispatcher creates UUID request IDs: this has the exact same encoded size.
+              id: "00000000-0000-4000-8000-000000000000",
+              method: "worker.inference.start",
+              params: { ...request, context: { ...request.context, messages: candidateMessages } },
+            }),
+            "utf8",
+          ),
+        adapter.computerContextEpoch?.frameToolCallId,
+      );
+      if (!messages) {
+        throw new Error(
+          request.context.messages.some(
+            (message) => message.role === "assistant" && message.providerReplay !== undefined,
+          )
+            ? `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (inference payload limit)`
+            : "Worker inference context exceeds the image transport limit. Use fewer or smaller images in this turn, then retry.",
+        );
+      }
+      request = { ...request, context: { ...request.context, messages } };
+      if (adapter.computerContextEpoch) {
+        invalidateComputerFrameIfMissing({
+          contextEpoch: adapter.computerContextEpoch,
+          messages: messages.filter((message) => message.role === "toolResult"),
+        });
+      }
+    } catch (error) {
+      fail(error);
+      return stream;
+    }
     inferenceRequest.signal?.addEventListener("abort", abort, { once: true });
     void adapter.client
       .start(request, {
@@ -311,7 +356,12 @@ export function createWorkerInferenceStreamAdapter(
           streamHasGap = true;
         },
         onEvent: (event) => {
-          const projected = processInferenceEvent(event, partial, streamHasGap);
+          const projected = processInferenceEvent(
+            event,
+            partial,
+            toolArgumentPreviewSchedules,
+            streamHasGap,
+          );
           if (projected) {
             stream.push(projected);
           }
@@ -345,20 +395,7 @@ export function createWorkerInferenceStreamAdapter(
         stream.push({ type: "error", reason, error: message });
         stream.end();
       })
-      .catch((error: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        partial.stopReason = inferenceRequest.signal?.aborted ? "aborted" : "error";
-        partial.errorMessage = error instanceof Error ? error.message : String(error);
-        stream.push({
-          type: "error",
-          reason: partial.stopReason,
-          error: transcriptSafeErrorMessage(adapter.modelRef, partial),
-        });
-        stream.end();
-      })
+      .catch(fail)
       .finally(() => {
         inferenceRequest.signal?.removeEventListener("abort", abort);
       });

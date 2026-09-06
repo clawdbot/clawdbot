@@ -931,6 +931,10 @@ export async function collectDoctorPreviewNotes(params: {
     }),
   );
 
+  const { repairMergedGatewayOwnerProfile } =
+    await import("../../../state/user-profiles-owner-migration.js");
+  warnings.push(...repairMergedGatewayOwnerProfile({ env, shouldRepair: false }).warnings);
+
   return { infoNotes, warningNotes: warnings };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

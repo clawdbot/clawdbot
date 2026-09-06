@@ -47,7 +47,7 @@ export const RUN_LIVENESS_JOIN_TIMEOUT_MS = 120_000;
  */
 export function joinWithRunLivenessDeadline(input: {
   joinWork: () => Promise<void> | void;
-  runAbortSignal: AbortSignal;
+  runAbortSignal?: AbortSignal;
   timeoutMs?: number;
   onTimeout: () => void;
 }): Promise<void> {
@@ -59,7 +59,7 @@ export function joinWithRunLivenessDeadline(input: {
       }
       settled = true;
       clearTimeout(timer);
-      input.runAbortSignal.removeEventListener("abort", onAbort);
+      input.runAbortSignal?.removeEventListener("abort", onAbort);
       if (reason === "timeout") {
         input.onTimeout();
       }
@@ -71,11 +71,11 @@ export function joinWithRunLivenessDeadline(input: {
       input.timeoutMs ?? RUN_LIVENESS_JOIN_TIMEOUT_MS,
     );
     timer.unref?.();
-    if (input.runAbortSignal.aborted) {
+    if (input.runAbortSignal?.aborted) {
       finish("abort");
       return;
     }
-    input.runAbortSignal.addEventListener("abort", onAbort, { once: true });
+    input.runAbortSignal?.addEventListener("abort", onAbort, { once: true });
     Promise.resolve()
       .then(() => input.joinWork())
       .then(

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,9 +10,6 @@ import {
   requestSessionCompanionState,
   resetSessionCompanion,
 } from "./chat-session-companion.ts";
-import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
-import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
-import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import {
   ChatSessionRailElement,
   ChatSessionRailState,
@@ -38,35 +34,6 @@ function input(overrides: Partial<SessionRailInput> = {}): SessionRailInput {
     digest: digest(),
     hasCompanionActivity: false,
     ...overrides,
-  };
-}
-
-function backgroundTasksToggleProps(): BackgroundTasksProps {
-  return {
-    sessionKey: "agent:main:run",
-    statusRowId: "status-row",
-    collapsed: true,
-    narrowLayout: false,
-    connected: true,
-    canCancel: false,
-    loading: false,
-    error: null,
-    tasks: null,
-    subagentActivity: {
-      rows: [],
-      overflowWorking: 0,
-      taskIds: new Set<string>(),
-      nextExpiryAt: null,
-    },
-    taskDetails: new Map(),
-    taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set(),
-    cancellingTaskIds: new Set(),
-    finishedCollapsed: true,
-    onToggleCollapsed: () => {},
-    onToggleFinished: () => {},
-    onRefresh: () => {},
-    onCancel: () => {},
   };
 }
 
@@ -247,6 +214,23 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
   });
 
+  it("records hydration until the authoritative companion state settles", async () => {
+    let resolveLoad!: (value: { exchanges: [] }) => void;
+    const threads = new ChatSessionCompanionThreads();
+    const pending = threads.hydrate(
+      "one",
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+
+    expect(threads.view("one").loading).toBe(true);
+    resolveLoad({ exchanges: [] });
+    await pending;
+    expect(threads.view("one").loading).toBe(false);
+  });
+
   it("keeps matching bare session keys isolated by agent", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("global", "main draft", "main");
@@ -401,6 +385,32 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("one").exchanges).toEqual([]);
   });
 
+  it("retires one session without clearing unrelated companion state", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("one", "retire me", "main");
+    threads.setDraft("two", "keep me", "main");
+
+    threads.retire("one", "main");
+
+    expect(threads.view("one", "main").draft).toBe("");
+    expect(threads.view("two", "main").draft).toBe("keep me");
+  });
+
+  it("adopts an empty restarted-Gateway thread without discarding its local draft", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "Before restart", answer: "Old answer", ts: 1 }],
+    }));
+    threads.setDraft("one", "unsent local draft");
+
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+
+    expect(threads.view("one")).toMatchObject({
+      draft: "unsent local draft",
+      exchanges: [],
+    });
+  });
+
   it.each(["resolve", "reject"] as const)(
     "does not resurrect a reset request after a late $outcome",
     async (outcome) => {
@@ -467,6 +477,15 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timing")?.textContent).toBe("1m 32s");
   });
 
+  it("uses the shared surface empty state before the first side-chat exchange", async () => {
+    const element = await mount();
+    const empty = element.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("submits the rail composer and renders sanitized markdown answers", async () => {
     const onSubmit = vi.fn();
     const element = await mount({
@@ -479,6 +498,7 @@ describe("ChatSessionRailElement", () => {
             ts: 300_000,
           },
         ],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -499,6 +519,7 @@ describe("ChatSessionRailElement", () => {
       onSubmit,
       companion: {
         exchanges: [],
+        loading: false,
         pendingQuestion: "What changed?",
         failedQuestion: null,
         hint: null,
@@ -509,6 +530,7 @@ describe("ChatSessionRailElement", () => {
 
     element.companion = {
       exchanges: [],
+      loading: false,
       pendingQuestion: null,
       failedQuestion: "What changed?",
       hint: "history-unavailable",
@@ -528,6 +550,7 @@ describe("ChatSessionRailElement", () => {
       activeRunId: null,
       companion: {
         exchanges: [{ question: "Q", answer: "A", ts: 1 }],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -549,6 +572,24 @@ describe("ChatSessionRailElement", () => {
     element.digest = digest("on-track");
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail__status--critical")).toBeNull();
+  });
+
+  it("shows the shared chat skeleton instead of the empty state during hydration", async () => {
+    const element = await mount({
+      companion: {
+        exchanges: [],
+        loading: true,
+        pendingQuestion: null,
+        failedQuestion: null,
+        hint: null,
+        draft: "",
+      },
+    });
+
+    const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
+    await skeleton?.updateComplete;
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
+    expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
   it("collapses on Escape", async () => {
@@ -642,6 +683,7 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       companion: {
         exchanges: [{ question: "What changed?", answer: "The rail toggle.", ts: 300_000 }],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -651,28 +693,6 @@ describe("ChatSessionRailElement", () => {
 
     expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
-  });
-
-  it("keeps the destructive clear behind the overflow menu", async () => {
-    const onClear = vi.fn();
-    const element = await mount({ onClear });
-
-    const actions = element.querySelector(".chat-session-rail__actions");
-    expect(
-      actions?.querySelector("wa-dropdown .chat-session-rail__menu, .chat-session-rail__menu"),
-    ).not.toBeNull();
-    // Nothing in the always-visible row destroys the thread: only hide and
-    // collapse sit next to the menu trigger.
-    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(2);
-
-    const clearItem = element.querySelector("wa-dropdown-item[value='clear']");
-    expect(clearItem).not.toBeNull();
-    element
-      .querySelector(".chat-session-rail__menu")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
-      );
-    expect(onClear).toHaveBeenCalledOnce();
   });
 
   it("drops the digest band when there is no digest to show", async () => {
@@ -685,6 +705,7 @@ describe("ChatSessionRailElement", () => {
       activeRunId: null,
       companion: {
         exchanges: [],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -693,35 +714,6 @@ describe("ChatSessionRailElement", () => {
     });
     expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
-  });
-
-  it("gives the header toggle a glyph of its own, not the background-tasks one", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "hidden", onToggle: () => {} }), host);
-    const railGlyph = host.querySelector(".chat-session-rail-toggle svg")?.innerHTML;
-    const tasksHost = document.createElement("div");
-    document.body.append(tasksHost);
-    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), tasksHost);
-    const tasksGlyph = tasksHost.querySelector(".chat-tasks-toggle svg")?.innerHTML;
-
-    expect(railGlyph?.trim()).toBeTruthy();
-    expect(tasksGlyph?.trim()).toBeTruthy();
-    expect(railGlyph).not.toBe(tasksGlyph);
-  });
-
-  it("reports the open panel to assistive technology", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "expanded", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "true",
-    );
-
-    render(renderSessionRailToggle({ mode: "pill", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

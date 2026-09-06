@@ -1,8 +1,13 @@
-// PID liveness helpers check whether process ids still refer to active processes.
+// Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 
-const DARWIN_PS_TIMEOUT_MS = 1000;
+const PROCESS_START_TIMEOUT_MS = 1000;
+// Cache only a successful self read: this identity lasts for the process.
+// Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
+let selfStartTime: number | null = null;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
@@ -40,10 +45,7 @@ export function isPidAlive(pid: number): boolean {
       return false;
     }
   }
-  if (isZombieProcess(pid)) {
-    return false;
-  }
-  return true;
+  return !isZombieProcess(pid);
 }
 
 /** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
@@ -64,9 +66,10 @@ function getDarwinProcessStartTime(pid: number): number | null {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        env: { ...resolveDiagnosticProcessEnv(), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: DARWIN_PS_TIMEOUT_MS,
+        timeout: PROCESS_START_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       })
       .trim();
     // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so
@@ -80,10 +83,7 @@ function getDarwinProcessStartTime(pid: number): number | null {
 
 /** Read the Linux procfs start identity used by Linux-owned runtime state. */
 export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid)) {
-    return null;
-  }
-  if (process.platform !== "linux") {
+  if (!isValidPid(pid) || process.platform !== "linux") {
     return null;
   }
   try {
@@ -109,5 +109,18 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  return process.platform === "darwin" ? getDarwinProcessStartTime(pid) : getProcessStartTime(pid);
+  const isSelf = pid === process.pid;
+  if (isSelf && selfStartTime !== null) {
+    return selfStartTime;
+  }
+  const startTime =
+    process.platform === "darwin"
+      ? getDarwinProcessStartTime(pid)
+      : process.platform === "win32"
+        ? readWindowsProcessStartTimeSync(pid)
+        : getProcessStartTime(pid);
+  if (isSelf && startTime !== null) {
+    selfStartTime = startTime;
+  }
+  return startTime;
 }

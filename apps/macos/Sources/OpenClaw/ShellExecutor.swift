@@ -12,6 +12,7 @@ enum ShellExecutor {
         var timedOut: Bool
         var success: Bool
         var errorMessage: String?
+        var preflightError: String?
     }
 
     /// A background descendant may inherit stdout after its parent exits.
@@ -173,7 +174,7 @@ enum ShellExecutor {
                 allowedDurationToNextStep: .zero),
         ]
         return Configuration(
-            .path(.init("/usr/bin/env")),
+            executable: .path(.init("/usr/bin/env")),
             arguments: Arguments(command),
             environment: self.environment(from: env),
             workingDirectory: cwd.map { .init($0) },
@@ -194,7 +195,8 @@ enum ShellExecutor {
             exitCode: status,
             timedOut: false,
             success: terminationStatus.isSuccess,
-            errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)")
+            errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)",
+            preflightError: nil)
     }
 
     private static func timedOutResult(captured: (stdout: String, stderr: String)) -> ShellResult {
@@ -204,12 +206,14 @@ enum ShellExecutor {
             exitCode: nil,
             timedOut: true,
             success: false,
-            errorMessage: "timeout")
+            errorMessage: "timeout",
+            preflightError: nil)
     }
 
     private static func failedResult(
         captured: (stdout: String, stderr: String) = ("", ""),
-        message: String) -> ShellResult
+        message: String,
+        preflightError: String? = nil) -> ShellResult
     {
         ShellResult(
             stdout: captured.stdout,
@@ -217,7 +221,8 @@ enum ShellExecutor {
             exitCode: nil,
             timedOut: false,
             success: false,
-            errorMessage: message)
+            errorMessage: message,
+            preflightError: preflightError)
     }
 
     private static func runSubprocess(
@@ -226,7 +231,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         return result.terminationStatus
@@ -239,13 +244,13 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         { execution in
             await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
         }
-        return result.closureOutput ? .timedOut : .completed(result.terminationStatus)
+        return result.closureResult ? .timedOut : .completed(result.terminationStatus)
     }
 
     private static func waitForExitOrTimeout(
@@ -294,7 +299,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: .sequence,
             error: .sequence)
         { execution in
@@ -335,14 +340,15 @@ enum ShellExecutor {
                 _ = Darwin.kill(-processIdentifier, SIGKILL)
             }
         }
-        return (result.terminationStatus, result.closureOutput)
+        return (result.terminationStatus, result.closureResult)
     }
 
     static func runDetailed(
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        timeout: Double?) async -> ShellResult
+        timeout: Double?,
+        beforeSpawn: (@Sendable () -> String?)? = nil) async -> ShellResult
     {
         guard !command.isEmpty else {
             return self.failedResult(message: "empty command")
@@ -357,7 +363,13 @@ enum ShellExecutor {
 
         let configuration = self.configuration(command: command, cwd: cwd, env: env)
 
+        if let message = beforeSpawn?() {
+            _ = output.readAndRemove()
+            return self.failedResult(message: message, preflightError: message)
+        }
+
         do {
+            try Task.checkCancellation()
             let outcome = if let timeout, timeout > 0 {
                 try await self.runTimedSubprocess(
                     configuration: configuration,

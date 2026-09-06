@@ -16,26 +16,6 @@ export type RuntimeToolInputSchemaProjection = {
   readonly violations: readonly string[];
 };
 
-function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
-  if (value === null) {
-    return true;
-  }
-  switch (typeof value) {
-    case "boolean":
-    case "string":
-      return true;
-    case "number":
-      return Number.isFinite(value);
-    case "object":
-      if (Array.isArray(value)) {
-        return value.every(isJsonValue);
-      }
-      return Object.values(value as Record<string, unknown>).every(isJsonValue);
-    default:
-      return false;
-  }
-}
-
 function isNonFiniteNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
     return !Number.isFinite(value);
@@ -55,20 +35,23 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
   let text: string | undefined;
   try {
     text = JSON.stringify(value, function (this: object, key, entry) {
-      const holderPath = paths.get(this);
-      const entryPath = isRoot
-        ? path
-        : holderPath === undefined
-          ? `${path}.${key}`
-          : Array.isArray(this)
-            ? `${holderPath}[${key}]`
-            : `${holderPath}.${key}`;
-      isRoot = false;
-      if (nonFiniteNumber.path === null && isNonFiniteNumberValue(entry)) {
-        nonFiniteNumber.path = entryPath;
-      } else if (entry && typeof entry === "object") {
-        paths.set(entry, entryPath);
+      const invalidNumber = nonFiniteNumber.path === null && isNonFiniteNumberValue(entry);
+      if (invalidNumber || (entry && typeof entry === "object")) {
+        const holderPath = paths.get(this);
+        const entryPath = isRoot
+          ? path
+          : holderPath === undefined
+            ? `${path}.${key}`
+            : Array.isArray(this)
+              ? `${holderPath}[${key}]`
+              : `${holderPath}.${key}`;
+        if (invalidNumber) {
+          nonFiniteNumber.path = entryPath;
+        } else {
+          paths.set(entry, entryPath);
+        }
       }
+      isRoot = false;
       return entry;
     });
   } catch {
@@ -90,15 +73,8 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
       violations: [`${violationPath} is not JSON-serializable`],
     };
   }
-  const parsed = JSON.parse(text) as unknown;
-  if (!isJsonValue(parsed)) {
-    return {
-      schema: {},
-      violations: [`${path} is not a JSON value`],
-    };
-  }
   return {
-    schema: parsed,
+    schema: JSON.parse(text) as RuntimeToolInputSchemaJson,
     violations: [],
   };
 }
@@ -112,39 +88,44 @@ const schemaMapKeywords = new Set([
   "properties",
 ]);
 
-function findDynamicSchemaKeywordViolations(
+function inspectJsonSchema(
   schema: RuntimeToolInputSchemaJson,
   path: string,
-): string[] {
+  violations: string[],
+): boolean {
   if (Array.isArray(schema)) {
-    return schema.flatMap((entry, index) =>
-      findDynamicSchemaKeywordViolations(entry, `${path}[${index}]`),
+    return schema.every((entry, index) =>
+      inspectJsonSchema(entry, `${path}[${index}]`, violations),
     );
   }
   if (!isJsonObject(schema)) {
-    return [];
+    // Raw JSON numeric literals can overflow during parsing without passing
+    // through the stringify replacer's non-finite number check.
+    return typeof schema !== "number" || Number.isFinite(schema);
   }
-  const violations: string[] = [];
   for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
     if (key in schema) {
       violations.push(`${path}.${key}`);
     }
   }
   for (const [key, value] of Object.entries(schema)) {
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      return false;
+    }
     if (!value || typeof value !== "object") {
       continue;
     }
     if (schemaMapKeywords.has(key) && isJsonObject(value)) {
       for (const [schemaName, childSchema] of Object.entries(value)) {
-        violations.push(
-          ...findDynamicSchemaKeywordViolations(childSchema, `${path}.${key}.${schemaName}`),
-        );
+        if (!inspectJsonSchema(childSchema, `${path}.${key}.${schemaName}`, violations)) {
+          return false;
+        }
       }
-    } else {
-      violations.push(...findDynamicSchemaKeywordViolations(value, `${path}.${key}`));
+    } else if (!inspectJsonSchema(value, `${path}.${key}`, violations)) {
+      return false;
     }
   }
-  return violations;
+  return true;
 }
 
 /** Projects one runtime tool input schema to JSON and reports runtime incompatibilities. */
@@ -159,7 +140,9 @@ export function projectRuntimeToolInputSchema(
   } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
     violations.push(`${path}.type must be "object"`);
   }
-  violations.push(...findDynamicSchemaKeywordViolations(projection.schema, path));
+  if (!inspectJsonSchema(projection.schema, path, violations)) {
+    return { schema: {}, violations: [`${path} is not a JSON value`] };
+  }
   return {
     schema: projection.schema,
     violations,

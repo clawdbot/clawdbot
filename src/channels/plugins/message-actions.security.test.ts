@@ -17,7 +17,11 @@ function dispatchTestChannelMessageAction(
     ...overrides,
   });
 }
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "./types.js";
 
 const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResult({ ok: true }));
 
@@ -95,9 +99,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   function setReadPlugin(params?: {
     channel?: ChannelPlugin["id"];
     origin?: string;
-    strayPolicy?: string;
     normalizeTarget?: (raw: string) => string | undefined;
     targetPrefixes?: readonly string[];
+    providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
     messageActionTargetAliases?: NonNullable<
       NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"]
     >;
@@ -121,9 +125,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
           }
         : {}),
       actions: {
-        ...(params?.strayPolicy
-          ? ({ conversationReadPolicy: params.strayPolicy } as Record<string, unknown>)
-          : {}),
+        providerOwnedReadGates: params?.providerOwnedReadGates,
         describeMessageTool: () => ({ actions: ["read", "send"] }),
         supportsAction,
         requiresTrustedRequesterSender,
@@ -511,8 +513,54 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      name: "declared bundled adapter",
+      channel: "declared-bundled",
+      origin: "bundled",
+      providerOwnedReadGates: true,
+      allowed: true,
+    },
+    {
+      name: "undeclared bundled adapter",
+      channel: "undeclared-bundled",
+      origin: "bundled",
+      providerOwnedReadGates: undefined,
+      allowed: false,
+    },
+    {
+      name: "declared external adapter",
+      channel: "declared-external",
+      origin: "workspace",
+      providerOwnedReadGates: true,
+      allowed: false,
+    },
+  ] as const)("applies provider-owned read gates for a $name", async (testCase) => {
+    setReadPlugin(testCase);
+    const dispatch = dispatchTestChannelMessageAction({
+      channel: testCase.channel,
+      action: "read",
+      params: { channelId: "configured" },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: testCase.channel,
+        currentChannelId: "current",
+      },
+    });
+
+    if (testCase.allowed) {
+      await dispatch;
+      expect(handleAction).toHaveBeenCalledOnce();
+      return;
+    }
+    await expect(dispatch).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   it("delegates configured-target policy to a bundled adapter", async () => {
-    setReadPlugin({ origin: "bundled" });
+    setReadPlugin({ origin: "bundled", providerOwnedReadGates: true });
 
     await dispatchTestChannelMessageAction({
       channel: "discord",
@@ -525,7 +573,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   });
 
   it("delegates Mattermost cross-channel policy to its bundled provider gate", async () => {
-    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+    setReadPlugin({
+      channel: "mattermost",
+      origin: "bundled",
+      providerOwnedReadGates: ["read"],
+    });
 
     await dispatchChannelMessageAction({
       channel: "mattermost",
@@ -539,7 +591,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   });
 
   it("keeps Mattermost reactions behind the host exact-current gate", async () => {
-    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+    setReadPlugin({
+      channel: "mattermost",
+      origin: "bundled",
+      providerOwnedReadGates: ["read"],
+    });
 
     await expect(
       dispatchChannelMessageAction({
@@ -560,7 +616,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   });
 
   it("keeps unaudited bundled adapters on the exact-current host limit", async () => {
-    setReadPlugin({ channel: "telegram", origin: "bundled" });
+    setReadPlugin({
+      channel: "telegram",
+      origin: "bundled",
+      providerOwnedReadGates: ["react", "edit", "delete"],
+    });
 
     await expect(
       dispatchTestChannelMessageAction({
@@ -582,7 +642,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it.each(["react", "edit", "delete"] as const)(
     "delegates Telegram %s topic binding to the bundled provider",
     async (action) => {
-      setReadPlugin({ channel: "telegram", origin: "bundled" });
+      setReadPlugin({
+        channel: "telegram",
+        origin: "bundled",
+        providerOwnedReadGates: ["react", "edit", "delete"],
+      });
 
       await dispatchTestChannelMessageAction({
         channel: "telegram",
@@ -603,7 +667,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   );
 
   it("does not grant Telegram mutation enforcement to an external override", async () => {
-    setReadPlugin({ channel: "telegram", origin: "workspace" });
+    setReadPlugin({
+      channel: "telegram",
+      origin: "workspace",
+      providerOwnedReadGates: ["react", "edit", "delete"],
+    });
 
     await expect(
       dispatchTestChannelMessageAction({
@@ -1516,29 +1584,6 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         toolContext: {
           currentChannelProvider: testCase.currentChannelProvider,
           currentChannelId: "currentChannelId" in testCase ? testCase.currentChannelId : "123",
-        },
-      }),
-    ).rejects.toThrow("requires the exact current conversation and account");
-    expect(handleAction).not.toHaveBeenCalled();
-  });
-
-  it("does not let an external adapter opt into bundled behavior with a stray property", async () => {
-    setReadPlugin({
-      origin: "workspace",
-      strayPolicy: "current-or-configured-v1",
-    });
-
-    await expect(
-      dispatchTestChannelMessageAction({
-        channel: "discord",
-        action: "read",
-        params: { channelId: "configured" },
-        accountId: "default",
-        requesterAccountId: "default",
-        conversationReadOrigin: "delegated",
-        toolContext: {
-          currentChannelProvider: "discord",
-          currentChannelId: "current",
         },
       }),
     ).rejects.toThrow("requires the exact current conversation and account");

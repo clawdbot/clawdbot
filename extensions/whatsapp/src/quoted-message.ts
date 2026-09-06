@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements quoted message behavior.
 import {
   isHostedLidUser,
   isHostedPnUser,
@@ -228,7 +227,14 @@ export function buildQuotedMessageOptions(params: {
 }): MiscMessageGenerationOptions | undefined {
   const id = params.messageId?.trim();
   const quotedRemoteJid = params.remoteJid?.trim();
-  if (!id || !quotedRemoteJid) {
+  const previewText = [
+    params.messageText,
+    formatMediaPlaceholderText(params.media ? [params.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  // Baileys needs quote content; a cache miss uses the ordinary unquoted send.
+  if (!id || !quotedRemoteJid || !previewText) {
     return undefined;
   }
   const remoteJid = resolveQuotedRemoteJid({
@@ -237,12 +243,6 @@ export function buildQuotedMessageOptions(params: {
     quotedRemoteJid,
     requestedJid: params.requestedJid,
   });
-  const previewText = [
-    params.messageText,
-    formatMediaPlaceholderText(params.media ? [params.media] : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
   return {
     quoted: {
       key: {

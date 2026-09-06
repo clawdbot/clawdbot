@@ -142,16 +142,22 @@ describe("Tool Search MCP failures", () => {
       status: "failed",
     });
     const wrappedDetails = wrappedResult.details as {
-      tool: unknown;
+      tool: { id: string; name: string; source: string };
       result: unknown;
       status: unknown;
     };
+    const { id, name, source } = wrappedDetails.tool;
     expect(wrappedResult.content).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
+        text: expect.stringContaining(
+          JSON.stringify({ tool: { id, name, source }, result: wrappedDetails.result }, null, 2),
+        ),
       },
     ]);
+    expect(wrappedResult.content[0]).toMatchObject({
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+    });
     expect(isToolResultError(wrappedResult)).toBe(true);
   });
 

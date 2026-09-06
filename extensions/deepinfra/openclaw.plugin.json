@@ -1,5 +1,6 @@
 {
   "id": "deepinfra",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },
@@ -32,6 +33,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepinfra": "deepinfra"
+    },
     "providers": {
       "deepinfra": {
         "baseUrl": "https://api.deepinfra.com/v1/openai",
@@ -81,9 +85,9 @@
             "contextWindow": 1048576,
             "maxTokens": 1048576,
             "cost": {
-              "input": 0.93,
-              "output": 3,
-              "cacheRead": 0.18,
+              "input": 0.4875,
+              "output": 1.56,
+              "cacheRead": 0.091000001625,
               "cacheWrite": 0
             },
             "compat": {
@@ -116,9 +120,9 @@
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
-              "input": 0.74,
-              "output": 3.5,
-              "cacheRead": 0.15,
+              "input": 0.68,
+              "output": 3.4,
+              "cacheRead": 0.136,
               "cacheWrite": 0
             },
             "compat": {
@@ -225,9 +229,9 @@
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
-              "input": 0.1,
+              "input": 0.09,
               "output": 0.3,
-              "cacheRead": 0.02,
+              "cacheRead": 0.0199999998,
               "cacheWrite": 0
             },
             "compat": {
@@ -258,6 +262,11 @@
     },
     "discovery": {
       "deepinfra": "refreshable"
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "deepinfra": { "deepinfra": { "provider": "deepinfra" } }
     }
   },
   "providerAuthChoices": [

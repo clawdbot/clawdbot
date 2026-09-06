@@ -7,11 +7,32 @@ import { setSlackRuntime } from "../runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 
+const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
+const logVerboseMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: logVerboseMock,
+}));
+
+vi.mock("./media.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.runtime.js")>()),
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   groupDmEnabled?: boolean;
   groupDmChannels?: string[];
   appClient?: App["client"];
+  runtime?: RuntimeEnv;
   apiAppId?: string;
   channelsConfig?: Record<string, { enabled?: boolean }>;
 }) {
@@ -23,7 +44,7 @@ function createTestContext(params?: {
     accountId: "default",
     botToken: "xoxb-test",
     app: { client: params?.appClient ?? {} } as App,
-    runtime: {} as RuntimeEnv,
+    runtime: params?.runtime ?? ({} as RuntimeEnv),
     botUserId: "U_BOT",
     botId: "B_BOT",
     identityHealth: { lifecycle: "ready", lastError: null },
@@ -55,7 +76,6 @@ function createTestContext(params?: {
     },
     textLimit: 4000,
     typingReaction: "",
-    ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
   });
 }
@@ -67,7 +87,11 @@ function createEnterpriseEventScope(teamId: string): SlackEventScope {
   };
 }
 
-beforeEach(() => setSlackRuntime(null as never));
+beforeEach(() => {
+  setSlackRuntime(null as never);
+  saveRemoteMediaMock.mockReset();
+  logVerboseMock.mockClear();
+});
 afterEach(() => setSlackRuntime(null as never));
 
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
@@ -368,6 +392,69 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
   });
+
+  it("downloads the cached DM profile image without blocking or attaching the bot token", async () => {
+    const download = deferred<{ path: string }>();
+    saveRemoteMediaMock.mockReturnValue(download.promise);
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: {
+        profile: {
+          display_name: "Alice",
+          image_192: "https://avatars.slack-edge.com/user-hash-192.png",
+          image_512: "https://avatars.slack-edge.com/user-hash-512.png",
+          image_72: "https://avatars.slack-edge.com/user-hash-72.png",
+        },
+      },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+
+    await expect(ctx.resolveUserName("U1")).resolves.toEqual({
+      name: "Alice",
+      imageUrl: "https://avatars.slack-edge.com/user-hash-192.png",
+    });
+    expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
+    expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+      url: "https://avatars.slack-edge.com/user-hash-192.png",
+      filePathHint: "conversation-avatar.png",
+      maxBytes: 256 * 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["avatars.slack-edge.com", "*.slack-edge.com"],
+        hostnameAllowlist: ["avatars.slack-edge.com", "*.slack-edge.com"],
+      },
+    });
+
+    download.resolve({ path: "/media/inbound/slack-avatar.png" });
+    await vi.waitFor(() =>
+      expect(ctx.resolveUserAvatar("U1")).toBe("/media/inbound/slack-avatar.png"),
+    );
+    await ctx.resolveUserName("U1");
+    expect(usersInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips profile image downloads for GovSlack clients", async () => {
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: {
+        profile: {
+          display_name: "Gov User",
+          image_192: "https://avatars.slack-edge.com/gov-user.png",
+        },
+      },
+    });
+    const appClient = {
+      slackApiUrl: "https://slack-gov.com/api/",
+      users: { info: usersInfo },
+    } as unknown as App["client"];
+    const ctx = createTestContext({ appClient });
+
+    await ctx.resolveUserName("U_GOV");
+
+    expect(ctx.resolveUserAvatar("U_GOV")).toBeUndefined();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("createSlackMonitorContext Agent View state", () => {
@@ -534,6 +621,24 @@ describe("createSlackMonitorContext Agent View state", () => {
     expect(lookup).toHaveBeenCalledTimes(4098);
   });
 
+  it("reads the durable Agent View marker once the app id is learned", async () => {
+    const register = vi.fn();
+    const lookup = vi.fn(async () => ({ experience: "agent", observedAt: 1 }));
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup })) },
+    } as never);
+    const ctx = createTestContext({ apiAppId: "" });
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+    expect(lookup).not.toHaveBeenCalled();
+
+    ctx.apiAppId = "A_LEARNED";
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith(
+      JSON.stringify(["workspace", "default", "T_EXPECTED", "A_LEARNED"]),
+    );
+  });
+
   it("does not persist Agent View without a stable Slack app identity", async () => {
     const register = vi.fn();
     const lookup = vi.fn();
@@ -569,5 +674,156 @@ describe("createSlackMonitorContext Agent View state", () => {
     await ctx.recordSlackAgentView();
 
     await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+  });
+});
+
+describe("Slack session status and titles", () => {
+  it.each(["processing", "active", "suspended"] as const)(
+    "writes %s only for a thread",
+    async (status) => {
+      const apiCall = vi.fn().mockResolvedValue({ ok: true });
+      const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
+      await ctx.setSlackSessionStatus({ channelId: "D123", status });
+      expect(apiCall).not.toHaveBeenCalled();
+      await ctx.setSlackSessionStatus({ channelId: "D123", threadTs: "10.000", status });
+      expect(apiCall).toHaveBeenCalledExactlyOnceWith("agents.sessions.setStatus", {
+        token: "xoxb-test",
+        channel_id: "D123",
+        thread_ts: "10.000",
+        status,
+      });
+    },
+  );
+
+  it("warns operators only once across contexts for a missing Stop subscription", async () => {
+    const warning = "missing_agent_session_stopped_event_subscription";
+    const log = vi.fn();
+    const apiCall = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, response_metadata: { warnings: [warning] } })
+      .mockResolvedValue({ ok: true, warning });
+    for (let i = 0; i < 3; i++) {
+      const ctx = createTestContext({
+        appClient: { apiCall } as unknown as App["client"],
+        runtime: { log } as unknown as RuntimeEnv,
+      });
+      await ctx.setSlackSessionStatus({
+        channelId: "D123",
+        threadTs: "10.000",
+        status: "processing",
+      });
+    }
+    expect(log).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "https://docs.openclaw.ai/channels/slack#additional-manifest-settings",
+      ),
+    );
+  });
+
+  it("keeps API failures verbose and retries a title only after successful delivery", async () => {
+    const apiCall = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("not_agent_app"))
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("rename failed"))
+      .mockResolvedValue({ ok: true });
+    const log = vi.fn();
+    const ctx = createTestContext({
+      appClient: { apiCall } as unknown as App["client"],
+      runtime: { log } as unknown as RuntimeEnv,
+    });
+    const update = {
+      channelId: "D123",
+      threadTs: "10.000",
+      status: "processing" as const,
+      title: "Research",
+    };
+    await ctx.setSlackSessionStatus(update);
+    await ctx.setSlackSessionStatus(update);
+    await ctx.setSlackSessionStatus(update);
+    await ctx.setSlackSessionStatus(update);
+    expect(
+      apiCall.mock.calls.filter(([method]) => method === "agents.sessions.rename"),
+    ).toHaveLength(2);
+    expect(log).not.toHaveBeenCalled();
+    expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining("not_agent_app"));
+    expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining("rename failed"));
+  });
+
+  it("accepts the creation title, renames once per change, and does not echo user renames", async () => {
+    const apiCall = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, title: "x".repeat(200) })
+      .mockResolvedValue({ ok: true });
+    const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
+    const update = { channelId: "D123", threadTs: "10.000", status: "processing" as const };
+    await ctx.setSlackSessionStatus({ ...update, title: "x".repeat(201) });
+    await ctx.setSlackSessionStatus({ ...update, title: "x".repeat(202) });
+    await ctx.setSlackSessionStatus({ ...update, title: "New display name" });
+    await ctx.setSlackSessionStatus({ ...update, title: "New display name" });
+    ctx.recordSlackSessionTitle({ ...update, title: "User title" });
+    await ctx.setSlackSessionStatus({ ...update, title: "User title" });
+    expect(apiCall).toHaveBeenNthCalledWith(
+      1,
+      "agents.sessions.setStatus",
+      expect.objectContaining({ title: "x".repeat(200) }),
+    );
+    expect(apiCall.mock.calls.filter(([method]) => method === "agents.sessions.rename")).toEqual([
+      [
+        "agents.sessions.rename",
+        { token: "xoxb-test", channel_id: "D123", thread_ts: "10.000", title: "New display name" },
+      ],
+    ]);
+  });
+
+  it("does not overwrite a user rename received during a status request", async () => {
+    const statusReply = deferred<{ ok: boolean }>();
+    const apiCall = vi
+      .fn()
+      .mockReturnValueOnce(statusReply.promise)
+      .mockResolvedValue({ ok: true });
+    const ctx = createTestContext({ appClient: { apiCall } as unknown as App["client"] });
+    const update = { channelId: "D123", threadTs: "10.000", status: "processing" as const };
+    const pending = ctx.setSlackSessionStatus({ ...update, title: "Old title" });
+    ctx.recordSlackSessionTitle({ ...update, title: "User title" });
+    statusReply.resolve({ ok: true });
+    await pending;
+    await ctx.setSlackSessionStatus({ ...update, title: "User title" });
+    expect(apiCall.mock.calls.map(([method]) => method)).toEqual([
+      "agents.sessions.setStatus",
+      "agents.sessions.setStatus",
+    ]);
+  });
+
+  it("evicts old title records without mixing threads or workspace clients", async () => {
+    const apiCall = vi.fn().mockResolvedValue({ ok: true });
+    const ctx = createTestContext();
+    const eventScope = { teamId: "T_OTHER", client: { apiCall } as unknown as App["client"] };
+    const update = {
+      channelId: "D123",
+      threadTs: "10.000",
+      status: "processing" as const,
+      title: "Title",
+      eventScope,
+    };
+    ctx.recordSlackSessionTitle(update);
+    for (let i = 0; i < 1024; i++) {
+      ctx.recordSlackSessionTitle({ ...update, threadTs: String(i) });
+    }
+    await ctx.setSlackSessionStatus(update);
+    expect(apiCall).toHaveBeenLastCalledWith(
+      "agents.sessions.rename",
+      expect.objectContaining({ thread_ts: "10.000", title: "Title" }),
+    );
+    ctx.recordSlackSessionTitle({
+      ...update,
+      eventScope: undefined,
+      title: "Workspace-local title",
+    });
+    await ctx.setSlackSessionStatus(update);
+    expect(
+      apiCall.mock.calls.filter(([method]) => method === "agents.sessions.rename"),
+    ).toHaveLength(1);
   });
 });

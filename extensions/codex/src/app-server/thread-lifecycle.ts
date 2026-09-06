@@ -16,7 +16,6 @@ export {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexAppServerThreadModelSelection,
   resolveCodexBindingModelProviderFallback,
-  resolveReasoningEffort,
 } from "./thread-model-selection.js";
 export { buildDeveloperInstructions } from "./thread-prompt.js";
 export {

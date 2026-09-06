@@ -19,6 +19,8 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
+import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -50,15 +52,30 @@ vi.mock("../../infra/device-pairing.js", async () => {
   );
   return {
     ...actual,
-    approveDevicePairing: approveDevicePairingMock,
     getPairedDevice: getPairedDeviceMock,
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
     rejectDevicePairing: rejectDevicePairingMock,
+    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  };
+});
+
+vi.mock("../../infra/device-pairing-approval.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-approval.js")>(
+    "../../infra/device-pairing-approval.js",
+  );
+  return { ...actual, approveDevicePairing: approveDevicePairingMock };
+});
+
+vi.mock("../../infra/device-pairing-tokens.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-tokens.js")>(
+    "../../infra/device-pairing-tokens.js",
+  );
+  return {
+    ...actual,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
-    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
   };
 });
 
@@ -213,6 +230,55 @@ describe("deviceHandlers", () => {
     });
   });
 
+  it("clears node runtime state and reconciles workers after revoking a node token", async () => {
+    const nodeId = "revoked-node-device";
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { token: "raw-node-token", role: "node", scopes: [], revokedAtMs: 456 },
+    });
+    await seedNodeWakeState(nodeId);
+    enqueueNodePendingWork({ nodeId, type: "location.request" });
+    const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+    const workerEnvironmentService = {};
+    const reconciledDevices: string[] = [];
+    bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
+      reconciledDevices.push(deviceId);
+      return [];
+    });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: nodeId, role: "node" },
+      // Non-operator role management requires an admin-scoped caller.
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+    Object.assign(opts.context, { workerEnvironmentService });
+
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
+
+    // Revocation ends node authority like pairing removal: the same teardown
+    // owner must run so pending work, wake state, surface caps, and worker
+    // placements are not stranded on a dead node.
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
+    expect(wakeLifecycle.aborted).toBe(true);
+    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
+    const nodeRegistry = opts.context.nodeRegistry as unknown as {
+      updateSurface: ReturnType<typeof vi.fn>;
+    };
+    expect(nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+    expect(reconciledDevices).toEqual([nodeId]);
+    expect(opts.context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
+      role: "node",
+      reason: "device-token-revoked",
+    });
+  });
+
   it("disconnects active clients after removing a paired device", async () => {
     removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
     const opts = createOptions("device.pair.remove", { deviceId: " device-1 " });
@@ -256,6 +322,71 @@ describe("deviceHandlers", () => {
     expect(respond).toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledWith("device-1");
   });
+
+  it.each([false, true])(
+    "reconciles removed device workers even if the caller retires during removal: %s",
+    async (callerRetired) => {
+      const opts = createOptions(
+        "device.pair.remove",
+        { deviceId: "device-1" },
+        { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+      );
+      const client = Object.assign(expectDefined(opts.client, "device removal caller"), {
+        invalidated: false,
+        socket: { close: vi.fn() },
+      });
+      removePairedDeviceMock.mockImplementationOnce(async () => {
+        client.invalidated = callerRetired;
+        return { deviceId: "device-1" };
+      });
+      const policyResponse = registerGatewayPolicyResponse(
+        "device.pair.remove",
+        client,
+        opts.respond,
+      );
+      const order: string[] = [];
+      const workerEnvironmentService = {};
+      bindDeviceWorkerReconciliation(workerEnvironmentService, async () => {
+        order.push("environment");
+        return ["environment-1"];
+      });
+      const reconcileActive = vi.fn(async () => {
+        order.push("placement");
+      });
+      Object.assign(opts.context, {
+        workerEnvironmentService,
+        workerPlacementDispatchService: { reconcileActive },
+        invalidateClientsForDevice: vi.fn(() => order.push("invalidate")),
+        disconnectClientsForDevice: vi.fn(() => order.push("disconnect")),
+      });
+      vi.mocked(opts.respond).mockImplementation(() => {
+        order.push("respond");
+      });
+
+      try {
+        const removal = expectDefined(
+          deviceHandlers["device.pair.remove"],
+          'deviceHandlers["device.pair.remove"] test invariant',
+        )(opts);
+        if (callerRetired) {
+          await expect(removal).rejects.toThrow("client authorization is no longer active");
+          expect(opts.respond).not.toHaveBeenCalled();
+        } else {
+          await removal;
+        }
+        expect(reconcileActive).toHaveBeenCalledWith("environment-1");
+        expect(order).toEqual([
+          "invalidate",
+          "environment",
+          "placement",
+          ...(callerRetired ? [] : ["respond"]),
+          "disconnect",
+        ]);
+      } finally {
+        policyResponse?.finish();
+      }
+    },
+  );
 
   it("does not disconnect clients when device removal fails", async () => {
     removePairedDeviceMock.mockResolvedValue(null);
@@ -822,7 +953,7 @@ describe("deviceHandlers", () => {
       deviceId: "device-1",
       role: "node",
       scopes: undefined,
-      callerScopes: ["operator.admin"],
+      callerScopes: undefined,
     });
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device token rotation denied");
@@ -1563,6 +1694,11 @@ describe("deviceHandlers", () => {
     expect(opts.context.logGateway.info).toHaveBeenCalledWith(
       "device pairing renamed device=device-1 label=Kitchen Mac",
     );
+    expect(opts.context.broadcast).toHaveBeenCalledWith(
+      "device.pair.changed",
+      {},
+      { dropIfSlow: true },
+    );
   });
 
   it("rejects renaming another device from a non-admin device session", async () => {
@@ -1596,6 +1732,7 @@ describe("deviceHandlers", () => {
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("missing-device", {
       operatorLabel: "Ghost",
     });
+    expect(opts.context.broadcast).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "unknown deviceId");
   });
 

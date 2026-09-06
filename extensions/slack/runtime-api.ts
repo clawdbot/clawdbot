@@ -6,31 +6,34 @@ export {
 } from "./src/action-runtime.js";
 export { listSlackDirectoryGroupsLive, listSlackDirectoryPeersLive } from "./src/directory-live.js";
 export {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+} from "./src/accounts.js";
+export {
   deleteSlackMessage,
   editSlackMessage,
   getSlackMemberInfo,
-  listEnabledSlackAccounts,
-  listSlackAccountIds,
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
-  monitorSlackProvider,
   pinSlackMessage,
-  probeSlack,
   reactSlackMessage,
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  resolveSlackAppToken,
-  resolveSlackBotToken,
-  resolveSlackGroupRequireMention,
-  resolveSlackGroupToolPolicy,
-  sendMessageSlack,
   sendSlackMessage,
   unpinSlackMessage,
-} from "./src/index.js";
+} from "./src/actions.js";
+export {
+  resolveSlackGroupRequireMention,
+  resolveSlackGroupToolPolicy,
+} from "./src/group-policy.js";
+export { monitorSlackProvider } from "./src/monitor.js";
+export { probeSlack } from "./src/probe.js";
+export { sendMessageSlack } from "./src/send.js";
+export { resolveSlackAppToken, resolveSlackBotToken } from "./src/token.js";
 export {
   resolveSlackChannelAllowlist,
   type SlackChannelLookup,

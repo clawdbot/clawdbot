@@ -4,6 +4,13 @@
     "stateMigrations": true
   },
   "name": "OpenClaw Memory",
+  "cliCommands": [
+    {
+      "name": "memory",
+      "description": "Search, inspect, and reindex memory files",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },
@@ -12,6 +19,9 @@
     "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {
+    "intent": {
+      "profiles": ["coding", "messaging"]
+    },
     "memory_get": {
       "replaySafe": true
     }
@@ -47,6 +57,30 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludeSessions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hookExternalContentSources": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "channels": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "chatTypes": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["direct", "group", "channel"] }
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

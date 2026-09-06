@@ -6,8 +6,17 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
+let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let resolveSkillReferenceInvocations: typeof import("./chat-commands.js").resolveSkillReferenceInvocations;
+let lastCommandBuildOptions:
+  | { pluginMetadataSnapshot?: unknown; librarySelections?: unknown }
+  | undefined;
+
+function resolveSkillReferenceInvocations(
+  params: Parameters<typeof expandExplicitSkillReferences>[0],
+) {
+  return expandExplicitSkillReferences(params).skills;
+}
 
 const tempDirs = createTempDirTracker();
 const resolveNodeExecEligibilityMock = vi.hoisted(() =>
@@ -89,6 +98,8 @@ function buildWorkspaceSkillCommandSpecs(
     reservedNames?: Set<string>;
     skillFilter?: string[];
     agentId?: string;
+    pluginMetadataSnapshot?: unknown;
+    librarySelections?: unknown;
     config?: {
       agents?: {
         defaults?: { skills?: string[] };
@@ -97,6 +108,7 @@ function buildWorkspaceSkillCommandSpecs(
     };
   },
 ) {
+  lastCommandBuildOptions = opts;
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
@@ -157,10 +169,10 @@ vi.mock("./agent-filter.js", () => ({
 
 beforeAll(async () => {
   ({
+    expandExplicitSkillReferences,
     listSkillCommandsForAgents,
     listSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
-    resolveSkillReferenceInvocations,
   } = await import("./chat-commands.js"));
 });
 
@@ -170,10 +182,31 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  lastCommandBuildOptions = undefined;
   resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
 });
 
 describe("resolveSkillCommandInvocation", () => {
+  it("keeps a renamed dashboard skill addressable through /skill and $ references", () => {
+    const dashboard = {
+      name: "dashboard_2",
+      skillName: "dashboard",
+      description: "Custom dashboard skill",
+    };
+    expect(
+      resolveSkillCommandInvocation({
+        commandBodyNormalized: "/skill dashboard custom input",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual({ command: dashboard, args: "custom input" });
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $dashboard for the custom workflow",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual([dashboard]);
+  });
+
   it("matches skill commands and parses args", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/demo_skill do the thing",
@@ -302,6 +335,118 @@ describe("resolveSkillReferenceInvocations", () => {
         ],
       }).map((command) => command.name),
     ).toEqual(["hidden_skill"]);
+  });
+});
+
+describe("expandExplicitSkillReferences", () => {
+  it("renders a leading bundle command template and leaves dollar-like bundle text literal", () => {
+    const bundleCommand = {
+      name: "workflows_review",
+      skillName: "workflows-review",
+      description: "Review a workflow",
+      promptTemplate: "Review this workflow.\n\nFocus on:\n$ARGUMENTS",
+      sourceFilePath: "/tmp/plugin/commands/workflows-review.md",
+    };
+    expect(
+      expandExplicitSkillReferences({
+        text: "/workflows_review retries",
+        skillCommands: [bundleCommand],
+      }),
+    ).toEqual({
+      body: "Review this workflow.\n\nFocus on:\nretries",
+      skills: [bundleCommand],
+    });
+    expect(
+      expandExplicitSkillReferences({
+        text: "Keep $workflows_review literal.",
+        skillCommands: [bundleCommand],
+      }),
+    ).toEqual({ body: "Keep $workflows_review literal.", skills: [] });
+  });
+
+  it("leaves unknown leading slash commands byte-identical", () => {
+    const text = "/compact with $demo_skill";
+    expect(
+      expandExplicitSkillReferences({
+        text,
+        skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+      }),
+    ).toEqual({ body: text, skills: [] });
+  });
+
+  it.each([
+    {
+      label: "slash command",
+      text: "/foo run it",
+      available: { name: "foo", skillName: "foo?", description: "Allowed skill" },
+      hidden: { name: "foo", skillName: "foo!", description: "Hidden skill" },
+      allAvailableName: "foo_2",
+    },
+    {
+      label: "dollar reference",
+      text: "Run it with $foo_bar.",
+      available: { name: "foo_bar", skillName: "foo-bar", description: "Allowed skill" },
+      hidden: { name: "foo_bar", skillName: "foo:bar", description: "Hidden skill" },
+      allAvailableName: "foo_bar_2",
+    },
+  ])(
+    "prefers an available $label when hidden skill names collide",
+    ({ text, available, hidden, allAvailableName }) => {
+      expect(
+        expandExplicitSkillReferences({
+          text,
+          skillCommands: [available],
+          allSkillCommands: [hidden, { ...available, name: allAvailableName }],
+        }),
+      ).toEqual({
+        body: [
+          "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+          `- ${available.skillName}`,
+          "",
+          "User request:",
+          text,
+        ].join("\n"),
+        skills: [available],
+      });
+    },
+  );
+
+  it("rejects a rendered skill reference that exceeds its prompt budget", () => {
+    const text = "/demo_skill";
+    expect(
+      expandExplicitSkillReferences({
+        text,
+        skillCommands: [
+          {
+            name: "demo_skill",
+            skillName: "demo-skill",
+            description: "Demo",
+            modelVisible: false,
+            skillFile: `/tmp/${"nested/".repeat(80)}SKILL.md`,
+          },
+        ],
+      }),
+    ).toEqual({
+      body: text,
+      error:
+        "Skill reference metadata is too long. Keep each rendered reference at 512 characters or less.",
+      skills: [],
+    });
+  });
+
+  it("rejects a combined reference prefix that exceeds its prompt budget", () => {
+    const skillCommands = Array.from({ length: 8 }, (_, index) => ({
+      name: `skill_${index + 1}`,
+      skillName: `skill-${index + 1}-${"x".repeat(110)}`,
+      description: `Skill ${index + 1}`,
+    }));
+    const text = skillCommands.map((skill) => `$${skill.name}`).join(" ");
+    expect(expandExplicitSkillReferences({ text, skillCommands })).toEqual({
+      body: text,
+      error:
+        "Combined skill reference metadata is too long. Use fewer or shorter skill references.",
+      skills: [],
+    });
   });
 });
 
@@ -526,5 +671,35 @@ describe("listSkillCommandsForWorkspace", () => {
         execOverrides: { security: "allowlist" },
       }),
     );
+  });
+
+  it("keeps explicit command discovery on the admitted plugin generation", async () => {
+    const baseDir = tempDirs.make("openclaw-skills-workspace-generation-");
+    const workspaceDir = await createWorkspace(baseDir, "main");
+    const pluginMetadataSnapshot = { generation: "gateway" } as never;
+
+    listSkillCommandsForWorkspace({
+      workspaceDir,
+      cfg: {},
+      pluginMetadataSnapshot,
+    });
+
+    expect(lastCommandBuildOptions?.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("delegates pinned library loading to the command entry provider", async () => {
+    const baseDir = tempDirs.make("openclaw-skills-workspace-library-");
+    const workspaceDir = await createWorkspace(baseDir, "main");
+    const librarySelections = [
+      { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
+    ];
+
+    listSkillCommandsForWorkspace({
+      workspaceDir,
+      cfg: {},
+      sessionEntry: { skillLibrarySelections: librarySelections },
+    });
+
+    expect(lastCommandBuildOptions?.librarySelections).toBe(librarySelections);
   });
 });

@@ -110,7 +110,13 @@ delay; otherwise they log at `debug`. Idle liveness samples are still recorded
 as diagnostic events but never escalate to a warning by themselves.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
-CPU timing. Stalled embedded-run diagnostics mark `terminalProgressStale=true`
+whole-process CPU timing, including worker and native threads. Phase CPU can
+include concurrent work outside that phase; it is not exclusive attribution.
+The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
+and can exceed `1`. See
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
+
+Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
 embedded run active.

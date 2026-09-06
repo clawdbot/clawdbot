@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
@@ -11,6 +12,11 @@ TOKEN="e2e-$(date +%s)-$$"
 NET_NAME="openclaw-net-e2e-$$"
 GW_NAME="openclaw-gateway-e2e-$$"
 SUSPENSION_STATE_PATH="/tmp/gateway-network-suspension.json"
+CAPABILITIES_DIR=""
+CAPABILITIES_PATH=""
+CAPABILITIES_CONTAINER_PATH="/tmp/gateway-network-output/capabilities.json"
+CAPABILITIES_HOST_USER="$(id -u)"
+CAPABILITIES_HOST_GROUP="$(id -g)"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_DOCKER_COMMAND_TIMEOUT:-600s}"
 CLIENT_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_CLIENT_TIMEOUT:-90s}"
 CLIENT_LIMIT_ENV_ARGS=()
@@ -33,6 +39,8 @@ fi
 cleanup() {
   docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
   docker_e2e_docker_cmd network rm "$NET_NAME" >/dev/null 2>&1 || true
+  [[ -z "$CAPABILITIES_PATH" ]] || rm -f "$CAPABILITIES_PATH" >/dev/null 2>&1 || true
+  [[ -z "$CAPABILITIES_DIR" ]] || rmdir "$CAPABILITIES_DIR" >/dev/null 2>&1 || true
 }
 
 run_suspension_phase() {
@@ -77,14 +85,61 @@ if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openc
 fi
 
 echo "Running client container (connect + health)..."
+CAPABILITIES_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-gateway-network-capabilities.XXXXXX")"
+CAPABILITIES_PATH="$CAPABILITIES_DIR/capabilities.json"
+if [[ ! -O "$CAPABILITIES_DIR" ]]; then
+  echo "Gateway network capability output directory is not owned by the host user." >&2
+  exit 1
+fi
 DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+  --user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP" \
   --network "$NET_NAME" \
   "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+  -v "$CAPABILITIES_DIR:/tmp/gateway-network-output" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
+  -e "GW_CAPABILITIES_PATH=$CAPABILITIES_CONTAINER_PATH" \
   "$IMAGE_NAME" \
   node scripts/e2e/lib/gateway-network/client.mts
+
+SUSPENSION_CAPABILITY="$(
+  node -e '
+    const fs = require("node:fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !["supported", "unsupported"].includes(value.suspension)
+    ) {
+      throw new Error("invalid gateway network capability output");
+    }
+    process.stdout.write(value.suspension);
+  ' "$CAPABILITIES_PATH"
+)"
+if [[ ! -O "$CAPABILITIES_PATH" ]]; then
+  echo "Gateway network capability output is not owned by the host user." >&2
+  exit 1
+fi
+rm "$CAPABILITIES_PATH"
+rmdir "$CAPABILITIES_DIR"
+CAPABILITIES_PATH=""
+CAPABILITIES_DIR=""
+if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]; then
+  authorization_status=0
+  if openclaw_frozen_target_omissions_authorized; then
+    echo "Target gateway does not advertise cooperative suspension; authorized frozen-target omission."
+    echo "OK"
+    exit 0
+  else
+    authorization_status=$?
+  fi
+  if ((authorization_status == 2)); then
+    exit "$authorization_status"
+  fi
+  echo "Target gateway does not advertise cooperative suspension and frozen-target omissions are not authorized." >&2
+  exit 1
+fi
 
 phase_started="$SECONDS"
 echo "Running cooperative suspension lifecycle before container stop..."

@@ -16,6 +16,7 @@ import type {
   DB as OpenClawStateKyselyDatabase,
 } from "../../state/openclaw-state-db.generated.js";
 import {
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -251,6 +252,13 @@ export type CreateChannelIngressQueueOptions = {
   accountId?: string;
   stateDir?: string;
   now?: () => number;
+  /**
+   * `read-only` reads through the existing-database read-only opener, which never
+   * creates, migrates, chmods or configures the shared state file. Callers that must
+   * not touch durable state before they own it - Doctor detection runs before the
+   * exclusive maintenance lock - use it so listing cannot take a write path.
+   */
+  access?: "read-write" | "read-only";
 };
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
@@ -279,6 +287,35 @@ export function openChannelIngressDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
+}
+
+type ChannelIngressReadHandle = {
+  db: DatabaseSync;
+  release: () => void;
+};
+
+/**
+ * Resolve a database handle for listing. Read-only callers get the non-creating opener
+ * and own closing it; read-write callers keep the shared cached handle they already had.
+ */
+async function openChannelIngressDatabaseForListing(
+  stateDir: string | undefined,
+  access: "read-write" | "read-only",
+): Promise<ChannelIngressReadHandle | undefined> {
+  if (access !== "read-only") {
+    return { db: openChannelIngressDatabase(stateDir).db, release: () => {} };
+  }
+  const env = stateDir ? createStateDirEnv(stateDir) : process.env;
+  const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
+  if (!database) {
+    return undefined;
+  }
+  return {
+    db: database.db,
+    release: () => {
+      database.walMaintenance.close();
+    },
+  };
 }
 
 export function getChannelIngressKysely(db: DatabaseSync) {
@@ -327,25 +364,34 @@ function baseRecord<TPayload, TMetadata>(
   };
 }
 
+type ChannelIngressClaimColumns = { token: string; ownerId: string; claimedAt: number };
+
+// A claimant writes token/owner/claimed_at in one UPDATE, and complete/release/
+// refresh all match on claim_token. A claimed row missing any of the three has
+// no reachable owner and could never be released; reject it instead of minting
+// sentinel claim identity that release/liveness checks silently fail against.
+function decodeClaimColumns(row: ChannelIngressRow): ChannelIngressClaimColumns | null {
+  if (!row.claim_token || !row.claim_owner || row.claimed_at === null) {
+    return null;
+  }
+  return { token: row.claim_token, ownerId: row.claim_owner, claimedAt: row.claimed_at };
+}
+
 function claimedRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueClaim<TPayload, TMetadata> | null {
-  const base = baseRecord<TPayload, TMetadata>(row);
-  if (base === null) {
+  const claim = decodeClaimColumns(row);
+  const base = claim === null ? null : baseRecord<TPayload, TMetadata>(row);
+  if (claim === null || base === null) {
     return null;
   }
-  return {
-    ...base,
-    claim: {
-      token: row.claim_token ?? "",
-      ownerId: row.claim_owner ?? "",
-      claimedAt: row.claimed_at ?? 0,
-    },
-  };
+  return { ...base, claim };
 }
 
-function corruptClaimRecord(row: ChannelIngressRow): ChannelIngressQueueCorruptClaim {
-  const claimValue = row.claim_token ?? "";
+function corruptClaimRecord(
+  row: ChannelIngressRow,
+  claim: ChannelIngressClaimColumns,
+): ChannelIngressQueueCorruptClaim {
   return {
     id: row.event_id,
     channelId: row.channel_id,
@@ -353,11 +399,7 @@ function corruptClaimRecord(row: ChannelIngressRow): ChannelIngressQueueCorruptC
     queueName: row.queue_name,
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
     reason: "corrupt_payload",
-    claim: {
-      token: claimValue,
-      ownerId: row.claim_owner ?? "",
-      claimedAt: row.claimed_at ?? 0,
-    },
+    claim,
   };
 }
 
@@ -415,34 +457,49 @@ function selectRow(db: DatabaseSync, queueName: string, id: string) {
   );
 }
 
-function tombstoneCorruptPayloadRow(params: {
+function tombstoneCorruptRow(params: {
   db: DatabaseSync;
   row: ChannelIngressRow;
   expectedStatus: "pending" | "claimed";
   failedAt: number;
   staleCutoff?: number;
+  reason: "corrupt_payload" | "corrupt_claim";
 }): boolean {
   const kysely = getChannelIngressKysely(params.db);
   const baseUpdate = kysely
     .updateTable("channel_ingress_events")
-    .set({
+    .set((eb) => ({
       status: "failed",
       failed_at: params.failedAt,
-      failed_reason: "corrupt_payload",
+      failed_reason: params.reason,
       last_error: null,
-      payload_json: "null",
-      metadata_json: null,
+      // A corrupt payload is unreadable — scrub it. A corrupt claim can wrap a
+      // valid payload; keep it resubmittable (JSON null maps to the fail() sentinel).
+      ...(params.reason === "corrupt_payload"
+        ? { payload_json: "null", metadata_json: null }
+        : {
+            payload_json: eb
+              .case()
+              .when("payload_json", "=", "null")
+              .then(FAILED_NULL_PAYLOAD_SENTINEL)
+              .else(eb.ref("payload_json"))
+              .end(),
+          }),
       claim_token: null,
       claim_owner: null,
       claimed_at: null,
       updated_at: params.failedAt,
-    })
+    }))
     .where("queue_name", "=", params.row.queue_name)
     .where("event_id", "=", params.row.event_id)
     .where("status", "=", params.expectedStatus);
   if (params.expectedStatus === "pending") {
     return affectedRows(executeSqliteQuerySync(params.db, baseUpdate)) > 0;
   }
+  // The exact-token guard fences concurrent re-claims: claiming always writes a
+  // fresh random token, so a matching (or still-NULL) token proves the row is
+  // unchanged since it was read. Malformed-claim tombstones rely on this guard
+  // alone and pass no staleCutoff — their claimed_at can be NULL or corrupt.
   const claimGuardedUpdate =
     params.row.claim_token === null
       ? baseUpdate.where("claim_token", "is", null)
@@ -521,6 +578,55 @@ function queueNameForParts(channelId: string, accountId: string): string {
   return JSON.stringify([channelId, accountId]);
 }
 
+/** Lists account ids that hold any ingress rows for a channel, so doctor
+ *  migrations can sweep durable state whose account is gone from config. */
+export function listChannelIngressQueueAccountIds(params: {
+  channelId: string;
+  stateDir?: string;
+}): string[] {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const database = openChannelIngressDatabase(params.stateDir);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getChannelIngressKysely(database.db)
+      .selectFrom("channel_ingress_events")
+      .select("account_id")
+      .distinct()
+      .where("channel_id", "=", channelId)
+      .orderBy("account_id", "asc"),
+  ).rows;
+  return rows.map((row) => row.account_id);
+}
+
+/**
+ * Account discovery for callers that must not touch durable state yet. Uses the
+ * non-creating read-only opener, so an absent store yields no accounts instead of
+ * being created and migrated by the lookup itself.
+ */
+export async function listChannelIngressQueueAccountIdsReadOnly(params: {
+  channelId: string;
+  stateDir?: string;
+}): Promise<string[]> {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const handle = await openChannelIngressDatabaseForListing(params.stateDir, "read-only");
+  if (!handle) {
+    return [];
+  }
+  try {
+    return executeSqliteQuerySync(
+      handle.db,
+      getChannelIngressKysely(handle.db)
+        .selectFrom("channel_ingress_events")
+        .select("account_id")
+        .distinct()
+        .where("channel_id", "=", channelId)
+        .orderBy("account_id", "asc"),
+    ).rows.map((row) => row.account_id);
+  } finally {
+    handle.release();
+  }
+}
+
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,
@@ -533,6 +639,7 @@ export function createChannelIngressQueue<
   const accountId = normalizePart(options.accountId, "default");
   const queueName = queueNameForParts(channelId, accountId);
   const now = options.now ?? Date.now;
+  const access = options.access ?? "read-write";
 
   const enqueue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"] = async (
     id,
@@ -594,16 +701,15 @@ export function createChannelIngressQueue<
           // Duplicate enqueue cannot prove ownership is stale, so leave claimed
           // corruption for the ownership-aware recovery path.
           if (row.status === "claimed") {
-            throw new Error(
-              `Corrupt payload_json in claimed channel ingress event ${queueName}/${eventId}`,
-            );
+            throw new Error(`Corrupt claimed channel ingress event ${queueName}/${eventId}`);
           }
           if (
-            !tombstoneCorruptPayloadRow({
+            !tombstoneCorruptRow({
               db: tx.db,
               row,
               expectedStatus: "pending",
               failedAt: updatedAt,
+              reason: "corrupt_payload",
             })
           ) {
             throw new Error(`Failed to tombstone corrupt ingress event ${queueName}/${eventId}`);
@@ -629,52 +735,60 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listPending"] = async (listOptions) => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const kysely = getChannelIngressKysely(db);
-    const limit = normalizeLimit(listOptions?.limit);
-    const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
-    let lastRow: ChannelIngressRow | undefined;
-    while (records.length < limit) {
-      let pageQuery = kysely
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "pending");
-      if (lastRow) {
-        const cursor = lastRow;
-        pageQuery =
-          listOptions?.orderBy === "id"
-            ? pageQuery.where("event_id", ">", cursor.event_id)
-            : pageQuery.where((eb) =>
-                eb.or([
-                  eb("received_at", ">", cursor.received_at),
-                  eb.and([
-                    eb("received_at", "=", cursor.received_at),
-                    eb("event_id", ">", cursor.event_id),
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const kysely = getChannelIngressKysely(db);
+      const limit = normalizeLimit(listOptions?.limit);
+      const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
+      let lastRow: ChannelIngressRow | undefined;
+      while (records.length < limit) {
+        let pageQuery = kysely
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "pending");
+        if (lastRow) {
+          const cursor = lastRow;
+          pageQuery =
+            listOptions?.orderBy === "id"
+              ? pageQuery.where("event_id", ">", cursor.event_id)
+              : pageQuery.where((eb) =>
+                  eb.or([
+                    eb("received_at", ">", cursor.received_at),
+                    eb.and([
+                      eb("received_at", "=", cursor.received_at),
+                      eb("event_id", ">", cursor.event_id),
+                    ]),
                   ]),
-                ]),
-              );
-      }
-      const orderedQuery =
-        listOptions?.orderBy === "id"
-          ? pageQuery.orderBy("event_id", "asc")
-          : pageQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
-      const rows = executeSqliteQuerySync(db, orderedQuery.limit(LIST_PENDING_BATCH_SIZE)).rows;
-      for (const row of rows) {
-        const record = baseRecord<TPayload, TMetadata>(row);
-        if (record) {
-          records.push(record);
-          if (records.length === limit) {
-            break;
+                );
+        }
+        const orderedQuery =
+          listOptions?.orderBy === "id"
+            ? pageQuery.orderBy("event_id", "asc")
+            : pageQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
+        const rows = executeSqliteQuerySync(db, orderedQuery.limit(LIST_PENDING_BATCH_SIZE)).rows;
+        for (const row of rows) {
+          const record = baseRecord<TPayload, TMetadata>(row);
+          if (record) {
+            records.push(record);
+            if (records.length === limit) {
+              break;
+            }
           }
         }
+        if (rows.length < LIST_PENDING_BATCH_SIZE) {
+          break;
+        }
+        lastRow = rows.at(-1);
       }
-      if (rows.length < LIST_PENDING_BATCH_SIZE) {
-        break;
-      }
-      lastRow = rows.at(-1);
+      return records;
+    } finally {
+      handle.release();
     }
-    return records;
   };
 
   const listClaims: ChannelIngressQueue<
@@ -682,40 +796,56 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listClaims"] = async () => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const kysely = getChannelIngressKysely(db);
-    const rows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "claimed")
-        .orderBy("claimed_at", "asc")
-        .orderBy("received_at", "asc")
-        .orderBy("event_id", "asc"),
-    ).rows;
-    return rows
-      .map((row) => claimedRecord<TPayload, TMetadata>(row))
-      .filter((rec): rec is ChannelIngressQueueClaim<TPayload, TMetadata> => rec !== null);
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const kysely = getChannelIngressKysely(db);
+      const rows = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "claimed")
+          .orderBy("claimed_at", "asc")
+          .orderBy("received_at", "asc")
+          .orderBy("event_id", "asc"),
+      ).rows;
+      return rows
+        .map((row) => claimedRecord<TPayload, TMetadata>(row))
+        .filter((rec): rec is ChannelIngressQueueClaim<TPayload, TMetadata> => rec !== null);
+    } finally {
+      handle.release();
+    }
   };
 
   const listFailed: NonNullable<
     ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["listFailed"]
   > = async (listOptions) => {
-    const { db } = openChannelIngressDatabase(options.stateDir);
-    const rows = executeSqliteQuerySync(
-      db,
-      getChannelIngressKysely(db)
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "failed")
-        .orderBy("failed_at", "asc")
-        .orderBy("event_id", "asc")
-        .limit(normalizeLimit(listOptions?.limit)),
-    ).rows;
-    return rows.map((row) => failedRecord<TPayload, TMetadata>(row));
+    const handle = await openChannelIngressDatabaseForListing(options.stateDir, access);
+    if (!handle) {
+      return [];
+    }
+    const { db } = handle;
+    try {
+      const rows = executeSqliteQuerySync(
+        db,
+        getChannelIngressKysely(db)
+          .selectFrom("channel_ingress_events")
+          .selectAll()
+          .where("queue_name", "=", queueName)
+          .where("status", "=", "failed")
+          .orderBy("failed_at", "asc")
+          .orderBy("event_id", "asc")
+          .limit(normalizeLimit(listOptions?.limit)),
+      ).rows;
+      return rows.map((row) => failedRecord<TPayload, TMetadata>(row));
+    } finally {
+      handle.release();
+    }
   };
 
   const claimNext: ChannelIngressQueue<
@@ -816,11 +946,12 @@ export function createChannelIngressQueue<
               if (corruptReconciliations >= MAX_CORRUPT_RECONCILIATIONS_PER_CLAIM) {
                 continue;
               }
-              const didTombstone = tombstoneCorruptPayloadRow({
+              const didTombstone = tombstoneCorruptRow({
                 db: tx.db,
                 row,
                 expectedStatus: "pending",
                 failedAt: transitionAt,
+                reason: "corrupt_payload",
               });
               tombstonedCorruptRow = didTombstone || tombstonedCorruptRow;
               if (didTombstone) {
@@ -892,11 +1023,12 @@ export function createChannelIngressQueue<
           return null;
         }
         if (baseRecord<TPayload, TMetadata>(pendingRow) === null) {
-          tombstoneCorruptPayloadRow({
+          tombstoneCorruptRow({
             db: tx.db,
             row: pendingRow,
             expectedStatus: "pending",
             failedAt: transitionAt,
+            reason: "corrupt_payload",
           });
           return null;
         }
@@ -1005,31 +1137,51 @@ export function createChannelIngressQueue<
         .selectAll()
         .where("queue_name", "=", queueName)
         .where("status", "=", "claimed")
-        .where("claimed_at", "<=", cutoff),
+        // A claimed row missing any claim column has no live owner (see
+        // decodeClaimColumns); scan it regardless of claimed_at, since a NULL
+        // or corrupt future timestamp would dodge every cutoff comparison.
+        .where((eb) =>
+          eb.or([
+            eb("claimed_at", "<=", cutoff),
+            eb("claimed_at", "is", null),
+            eb("claim_token", "is", null),
+            eb("claim_owner", "is", null),
+            eb("claim_token", "=", ""),
+            eb("claim_owner", "=", ""),
+          ]),
+        ),
     ).rows;
     let recovered = 0;
     for (const row of claimedRows) {
-      const claimRec = claimedRecord<TPayload, TMetadata>(row);
+      const claimColumns = decodeClaimColumns(row);
+      const claimRec = claimColumns === null ? null : claimedRecord<TPayload, TMetadata>(row);
       if (claimRec === null) {
-        const shouldRecoverCorrupt = recoverOptions?.shouldRecoverCorrupt;
-        if (shouldRecoverCorrupt) {
-          if (!(await shouldRecoverCorrupt(corruptClaimRecord(row)))) {
+        if (claimColumns !== null) {
+          const shouldRecoverCorrupt = recoverOptions?.shouldRecoverCorrupt;
+          if (shouldRecoverCorrupt) {
+            if (!(await shouldRecoverCorrupt(corruptClaimRecord(row, claimColumns)))) {
+              continue;
+            }
+          } else if (recoverOptions?.shouldRecover) {
+            // Existing payload-aware policies cannot safely decide on corrupt
+            // data. Preserve ownership unless the caller opts into the raw claim
+            // identity contract above.
             continue;
           }
-        } else if (recoverOptions?.shouldRecover) {
-          // Existing payload-aware policies cannot safely decide on corrupt
-          // data. Preserve ownership unless the caller opts into the raw claim
-          // identity contract above.
-          continue;
         }
+        // claimColumns === null: no reachable owner can exist, so no policy
+        // consult — tombstone unconditionally to keep the queue recoverable.
         const tombstoned = runOpenClawStateWriteTransaction(
           (tx) =>
-            tombstoneCorruptPayloadRow({
+            tombstoneCorruptRow({
               db: tx.db,
               row,
               expectedStatus: "claimed",
               failedAt: current,
-              staleCutoff: cutoff,
+              // Malformed claims skip the stale guard: their claimed_at may be
+              // NULL or a corrupt future value; the exact-token guard fences.
+              ...(claimColumns === null ? {} : { staleCutoff: cutoff }),
+              reason: claimColumns === null ? "corrupt_claim" : "corrupt_payload",
             }),
           { path: database.path },
         );
@@ -1365,6 +1517,7 @@ export function createChannelIngressQueue<
           }
           const batchSize = 500;
           const protectedSet = new Set(protectIds);
+          // Page before filtering protected IDs; they still occupy their retention slots.
           while (true) {
             const rowsToDelete = executeSqliteQuerySync(
               tx.db,
@@ -1375,8 +1528,9 @@ export function createChannelIngressQueue<
                 .where("status", "=", status)
                 .orderBy("updated_at", "desc")
                 .orderBy("event_id", "desc")
-                .limit(maxEntries + batchSize),
-            ).rows.slice(maxEntries);
+                .limit(batchSize)
+                .offset(maxEntries),
+            ).rows;
             const ids = rowsToDelete
               .map((row) => row.event_id)
               .filter((id) => !protectedSet.has(id));

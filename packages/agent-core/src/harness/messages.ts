@@ -143,12 +143,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             timestamp: message.timestamp,
           };
         case "custom": {
+          if (message.excludeFromContext) {
+            return undefined;
+          }
           const content =
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]
               : message.content;
-          // Transient current-turn runtime-context carriers must not anchor a
-          // provider prompt-cache breakpoint (their bytes change every turn).
+          // Preserve carrier identity so provider-owned replay and cache policy
+          // can distinguish transient context from append-only context.
           const runtimeContextCarrier =
             (message.details as { runtimeContextCarrier?: unknown } | undefined)
               ?.runtimeContextCarrier === true;

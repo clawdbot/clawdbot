@@ -19,7 +19,7 @@ import {
   createAutomaticDraftContext,
   createBlockModeContext,
   createMockDraftStreamForTest,
-  expectFinalWithProgressReceipt,
+  expectFinalAnswerText,
   expectFreshFinalText,
   firstDispatchParams,
   firstMockArg,
@@ -86,7 +86,10 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 120,
+      },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -94,7 +97,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expectFinalWithProgressReceipt(fullAnswer, "🛠️ 1 tool call");
+    expectFinalAnswerText(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {
@@ -256,7 +259,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     });
   });
 
-  it("does not flush draft previews for error finals before normal delivery", async () => {
+  it("retains draft previews after error finals are delivered", async () => {
     const draftStream = await runFinalReplyScenario({
       text: "Something failed",
       isError: true,
@@ -264,7 +267,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
@@ -471,6 +474,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
+          progress: { toolProgress: true },
         },
       },
     });
@@ -512,7 +516,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: false, commentary: false },
+          progress: { toolProgress: true, label: false, commentary: false },
         },
       },
     });
@@ -522,7 +526,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Checking private context before replying.\n\n🛠️ Exec",
     );
-    expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+    expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
   });
 
@@ -544,7 +548,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: false } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
       },
     });
 

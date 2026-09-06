@@ -1,18 +1,21 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { ReactiveController } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
-  TerminalOpenTimeoutError,
+  type TerminalOpenResult,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
+import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
+import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
-  forceTerminalRender,
+  resolveTerminalPanelOwnerSessionKey,
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
@@ -22,7 +25,8 @@ import {
   type TerminalPanelSessionControllerState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
-import { TerminalPendingActions } from "./terminal-pending-actions.ts";
+import { TerminalOpenRetry, terminalIntentQueue } from "./terminal-pending-actions.ts";
+import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
 import {
   loadPersistedTerminalSessionIds,
   persistLiveTerminalSessions,
@@ -31,8 +35,6 @@ import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import { TerminalTabReadinessController } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
-
-type TerminalSessionSink = Parameters<TerminalConnection["open"]>[1];
 
 /** Owns gateway PTY sessions and the Ghostty controllers bound to them. */
 export class TerminalPanelSessionController
@@ -51,13 +53,14 @@ export class TerminalPanelSessionController
   private lifecycleAbortController = new AbortController();
   private lifecycleSyncToken = 0;
   private tabSequence = 0;
+  readonly openRetry = new TerminalOpenRetry();
   private readonly bootQueue = new TerminalTaskQueue();
-  private readonly pendingActions: TerminalPendingActions;
+  private readonly intentHost: TerminalIntentHost;
   private readonly readiness: TerminalTabReadinessController<TerminalPanelSessionTab>;
 
   constructor(private readonly host: TerminalPanelSessionControllerHost) {
     host.addController(this);
-    this.pendingActions = new TerminalPendingActions({
+    this.intentHost = {
       bootQueue: this.bootQueue,
       currentGeneration: () => this.lifecycleGeneration,
       canRun: () => this.terminalActionsCanRun(),
@@ -69,18 +72,14 @@ export class TerminalPanelSessionController
       requestUpdate: () => this.host.requestUpdate(),
       setBooting: (booting) => this.updateControllerState("booting", booting),
       timeoutMs: () => this.host.catalogReadyTimeoutMs,
-      showTimeout: () => {
-        this.host.terminalPanelErrorText = t("terminal.refreshRequired");
-      },
-      clearTimeout: () => {
-        this.host.terminalPanelErrorText = null;
-      },
-    });
-    this.booting = this.pendingActions.hasActions;
+      showTimeout: () => (this.host.terminalPanelErrorText = t("terminal.refreshRequired")),
+      clearTimeout: () => (this.host.terminalPanelErrorText = null),
+    };
     this.readiness = new TerminalTabReadinessController<TerminalPanelSessionTab>({
       timeoutMs: () => this.host.catalogReadyTimeoutMs,
       isCurrent: (tab) => this.tabs.includes(tab),
       onReady: () => {
+        this.openRetry.clear();
         this.updateControllerState("tabs", [...this.tabs]);
         persistLiveTerminalSessions(this.tabs);
       },
@@ -108,9 +107,16 @@ export class TerminalPanelSessionController
     this.activeAvailable = this.host.available;
     this.hadClient = this.host.client !== null;
     this.hadAvailable = this.host.available;
+    // Latest mount executes: on a session route the side-panel terminal takes
+    // the queue over from the shell instance still held for the bottom dock.
+    terminalIntentQueue.bindHost(this.intentHost);
+    // Read after binding: the queue reloads its persisted record for the first
+    // panel in a document, so an earlier read would miss a carried-over intent.
+    this.updateControllerState("booting", terminalIntentQueue.hasActions);
   }
 
   disconnectHost(): void {
+    terminalIntentQueue.releaseHost(this.intentHost);
     this.disposeAllTabs();
     this.activeClient = null;
     this.activeAvailable = false;
@@ -165,13 +171,13 @@ export class TerminalPanelSessionController
     } else if (shouldRestore) {
       void this.restoreSessions();
     } else {
-      void this.pendingActions.drain();
+      void terminalIntentQueue.drain();
     }
   }
 
   private refreshBeforeReconnectRestore(restore: boolean): void {
     const generation = this.lifecycleGeneration;
-    this.pendingActions.beginRefreshFence(generation);
+    terminalIntentQueue.beginRefreshFence(this.intentHost, generation);
     if (restore) {
       void this.restoreSessions();
     }
@@ -179,7 +185,7 @@ export class TerminalPanelSessionController
       if (generation !== this.lifecycleGeneration || !this.host.isConnected) {
         return;
       }
-      this.pendingActions.releaseRefreshFence();
+      terminalIntentQueue.releaseRefreshFence(this.intentHost);
     };
     void import("../../app/sw-refresh.runtime.ts")
       .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
@@ -192,11 +198,11 @@ export class TerminalPanelSessionController
 
   async restoreSessions(): Promise<void> {
     const agentId = this.host.agentId?.trim() || null;
-    await this.pendingActions.queue({ kind: "restore", agentId });
+    await terminalIntentQueue.queue({ kind: "restore", agentId });
   }
 
   async openCatalogSession(catalog: TerminalPanelCatalogReference): Promise<void> {
-    await this.pendingActions.queue({
+    await terminalIntentQueue.queue({
       kind: "catalog",
       agentId: this.host.agentId?.trim() || null,
       catalog,
@@ -204,26 +210,27 @@ export class TerminalPanelSessionController
   }
 
   async openRequestedSession(sessionId: string): Promise<void> {
-    await this.pendingActions.queue({ kind: "attach", sessionId, agentOwned: true });
+    await terminalIntentQueue.queue({ kind: "attach", sessionId, agentOwned: true });
   }
 
   private terminalActionsCanRun(): boolean {
-    const client = this.host.client;
     return (
-      !this.pendingActions.fenced &&
-      Boolean(client) &&
-      client === this.activeClient &&
+      this.host.client !== null &&
+      this.host.client === this.activeClient &&
       this.host.available &&
+      // A lazy upgrade also mounts the closed shell. Only the visible owner
+      // may consume intent; a viewport-less boot would discard it as failed.
+      this.host.terminalPanelOpen &&
       this.host.isConnected
     );
   }
 
   cancelPendingActions(): void {
-    this.pendingActions.cancel();
+    terminalIntentQueue.cancel(this.intentHost);
   }
 
   get waitingForRefresh(): boolean {
-    return this.pendingActions.waitingForRefresh;
+    return terminalIntentQueue.waitingForRefresh;
   }
 
   private async reattachPersistedSessions(): Promise<void> {
@@ -298,7 +305,7 @@ export class TerminalPanelSessionController
   }
 
   async attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
-    await this.pendingActions.queue({ kind: "attach", sessionId, agentOwned });
+    await terminalIntentQueue.queue({ kind: "attach", sessionId, agentOwned });
   }
 
   private async attachSessionNow(sessionId: string, agentOwned: boolean): Promise<boolean> {
@@ -312,10 +319,14 @@ export class TerminalPanelSessionController
       return false;
     }
     this.updateControllerState("booting", true);
+    this.openRetry.clear();
     this.host.terminalPanelErrorText = null;
     try {
       const attached = await this.attachSession(sessionId, operation, agentOwned);
       if (attached) {
+        if (this.activeId) {
+          this.switchTo(this.activeId);
+        }
         return true;
       }
       if (!this.isTerminalOperationCurrent(operation)) {
@@ -359,7 +370,7 @@ export class TerminalPanelSessionController
     const { createTerminalDefaultColorQueryResponder } =
       await import("@openclaw/libterminal/browser");
     const defaultColorQueries = createTerminalDefaultColorQueryResponder({
-      getColors: () => terminalDynamicColors(this.host.themeMode),
+      getColors: terminalDynamicColors,
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
     const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
@@ -407,7 +418,7 @@ export class TerminalPanelSessionController
       readyTimer: null,
     };
     tabReference.current = tab;
-    const sink: TerminalSessionSink = {
+    const sink: Parameters<TerminalConnection["open"]>[1] = {
       // The cancelled guard also protects the buffered-event replay inside
       // connection.open/attach from writing to an already-disposed terminal.
       onData: (data: string) => {
@@ -458,7 +469,7 @@ export class TerminalPanelSessionController
   /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalPanelSessionTab,
-    result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
+    result: TerminalOpenResult,
     agentOwned = false,
   ): void {
     tab.gatewaySessionId = result.sessionId;
@@ -466,7 +477,7 @@ export class TerminalPanelSessionController
     tab.shell = result.shell;
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
-    tab.agentOwned = agentOwned;
+    tab.agentOwned = result.owner !== undefined ? result.owner.startsWith("agent:") : agentOwned;
     // Libterminal observes layout before the Gateway session exists. Resync the
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
@@ -498,7 +509,7 @@ export class TerminalPanelSessionController
   }
 
   async openSession(catalog?: TerminalPanelCatalogReference): Promise<void> {
-    await this.pendingActions.queue(
+    await terminalIntentQueue.queue(
       catalog
         ? { kind: "catalog", agentId: this.host.agentId?.trim() || null, catalog }
         : { kind: "open", agentId: this.host.agentId?.trim() || null },
@@ -514,9 +525,10 @@ export class TerminalPanelSessionController
       return false;
     }
     this.updateControllerState("booting", true);
+    this.openRetry.remember(catalog, agentId);
     this.host.terminalPanelErrorText = null;
     // Freeze the selection for this tab; later agent changes affect only new tabs.
-    const ownerAgentId = agentId ?? undefined;
+    const ownerSessionKey = resolveTerminalPanelOwnerSessionKey(this.host.sessionKey, catalog);
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
@@ -524,7 +536,8 @@ export class TerminalPanelSessionController
       createdTab = boot.tab;
       const result = await boot.connection.open(
         {
-          agentId: ownerAgentId,
+          agentId: agentId ?? undefined,
+          ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
           cols: boot.cols,
           rows: boot.rows,
           ...(catalog ? { catalog } : {}),
@@ -542,7 +555,7 @@ export class TerminalPanelSessionController
         }
         return false;
       }
-      this.adoptSession(boot.tab, result);
+      this.adoptSession(boot.tab, result, ownerSessionKey !== undefined);
       boot.tab.controller.terminal.focus();
       return true;
     } catch (error) {
@@ -555,12 +568,8 @@ export class TerminalPanelSessionController
       if (!this.isTerminalOperationCurrent(operation)) {
         return false;
       }
-      this.host.terminalPanelErrorText =
-        error instanceof TerminalOpenTimeoutError
-          ? t("terminal.connectionTimedOut")
-          : error instanceof Error
-            ? error.message
-            : String(error);
+      this.openRetry.clearUnlessRetryable(error);
+      this.host.terminalPanelErrorText = terminalOpenErrorText(error);
       return true;
     } finally {
       if (this.isTerminalOperationCurrent(operation)) {
@@ -665,7 +674,7 @@ export class TerminalPanelSessionController
     tab.exitReason = info.reason;
     tab.exitCode = info.exitCode;
     if (info.error?.trim()) {
-      this.host.terminalPanelErrorText = info.error.trim();
+      this.host.terminalPanelErrorText = formatUiExternalText(info.error);
     }
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.
@@ -706,21 +715,13 @@ export class TerminalPanelSessionController
   switchTo(tabId: string): void {
     this.updateControllerState("activeId", tabId);
     const tab = this.tabs.find((entry) => entry.id === tabId);
-    // Refit and repaint after the container becomes visible. A same-size tab
-    // switch otherwise leaves the newly shown canvas without dirty rows.
-    void this.host.updateComplete.then(() => {
-      if (tab) {
-        tab.controller.fit();
-        forceTerminalRender(tab.controller);
-        tab.controller.terminal.focus();
-      }
-    });
+    void focusTerminalSession(tab, this.host.updateComplete);
   }
 
   private captureTerminalOperation(): TerminalOperation | null {
     const client = this.host.client;
     if (
-      this.pendingActions.fenced ||
+      terminalIntentQueue.fenced ||
       !client ||
       client !== this.activeClient ||
       !this.host.available ||
@@ -761,13 +762,13 @@ export class TerminalPanelSessionController
 
   private disposeAllTabs(): void {
     this.lifecycleGeneration += 1;
-    this.pendingActions.resetLifecycle();
+    terminalIntentQueue.resetLifecycle(this.intentHost);
     this.lifecycleAbortController.abort();
     this.lifecycleAbortController = new AbortController();
     this.bootQueue.reset();
+    this.openRetry.clear();
     this.updateControllerState("booting", false);
     this.host.terminalPanelUploadController.dispose();
-    this.host.clearTerminalPanelResizeListeners();
     for (const tab of this.tabs) {
       // No terminal.close here: this teardown runs for disconnects,
       // availability loss, and element removal — exactly the sessions the

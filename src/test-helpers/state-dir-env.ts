@@ -33,8 +33,8 @@ export async function withStateDirEnv<T>(
   } finally {
     // Session state cleanup may race with assertions in failing tests; never let
     // that cleanup failure hide the original test error or skip env restoration.
-    await cleanupSessionStateForTest().catch(() => undefined);
+    await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
     restoreStateDirEnv(snapshot);
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }

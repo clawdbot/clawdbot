@@ -33,7 +33,7 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces installed plugins through the exact Codex 0.146 endpoint", async () => {
+  it("coalesces installed plugins through the canonical endpoint", async () => {
     const cache = new CodexPluginMetadataCache();
     let release: ((response: v2.PluginInstalledResponse) => void) | undefined;
     const request = vi.fn(

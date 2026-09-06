@@ -3,16 +3,15 @@ import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  registerUnhandledRejectionHandler,
+  getChildLogger,
   defaultRuntime,
   formatDurationPrecise,
   warn,
@@ -33,9 +32,8 @@ import {
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
-import { normalizeAdmittedWebInboundMessage } from "../inbound/message-aliases.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
-import type { WebInboundMessageInput } from "../inbound/types.js";
+import type { WebInboundCallbackMessage } from "../inbound/types.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
@@ -224,19 +222,13 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
-      const inboundDebounceMs = resolveInboundDebounceMs({
-        cfg,
-        channel: "whatsapp",
-      });
-      const shouldDebounce = (msg: WebInboundMessageInput) => {
-        const admitted = normalizeAdmittedWebInboundMessage(msg);
-        return shouldDebounceTextInbound({
-          text: admitted.payload.commandBody ?? admitted.payload.body,
+      const shouldDebounce = (msg: WebInboundCallbackMessage) =>
+        shouldDebounceTextInbound({
+          text: msg.payload.commandBody ?? msg.payload.body,
           cfg,
-          hasMedia: Boolean(admitted.payload.media?.path || admitted.payload.media?.type),
-          allowDebounce: !(admitted.payload.location || admitted.quote?.id || admitted.quote?.body),
+          hasMedia: Boolean(msg.payload.media?.path || msg.payload.media?.type),
+          allowDebounce: !(msg.payload.location || msg.quote?.id || msg.quote?.body),
         });
-      };
 
       let connection;
       try {
@@ -251,6 +243,10 @@ export async function monitorWebChannel(
             return meta?.participants?.length ? meta : undefined;
           },
           createListener: async ({ sock, connection: connectionLocal }) => {
+            // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+            const pluginChannelRuntime = tuning.channelRuntime as
+              | PluginRuntime["channel"]
+              | undefined;
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -265,8 +261,9 @@ export async function monitorWebChannel(
               replyLogger,
               baseMentionConfig,
               account,
-              buildContext: (tuning.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-                .buildContext,
+              buildContext: pluginChannelRuntime?.inbound.buildContext,
+              // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+              dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
             });
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
@@ -278,7 +275,7 @@ export async function monitorWebChannel(
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
-              debounceMs: inboundDebounceMs,
+              debounceMs: tuning.debounceMs,
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {
                     afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
@@ -294,14 +291,11 @@ export async function monitorWebChannel(
               groupMetadataCache,
               recentMessageKeys,
               baileysGroupMetaCache,
-              onMessage: async (msg: WebInboundMessageInput) => {
-                // Keep the deprecated injected-listener input contract at the WhatsApp edge.
-                // Auto-reply only receives the admitted canonical message.
-                const admitted = normalizeAdmittedWebInboundMessage(msg);
+              onMessage: async (msg: WebInboundCallbackMessage) => {
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(admitted);
+                await onMessage(msg);
               },
               onPendingWorkChanged: (pendingWorkCount, at) => {
                 statusController.noteBusy(pendingWorkCount > 0, at);

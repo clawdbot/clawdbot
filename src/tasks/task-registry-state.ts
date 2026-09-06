@@ -22,6 +22,24 @@ export const taskRegistryLog = createSubsystemLogger("tasks/registry");
 export const TASK_FLOW_SYNC_RETRY_DELAYS_MS = [1_000, 5_000, 25_000, 120_000, 600_000] as const;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
+const TASK_REGISTRY_REVISION_KEY = Symbol.for("openclaw.taskRegistry.revision");
+type TaskRegistryRevisionGlobal = typeof globalThis & {
+  [TASK_REGISTRY_REVISION_KEY]?: { value: number };
+};
+// SAFETY: This symbol owns the process-global revision cell assigned below.
+const taskRegistryRevisionGlobal = globalThis as TaskRegistryRevisionGlobal;
+const taskRegistryRevisionState = (taskRegistryRevisionGlobal[TASK_REGISTRY_REVISION_KEY] ??= {
+  value: 0,
+});
+
+export function readTaskRegistryRevision(): number {
+  return taskRegistryRevisionState.value;
+}
+
+export function bumpTaskRegistryRevision(): void {
+  taskRegistryRevisionState.value += 1;
+}
+
 export const tasks = taskRegistryProcessState.tasks;
 export const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
 const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
@@ -37,10 +55,12 @@ type TaskRegistryRestoreState =
   | { status: "failed"; error: Error };
 let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 export const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-export type TaskRegistryDeliveryRuntime = Pick<
-  typeof import("./task-registry-delivery-runtime.js"),
-  "sendMessage"
->;
+export type TaskRegistryDeliveryRuntime = {
+  sendMessage: (typeof import("./task-registry-delivery-runtime.js"))["sendMessage"];
+  // Optional so existing test overrides that stub only sendMessage stay valid;
+  // delivery treats a missing resolver as "no Control UI link".
+  resolveTaskControlUiSessionUrl?: (typeof import("./task-registry-delivery-runtime.js"))["resolveTaskControlUiSessionUrl"];
+};
 export const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.deliveryRuntimeOverride",
 );
@@ -257,6 +277,7 @@ export function clearTaskRegistryMemory(): void {
   }
   taskActivityByTaskId.clear();
   tasks.clear();
+  bumpTaskRegistryRevision();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
   taskIdsByOwnerKey.clear();
@@ -320,11 +341,13 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
   }
 }
 
-function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
+type TaskSessionKeys = Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">;
+
+function getTaskRelatedSessionIndexKeys(task: TaskSessionKeys) {
   return uniqueStrings(
-    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
-      Boolean,
-    ) as string[],
+    [task.requesterSessionKey, task.ownerKey, task.childSessionKey]
+      .map(normalizeOptionalString)
+      .filter((key): key is string => Boolean(key)),
   );
 }
 
@@ -360,19 +383,13 @@ export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "
   deleteIndexedKey(taskIdsByParentFlowId, key, taskId);
 }
 
-export function addRelatedSessionKeyIndex(
-  taskId: string,
-  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
-) {
+export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     addIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
-export function deleteRelatedSessionKeyIndex(
-  taskId: string,
-  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
-) {
+export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     deleteIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }

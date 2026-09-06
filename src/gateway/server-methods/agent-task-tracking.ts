@@ -17,7 +17,11 @@ import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 
 export type TrustedGroupMetadata = {
   groupId?: string;
@@ -176,6 +180,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -200,6 +205,9 @@ export async function registerPluginSubagentRunFromGateway(params: {
       childSessionKey,
       runId: params.runId,
       task: params.task,
+      ...(params.gatewayContextResolver
+        ? { gatewayContextResolver: params.gatewayContextResolver }
+        : {}),
     })
   ) {
     return;
@@ -216,11 +224,15 @@ export async function registerPluginSubagentRunFromGateway(params: {
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
+    ...(params.gatewayContextResolver
+      ? { gatewayContextResolver: params.gatewayContextResolver }
+      : {}),
   });
 }
 
 export function tryFinalizeTrackedAgentTask(params: {
   runId: string;
+  sessionKey?: string;
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
@@ -230,6 +242,7 @@ export function tryFinalizeTrackedAgentTask(params: {
     finalizeTaskRunByRunId({
       runId: params.runId,
       runtime: "cli",
+      sessionKey: params.sessionKey,
       status: params.status,
       endedAt: Date.now(),
       ...(params.error !== undefined ? { error: params.error } : {}),

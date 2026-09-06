@@ -1,4 +1,5 @@
 // Tests node process runner lifecycle and captured output.
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -33,6 +34,16 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
+  "scripts/runtime-postbuild.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
+  "scripts/write-build-info.ts",
+  "scripts/write-official-channel-catalog.mts",
+] as const;
+const DEPLOYMENT_MANIFEST = "deployment.json";
 const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
 const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
@@ -40,6 +51,9 @@ const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
 const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
+const DIST_BUILD_INFO = "dist/build-info.json";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
@@ -73,6 +87,8 @@ const DIFFS_PACKAGE = "extensions/diffs/package.json";
 const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
 const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
 const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+const BUNDLED_HOOK_METADATA = "src/hooks/bundled/demo/HOOK.md";
+const DIST_BUNDLED_HOOK_METADATA = "dist/bundled/demo/HOOK.md";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -152,6 +168,9 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   await writeProjectFiles(tmp, {
     [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+    [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
@@ -162,7 +181,10 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     tmp,
     [
       DIST_CHANNEL_CATALOG,
+      DIST_BUILD_INFO,
       DIST_PLUGIN_SDK_CORE,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
       DIST_OPENCLAW_ALIAS_PACKAGE,
@@ -173,22 +195,23 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
 }
 
 function expectedBuildSpawn() {
-  return [process.execPath, "--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"];
-}
-
-function expectedBundledPluginAssetBuildSpawn() {
-  return [
-    process.execPath,
-    "--import",
-    "tsx",
-    "scripts/bundled-plugin-assets.mts",
-    "--phase",
-    "build",
-  ];
+  return [process.execPath, "--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
 }
 
 function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
+}
+
+function gatewayStatusCommandSpawn() {
+  return [
+    process.execPath,
+    "openclaw.mjs",
+    "gateway",
+    "status",
+    "--deep",
+    "--require-rpc",
+    "--json",
+  ];
 }
 
 function resolvePath(tmp: string, relativePath: string) {
@@ -276,6 +299,12 @@ async function setupStampedProject(
   });
 }
 
+async function writeImmutableDeploymentManifest(tmp: string): Promise<void> {
+  await writeProjectFiles(tmp, {
+    [DEPLOYMENT_MANIFEST]: `${JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) })}\n`,
+  });
+}
+
 function createSpawnRecorder(
   options: {
     gitHead?: string;
@@ -356,6 +385,7 @@ type RunCommandParams = {
   args?: string[];
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  stderr?: NodeJS.WriteStream;
   env?: Record<string, string>;
   runRuntimePostBuild?: (params?: {
     cwd?: string;
@@ -382,141 +412,54 @@ async function expectManifestId(tmp: string, relativePath: string, id: string) {
 }
 
 describe("run-node script", () => {
-  it.runIf(process.platform !== "win32")(
-    "preserves control-ui assets by building with tsdown --no-clean",
-    async ({ tmp }) => {
-      const argsPath = resolvePath(tmp, ".build-args.txt");
-      const indexPath = resolvePath(tmp, "dist/control-ui/index.html");
-
-      await writeRuntimePostBuildScaffold(tmp);
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
-
-      const nodeCalls: string[][] = [];
-      const spawn = (cmd: string, args: string[]) => {
-        if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
-          fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
-          if (!args.includes("--no-clean")) {
-            fsSync.rmSync(resolvePath(tmp, "dist/control-ui"), { recursive: true, force: true });
-          }
-        }
-        if (cmd === process.execPath) {
-          nodeCalls.push([cmd, ...args]);
-        }
-        return createExitedProcess(0);
-      };
-
-      const exitCode = await runNodeCommand(tmp, {
-        args: ["--version"],
-        env: { OPENCLAW_FORCE_BUILD: "1" },
-        spawn,
-        runRuntimePostBuild: skipRuntimePostBuild,
-      });
-
-      expect(exitCode).toBe(0);
-      await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain(
-        "scripts/tsdown-build.mts --no-clean",
-      );
-      await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
-      expect(nodeCalls).toEqual([
-        [
-          process.execPath,
-          "--import",
-          "tsx",
-          "scripts/bundled-plugin-assets.mts",
-          "--phase",
-          "build",
-        ],
-        [process.execPath, "--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"],
-        [process.execPath, "openclaw.mjs", "--version"],
-      ]);
-    },
-  );
-
-  it("copies bundled plugin metadata after rebuilding from a clean dist", async ({ tmp }) => {
-    await writeRuntimePostBuildScaffold(tmp);
-    await writeProjectFiles(tmp, {
-      [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
-      [EXTENSION_PACKAGE]:
-        JSON.stringify(
-          {
-            name: "demo",
-            openclaw: {
-              extensions: ["./src/index.ts", "./nested/entry.mts"],
-            },
-          },
-          null,
-          2,
-        ) + "\n",
-    });
-
-    const spawnCalls: string[][] = [];
-    const spawn = (cmd: string, args: string[]) => {
-      spawnCalls.push([cmd, ...args]);
-      return createExitedProcess(0);
-    };
-
-    const exitCode = await runStatusCommand({
-      tmp,
+  it("starts the CLI only after the canonical runtime build completes", async ({ tmp }) => {
+    const build = new EventEmitter();
+    const spawn = vi.fn((_cmd: string, args: string[]) =>
+      isTsxScriptArgs(args, "scripts/build-all.mts") ? build : createExitedProcess(0),
+    );
+    const runRuntimePostBuild = vi.fn();
+    const result = runNodeCommand(tmp, {
       spawn,
       env: { OPENCLAW_FORCE_BUILD: "1" },
-      runRuntimePostBuild: syncBundledPluginMetadata,
+      runRuntimePostBuild,
     });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+    expect(fsSync.existsSync(lockDir)).toBe(true);
+    build.emit("exit", 0, null);
 
-    expect(exitCode).toBe(0);
-    expect(spawnCalls).toEqual([
-      expectedBundledPluginAssetBuildSpawn(),
+    expect(await result).toBe(0);
+    expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
       expectedBuildSpawn(),
       statusCommandSpawn(),
     ]);
-
-    await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
-    await expect(fs.readFile(resolvePath(tmp, DIST_EXTENSION_PACKAGE), "utf-8")).resolves.toContain(
-      '"extensions": [\n      "./src/index.js",\n      "./nested/entry.js"\n    ]',
-    );
+    // The canonical profile owns metadata and both stamps; the local runner
+    // only invokes postbuild directly on its separate metadata-only path.
+    expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    expect(fsSync.existsSync(lockDir)).toBe(false);
   });
 
-  it("skips DTS generation only for launcher-triggered local builds", async ({ tmp }) => {
-    await writeRuntimePostBuildScaffold(tmp);
-    const spawnCalls: Array<{
-      args: string[];
-      env: Record<string, string | undefined>;
-    }> = [];
-    const spawn = (_cmd: string, args: string[], options?: unknown) => {
-      const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
-      spawnCalls.push({
-        args,
-        env: { ...opts?.env },
+  it.for([undefined, "0", "1"])(
+    "defaults DTS off only for the canonical build child (override: %s)",
+    async (skipDts, { tmp }) => {
+      const spawnCalls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+      const spawn = (_cmd: string, args: string[], options: SpawnOptions) => {
+        spawnCalls.push({ args, env: { ...options.env } });
+        return createExitedProcess(0);
+      };
+      const exitCode = await runNodeCommand(tmp, {
+        env: { OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
+        spawn,
       });
-      return createExitedProcess(0);
-    };
-
-    const exitCode = await runNodeCommand(tmp, {
-      env: { OPENCLAW_FORCE_BUILD: "1" },
-      spawn,
-      runRuntimePostBuild: skipRuntimePostBuild,
-    });
-
-    expect(exitCode).toBe(0);
-    expect(spawnCalls).toHaveLength(3);
-    expect(spawnCalls[0]?.args).toEqual([
-      "--import",
-      "tsx",
-      "scripts/bundled-plugin-assets.mts",
-      "--phase",
-      "build",
-    ]);
-    expect(spawnCalls[1]?.args).toEqual([
-      "--import",
-      "tsx",
-      "scripts/tsdown-build.mts",
-      "--no-clean",
-    ]);
-    expect(spawnCalls[2]?.args).toEqual(["openclaw.mjs", "status"]);
-    expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
-    expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
-    expect(spawnCalls[2]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
-  });
+      expect(exitCode).toBe(0);
+      expect(spawnCalls.map(({ args }) => args)).toEqual([
+        expectedBuildSpawn().slice(1),
+        ["openclaw.mjs", "status"],
+      ]);
+      expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
+      expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts);
+    },
+  );
 
   it("tees launcher output into the requested generic output log", async ({ tmp }) => {
     await setupTrackedProject(tmp);
@@ -567,16 +510,10 @@ describe("run-node script", () => {
     await writeRuntimePostBuildScaffold(tmp);
     const outputPath = path.join(tmp, ".artifacts", "run-node", "output.log");
     const spawn = (_cmd: string, args: string[]) => {
-      if (isTsxScriptArgs(args, "scripts/bundled-plugin-assets.mts")) {
+      if (isTsxScriptArgs(args, "scripts/build-all.mts")) {
         return createPipedExitedProcess({
-          stdout: "asset stdout\n",
-          stderr: "asset stderr\n",
-        });
-      }
-      if (isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
-        return createPipedExitedProcess({
-          stdout: "build stdout\n",
-          stderr: "build stderr\n",
+          stdout: "asset stdout\nbuild stdout\n",
+          stderr: "asset stderr\nbuild stderr\n",
         });
       }
       return createPipedExitedProcess({ stdout: '{"plugins":[]}\n' });
@@ -840,6 +777,26 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
 
+  it.for([undefined, "/explicit/checkout"])(
+    "carries the checkout selector into the CLI (override: %s)",
+    async (override, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const { spawnSync } = createCurrentGitSpawnRecorder();
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const exitCode = await runNodeCommand(tmp, {
+        env: { OPENCLAW_DEV_SOURCE_ROOT: override },
+        spawn: (_cmd, _args, options) => {
+          childEnv = options.env;
+          return createExitedProcess(0);
+        },
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      expect(exitCode).toBe(0);
+      expect(childEnv?.OPENCLAW_DEV_SOURCE_ROOT).toBe(override ?? tmp);
+    },
+  );
+
   it("skips rebuilding for private QA commands when the private QA facades are present", async ({
     tmp,
   }) => {
@@ -898,7 +855,6 @@ describe("run-node script", () => {
 
     expect(exitCode).toBe(0);
     expect(spawnCalls).toEqual([
-      expectedBundledPluginAssetBuildSpawn(),
       expectedBuildSpawn(),
       [
         process.execPath,
@@ -913,49 +869,58 @@ describe("run-node script", () => {
     ]);
   });
 
-  it("passes the synthesized private QA env into runtime postbuild staging", async ({ tmp }) => {
-    await setupStampedProject(tmp, {
-      files: { [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n" },
-      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
-    });
-
-    const runRuntimePostBuild = vi.fn();
-    const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
-    const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
-
-    expect(exitCode).toBe(0);
-    expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
-    const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
-      | { cwd?: string; env?: Record<string, string | undefined> }
-      | undefined;
-    expect(postBuildParams?.cwd).toBe(tmp);
-    expect(postBuildParams?.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(postBuildParams?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
-    expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("0");
-  });
-
-  it("preserves an explicit bundled plugin disable flag for QA runs", async ({ tmp }) => {
-    await setupStampedProject(tmp, {
-      files: { [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n" },
-      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
-    });
-
-    const runRuntimePostBuild = vi.fn();
-    const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
-    const exitCode = await runQaCommand({
-      tmp,
-      spawn,
-      spawnSync,
-      runRuntimePostBuild,
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-    });
-
-    expect(exitCode).toBe(0);
-    const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
-      | { cwd?: string; env?: Record<string, string | undefined> }
-      | undefined;
-    expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
-  });
+  it.for([
+    { mode: "build", disable: undefined },
+    { mode: "build", disable: "1" },
+    { mode: "metadata", disable: undefined },
+    { mode: "metadata", disable: "1" },
+  ])(
+    "carries private QA policy through $mode (disable: $disable)",
+    async ({ mode, disable }, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files: {
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+          ...(mode === "metadata"
+            ? { [QA_RUNTIME_PLUGIN_SDK_ENTRY]: "export const qaRuntime = true;\n" }
+            : {}),
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
+      const runRuntimePostBuild = vi.fn();
+      const spawn = vi.fn((_cmd: string, _args: string[], _options: SpawnOptions) =>
+        createExitedProcess(0),
+      );
+      const { spawnSync } = createCurrentGitSpawnRecorder();
+      const exitCode = await runNodeCommand(tmp, {
+        args: ["qa", "suite"],
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: disable },
+      });
+      expect(exitCode).toBe(0);
+      expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
+        ...(mode === "build" ? [expectedBuildSpawn().slice(1)] : []),
+        ["openclaw.mjs", "qa", "suite"],
+      ]);
+      const expectedEnv = {
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: disable ?? "0",
+      };
+      for (const call of spawn.mock.calls) {
+        expect(call[2].env).toMatchObject(expectedEnv);
+      }
+      if (mode === "metadata") {
+        expect(runRuntimePostBuild).toHaveBeenCalledExactlyOnceWith({
+          cwd: tmp,
+          env: expect.objectContaining(expectedEnv),
+        });
+      } else {
+        expect(runRuntimePostBuild).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("derives private QA facade checks from distRoot for direct freshness checks", async ({
     tmp,
@@ -1121,6 +1086,74 @@ describe("run-node script", () => {
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
 
+  it("runs current immutable deployment artifacts without refreshing them", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
+    await writeImmutableDeploymentManifest(tmp);
+
+    const runRuntimePostBuild = vi.fn();
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const exitCode = await runStatusCommand({
+      tmp,
+      args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+      spawn,
+      spawnSync,
+      runRuntimePostBuild,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(spawnCalls).toEqual([gatewayStatusCommandSpawn()]);
+    expect(runRuntimePostBuild).not.toHaveBeenCalled();
+  });
+
+  for (const { label, missingPath, expectedReason } of [
+    {
+      label: "build output",
+      missingPath: BUILD_STAMP,
+      expectedReason: "build stamp missing",
+    },
+    {
+      label: "runtime postbuild output",
+      missingPath: DIST_OPENCLAW_ALIAS_PACKAGE,
+      expectedReason: "required runtime postbuild output missing",
+    },
+  ]) {
+    it(`refuses to regenerate missing ${label} in an immutable deployment`, async ({ tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
+      await writeImmutableDeploymentManifest(tmp);
+      await fs.rm(resolvePath(tmp, missingPath));
+
+      const stderrChunks: string[] = [];
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      const exitCode = await runStatusCommand({
+        tmp,
+        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+        spawn,
+        spawnSync,
+        stderr,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(spawnCalls).toEqual([]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+      expect(stderrChunks.join("")).toContain(expectedReason);
+      expect(stderrChunks.join("")).toContain("node openclaw.mjs");
+    });
+  }
+
   it("restages runtime artifacts when runtime metadata is dirty", async ({ tmp }) => {
     await setupStampedProject(tmp, {
       files: {
@@ -1202,24 +1235,26 @@ describe("run-node script", () => {
     expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
   });
 
-  it("returns the build exit code when the compiler step fails", async ({ tmp }) => {
-    const spawn = (cmd: string, args: string[] = []) => {
-      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
+  it("returns the canonical build failure without starting the CLI", async ({ tmp }) => {
+    const spawn = vi.fn((cmd: string, args: string[] = []) => {
+      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/build-all.mts")) {
         return createExitedProcess(23);
       }
       return createExitedProcess(0);
-    };
+    });
 
     const exitCode = await runNodeCommand(tmp, { env: { OPENCLAW_FORCE_BUILD: "1" }, spawn });
 
     expect(exitCode).toBe(23);
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
   });
 
-  it("returns failure and releases the build lock when the compiler spawn errors", async ({
+  it("returns failure and releases the build lock when the canonical build spawn errors", async ({
     tmp,
   }) => {
-    const spawn = (cmd: string, args: string[] = []) => {
-      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
+    const spawn = vi.fn((cmd: string, args: string[] = []) => {
+      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/build-all.mts")) {
         const events = new EventEmitter();
         queueMicrotask(() => events.emit("error", new Error("spawn failed")));
         return {
@@ -1230,74 +1265,82 @@ describe("run-node script", () => {
         };
       }
       return createExitedProcess(0);
-    };
+    });
 
     const exitCode = await runNodeCommand(tmp, { env: { OPENCLAW_FORCE_BUILD: "1" }, spawn });
 
     expect(exitCode).toBe(1);
+    expect(spawn).toHaveBeenCalledOnce();
     expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
   });
 
-  it("forwards wrapper SIGTERM to the active openclaw child and returns 143", async ({ tmp }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+  it.for([false, true])(
+    "forwards SIGTERM to the active child and returns 143 (rebuild: %s)",
+    async (rebuild, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
 
-    const fakeProcess = Object.assign(createFakeProcess(), {
-      stdin: {
-        isTTY: true,
-      },
-    });
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn((signal: string) => {
-        queueMicrotask(() => child.emit("exit", 0, null));
-        return signal;
-      }),
-    });
-    const spawn = vi.fn<
-      (
-        cmd: string,
-        args: string[],
-        options: unknown,
-      ) => {
-        kill: (signal?: string) => boolean;
-        on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
-      }
-    >(() => ({
-      kill: (signal) => {
-        child.kill(signal ?? "SIGTERM");
-        return true;
-      },
-      on: (event, cb) => {
-        child.on(event, cb);
-      },
-    }));
+      const fakeProcess = Object.assign(createFakeProcess(), {
+        stdin: {
+          isTTY: true,
+        },
+      });
+      const child = Object.assign(new EventEmitter(), {
+        kill: vi.fn((signal: string) => {
+          queueMicrotask(() => child.emit("exit", 0, null));
+          return signal;
+        }),
+      });
+      const spawn = vi.fn<
+        (
+          cmd: string,
+          args: string[],
+          options: unknown,
+        ) => {
+          kill: (signal?: string) => boolean;
+          on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
+        }
+      >(() => ({
+        kill: (signal) => {
+          child.kill(signal ?? "SIGTERM");
+          return true;
+        },
+        on: (event, cb) => {
+          child.on(event, cb);
+        },
+      }));
 
-    const exitCodePromise = runNodeCommand(tmp, {
-      process: fakeProcess,
-      spawn,
-      runRuntimePostBuild: skipRuntimePostBuild,
-    });
+      const exitCodePromise = runNodeCommand(tmp, {
+        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
+        process: fakeProcess,
+        spawn,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
-    await vi.waitFor(() => {
-      expect(spawn).toHaveBeenCalled();
-    });
-    fakeProcess.emit("SIGTERM");
-    const exitCode = await exitCodePromise;
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalled();
+      });
+      fakeProcess.emit("SIGTERM");
+      const exitCode = await exitCodePromise;
 
-    expect(exitCode).toBe(143);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
-    expect(spawnCall?.[0]).toBe(process.execPath);
-    expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
-    expect(spawnCall?.[2].stdio).toBe("inherit");
-    expect(spawnCall?.[2]).toMatchObject({ detached: false });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
-    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
-  });
+      expect(exitCode).toBe(143);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
+      expect(spawnCall?.[0]).toBe(process.execPath);
+      expect(spawnCall?.[1]).toEqual(
+        rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
+      );
+      expect(spawnCall?.[2].stdio).toEqual(rebuild ? ["inherit", "pipe", "pipe"] : "inherit");
+      expect(spawnCall?.[2]).toMatchObject({ detached: false });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+      expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
 
-  it.runIf(process.platform !== "win32")(
-    "force-cleans the active openclaw child process group after forwarded SIGTERM",
-    async ({ tmp }) => {
+  it.runIf(process.platform !== "win32").for([false, true])(
+    "force-cleans the active child process group after SIGTERM (rebuild: %s)",
+    async (rebuild, { tmp }) => {
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
 
       const fakeProcess = Object.assign(createFakeProcess(), {
@@ -1332,6 +1375,7 @@ describe("run-node script", () => {
       }));
 
       const exitCodePromise = runNodeCommand(tmp, {
+        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
         platform: "darwin",
         process: fakeProcess,
         signalProcess: (pid: number, signal?: string | number) => {
@@ -1355,8 +1399,15 @@ describe("run-node script", () => {
       const spawnCall = firstMockCall(spawn) as
         | [string, string[], { detached?: boolean; stdio?: unknown }]
         | undefined;
-      expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
-      expect(spawnCall?.[2]).toMatchObject({ detached: true, stdio: "inherit" });
+      expect(spawnCall?.[1]).toEqual(
+        rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
+      );
+      expect(spawnCall?.[2]).toMatchObject({
+        detached: true,
+        stdio: rebuild ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
       expect(groupSignals).toEqual([
         [-42_420, "SIGTERM"],
         [-42_420, "SIGKILL"],
@@ -1386,11 +1437,7 @@ describe("run-node script", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(spawnCalls).toEqual([
-      expectedBundledPluginAssetBuildSpawn(),
-      expectedBuildSpawn(),
-      statusCommandSpawn(),
-    ]);
+    expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
   });
 
   it("shows tty progress while rebuilding source-checkout artifacts", async ({ tmp }) => {
@@ -1433,11 +1480,7 @@ describe("run-node script", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(spawnCalls).toEqual([
-      expectedBundledPluginAssetBuildSpawn(),
-      expectedBuildSpawn(),
-      statusCommandSpawn(),
-    ]);
+    expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
   });
 
   it("skips rebuilding when extension package metadata is newer than the build stamp", async ({
@@ -1629,6 +1672,41 @@ describe("run-node script", () => {
     expect(requirement).toEqual({
       shouldBuild: false,
       reason: "clean",
+    });
+  });
+
+  it("ignores newer tracked config mtimes when Git proves the checkout is clean", async ({
+    tmp,
+  }) => {
+    await setupStampedProject(tmp, {
+      files: { [ROOT_TSDOWN]: "export default {};\n" },
+      oldPaths: [ROOT_SRC],
+      newPaths: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
+    });
+
+    const requirement = resolveBuildRequirement(createBuildRequirementDeps(tmp));
+
+    expect(requirement).toEqual({
+      shouldBuild: false,
+      reason: "clean",
+    });
+  });
+
+  it("uses newer config mtimes when Git state is unavailable", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      oldPaths: [ROOT_SRC],
+      newPaths: [ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
+    const { spawnSync } = createSpawnRecorder();
+
+    const requirement = resolveBuildRequirement({
+      ...createBuildRequirementDeps(tmp),
+      spawnSync,
+    });
+
+    expect(requirement).toEqual({
+      shouldBuild: true,
+      reason: "config_newer",
     });
   });
 
@@ -1948,6 +2026,9 @@ describe("run-node script", () => {
 
     for (const missingPath of [
       DIST_CHANNEL_CATALOG,
+      DIST_BUILD_INFO,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
       DIST_LEGACY_ROOT_RUNTIME_COMPAT,
@@ -1963,6 +2044,29 @@ describe("run-node script", () => {
       });
       await fs.writeFile(resolvedMissingPath, originalContent);
     }
+  });
+
+  it("reports missing bundled hook metadata when runtime stamps match HEAD", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: {
+        [BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [DIST_BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+      },
+    });
+
+    expect(resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp))).toEqual({
+      shouldSync: false,
+      reason: "clean",
+    });
+    await fs.rm(resolvePath(tmp, DIST_BUNDLED_HOOK_METADATA));
+
+    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
+
+    expect(requirement).toEqual({
+      shouldSync: true,
+      reason: "missing_runtime_postbuild_output",
+    });
   });
 
   it("does not require ambiguous stable runtime aliases that postbuild cannot create", async ({
@@ -2029,6 +2133,49 @@ describe("run-node script", () => {
     expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
       shouldSync: true,
       reason: "dirty_runtime_postbuild_inputs",
+    });
+  });
+
+  it.each(RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS)(
+    "reports dirty runtime postbuild implementation %s",
+    async (implementationPath) => {
+      await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupStampedProject(tmp, {
+          files: {
+            [implementationPath]: "export {};\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          trackConfig: true,
+        });
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\n` }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "dirty_runtime_postbuild_inputs",
+        });
+      });
+    },
+  );
+
+  it("reports a newer hook metadata copier without git status", async ({ tmp }) => {
+    const implementationPath = "scripts/copy-hook-metadata.ts";
+    await setupStampedProject(tmp, {
+      files: {
+        [implementationPath]: "export {};\n",
+        [RUNTIME_POSTBUILD_STAMP]: "{}\n",
+      },
+      newPaths: [implementationPath],
+      trackConfig: true,
+    });
+    const deps = createBuildRequirementDeps(tmp);
+    deps.spawnSync = () => ({ status: 1, stdout: "" });
+
+    expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+      shouldSync: true,
+      reason: "runtime_postbuild_input_mtime_newer",
     });
   });
 
@@ -2136,14 +2283,16 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
 
-  it("rebuilds when tsdown config is newer than the build stamp", async ({ tmp }) => {
+  it("rebuilds when tsdown config is dirty", async ({ tmp }) => {
     await setupStampedProject(tmp, {
       files: { [ROOT_TSDOWN]: "export default {};\n" },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
       newPaths: [ROOT_TSDOWN],
     });
 
-    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
+      gitStatus: ` M ${ROOT_TSDOWN}\n`,
+    });
     const exitCode = await runStatusCommand({
       tmp,
       spawn,
@@ -2152,11 +2301,7 @@ describe("run-node script", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(spawnCalls).toEqual([
-      expectedBundledPluginAssetBuildSpawn(),
-      expectedBuildSpawn(),
-      statusCommandSpawn(),
-    ]);
+    expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
   });
 
   describe("acquireRunNodeBuildLock", () => {

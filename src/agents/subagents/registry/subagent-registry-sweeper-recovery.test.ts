@@ -32,10 +32,12 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
     recoverInterruptedSubagentRow: recoverRow,
   };
 });
-vi.mock("../../../infra/agent-events.js", () => ({
+vi.mock("../../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/agent-events.js")>()),
   isAgentEventLifecycleGenerationCurrent: () => true,
 }));
-vi.mock("../../../infra/agent-run-registry.js", () => ({
+vi.mock("../../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/agent-run-registry.js")>()),
   getAgentRunContext,
 }));
 vi.mock("../../internal-session-effects.js", () => ({
@@ -95,6 +97,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     getGatewayRecoveryRuntime: () => runtime.current,
     abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
     clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
+    clearPendingSubagentRecoveryNotice: vi.fn(() => true),
     resumeSettledSubagentRestartRecovery: vi.fn(() => true),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
     markSubagentRestartRecoveryLaunchAttempted: vi.fn((params) => ({

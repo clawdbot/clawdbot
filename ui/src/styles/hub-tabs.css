@@ -137,10 +137,6 @@ wa-tab.hub-tab:focus-visible::part(base) {
     justify-self: stretch;
   }
 
-  .hub-page-header .page-title {
-    display: none;
-  }
-
   .hub-page-header .hub-page-header__tabs {
     grid-area: tabs;
   }

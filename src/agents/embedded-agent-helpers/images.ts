@@ -78,11 +78,7 @@ export async function sanitizeSessionMessagesImages(
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = (await sanitizeContentBlocksImages(
-        content,
-        label,
-        imageSanitization,
-      )) as unknown as typeof toolMsg.content;
+      const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
       out.push({ ...toolMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
       continue;
     }
@@ -91,11 +87,7 @@ export async function sanitizeSessionMessagesImages(
       const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
       const content = userMsg.content;
       if (Array.isArray(content)) {
-        const nextContent = await sanitizeContentBlocksImages(
-          content as unknown as ContentBlock[],
-          label,
-          imageSanitization,
-        );
+        const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
         out.push({ ...userMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
         continue;
       }

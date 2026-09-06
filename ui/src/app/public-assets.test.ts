@@ -18,6 +18,37 @@ function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
 }
 
 describe("controlUiPublicAssetPath", () => {
+  it("versions public assets with the document build while keeping the worker revalidating", () => {
+    const attribute = "data-openclaw-control-ui-build-id";
+    document.documentElement.setAttribute(attribute, "build-a");
+    try {
+      for (const asset of [
+        "favicon.svg",
+        "apple-touch-icon.png",
+        "manifest.webmanifest",
+        "themes/absolutely.css",
+        "fonts/lora.css",
+        "provider-icons/ProviderIcon-pi.svg",
+        "file-icons/compact/dark/pdf.svg",
+        "file-icons/large/shell-dark.svg",
+        "file-icons/overlays/pdf.svg",
+        "plugin-art/example.webp",
+        "app-art/example.webp",
+        "community-art/example.webp",
+      ] as const) {
+        expect(controlUiPublicAssetPath(asset, "")).toBe(`/${asset}?v=build-a`);
+        expect(controlUiPublicAssetPath(asset, "/control/")).toBe(`/control/${asset}?v=build-a`);
+      }
+      expect(controlUiPublicAssetPath("sw.js", "/control")).toBe("/control/sw.js");
+      document.documentElement.setAttribute(attribute, "build-b");
+      expect(
+        inferControlUiPublicAssetPath("fonts/lora.css", { resourceBasePath: "/control" }),
+      ).toBe("/control/fonts/lora.css?v=build-b");
+    } finally {
+      document.documentElement.removeAttribute(attribute);
+    }
+  });
+
   it("resolves root-mounted public assets from the URL root", () => {
     expect(controlUiPublicAssetPath("favicon.svg", "")).toBe("/favicon.svg");
     expect(controlUiPublicAssetPath("manifest.webmanifest", null)).toBe("/manifest.webmanifest");
@@ -34,6 +65,12 @@ describe("inferControlUiPublicAssetPath", () => {
     expect(
       inferControlUiPublicAssetPath("manifest.webmanifest", { pathname: "/skills/workshop" }),
     ).toBe("/manifest.webmanifest");
+    expect(
+      inferControlUiPublicAssetPath("favicon.svg", {
+        resourceBasePath: "",
+        pathname: "/__openclaw__/new",
+      }),
+    ).toBe("/favicon.svg");
   });
 
   it("infers base-mounted assets from nested routes", () => {
@@ -57,7 +94,7 @@ describe("inferControlUiPublicAssetPath", () => {
   it("prefers an explicit base path over pathname inference", () => {
     expect(
       inferControlUiPublicAssetPath("apple-touch-icon.png", {
-        basePath: "/control/",
+        resourceBasePath: "/control/",
         pathname: "/skills/workshop",
       }),
     ).toBe("/control/apple-touch-icon.png");

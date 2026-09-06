@@ -16,7 +16,7 @@ import { resolveLinkChannelContext } from "../status/link-channel.js";
 
 describe("resolveLinkChannelContext", () => {
   it("returns linked context from read-only inspected account state", async () => {
-    const account = { configured: true, enabled: true };
+    const account = { configured: true, enabled: true, linked: true };
     pluginRegistry.list = [
       {
         id: "quietchat",
@@ -29,18 +29,37 @@ describe("resolveLinkChannelContext", () => {
           },
         },
         status: {
-          buildChannelSummary: () => ({ linked: true, authAgeMs: 1234 }),
+          buildChannelSummary: () => {
+            throw new Error("runtime summary must not receive inspection metadata");
+          },
         },
       },
     ];
 
     const result = await resolveLinkChannelContext({} as OpenClawConfig);
     expect(result?.linked).toBe(true);
-    expect(result?.authAgeMs).toBe(1234);
+    expect(result?.authAgeMs).toBeNull();
     expect(result?.account).toBe(account);
   });
 
-  it("degrades safely when account resolution throws", async () => {
+  it("preserves link age from runtime summary hooks when an account is resolved", async () => {
+    const account = { configured: true, enabled: true, authDir: "/synthetic/auth" };
+    const summary = vi.fn(() => ({ linked: true, authAgeMs: 1234 }));
+    pluginRegistry.list = [
+      {
+        id: "quietchat",
+        meta: { label: "QuietChat" },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => account },
+        status: { buildChannelSummary: summary },
+      },
+    ];
+
+    const result = await resolveLinkChannelContext({});
+    expect(result).toMatchObject({ linked: true, authAgeMs: 1234, account });
+    expect(summary).toHaveBeenCalledWith(expect.objectContaining({ account }));
+  });
+
+  it("reports unexpected account resolution failures", async () => {
     pluginRegistry.list = [
       {
         id: "quietchat",
@@ -54,7 +73,6 @@ describe("resolveLinkChannelContext", () => {
       },
     ];
 
-    const result = await resolveLinkChannelContext({} as OpenClawConfig);
-    expect(result).toBeNull();
+    await expect(resolveLinkChannelContext({} as OpenClawConfig)).rejects.toThrow("missing secret");
   });
 });

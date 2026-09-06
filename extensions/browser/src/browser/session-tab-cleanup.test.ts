@@ -1,4 +1,5 @@
 // Browser tests cover periodic session-tab cleanup failure handling.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,9 +23,6 @@ describe("session tab cleanup timer", () => {
       browser: {
         tabCleanup: {
           enabled: true,
-          idleMinutes: 30,
-          maxTabsPerSession: 10,
-          sweepMinutes: 1,
         },
       },
     };
@@ -55,7 +53,7 @@ describe("session tab cleanup timer", () => {
     await stop();
   });
 
-  it("forwards the live runtime config resolver to every periodic sweep", async () => {
+  it("adopts cleanup policy changes without replacing the timer", async () => {
     registryMocks.sweepTrackedBrowserTabs.mockResolvedValue(0);
     const resolved = { profiles: {} } as never;
     const getResolvedBrowserConfig = vi.fn(() => resolved);
@@ -69,6 +67,37 @@ describe("session tab cleanup timer", () => {
     expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledWith(
       expect.objectContaining({ getResolvedBrowserConfig }),
     );
+
+    const disabled = { browser: { tabCleanup: { enabled: false } } };
+    setRuntimeConfigSnapshot(disabled, disabled);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(1);
+
+    const enabled = { browser: { tabCleanup: { enabled: true } } };
+    setRuntimeConfigSnapshot(enabled, enabled);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
     await stop();
+  });
+
+  it("waits for the active sweep and does not reschedule after stop", async () => {
+    const sweep = createDeferred<number>();
+    registryMocks.sweepTrackedBrowserTabs.mockReturnValue(sweep.promise);
+    const stop = startTrackedBrowserTabCleanupTimer({ onWarn: vi.fn() });
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+
+    const stopped = vi.fn();
+    const stopping = stop().then(stopped);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(stopped).not.toHaveBeenCalled();
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+
+    sweep.resolve(0);
+    await stopping;
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

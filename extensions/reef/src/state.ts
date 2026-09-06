@@ -406,7 +406,11 @@ export class ReviewApprovalStore {
   readonly #store: PluginStateSyncKeyedStore<ReefReviewRecord>;
   readonly #maxEntries: number;
 
-  constructor(runtime: PluginRuntime, maxEntries = REEF_REVIEWS_MAX_ENTRIES) {
+  constructor(
+    runtime: PluginRuntime,
+    maxEntries = REEF_REVIEWS_MAX_ENTRIES,
+    private readonly authoritySignal?: AbortSignal,
+  ) {
     this.#maxEntries = maxEntries;
     this.#store = runtime.state.openSyncKeyedStore<ReefReviewRecord>({
       namespace: REEF_REVIEWS_NAMESPACE,
@@ -436,6 +440,7 @@ export class ReviewApprovalStore {
   }
 
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
+    this.authoritySignal?.throwIfAborted();
     const current = this.#store.lookup(review.approvalDigest);
     if (current?.approved !== undefined) {
       return { approved: current.approved, approvalDigest: review.approvalDigest };
@@ -453,23 +458,36 @@ export class ReviewApprovalStore {
       : { approved: persisted.approved, approvalDigest: review.approvalDigest };
   }
 
-  async decide(digest: string, approved: boolean): Promise<boolean> {
+  async lookupDecision(
+    approvalDigest: string,
+  ): Promise<"none" | "pending" | { approved: boolean }> {
+    this.authoritySignal?.throwIfAborted();
+    const current = this.#store.lookup(approvalDigest);
+    if (!current) {
+      return "none";
+    }
+    return current.approved === undefined ? "pending" : { approved: current.approved };
+  }
+
+  async decide(digest: string, approved: boolean): Promise<ReviewRequest | undefined> {
     const update = this.#store.update;
     if (!update) {
       throw new Error("Reef review state requires atomic plugin-state updates");
     }
-    let found = false;
+    let decided: ReviewRequest | undefined;
+    this.authoritySignal?.throwIfAborted();
     update(digest, (current) => {
       if (!current) {
         return undefined;
       }
-      found = true;
+      decided = structuredClone(current.review);
       return { ...current, approved };
     });
-    return found;
+    return decided;
   }
 
   async list(): Promise<ReviewRequest[]> {
+    this.authoritySignal?.throwIfAborted();
     return this.#store
       .entries()
       .filter((entry) => entry.value.approved === undefined)
@@ -585,6 +603,7 @@ export function openStores(
     auditMaxEntries?: number;
     replayMaxEntries?: number;
     deliveredMaxEntries?: number;
+    authoritySignal?: AbortSignal;
   } = {},
 ) {
   assertReefIdentityMigrationComplete(runtime);
@@ -596,7 +615,7 @@ export function openStores(
       randomBytes,
       options.replayMaxEntries,
     ),
-    reviews: new ReviewApprovalStore(runtime),
+    reviews: new ReviewApprovalStore(runtime, undefined, options.authoritySignal),
     delivered: new ReefDeliveredStore(runtime, options.deliveredMaxEntries),
   };
 }

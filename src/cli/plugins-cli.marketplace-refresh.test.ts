@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
@@ -39,7 +40,7 @@ vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
 }));
 
-vi.mock("../plugins/management-service.js", () => ({
+vi.mock("../plugins/management-catalog.js", () => ({
   clearManagedPluginOfficialCatalogCache: mocks.clearManagedPluginOfficialCatalogCache,
 }));
 
@@ -53,6 +54,7 @@ async function createTimelinePath(): Promise<string> {
 }
 
 async function readTimeline(pathname: string): Promise<Record<string, unknown>[]> {
+  flushDiagnosticsTimeline();
   const content = await readFile(pathname, "utf8");
   return content
     .trim()
@@ -74,6 +76,7 @@ describe("plugins marketplace refresh", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
     vi.unstubAllEnvs();
   });
 

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   isModelKeyAllowedBySet,
@@ -15,7 +16,6 @@ import {
   buildConfiguredModelCatalog,
   modelKey,
   normalizeProviderId,
-  resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
@@ -176,67 +176,20 @@ function buildModelPickerCatalog(params: {
   allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
 }): ModelPickerCatalogEntry[] {
-  const resolvedDefault = resolveConfiguredModelRef({
+  const configuredProjection = resolveConfiguredModelEntries({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    aliasIndex: params.aliasIndex,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
-
-  const buildConfiguredCatalog = (): ModelPickerCatalogEntry[] => {
-    const out: ModelPickerCatalogEntry[] = [];
-    const keys = new Set<string>();
-
-    const pushRef = (ref: { provider: string; model: string }, name?: string) => {
-      pushUniqueCatalogEntry({
-        keys,
-        out,
-        provider: ref.provider,
-        id: ref.model,
-        name,
-        fallbackNameToId: true,
-      });
-    };
-
-    const pushRaw = (raw?: string) => {
-      const value = normalizeOptionalString(raw) ?? "";
-      if (!value) {
-        return;
-      }
-      const resolved = resolveModelRefFromString({
-        raw: value,
-        defaultProvider: params.defaultProvider,
-        aliasIndex: params.aliasIndex,
-      });
-      if (!resolved) {
-        return;
-      }
-      pushRef(resolved.ref);
-    };
-
-    pushRef(resolvedDefault);
-
-    const modelConfig = params.cfg.agents?.defaults?.model;
-    const modelFallbacks =
-      modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
-    for (const fallback of modelFallbacks) {
-      pushRaw(fallback ?? "");
-    }
-
-    const imageConfig = params.cfg.agents?.defaults?.imageModel;
-    if (imageConfig && typeof imageConfig === "object") {
-      pushRaw(imageConfig.primary);
-      for (const fallback of imageConfig.fallbacks ?? []) {
-        pushRaw(fallback ?? "");
-      }
-    }
-
-    for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
-      pushRaw(raw);
-    }
-
-    return out;
-  };
+  const resolvedDefault = configuredProjection.defaultRef;
+  const configuredCatalog = configuredProjection.entries.map((entry) => ({
+    provider: entry.ref.provider,
+    id: entry.ref.model,
+    name: entry.ref.model,
+  }));
 
   const keys = new Set<string>();
   const out: ModelPickerCatalogEntry[] = [];
@@ -264,7 +217,7 @@ function buildModelPickerCatalog(params: {
         name: entry.name,
       });
     }
-    for (const entry of buildConfiguredCatalog()) {
+    for (const entry of configuredCatalog) {
       push(entry);
     }
     return out;
@@ -289,6 +242,7 @@ function buildModelPickerCatalog(params: {
   for (const raw of visibility.exactModelRefs) {
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
+      agentId: params.agentId,
       raw,
       defaultProvider: params.defaultProvider,
       aliasIndex: params.policyAliasIndex,
@@ -413,20 +367,18 @@ export async function maybeHandleModelDirectiveInfo(params: {
   if (params.directives.rawModelRuntime) {
     return { text: "Runtime override requires a model selection.", isError: true };
   }
-  if (params.directives.modelSessionOnly) {
-    return { text: "Session-only scope requires a model selection.", isError: true };
+  if (params.directives.modelScope) {
+    const scopeLabel =
+      params.directives.modelScope === "session"
+        ? "Session-only"
+        : params.directives.modelScope === "agent"
+          ? "Agent"
+          : "Global";
+    return {
+      text: `${scopeLabel} scope requires a model selection.`,
+      isError: true,
+    };
   }
-
-  const pickerCatalog = buildModelPickerCatalog({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    agentId: params.activeAgentId,
-    aliasIndex: params.aliasIndex,
-    policyAliasIndex: params.policyAliasIndex ?? params.aliasIndex,
-    allowedModelKeys: params.allowedModelKeys,
-    allowedModelCatalog: params.allowedModelCatalog,
-  });
 
   if (wantsLegacyList) {
     const reply = await resolveModelsCommandReply({
@@ -477,9 +429,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
           activeRuntimeLine,
           thinkingLine,
           "",
-          "Tap below to switch this session only, or use:",
-          "/model <provider/model> for session + owner/admin default update",
+          "Tap below to select a model, or use:",
           "/model <provider/model> -s for this session only",
+          "/model <provider/model> -a to update this agent's default",
+          "/model <provider/model> -g to update the global default",
           "/model <provider/model> --runtime <runtime> -s to switch harnesses",
           "/model status for details",
         ]
@@ -495,8 +448,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
         activeRuntimeLine,
         thinkingLine,
         "",
-        "Direct: /model <provider/model> (owner/admin requests a default update)",
-        "Session only: /model <provider/model> -s",
+        "Session: /model <provider/model> -s",
+        "Agent default: /model <provider/model> -a",
+        "Global default: /model <provider/model> -g",
         "Runtime: /model <provider/model> --runtime <runtime> -s",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
@@ -506,6 +460,16 @@ export async function maybeHandleModelDirectiveInfo(params: {
     };
   }
 
+  const pickerCatalog = buildModelPickerCatalog({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    agentId: params.activeAgentId,
+    aliasIndex: params.aliasIndex,
+    policyAliasIndex: params.policyAliasIndex ?? params.aliasIndex,
+    allowedModelKeys: params.allowedModelKeys,
+    allowedModelCatalog: params.allowedModelCatalog,
+  });
   const modelsPath = `${params.agentDir}/models.json`;
   const formatPath = (value: string) => shortenHomePath(value);
   const authMode: ModelAuthDetailMode = "verbose";

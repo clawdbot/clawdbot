@@ -151,9 +151,15 @@ vi.mock("./actions.runtime.js", () => ({
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalGatewayMock.resolveApprovalOverGateway,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: approvalGatewayMock.isApprovalNotFoundError,
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: approvalGatewayMock.isApprovalNotFoundError,
+  };
+});
 
 describe("imessageApprovalNativeRuntime", () => {
   it("renders shared reactions in pending exec approvals", async () => {
@@ -451,6 +457,13 @@ describe("imessageApprovalNativeRuntime", () => {
           messageId: PROMPT_GUID,
           ...(poll ? { poll } : {}),
         },
+        request: {
+          id: "approval-1",
+          request: { command: "echo hi" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        approvalKind: "exec",
         payload: { text },
         phase: "resolved",
       });
@@ -505,7 +518,7 @@ describe("imessageApprovalNativeRuntime", () => {
         pollDeliverArgs.pendingPayload.pollText,
         expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
       );
-      expect(sendMock.sendMessageIMessage.mock.calls[0]?.[2]).not.toHaveProperty("approvalKind");
+      expect(sendMock.sendMessageIMessage.mock.calls[0]?.[2]).not.toHaveProperty("approvalPrompt");
       expect(actionsMock.sendPoll).toHaveBeenCalledWith(
         expect.objectContaining({
           chatGuid: "iMessage;-;+15551230000",
@@ -815,7 +828,11 @@ describe("imessageApprovalNativeRuntime", () => {
         "+15551230000",
         pollDeliverArgs.pendingPayload.text,
         expect.objectContaining({
-          approvalKind: "exec",
+          approvalPrompt: {
+            approvalId: "exec-poll",
+            approvalKind: "exec",
+            allowedDecisions: ["allow-once", "deny"],
+          },
           replyToId: "prompt-guid",
         }),
       );
@@ -886,7 +903,11 @@ describe("imessageApprovalNativeRuntime", () => {
         "+15551230000",
         pollDeliverArgs.pendingPayload.text,
         expect.objectContaining({
-          approvalKind: "exec",
+          approvalPrompt: {
+            approvalId: "exec-poll",
+            approvalKind: "exec",
+            allowedDecisions: ["allow-once", "deny"],
+          },
           replyToId: "prompt-guid",
         }),
       );

@@ -176,7 +176,7 @@ describe("refreshQueuedFollowupSession", () => {
       nextRouteResolution: "resolved",
       nextThinking: {
         level: "ultra",
-        catalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
+        catalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
         agentRuntime: "codex",
       },
     });
@@ -185,7 +185,7 @@ describe("refreshQueuedFollowupSession", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
       thinkLevel: "max",
-      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
+      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
     });
   });
 
@@ -206,6 +206,193 @@ describe("refreshQueuedFollowupSession", () => {
     });
 
     expect(queue.items[0]?.run.thinkLevel).toBe("high");
+  });
+
+  it.each([
+    {
+      source: "turn",
+      current: "high",
+      stored: "off",
+      model: "gpt-5.6-sol",
+      reasoning: true,
+      expected: "high",
+    },
+    {
+      source: "turn",
+      current: "off",
+      stored: "high",
+      model: "gpt-5.6-sol",
+      reasoning: true,
+      expected: "off",
+    },
+    {
+      source: "default",
+      current: "high",
+      stored: "high",
+      model: "gpt-5.6-sol",
+      reasoning: true,
+      expected: "medium",
+    },
+    {
+      source: undefined,
+      current: "high",
+      stored: "low",
+      model: "gpt-5.6-sol",
+      reasoning: true,
+      expected: "low",
+    },
+    {
+      source: "turn",
+      current: "ultra",
+      stored: "off",
+      model: "gpt-5.6-luna",
+      reasoning: true,
+      expected: "max",
+    },
+    {
+      source: "turn",
+      current: "high",
+      stored: "off",
+      model: "non-reasoner",
+      reasoning: false,
+      expected: "off",
+    },
+  ] as const)(
+    "retargets $source thinking $current with stored $stored to $model as $expected",
+    ({ source, current, stored, model, reasoning, expected }) => {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const runs = Array.from({ length: 4 }, () => ({
+        ...makeRun(),
+        thinkLevel: current,
+        thinkLevelOverride: source === "turn" ? current : source,
+      }));
+      const wrap = (run: FollowupRun["run"]): FollowupRun => ({
+        prompt: "queued",
+        enqueuedAt: Date.now(),
+        run,
+      });
+      queue.lastRun = runs[0];
+      queue.items.push(wrap(runs[1]!));
+      queue.summarySources.push(wrap(runs[2]!));
+      queue.summaryElisions.push({
+        contextKey: "elided",
+        count: 1,
+        sources: [wrap(runs[3]!)],
+        summaryLines: ["queued"],
+        sourceRefs: new WeakMap(),
+      });
+      refreshQueuedFollowupSession({
+        key: QUEUE_KEY,
+        nextProvider: "openai",
+        nextModel: model,
+        nextThinking: {
+          level: stored,
+          catalog: [{ provider: "openai", id: model, name: model, reasoning }],
+          agentRuntime: "codex",
+        },
+      });
+      expect(runs.map((run) => run.thinkLevel)).toEqual(Array(4).fill(expected));
+      expect(runs.map((run) => run.thinkLevelOverride)).toEqual(
+        Array(4).fill(source === "turn" ? current : source),
+      );
+    },
+  );
+
+  it.each([
+    { requested: "high", stored: "low", expected: ["high", "off", "high"] },
+    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
+    { requested: "default", stored: "off", expected: ["high", "off", "low"] },
+    { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
+  ] as const)(
+    "retains requested thinking $requested across repeated queued model switches",
+    ({ requested, stored, expected }) => {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const run: FollowupRun["run"] = {
+        ...makeRun(),
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": { params: { thinking: "high" } },
+                "openai/gpt-5.6-luna": { params: { thinking: "low" } },
+              },
+            },
+          },
+        },
+        thinkLevel: "high",
+        thinkLevelOverride: requested,
+      };
+      queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
+      for (const [index, model] of ["gpt-5.6-sol", "non-reasoner", "gpt-5.6-luna"].entries()) {
+        refreshQueuedFollowupSession({
+          key: QUEUE_KEY,
+          nextProvider: "openai",
+          nextModel: model,
+          nextThinking: {
+            level: stored,
+            catalog: [{ provider: "openai", id: model, name: model, reasoning: index !== 1 }],
+            agentRuntime: "codex",
+          },
+        });
+        expect(run.thinkLevel).toBe(expected[index]);
+        expect(run.thinkLevelOverride).toBe(requested);
+      }
+    },
+  );
+
+  describe.each(["default", undefined] as const)("thinking source %s", (source) => {
+    it.each<{ name: string; config: FollowupRun["run"]["config"]; expected: string }>([
+      {
+        name: "agent",
+        config: {
+          agents: {
+            entries: { main: { thinkingDefault: "low" } },
+            defaults: {
+              thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "model",
+        config: {
+          agents: {
+            defaults: {
+              thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "high",
+      },
+      {
+        name: "global",
+        config: { agents: { defaults: { thinkingDefault: "high" } } },
+        expected: "high",
+      },
+    ])("honors the configured $name default when retargeting", ({ config, expected }) => {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const run: FollowupRun["run"] = {
+        ...makeRun(),
+        config,
+        thinkLevel: "medium",
+        thinkLevelOverride: source,
+      };
+      queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
+      refreshQueuedFollowupSession({
+        key: QUEUE_KEY,
+        nextProvider: "openai",
+        nextModel: "gpt-5.6-sol",
+        nextThinking: {
+          level: source === "default" ? "off" : undefined,
+          catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "Sol", reasoning: true }],
+          agentRuntime: "codex",
+        },
+      });
+      expect(run.thinkLevel).toBe(expected);
+    });
   });
 
   it("recomputes the retargeted model default when the session has no thinking override", () => {

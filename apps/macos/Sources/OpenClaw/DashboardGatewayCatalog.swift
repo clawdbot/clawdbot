@@ -47,6 +47,7 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 struct MacGatewayCatalogProfile: Equatable, Sendable {
     let profile: MacGatewayProfile
     let canPromote: Bool
+    var usesBrowserIdentity = false
 }
 
 enum DashboardGatewayCatalog {
@@ -64,7 +65,9 @@ enum DashboardGatewayCatalog {
             }
             : nil
         let duplicate = canonicalPrimaryURL.flatMap { primaryURL in
-            profiles.first { (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL }
+            profiles.first {
+                !$0.usesBrowserIdentity && (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL
+            }
         }
         let primaryName: String = if mode == .local {
             "Local Gateway"
@@ -81,8 +84,8 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A saved identity for the active route is represented by the
-            // primary row so one physical Gateway never appears twice.
+            // A browser sign-in is a separate human authority even when its
+            // address matches the primary machine connection.
             if item.profile.id == duplicate?.profile.id { return nil }
             return DashboardGatewayEntry(
                 id: DashboardGatewayTarget.profile(item.profile.id).bridgeID,
@@ -129,9 +132,15 @@ enum DashboardGatewayCatalog {
 
 enum DashboardPrimaryGatewayError: LocalizedError, Equatable {
     case notPromotable
+    case passwordUnsupported
 
     var errorDescription: String? {
-        "This Gateway cannot be set as primary."
+        switch self {
+        case .notPromotable:
+            "This Gateway cannot be set as primary."
+        case .passwordUnsupported:
+            "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead."
+        }
     }
 }
 
@@ -142,12 +151,8 @@ struct DashboardPrimaryGatewayAdapter {
         try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
     }
 
-    var currentTLSFingerprint: @MainActor () -> String? = {
-        GatewayRemoteConfig.resolveTLSFingerprint(root: OpenClawConfigFile.loadDict())
-    }
-
-    var persist: @MainActor (AppState, String?) -> Bool = {
-        $0.syncGatewayConfigNow(remoteTLSFingerprint: $1)
+    var persist: @MainActor (AppState, AppState.PrimaryGatewayConfiguration) -> Bool = {
+        $0.replacePrimaryGateway($1)
     }
 
     func apply(profileID: String) async throws {
@@ -162,25 +167,55 @@ struct DashboardPrimaryGatewayAdapter {
                 GatewayTLSStore.loadFingerprint(stableID: $0)
             }
         }
-        let previous = (
-            transport: self.state.remoteTransport,
-            url: self.state.remoteUrl,
-            token: self.state.remoteToken,
-            mode: self.state.connectionMode,
-            tlsFingerprint: self.currentTLSFingerprint())
-        self.state.remoteTransport = .direct
-        self.state.remoteUrl = endpoint.config.url.absoluteString
-        // Promotion intentionally moves the saved token into gateway.remote.token,
-        // matching the existing Settings connection flow.
-        self.state.remoteToken = token
-        self.state.connectionMode = .remote
-        guard self.persist(self.state, tlsFingerprint) else {
-            self.state.remoteTransport = previous.transport
-            self.state.remoteUrl = previous.url
-            self.state.remoteToken = previous.token
-            self.state.connectionMode = previous.mode
-            _ = self.persist(self.state, previous.tlsFingerprint)
+        try self.apply(url: endpoint.config.url, token: token, tlsFingerprint: tlsFingerprint)
+    }
+
+    func apply(link: GatewayConnectDeepLink) throws {
+        if link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil {
+            throw DashboardPrimaryGatewayError.passwordUnsupported
+        }
+        guard let url = link.websocketURL else {
             throw DashboardPrimaryGatewayError.notPromotable
+        }
+        try self.apply(
+            url: url,
+            token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+            tlsFingerprint: nil)
+    }
+
+    private func apply(url: URL, token: String?, tlsFingerprint: String?) throws {
+        let configuration = AppState.PrimaryGatewayConfiguration(url: url, token: token, tlsFingerprint: tlsFingerprint)
+        guard self.persist(self.state, configuration) else {
+            throw DashboardPrimaryGatewayError.notPromotable
+        }
+    }
+}
+
+@MainActor
+struct DashboardGatewaySetupCoordinator {
+    let adapter: DashboardPrimaryGatewayAdapter
+    let confirm: (_ title: String, _ message: String) -> Bool
+    let presentError: (_ title: String, _ message: String) -> Void
+    let openConnectionSettings: () -> Void
+
+    func handle(_ link: GatewayConnectDeepLink) {
+        if link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil {
+            self.presentError(
+                "Gateway Setup Not Supported",
+                DashboardPrimaryGatewayError.passwordUnsupported.localizedDescription)
+            return
+        }
+        let endpoint = "\(link.host):\(link.port)"
+        let transport = link.tls ? "TLS" : "an unencrypted private-network connection"
+        guard self.confirm(
+            "Change the primary Gateway?",
+            "Connect the Mac app directly to \(endpoint) using \(transport)?")
+        else { return }
+        do {
+            try self.adapter.apply(link: link)
+            self.openConnectionSettings()
+        } catch {
+            self.presentError("Could Not Change Primary Gateway", error.localizedDescription)
         }
     }
 }

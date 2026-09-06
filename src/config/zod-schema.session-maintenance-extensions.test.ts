@@ -6,12 +6,44 @@ describe("SessionSchema maintenance extensions", () => {
   it("accepts valid maintenance extensions", () => {
     const result = SessionSchema.safeParse({
       maintenance: {
+        preserveRecent: "7d",
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts disabling recent-session preservation", () => {
+    expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);
+  });
+
+  it.each([false, 0] as const)("accepts disabling dashboard archiving with %s", (value) => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: value } }).success).toBe(
+      true,
+    );
+  });
+
+  it("accepts a positive dashboard archive duration", () => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: "7d" } }).success).toBe(
+      true,
+    );
+  });
+
+  it.each(["0", "0d", -1, "never"])(
+    "rejects invalid dashboard archive duration: %s",
+    (archiveDashboardAfter) => {
+      const result = SessionSchema.safeParse({ maintenance: { archiveDashboardAfter } });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("archiveDashboardAfter");
+    },
+  );
+
+  it("rejects an invalid recent-session preservation duration", () => {
+    const result = SessionSchema.safeParse({ maintenance: { preserveRecent: "forever" } });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("preserveRecent");
   });
 
   it("accepts disabling reset archive cleanup", () => {

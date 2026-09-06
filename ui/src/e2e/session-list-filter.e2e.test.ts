@@ -1,12 +1,22 @@
-// Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+// Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session-list event scope",
 });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+async function openSessionFilters(page: Page) {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+}
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
@@ -28,6 +38,12 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "unknown",
       methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }, { id: "writer" }],
+        },
         "sessions.list": {
           count: 1,
           defaults: { contextTokens: null, model: null, modelProvider: null },
@@ -48,16 +64,27 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
     await visibleRow.waitFor({ timeout: 10_000 });
-    // Arm the deferred response before sampling requests; startup may still finish in between.
-    await gateway.deferNext("sessions.list");
+    // An agent-scoped list can ignore another agent; this query must exercise
+    // the Gateway's configured-agent membership filter across all agents.
+    const pageScope = currentPage.locator(".agent-scope-control openclaw-agent-select");
+    await pageScope.locator(".agent-select__trigger").click();
+    await pageScope
+      .locator("wa-dropdown-item[data-agent-option]")
+      .filter({ hasText: "All agents" })
+      .evaluate((item) => (item as HTMLElement).click());
+    const allAgentsQuery = {
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 50,
+    };
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).map((request) => request.params),
+      )
+      .toContainEqual(allAgentsQuery);
+    await gateway.deferNext("sessions.list", allAgentsQuery);
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
-    expect(
-      requestsBeforeEvent.some(
-        (request) =>
-          (request.params as { configuredAgentsOnly?: unknown } | undefined)
-            ?.configuredAgentsOnly === true,
-      ),
-    ).toBe(true);
 
     await gateway.emitGatewayEvent("sessions.changed", {
       sessionKey: "agent:local:hidden",
@@ -66,11 +93,13 @@ suite.define(() => {
       kind: "direct",
       label: hiddenLabel,
       updatedAt: 2,
+      archived: false,
     });
 
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(requestsBeforeEvent.length);
+    expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual(allAgentsQuery);
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
     await gateway.resolveDeferred("sessions.list", {
       count: 1,
@@ -88,6 +117,116 @@ suite.define(() => {
     });
     await visibleRow.waitFor();
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
+  });
+
+  it("keeps the Sessions page query stable when the startup roster completes", async () => {
+    const visibleLabel = "Visible page-owned session";
+    const pageQueryParams = {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 50,
+    };
+    const visibleResponse = {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:page-owned",
+          kind: "direct",
+          label: visibleLabel,
+          updatedAt: 1,
+        },
+      ],
+      ts: 1,
+    };
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir } } : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      deferredMethods: ["sessions.list"],
+      sessionKey: "agent:main:main",
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: pageQueryParams, response: visibleResponse },
+            {
+              response: {
+                count: 0,
+                defaults: visibleResponse.defaults,
+                path: "",
+                sessions: [],
+                ts: 1,
+              },
+            },
+          ],
+        },
+      },
+    });
+    const exactPageQueries = async () =>
+      (await gateway.getRequests("sessions.list")).filter((request) => {
+        const params = request.params;
+        if (!params || typeof params !== "object" || Array.isArray(params)) {
+          return false;
+        }
+        const record = params as Record<string, unknown>;
+        const entries = Object.entries(pageQueryParams);
+        return (
+          Object.keys(record).length === entries.length &&
+          entries.every(([key, value]) => record[key] === value)
+        );
+      });
+    const capture = async (stage: string) => {
+      if (!captureUiProof) {
+        return;
+      }
+      await writeFile(
+        path.join(suite.artifactDir, `${stage}.png`),
+        await takeControlUiViewportScreenshot(currentPage, currentPage.locator(".shell"), [
+          visibleRow,
+        ]),
+      );
+      await writeFile(
+        path.join(suite.artifactDir, `${stage}.json`),
+        JSON.stringify(await gateway.getRequests("sessions.list"), null, 2),
+      );
+    };
+
+    await currentPage.goto(`${suite.server.baseUrl}sessions`);
+    const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
+    await visibleRow.waitFor({ timeout: 10_000 });
+    await capture("before-startup-roster");
+
+    const startupAndPageRequests = await gateway.getRequests("sessions.list");
+    expect(startupAndPageRequests[0]?.params).toEqual({
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeGlobal: true,
+      includeLastMessage: true,
+      includeUnknown: true,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+    });
+    expect
+      .soft((await exactPageQueries()).map((request) => request.params))
+      .toEqual([pageQueryParams]);
+
+    await gateway.resolveDeferred("sessions.list", visibleResponse);
+    await visibleRow.waitFor();
+    await capture("after-startup-roster");
+
+    const stabilityDeadline = Date.now() + 500;
+    do {
+      expect(await exactPageQueries()).toHaveLength(1);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    } while (Date.now() < stabilityDeadline);
   });
 
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {
@@ -141,7 +280,7 @@ suite.define(() => {
       (request) =>
         (request.params as { includeUnknown?: unknown } | undefined)?.includeUnknown === true,
     )?.params as Record<string, unknown> | undefined;
-    expect(sidebarParams).toMatchObject({ limit: 50 });
+    expect(sidebarParams).toMatchObject({ limit: SIDEBAR_SESSION_ROSTER_LIMIT });
     expect(sidebarParams).not.toHaveProperty("activeMinutes");
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
@@ -155,6 +294,7 @@ suite.define(() => {
     expect(initialPageParams).toMatchObject({ limit: 50 });
     expect(initialPageParams).not.toHaveProperty("activeMinutes");
 
+    await openSessionFilters(currentPage);
     const activeMinutes = sessionsPage.getByLabel("Updated within");
     const limit = sessionsPage.getByLabel("Limit");
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
@@ -205,6 +345,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     await gateway.waitForRequest("sessions.list");
+    await openSessionFilters(currentPage);
     const activeMinutes = currentPage.getByLabel("Updated within");
     const limit = currentPage.getByLabel("Limit");
     const cases = [

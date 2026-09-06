@@ -27,6 +27,8 @@ export type {
   SshSandboxSettings,
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type { DirectoryEntry } from "../infra/directory-entries.js";
+export { resolveReadOnlyWorkspaceSkillMounts } from "../agents/sandbox/workspace-mounts.js";
 
 export {
   buildExecRemoteCommand,
@@ -43,6 +45,7 @@ export {
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
   isToolAllowed,
+  prepareSshSandboxExec,
   registerSandboxBackend,
   requireSandboxBackendFactory,
   resolveSandboxRuntimeStatus,

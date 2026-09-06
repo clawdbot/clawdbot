@@ -78,7 +78,7 @@ function recentOutboundSummary(state: QaTransportState, limit = 5) {
     .getSnapshot()
     .messages.filter((message: QaBusMessage) => message.direction === "outbound")
     .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
+    .map(({ accountId, conversation: { kind, id }, text }) => `${accountId}:${kind}:${id}:${text}`)
     .join(" | ");
 }
 

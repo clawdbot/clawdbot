@@ -39,6 +39,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     loading: false,
     error: null,
     tasks: [],
+    activeCount: 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
@@ -263,8 +264,7 @@ describe("subagent activity rows", () => {
     renderCurrent();
     expect(container.textContent).toContain("Subagent finished");
     expect(container.textContent).toContain("Final report complete");
-    expect(container.querySelector(".chat-diffstat__add")?.textContent).toBe("+12");
-    expect(container.querySelector(".chat-diffstat__del")?.textContent).toBe("-3");
+    expect(container.querySelector(".chat-diffstat")).toBeNull();
 
     requestUpdate.mockClear();
     vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1);

@@ -47,7 +47,7 @@ The equivalent configuration is:
 }
 ```
 
-OpenClaw configures Tailscale to serve HTTPS on port `443` and proxy to the Gateway port, which is `18789` by default. The Gateway itself remains on `127.0.0.1:<port>`.
+OpenClaw configures Tailscale to serve HTTPS on port `443` and proxy to a private ephemeral loopback listener owned by the Gateway. The ordinary Gateway listener remains on `127.0.0.1:18789` by default for direct local clients.
 
 ### Optional identity-header auth
 
@@ -59,7 +59,7 @@ openclaw config set gateway.auth.allowTailscale true
 
 For Serve with token auth, OpenClaw enables this behavior by default unless you set it to `false`. Password and trusted-proxy modes keep their explicit auth boundary unless you opt in.
 
-This setting lets a verified Tailscale identity satisfy the Control UI WebSocket shared-secret check. OpenClaw verifies the forwarded client address with `tailscale whois` and matches it to the `tailscale-user-login` header. It applies only when the request arrives from loopback through Serve with the expected forwarded headers.
+This setting lets a verified Tailscale identity satisfy the Control UI WebSocket shared-secret check. OpenClaw verifies the forwarded client address with `tailscale whois` and matches it to the `tailscale-user-login` header. It applies only when the request arrives through Serve on OpenClaw's dedicated managed-Tailscale listener with the expected forwarded headers.
 
 It does not authenticate HTTP API endpoints, remove browser device identity requirements, authenticate node-role connections, or bypass node pairing. See [Tailscale identity headers](/gateway/tailscale#tailscale-identity-headers-serve-only) for the full contract.
 
@@ -107,7 +107,7 @@ On the Gateway host, confirm that Serve is active:
 tailscale serve status
 ```
 
-The output should show an HTTPS route for `https://<host>.<tailnet>.ts.net` proxying to the Gateway port.
+The output should show an HTTPS route for `https://<host>.<tailnet>.ts.net` proxying to a private ephemeral loopback port owned by the Gateway.
 
 From another device on the same tailnet, check the HTTPS response:
 
@@ -144,17 +144,6 @@ The app now connects directly through Tailscale Serve, so the per-client SSH tun
 The iOS and Android apps connect directly to the Gateway WebSocket and do not manage an SSH-tunnel transport. Use the same `wss://<host>.<tailnet>.ts.net` endpoint when pairing or generating a setup code. This gives mobile clients a secure route they can use from anywhere on the tailnet.
 
 See [iOS app setup](/platforms/ios) and [Android connection setup](/platforms/android#connection-runbook) for their pairing steps.
-
-## Optional stable vanity name
-
-To use a Tailscale Service name instead of the Gateway device hostname:
-
-```bash
-openclaw config set gateway.tailscale.serviceName svc:openclaw
-openclaw gateway restart
-```
-
-This publishes `https://openclaw.<tailnet>.ts.net`. The Gateway host must be an approved tagged node, and the Service may require admin-console approval before Serve can publish it. See [Tailscale Services](/gateway/tailscale#tailnet-only-serve) for the full setup constraints.
 
 ## Troubleshooting
 

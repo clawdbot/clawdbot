@@ -20,7 +20,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type RuntimeModelContext = {
@@ -142,7 +142,6 @@ export async function collectActiveToolSchemaProjectionWarnings(params: {
           modelCompat: runtimeModelContext.modelCompat,
           modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
           allowGatewaySubagentBinding: true,
-          toolPolicyAuditLogLevel: "debug",
         });
       } catch (error) {
         agentWarnings.push(

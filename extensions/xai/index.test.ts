@@ -1,8 +1,8 @@
 // Xai tests cover index plugin behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -199,6 +199,47 @@ describe("xai provider plugin", () => {
         method: "device-code",
       }),
     );
+  });
+
+  it("registers SuperGrok usage through xAI OAuth only", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const oauth = vi.fn(async () => ({
+      token: "oauth-token",
+      accountId: "acct",
+      email: "user@example.com",
+    }));
+    const apiKey = vi.fn();
+
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: {},
+        agentDir: "/agent",
+        env: {},
+        provider: "xai",
+        resolveOAuthToken: oauth,
+        resolveApiKeyFromConfigAndStore: apiKey,
+        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
+      }),
+    ).resolves.toEqual({
+      token: "oauth-token",
+      accountId: "acct",
+      email: "user@example.com",
+    });
+
+    expect(apiKey).not.toHaveBeenCalled();
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: {},
+        agentDir: "/agent",
+        env: { XAI_API_KEY: "xai-api-key" },
+        provider: "xai",
+        resolveOAuthToken: vi.fn(async () => null),
+        resolveApiKeyFromConfigAndStore: apiKey,
+        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
+      }),
+    ).resolves.toEqual({ handled: true });
+    expect(manifest.contracts).toMatchObject({ usageProviders: ["xai"] });
+    expect(provider.fetchUsageSnapshot).toEqual(expect.any(Function));
   });
 
   it("filters the xAI API-key catalog against live model ids", async () => {

@@ -112,9 +112,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<unknown> })[
-    Symbol.asyncIterator
-  ] = async function* () {
+  const wrappedAsyncIterator = async function* () {
     const source = {
       [Symbol.asyncIterator]: originalAsyncIterator,
     } as AsyncIterable<unknown>;
@@ -122,9 +120,16 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
       matcher,
       normalizeTerminalMessage,
+      // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+      // the carried fence scan models (and yields to the full parse for the rest), so its
+      // protection is safe to trust from the fast path.
+      protectedRangesFenceCompatible: true,
       resolveProtectedRanges: findCodeRegions,
     });
   };
+  if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
+    throw new TypeError("Cannot replace stream async iterator");
+  }
 
   return stream;
 }

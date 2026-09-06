@@ -1,7 +1,7 @@
 // Codex plugin module implements source behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,

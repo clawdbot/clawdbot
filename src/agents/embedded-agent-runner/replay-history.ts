@@ -4,6 +4,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -26,7 +27,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcrip
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -41,7 +42,7 @@ import {
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
-  sanitizeToolUseResultPairing,
+  sanitizeToolUseResultPairingForModel,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
@@ -57,6 +58,7 @@ import {
   providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
@@ -74,6 +76,13 @@ import {
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
+  "attachment",
+  "attachment_error",
+  "audio",
+  "image",
+  "video",
+]);
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -136,7 +145,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       }
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: annotated,
       } as AgentMessage);
       continue;
@@ -168,7 +177,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       };
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: nextContent,
       } as AgentMessage);
       continue;
@@ -176,7 +185,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     touched = true;
     out.push({
-      ...(msg as unknown as Record<string, unknown>),
+      ...msg,
       content: [
         {
           type: "text",
@@ -242,11 +251,17 @@ function normalizeAssistantReplayBlockContent(
   let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
-    if (!block || typeof block !== "object") {
+    const record = asOptionalRecord(block);
+    if (!record) {
       sanitizedContent.push(block);
       continue;
     }
-    const text = (block as { text?: unknown }).text;
+    const type = record.type;
+    if (typeof type === "string" && MANAGED_DISPLAY_BLOCK_TYPES.has(type)) {
+      touched = true;
+      continue;
+    }
+    const text = record.text;
     if (typeof text !== "string") {
       sanitizedContent.push(block);
       continue;
@@ -266,7 +281,7 @@ function normalizeAssistantReplayBlockContent(
     const isSilentText =
       trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
     if (trimmed && !isSilentText) {
-      sanitizedContent.push({ ...block, text: strippedText });
+      sanitizedContent.push({ ...record, text: strippedText });
     }
     removedSilentText ||= isSilentText;
   }
@@ -593,7 +608,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     out[i] = {
-      ...(message as unknown as Record<string, unknown>),
+      ...message,
       usage: normalizedUsage,
     } as AgentMessage;
     touched = true;
@@ -869,32 +884,26 @@ export async function sanitizeSessionHistory(params: {
   // tests plus live OpenAI/Codex and generic replay-repair model tests.
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-          // Match upstream Codex history normalization for OpenAI Responses:
-          // missing function_call_output entries are model-visible "aborted".
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedToolCalls, true)
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         normalizeOpenAIResponsesToolCallIds(
           // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
           // invalidated by a switch, every later replay must keep dropping them.
-          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoningBefore: latestModelSwitchTimestamp ?? undefined,
-          }),
+          dropStaleOpenAIReasoning(
+            openAIRepairedToolCalls,
+            latestModelSwitchTimestamp ?? undefined,
+          ),
         ),
       )
     : sanitizedToolCalls;
   const pairedToolCalls =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-        })
+      ? sanitizeToolUseResultPairingForModel(openAISafeToolCalls, false)
       : openAISafeToolCalls;
   const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode
+    !isOpenAIResponsesApi && policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
@@ -923,15 +932,10 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
   const responsesProviderRepaired =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
-          erroredAssistantResultPolicy: "drop",
-          // Provider replay hooks run after the core repair pipeline and may
-          // rewrite history. Keep the final Responses invariant guarded by the
-          // same Codex-compatible repair instead of failing on hook output.
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedWithProvider, true)
       : sanitizedWithProvider;
   const responsesInvariantChecked = isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
@@ -1002,6 +1006,10 @@ export async function validateReplayTurns(params: {
   const validatedGemini = policy.validateGeminiTurns
     ? validateGeminiTurns(params.messages)
     : params.messages;
-  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini, {
+        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+      })
+    : validatedGemini;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

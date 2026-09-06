@@ -31,7 +31,7 @@ function buildTelegramLocationMessageHook(params: {
   const threadSpec = resolveTelegramMessageThreadSpec(msg, params.isForum);
   const originatingTo = buildTelegramInboundOriginTarget(msg.chat.id, threadSpec);
   const from = isGroup
-    ? buildTelegramGroupFrom(msg.chat.id, threadSpec.id)
+    ? buildTelegramGroupFrom(msg.chat.id, threadSpec)
     : `telegram:${msg.chat.id}`;
   const canonical = deriveInboundMessageHookContext({
     From: from,

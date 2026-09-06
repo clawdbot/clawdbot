@@ -1,8 +1,13 @@
 // Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
-import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "./attachment-payload-store.ts";
 
 type UserChatMessageContentBlock = {
   type: string;
@@ -17,39 +22,28 @@ type UserChatMessageContentBlock = {
   };
 };
 
-type BuildUserChatMessageContentOptions = {
-  renderInlineImageDataUrls?: boolean;
-};
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
-}
-
-export function buildUserChatMessageContentBlocks(
+function buildUserChatMessageContentBlocks(
   message: string,
   attachments?: readonly ChatAttachment[],
-  options: BuildUserChatMessageContentOptions = {},
-): UserChatMessageContentBlock[] {
+  retention?: "available" | "complete",
+): UserChatMessageContentBlock[] | null {
   const blocks: UserChatMessageContentBlock[] = [];
   const text = message.trim();
   if (text) {
     blocks.push({ type: "text", text });
   }
   for (const attachment of attachments ?? []) {
-    const previewUrl = getChatAttachmentPreviewUrl(attachment);
+    // Retained content owns inline bytes before outbox cleanup releases Blob URLs.
+    // Initial prompts allow available previews; delivered turns require every byte.
+    const dataUrl = retention ? getChatAttachmentDataUrl(attachment) : undefined;
+    if (retention === "complete" && !dataUrl) {
+      return null;
+    }
+    const previewUrl = dataUrl || getChatAttachmentPreviewUrl(attachment);
     if (!previewUrl) {
       continue;
     }
     if (attachment.mimeType.startsWith("image/")) {
-      if (isInlineDataUrl(previewUrl) && !options.renderInlineImageDataUrls) {
-        blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
-        continue;
-      }
       blocks.push({
         type: "image",
         url: previewUrl,
@@ -73,4 +67,81 @@ export function buildUserChatMessageContentBlocks(
     });
   }
   return blocks;
+}
+
+type LocalUserMessageInput = {
+  attachments?: readonly ChatAttachment[];
+  mentions?: readonly HumanMention[];
+  createdAt: number;
+  pending?: {
+    error?: string;
+    id: string;
+    state?: string;
+  };
+  replyToId?: string;
+  runId?: string;
+  sender?: SenderIdentity;
+  text: string;
+};
+
+type LocalUserMessage = {
+  role: "user";
+  content: UserChatMessageContentBlock[];
+  timestamp: number;
+  __openclaw: Record<string, unknown> & {
+    idempotencyKey?: string;
+  };
+};
+
+/** Bind initial display bytes to their explicit submission, before releasing the draft. */
+export function buildInitialChatSubmission(
+  sessionKey: string,
+  input: Pick<LocalUserMessageInput, "text" | "mentions" | "attachments" | "createdAt" | "sender">,
+  owner: object,
+  runId?: string,
+) {
+  const pendingRunId = runId?.trim();
+  const message = pendingRunId
+    ? buildLocalUserMessage({ ...input, runId: pendingRunId }, "available")
+    : null;
+  return message && pendingRunId
+    ? { kind: "initial" as const, sessionKey, owner, pendingRunId, message }
+    : null;
+}
+
+/** Canonical local user-turn projection shared by optimistic and acknowledged sends. */
+export function buildLocalUserMessage(
+  input: LocalUserMessageInput,
+  retention?: "available" | "complete",
+): LocalUserMessage | null {
+  const content = buildUserChatMessageContentBlocks(input.text, input.attachments, retention);
+  if (!content?.length) {
+    return null;
+  }
+  const { mentions } = trimHumanMentions(input.text, input.mentions);
+  return {
+    role: "user",
+    content,
+    timestamp: input.createdAt,
+    __openclaw: {
+      ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
+      ...(input.pending
+        ? {
+            kind: "pending-send",
+            id: input.pending.id,
+            ...(input.pending.state ? { state: input.pending.state } : {}),
+            ...(input.pending.error ? { error: input.pending.error } : {}),
+          }
+        : {}),
+      ...(input.replyToId ? { replyToId: input.replyToId } : {}),
+      ...(mentions ? { humanMentions: mentions } : {}),
+      ...(input.sender?.id ? { senderId: input.sender.id } : {}),
+      ...(input.sender?.identity ? { senderIdentity: input.sender.identity } : {}),
+      ...(input.sender?.name ? { senderName: input.sender.name } : {}),
+      ...(input.sender?.username ? { senderUsername: input.sender.username } : {}),
+      ...(input.sender?.profileAvatarUrl
+        ? { senderProfileAvatarUrl: input.sender.profileAvatarUrl }
+        : {}),
+    },
+  };
 }

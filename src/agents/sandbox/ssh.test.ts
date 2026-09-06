@@ -152,30 +152,52 @@ describe("sandbox ssh helpers", () => {
         updateHostKeys: false,
         [field]: `/tmp/key\n  ${directive} /tmp/injected`,
       }),
-    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks.`);
+    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
   });
 
-  it("wraps remote exec commands with env and workdir", () => {
-    const command = buildExecRemoteCommand({
-      command: "pwd && printenv TOKEN",
-      workdir: "/sandbox/project",
-      env: {
-        TOKEN: "abc 123",
-      },
+  // Default macOS crabbox lease keys live under "Application Support"; unquoted
+  // ssh_config arguments tokenize on whitespace and read as extra arguments.
+  it("quotes path directives containing whitespace", async () => {
+    const session = await createSshSandboxSessionFromSettings({
+      command: "ssh",
+      target: "peter@example.com:2222",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      identityFile: "/tmp/Application Support/lease/id_ed25519",
+      knownHostsFile: "/tmp/Application Support/lease/known_hosts",
     });
-    expect(command).toContain(`'env'`);
-    expect(command).toContain(`'TOKEN=abc 123'`);
-    expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
+    sessions.push(session);
+
+    const config = await fs.readFile(session.configPath, "utf8");
+    expect(config).toContain('  IdentityFile "/tmp/Application Support/lease/id_ed25519"');
+    expect(config).toContain('  UserKnownHostsFile "/tmp/Application Support/lease/known_hosts"');
+  });
+
+  it.each([
+    ["public", buildExecRemoteCommand],
+    ["validated", buildValidatedExecRemoteCommand],
+  ])("rejects configured environment values in the %s remote command builder", (_name, build) => {
+    const sentinel = "synthetic-ssh-command-value";
+    expect(() =>
+      build({
+        command: "pwd && printenv SYNTHETIC_VALUE",
+        workdir: "/sandbox/project",
+        env: { SYNTHETIC_VALUE: sentinel },
+      }),
+    ).toThrow(/environment.*secure|secure.*environment/i);
   });
 
   it("keeps the public exec command builder quote-only for compatibility", () => {
     const command = buildExecRemoteCommand({
       command: "workflow run <workflow-id> --ref main",
+      workdir: "/sandbox/project",
       env: {},
     });
 
     expect(command).toContain(`'/bin/sh'`);
-    expect(command).toContain(`'workflow run <workflow-id> --ref main'`);
+    expect(command).toContain(
+      `'cd '"'"'/sandbox/project'"'"' && workflow run <workflow-id> --ref main'`,
+    );
   });
 
   it.each([

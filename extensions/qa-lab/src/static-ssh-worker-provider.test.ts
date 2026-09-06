@@ -30,6 +30,7 @@ describe("QA Lab static-SSH worker provider", () => {
     const replay = await provider.provision(profile, "operation-123");
 
     expect(provider.id).toBe("static-ssh");
+    expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
     expect(first).toStrictEqual({
       leaseId: "static-ssh:operation-123",
       sharedHost: true,
@@ -42,6 +43,12 @@ describe("QA Lab static-SSH worker provider", () => {
       },
     });
     expect(replay).toStrictEqual(first);
+    // Cleanup needs only the logical operation identity, even without usable SSH settings.
+    const allocation = await provider.resolveAllocation({}, "operation-123");
+    expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
+    await expect(
+      provider.destroy({ leaseId: allocation.leaseId, profile: {} }),
+    ).resolves.toBeUndefined();
   });
 
   it("preserves an explicit positive SSH port", async () => {

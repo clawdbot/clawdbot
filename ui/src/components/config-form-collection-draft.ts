@@ -3,7 +3,8 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
-import { schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
+import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigFormCollectionDraftProps = {
   schema: JsonSchema;
@@ -12,6 +13,7 @@ export type ConfigFormCollectionDraftProps = {
   identity: string;
   sourceIdentity: unknown;
   existingKeys?: readonly string[];
+  validateKey?: (key: string) => boolean;
   existingValues?: readonly unknown[];
   validateValue?: (value: unknown) => boolean;
 };
@@ -20,6 +22,19 @@ export type ConfigFormCollectionDraftCommit = {
   key?: string;
   value: unknown;
 };
+
+export function openCollectionDraft(event: Event, draftId: string): void {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const block = target.closest(".cfg-block");
+  // Nested collection drafts belong to their own block, not this control.
+  const draft = Array.from(
+    block?.getElementsByTagName("openclaw-config-form-collection-draft") ?? [],
+  ).find((child) => child.parentElement === block && child.id === draftId);
+  draft?.openDraft?.();
+}
 
 export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: ConfigFormCollectionDraftProps;
@@ -89,19 +104,37 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       return { ok: true, value: null };
     }
     const valueType = schemaType(schema);
+    const variants = schema.anyOf ?? schema.oneOf ?? [];
+    const stringNumberUnion =
+      variants.some(schemaMayAcceptString) &&
+      variants.some((variant) => ["number", "integer"].includes(schemaType(variant) ?? ""));
     if (valueType === "string") {
       return { ok: true, value: this.draftValue };
     }
     if (valueType === "number" || valueType === "integer") {
-      const value = Number(this.draftValue);
-      return this.draftValue.trim() && Number.isFinite(value)
-        ? { ok: true, value }
+      const coerced = coerceConfigFormNumberString(this.draftValue, valueType === "integer");
+      return typeof coerced === "number"
+        ? { ok: true, value: coerced }
         : { ok: false, message: t("configForm.invalidNumber") };
     }
     try {
-      return { ok: true, value: JSON.parse(this.draftValue) };
+      const parsed = JSON.parse(this.draftValue) as unknown;
+      if (typeof parsed === "number") {
+        const coerced = coerceConfigFormNumberString(this.draftValue, false);
+        if (typeof coerced === "number") {
+          return { ok: true, value: coerced };
+        }
+        // JSON.parse has already rounded unsafe integer spellings. Preserve
+        // the source text only when the union accepts it as a string.
+        return stringNumberUnion && isSupportedConfigValueValid(schema, this.draftValue)
+          ? { ok: true, value: this.draftValue }
+          : { ok: false, message: t("configForm.invalidNumber") };
+      }
+      return { ok: true, value: parsed };
     } catch {
-      return { ok: false, message: t("configForm.invalidJson") };
+      return stringNumberUnion && isSupportedConfigValueValid(schema, this.draftValue)
+        ? { ok: true, value: this.draftValue }
+        : { ok: false, message: t("configForm.invalidJson") };
     }
   }
 
@@ -133,7 +166,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       return;
     }
     const key = this.draftKey.trim();
-    if (props.existingKeys && (!key || props.existingKeys.includes(key))) {
+    if (
+      props.existingKeys &&
+      (!key || props.existingKeys.includes(key) || props.validateKey?.(key) === false)
+    ) {
       this.fail("key", t("configForm.invalidString"));
       return;
     }
@@ -215,40 +251,44 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       <div class="settings-row settings-row--stacked cfg-collection-draft">
         <div class="settings-row__control">
           <div class="cfg-collection-draft__controls">
-            ${props.existingKeys
-              ? html`
-                  <input
-                    data-collection-draft-key
-                    type="text"
-                    class="settings-input"
-                    aria-label=${t("configForm.key")}
-                    aria-describedby=${errorId}
-                    aria-invalid=${this.invalidTarget === "key" ? "true" : "false"}
-                    placeholder=${t("configForm.key")}
-                    .value=${this.draftKey}
-                    @input=${(event: Event) => {
-                      this.draftKey = (event.currentTarget as HTMLInputElement).value;
-                      this.clearError();
-                    }}
-                  />
-                `
-              : nothing}
-            ${canUseNull
-              ? html`
-                  <label class="field checkbox">
+            ${
+              props.existingKeys
+                ? html`
                     <input
-                      data-collection-draft-null
-                      type="checkbox"
-                      .checked=${this.draftIsNull}
-                      @change=${(event: Event) => {
-                        this.draftIsNull = (event.currentTarget as HTMLInputElement).checked;
+                      data-collection-draft-key
+                      type="text"
+                      class="settings-input"
+                      aria-label=${t("configForm.key")}
+                      aria-describedby=${errorId}
+                      aria-invalid=${this.invalidTarget === "key" ? "true" : "false"}
+                      placeholder=${t("configForm.key")}
+                      .value=${this.draftKey}
+                      @input=${(event: Event) => {
+                        this.draftKey = (event.currentTarget as HTMLInputElement).value;
                         this.clearError();
                       }}
                     />
-                    <span>${t("configForm.nullValue")}</span>
-                  </label>
-                `
-              : nothing}
+                  `
+                : nothing
+            }
+            ${
+              canUseNull
+                ? html`
+                    <label class="field checkbox">
+                      <input
+                        data-collection-draft-null
+                        type="checkbox"
+                        .checked=${this.draftIsNull}
+                        @change=${(event: Event) => {
+                          this.draftIsNull = (event.currentTarget as HTMLInputElement).checked;
+                          this.clearError();
+                        }}
+                      />
+                      <span>${t("configForm.nullValue")}</span>
+                    </label>
+                  `
+                : nothing
+            }
             ${valueControl}
             <span id=${errorId} class="cfg-field__error" role="alert" ?hidden=${!this.error}
               >${this.error}</span
@@ -270,4 +310,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-config-form-collection-draft")) {
   customElements.define("openclaw-config-form-collection-draft", ConfigFormCollectionDraft);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-config-form-collection-draft": ConfigFormCollectionDraft;
+  }
 }

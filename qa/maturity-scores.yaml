@@ -2,7 +2,7 @@ version: 1
 process_version: 3
 counts:
   active_surfaces: 50
-  category_scores: 281
+  category_scores: 280
 rollups:
   surface_average:
     quality:
@@ -2283,7 +2283,7 @@ surfaces:
     lts:
       status: none
       supported_categories: 0
-      total_categories: 8
+      total_categories: 7
     last_score_run:
       status: complete
       completed_at: 2026-08-02
@@ -2292,17 +2292,6 @@ surfaces:
       process_version: 3
     categories:
       - name: Media and Sharing
-        quality:
-          score: 80
-          label: Stable
-        completeness:
-          score: 80
-          label: Stable
-        lts:
-          supported: false
-          reason: none
-          human_override: false
-      - name: Canvas and Screen
         quality:
           score: 80
           label: Stable

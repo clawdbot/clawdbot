@@ -8,7 +8,7 @@ read_when:
 title: "Peekaboo bridge"
 ---
 
-OpenClaw can host **PeekabooBridge** as a local, permission-aware UI automation broker (`PeekabooBridgeHostCoordinator`, backed by the `steipete/Peekaboo` Swift package). This lets the `peekaboo` CLI drive UI automation while reusing the macOS app's TCC permissions.
+OpenClaw can host **PeekabooBridge** as a local, permission-aware UI automation broker (`PeekabooBridgeHostCoordinator`, backed by the `openclaw/Peekaboo` Swift package). This lets the `peekaboo` CLI drive UI automation while reusing the macOS app's TCC permissions.
 
 ## What this is (and is not)
 
@@ -29,7 +29,7 @@ Use Peekaboo for the broad macOS automation surface via OpenClaw.app's permissio
 
 ## Enable the bridge
 
-In the macOS app: **Settings -> Enable Peekaboo Bridge**. The toggle requires **Allow Computer Control** to be on, since both grant local UI automation; with Computer Control off the toggle is disabled and the host does not run. To drive Peekaboo without Computer Control, run Peekaboo's own Mac app as the host instead.
+In the macOS app, open **Dashboard → Settings → This Mac → Capabilities** and enable **Peekaboo Bridge**. The bridge requires **Computer Control** to be on, since both grant local UI automation; with Computer Control off the host does not run. To drive Peekaboo without Computer Control, run Peekaboo's own Mac app as the host instead.
 
 When enabled (and Computer Control is on), OpenClaw starts a local UNIX socket server at `~/Library/Application Support/OpenClaw/<socket-name>`. If disabled, the host stops and `peekaboo` falls back to other available hosts. The coordinator also maintains legacy socket symlinks (`clawdbot`, `clawdis`, `moltbot` under Application Support) pointing at the current socket for older `peekaboo` installs.
 
@@ -41,29 +41,84 @@ authorized release operator:
 
 ```bash
 cd /path/to/elevation-artifact-set
-shasum -a 256 -c "OpenClaw-<full-source-sha>-stable.zip.sha256"
-shasum -a 256 -c "OpenClaw-<full-source-sha>-stable-installer.sh.sha256"
-./OpenClaw-<full-source-sha>-stable-installer.sh install \
-  --archive "OpenClaw-<full-source-sha>-stable.zip"
-./OpenClaw-<full-source-sha>-stable-installer.sh status
+export PREFIX="OpenClaw-<full-openclaw-sha>-Peekaboo-<full-peekaboo-sha>-stable"
+export INSTALLER_SHA256="<authenticated-installer-sha256>"
+export RECEIPT_SHA256="<authenticated-receipt-sha256>"
+[[ "$(shasum -a 256 "$PREFIX-installer.sh" | awk '{print $1}')" == "$INSTALLER_SHA256" ]] || exit 1
+shasum -a 256 -c "$PREFIX.zip.sha256"
+shasum -a 256 -c "$PREFIX-installer.sh.sha256"
+./"$PREFIX-installer.sh" verify \
+  --archive "$PREFIX.zip" \
+  --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256"
+./"$PREFIX-installer.sh" migration-plan \
+  --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
+./"$PREFIX-installer.sh" install \
+  --archive "$PREFIX.zip" \
+  --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256" \
+  --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
+./"$PREFIX-installer.sh" status --state-dir "<existing-state-dir>"
 ```
 
 Transfer the complete artifact set: archive, receipt, portable installer, and both checksum files. The target Mac does
-not need an OpenClaw source checkout. Verify both checksums before running the installer.
+not need an OpenClaw source checkout. The authorized operator handoff must independently provide the installer and
+receipt SHA-256 digests. Run `verify` with the authenticated receipt digest before planning a cutover; the receipt then
+selects the approved archive and `verify` revalidates the Foundation-signed app, notarization, staple, Gatekeeper result,
+architectures, entitlements, and both source revisions. The portable installer is not covered by the app's code
+signature, so this explicit two-digest release-operator handoff remains part of the internal trust boundary.
+
+Elevation artifacts require universal shared app code and both `arm64` and `x86_64` worker payloads under
+`Contents/Resources/node-worker/`. The packager must provide both; `verify` checks both regardless of the target Mac's
+architecture. Each worker must contain a Mach-O Node runtime, the OpenClaw package entrypoint, and build metadata matching
+the app's version, source commit, build timestamp, and worker build ID. All native code in each worker, including addons,
+static archives, and libraries without executable permission bits, must support its directory's architecture. Universal
+Mach-O code is allowed; foreign-platform native code is rejected.
+Signable Mach-O images must also expose native signature metadata for every slice. A generic resource signature,
+even when strict whole-app verification succeeds, is not native-signature evidence. Compatible thin, fat32, and fat64
+static archives remain resources protected by the app seal and architecture checks; they need no standalone Mach-O
+signature. Mixed archive/native containers fail verification. Inspection never thins or rewrites the supplied payload.
+Missing or unexpected architecture trees, escaping or cyclic worker symlinks, and thin shared executables or executable
+libraries fail verification. Dependencies that violate this closure must be repaired in packaging, not excluded from
+validation. The portable installer needs neither a checkout nor a separate inventory helper.
+
+Elevation packaging constructs fresh workers from the complete installed package without changing that input.
+It preserves JavaScript, WASM, other resources, modes, and contained relative symlinks, and omits only native images
+that cannot run on the selected Darwin architecture. Matching universal binaries remain intact. Windows-named source,
+scripts, and README files remain; directory names do not select files for omission. Unclassifiable native images and
+links that would escape, cycle, or become dangling stop packaging. Standard app packaging retains the full package.
+Both paths use the same worker verification and publication flow; build metadata remains unchanged by materialization.
+
+The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an
+app-readable direct remote Gateway route with string token or password auth, and the selected macOS node identity must
+already be paired. `migration-plan` performs those checks without changing the app, process, LaunchAgent, state, or
+Gateway. It recognizes the canonical CLI-managed `ai.openclaw.node` job and app-backed background LaunchAgents. If the
+old app is running in background mode without a LaunchAgent, use `--adopt-running-app` instead of
+`--migrate-launch-agent` and pass its state/config paths explicitly when they are not the defaults.
 
 `--elevation-host` is implied by the installed job. It keeps the Bridge, control channel, Mac node, Gateway
 connectivity, and termination handling active while disabling automatic windows, updater startup, Dock promotion,
 pairing and exec-approval presenters, Quick Chat hotkeys, voice and cookie services, and GUI-owned Keychain reads.
 Missing Screen Recording, Accessibility, or Event Synthesizing is reported by `status`; the host never opens System
 Settings to grant it. Installation succeeds once the launchd-owned process is Bridge-ready even if those grants are
-still incomplete; `status` returns a degraded-readiness result until all required grants are present. The installer
+still incomplete, but it commits only after the exact paired node identity reconnects as `openclaw-macos/node` with the
+new app version, `computer` capability, `screen.snapshot`, `computer.act`, and a computer-use descriptor. The installer
+copies no Gateway credentials or interactive `PATH`; it carries only the verified state/config ownership paths and
+uses the config's existing route and auth. `status` rechecks Bridge, Gateway node, and TCC readiness. The installer
 uses the separate `ai.openclaw.mac.elevation-host` job and refuses to race or rewrite ordinary **Launch at login**
 (`ai.openclaw.mac`).
 
-The elevation archive is Foundation-signed, notarized, stapled, named by the full OpenClaw source commit, and contains
-exactly `OpenClaw.app`. Its receipt binds the archive and installer names and digests, OpenClaw and Peekaboo source
-revisions, signer, CDHash, architectures, entitlement digests, and Apple notarization submission ID. No AppleScript or
-Apple Events entitlement is part of this workflow.
+Cutover is transactional: the installer snapshots the exact app and source plist, stops the prior owner, installs the
+replacement, and automatically restores the original bytes and loaded state if launchd, Bridge, or Gateway node
+attestation fails. The install receipt binds rollback plist digests, the prior app CDHash, and any previous managed
+install receipt. Generation-unique backups allow successive upgrades; `recover` preserves the replaced app in a unique
+evidence directory, restores the prior receipt, and refuses to overwrite a source LaunchAgent path recreated by another
+owner.
+
+The elevation archive is Foundation-signed, notarized, stapled, named by the full OpenClaw and Peekaboo source
+commits, and contains exactly `OpenClaw.app`. Its receipt binds the archive and portable-installer names and digests,
+OpenClaw and Peekaboo source revisions, signer, per-architecture CDHashes, architectures, entitlement digests, and Apple notarization
+submission ID. No AppleScript or Apple Events entitlement is part of this workflow.
 
 ## Client discovery order
 

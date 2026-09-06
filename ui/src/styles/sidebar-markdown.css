@@ -65,7 +65,7 @@
 }
 
 .sidebar-markdown :where(ul, ol) {
-  padding-left: 1.6em;
+  padding-inline-start: 1.6em;
 }
 
 .sidebar-markdown :where(li + li) {
@@ -82,20 +82,23 @@
 }
 
 .sidebar-markdown :where(.task-list-item-checkbox) {
-  margin-right: 0.4em;
+  margin-inline-end: 0.4em;
   vertical-align: middle;
 }
 
+/* Same link token as the message renderer: file links are styled jointly with
+   .chat-text (see chat/text.css), so a panel that kept --accent would show two
+   link colors side by side. */
 .sidebar-markdown :where(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent);
   text-underline-offset: 2px;
   transition: text-decoration-color var(--duration-fast) ease;
 }
 
 .sidebar-markdown :where(a:hover) {
-  text-decoration-color: var(--accent);
+  text-decoration-color: var(--link);
 }
 
 .sidebar-markdown code {
@@ -122,6 +125,19 @@
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.12);
   font-family: var(--mono);
+}
+
+/* Give every hard-wrapped line its own direction, so an RTL line inside a code
+   block — or inside the raw-text view, which renders the whole document as one
+   fenced block — reads correctly regardless of the document's direction. Block
+   art carries no strong characters, so it stays LTR.
+
+   Scoped to the reader on purpose: `.sidebar-markdown` is shared with the
+   skills, session-progress-card and agent status-file previews, and those do
+   not opt into a document direction. Only the chat preview sets `dir`, so only
+   it gets line-level bidi resolution. */
+.sidebar-markdown-reader pre {
+  unicode-bidi: plaintext;
 }
 
 :root[data-theme-mode="light"] .sidebar-markdown pre {
@@ -157,10 +173,13 @@
 
 .sidebar-markdown :where(blockquote) {
   margin-top: 0.75em;
-  margin-left: 0;
+  margin-inline-start: 0;
   padding: 8px 14px;
-  border-left: 3px solid var(--border-strong);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-inline-start: 3px solid var(--border-strong);
+  border-start-start-radius: 0;
+  border-start-end-radius: var(--radius-sm);
+  border-end-end-radius: var(--radius-sm);
+  border-end-start-radius: 0;
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
 }
@@ -185,7 +204,7 @@
 .sidebar-markdown :where(th, td) {
   padding: 8px 12px;
   border: 1px solid var(--border);
-  text-align: left;
+  text-align: start;
   vertical-align: top;
 }
 

@@ -1,14 +1,10 @@
 import type { McpConnectAction } from "../../agents/mcp-connect-action.js";
-import { isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 function isEligibleTerminalPayload(payload: ReplyPayload): boolean {
   return Boolean(
-    payload.text?.trim() &&
-    payload.isError !== true &&
-    payload.isReasoning !== true &&
-    payload.isCommentary !== true &&
-    !isReplyPayloadStatusNotice(payload),
+    payload.text?.trim() && payload.isError !== true && isReplyPayloadTerminalContent(payload),
   );
 }
 

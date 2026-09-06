@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import {
   createMigrationItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
@@ -14,11 +18,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  canonicalPathFromExistingAncestor,
-  extractErrorCode,
-  isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";

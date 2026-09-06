@@ -83,6 +83,6 @@ export function validateMcpCodeModeResult(
   assert(mentions.mcpNamespace > 0, "session log lacks MCP.fixture usage");
   assert(mentions.mcpTool > 0, "session log lacks MCP.fixture.lookupNote call");
   assert(mentions.apiCall === 0, "agent should not call MCP.$api when API files are available");
-  assert(mentions.toolSearchPollution === 0, "agent should not use tools.search for MCP lookup");
+  assert(mentions.toolSearchPollution === 0, "agent should not use catalog.search for MCP lookup");
   return finalText;
 }

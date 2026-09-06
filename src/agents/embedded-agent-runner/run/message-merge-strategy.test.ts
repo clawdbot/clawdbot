@@ -5,8 +5,8 @@ import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 
 describe("message merge strategy", () => {
   it("resolves the default orphan trailing user prompt strategy", () => {
-    // The default merge preserves both user asks and marks the old transcript
-    // leaf for removal so the active turn has one canonical prompt.
+    // The default merge folds the older ask into the active prompt while
+    // keeping that leaf on the canonical branch for later turns.
     const strategy = resolveMessageMergeStrategy();
 
     expect(strategy.id).toBe("orphan-trailing-user-prompt");
@@ -17,7 +17,7 @@ describe("message merge strategy", () => {
     });
     expect(result).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",

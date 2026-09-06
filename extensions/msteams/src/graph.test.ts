@@ -44,6 +44,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   };
 });
 
+import { fetchChannelMessage, fetchThreadReplies } from "./graph-thread.js";
 import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
@@ -214,6 +215,39 @@ describe("msteams graph helpers", () => {
     expect(normalizeQuery("  Team Alpha  ")).toBe("Team Alpha");
     expect(normalizeQuery("   ")).toBe("");
     expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
+  });
+
+  it("keeps channel parent and reply requests within their Graph query contracts", async () => {
+    const parent = { id: "parent-1", body: { content: "Original question" } };
+    const reply = { id: "reply-1", body: { content: "Earlier decision" } };
+    mockFetch(async (input: string | URL | Request) => {
+      const url = new URL(requestUrl(input));
+      const isReplies = url.pathname.endsWith("/replies");
+      const unsupported = [...url.searchParams.keys()].filter(
+        (parameter) => !isReplies || parameter !== "$top",
+      );
+      return jsonResponse(
+        unsupported.length > 0
+          ? { error: { code: "BadRequest", message: "Unsupported query parameter" } }
+          : isReplies
+            ? graphCollection(reply)
+            : parent,
+        unsupported.length > 0 ? { status: 400 } : undefined,
+      );
+    });
+
+    const outcomes = await Promise.allSettled([
+      fetchChannelMessage(graphToken, "group-1", "channel-1", "parent-1"),
+      fetchThreadReplies(graphToken, "group-1", "channel-1", "parent-1"),
+    ]);
+
+    expect(outcomes).toEqual([
+      { status: "fulfilled", value: parent },
+      { status: "fulfilled", value: [reply] },
+    ]);
+    expect(fetchCallSearchParam(0, "$select")).toBeNull();
+    expect(fetchCallSearchParam(1, "$select")).toBeNull();
+    expect(fetchCallSearchParam(1, "$top")).toBe("50");
   });
 
   it("lets the shared SSRF guard select the Graph transport", async () => {
@@ -641,8 +675,10 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it("findOne early exit", async () => {
+    it.each([undefined, false])("findOne early exit (collectItems=%s)", async (collectItems) => {
       const target = { id: "target", name: "found-it" };
+      const afterTarget = { id: "after", name: "not-visited" };
+      const visited: string[] = [];
       let callCount = 0;
 
       mockFetch(async () => {
@@ -655,10 +691,9 @@ describe("msteams graph helpers", () => {
             ),
           );
         }
-        // Page 2 contains the target; page 3 should never be fetched
         return jsonResponse(
           pagedResponse(
-            [{ id: "2", name: "b" }, target],
+            [{ id: "2", name: "b" }, target, afterTarget],
             "https://graph.microsoft.com/v1.0/items?$skiptoken=p3",
           ),
         );
@@ -667,14 +702,22 @@ describe("msteams graph helpers", () => {
       const result = await fetchAllGraphPages<Item>({
         token: graphToken,
         path: "/items",
-        findOne: (item) => item.id === "target",
+        maxPages: 2,
+        collectItems,
+        findOne: (item) => {
+          visited.push(item.id);
+          return item.id === "target";
+        },
       });
 
       expect(result.found).toEqual(target);
       expect(result.truncated).toBe(false);
-      // Page 1 items + page 2 items (where match was found)
-      expect(result.items).toEqual([{ id: "1", name: "a" }, { id: "2", name: "b" }, target]);
-      // Only 2 fetches; page 3 was never requested
+      expect(visited).toEqual(["1", "2", "target"]);
+      expect(result.items).toEqual(
+        collectItems === false
+          ? []
+          : [{ id: "1", name: "a" }, { id: "2", name: "b" }, target, afterTarget],
+      );
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
@@ -692,7 +735,7 @@ describe("msteams graph helpers", () => {
       expect(result.items).toEqual([{ id: "1", name: "a" }]);
     });
 
-    it("findOne with no match (truncated)", async () => {
+    it.each([undefined, false])("findOne with no match (collectItems=%s)", async (collectItems) => {
       mockFetch(async () =>
         jsonResponse(
           pagedResponse(
@@ -706,13 +749,40 @@ describe("msteams graph helpers", () => {
         token: graphToken,
         path: "/items",
         maxPages: 2,
+        collectItems,
         findOne: (item) => item.id === "missing",
       });
 
       expect(result.found).toBeUndefined();
       expect(result.truncated).toBe(true);
-      expect(result.items).toHaveLength(2);
+      expect(result.items).toHaveLength(collectItems === false ? 0 : 2);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
+
+    it.each([undefined, false])(
+      "preserves findOne errors (collectItems=%s)",
+      async (collectItems) => {
+        const failure = new Error("predicate failed");
+        mockJsonFetchResponse(
+          pagedResponse(
+            [{ id: "1", name: "a" }],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
+          ),
+        );
+
+        await expect(
+          fetchAllGraphPages<Item>({
+            token: graphToken,
+            path: "/items",
+            collectItems,
+            findOne: () => {
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      },
+    );
 
     it("empty first page", async () => {
       mockJsonFetchResponse(pagedResponse([]));
@@ -724,6 +794,42 @@ describe("msteams graph helpers", () => {
 
       expect(result).toEqual({ items: [], truncated: false });
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats a missing value as empty and rejects a malformed value", async () => {
+      mockJsonFetchResponse({});
+      await expect(
+        fetchAllGraphPages<Item>({ token: graphToken, path: "/items" }),
+      ).resolves.toEqual({ items: [], truncated: false });
+
+      mockJsonFetchResponse({ value: { id: "not-an-array" } });
+      await expect(
+        fetchAllGraphPages<Item>({ token: graphToken, path: "/items" }),
+      ).rejects.toThrow();
+    });
+
+    it("does not truncate when the final allowed page has no nextLink", async () => {
+      mockFetch(async (_input, _init) =>
+        vi.mocked(globalThis.fetch).mock.calls.length === 1
+          ? jsonResponse(
+              pagedResponse(
+                [{ id: "1", name: "a" }],
+                "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
+              ),
+            )
+          : jsonResponse(pagedResponse([{ id: "2", name: "b" }])),
+      );
+
+      await expect(
+        fetchAllGraphPages<Item>({ token: graphToken, path: "/items", maxPages: 2 }),
+      ).resolves.toEqual({
+        items: [
+          { id: "1", name: "a" },
+          { id: "2", name: "b" },
+        ],
+        truncated: false,
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
   });
 });

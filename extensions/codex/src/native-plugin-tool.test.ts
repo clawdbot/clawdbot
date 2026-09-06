@@ -35,8 +35,10 @@ function toolFixture(params?: {
   bindingCwd?: string;
   configWorkspaceDir?: string;
 }) {
-  const read = vi.fn(async () => (params?.bindingCwd ? { cwd: params.bindingCwd } : undefined));
-  const bindingStore = { read } as unknown as CodexAppServerBindingStore;
+  const read = vi.fn<CodexAppServerBindingStore["read"]>(() =>
+    params?.bindingCwd ? { threadId: "bound-thread", cwd: params.bindingCwd } : undefined,
+  );
+  const bindingStore = { read };
   const context: OpenClawPluginToolContext = {
     config: {},
     agentId: "main",

@@ -72,6 +72,25 @@ describe("realredactConfigSnapshot_real", () => {
     );
   });
 
+  it("redacts remote edge-auth header values from generated schema hints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const snapshot = makeSnapshot({
+      gateway: {
+        remote: {
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const gateway = expectDefined(result.config.gateway, "redacted gateway config");
+    const remote = expectDefined(gateway.remote, "redacted remote gateway config");
+    const edgeAuth = expectDefined(remote.edgeAuth, "redacted edge auth config");
+    expect(edgeAuth["X-Edge-Auth"]).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.gateway.remote.edgeAuth["X-Edge-Auth"]).toBe("test-secret");
+  });
+
   it("redacts Discord Activity client secrets registered on plain string schemas", () => {
     const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);

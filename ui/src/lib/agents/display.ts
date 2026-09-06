@@ -4,23 +4,20 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  expandToolGroups,
-  normalizeToolPolicyName,
-  resolveToolProfilePolicy,
-} from "../../../../src/agents/tool-policy-shared.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
-  ToolCatalogProfile,
-  ToolsCatalogResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
+
+export { formatAgentRuntimeLabel };
 
 type AgentRosterEntry = {
   id: string;
@@ -38,261 +35,9 @@ export function selectableAgentsList(agentsList: AgentsListResult): AgentsListRe
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
 }
 
-export type AgentToolEntry = {
-  id: string;
-  label: string;
-  description: string;
-  source?: "core" | "plugin";
-  pluginId?: string;
-  optional?: boolean;
-  defaultProfiles?: string[];
-};
-
-export type AgentToolSection = {
-  id: string;
-  label: string;
-  source?: "core" | "plugin";
-  pluginId?: string;
-  tools: AgentToolEntry[];
-};
-
-type FallbackToolEntry = Omit<AgentToolEntry, "description"> & {
-  descriptionKey: string;
-};
-
-type FallbackToolSection = Omit<AgentToolSection, "label" | "tools"> & {
-  labelKey: string;
-  tools: FallbackToolEntry[];
-};
-
-const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
-  {
-    id: "fs",
-    labelKey: "agents.toolCatalog.groups.files",
-    tools: [
-      { id: "read", label: "read", descriptionKey: "agents.toolCatalog.descriptions.read" },
-      { id: "write", label: "write", descriptionKey: "agents.toolCatalog.descriptions.write" },
-      { id: "edit", label: "edit", descriptionKey: "agents.toolCatalog.descriptions.edit" },
-      {
-        id: "apply_patch",
-        label: "apply_patch",
-        descriptionKey: "agents.toolCatalog.descriptions.applyPatch",
-      },
-    ],
-  },
-  {
-    id: "runtime",
-    labelKey: "agents.toolCatalog.groups.runtime",
-    tools: [
-      { id: "exec", label: "exec", descriptionKey: "agents.toolCatalog.descriptions.exec" },
-      {
-        id: "process",
-        label: "process",
-        descriptionKey: "agents.toolCatalog.descriptions.process",
-      },
-    ],
-  },
-  {
-    id: "web",
-    labelKey: "agents.toolCatalog.groups.web",
-    tools: [
-      {
-        id: "web_search",
-        label: "web_search",
-        descriptionKey: "agents.toolCatalog.descriptions.webSearch",
-      },
-      {
-        id: "web_fetch",
-        label: "web_fetch",
-        descriptionKey: "agents.toolCatalog.descriptions.webFetch",
-      },
-    ],
-  },
-  {
-    id: "memory",
-    labelKey: "agents.toolCatalog.groups.memory",
-    tools: [
-      {
-        id: "memory_search",
-        label: "memory_search",
-        descriptionKey: "agents.toolCatalog.descriptions.memorySearch",
-      },
-      {
-        id: "memory_get",
-        label: "memory_get",
-        descriptionKey: "agents.toolCatalog.descriptions.memoryGet",
-      },
-    ],
-  },
-  {
-    id: "sessions",
-    labelKey: "agents.toolCatalog.groups.sessions",
-    tools: [
-      {
-        id: "sessions_list",
-        label: "sessions_list",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsList",
-      },
-      {
-        id: "sessions_history",
-        label: "sessions_history",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsHistory",
-      },
-      {
-        id: "sessions_send",
-        label: "sessions_send",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsSend",
-      },
-      {
-        id: "sessions_spawn",
-        label: "sessions_spawn",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsSpawn",
-      },
-      {
-        id: "session_status",
-        label: "session_status",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionStatus",
-      },
-    ],
-  },
-  {
-    id: "ui",
-    labelKey: "agents.toolCatalog.groups.ui",
-    tools: [
-      {
-        id: "browser",
-        label: "browser",
-        descriptionKey: "agents.toolCatalog.descriptions.browser",
-      },
-      {
-        id: "canvas",
-        label: "canvas",
-        descriptionKey: "agents.toolCatalog.descriptions.canvas",
-      },
-    ],
-  },
-  {
-    id: "messaging",
-    labelKey: "agents.toolCatalog.groups.messaging",
-    tools: [
-      {
-        id: "message",
-        label: "message",
-        descriptionKey: "agents.toolCatalog.descriptions.message",
-      },
-    ],
-  },
-  {
-    id: "automation",
-    labelKey: "agents.toolCatalog.groups.automation",
-    tools: [
-      { id: "cron", label: "cron", descriptionKey: "agents.toolCatalog.descriptions.cron" },
-      {
-        id: "gateway",
-        label: "gateway",
-        descriptionKey: "agents.toolCatalog.descriptions.gateway",
-      },
-    ],
-  },
-  {
-    id: "nodes",
-    labelKey: "agents.toolCatalog.groups.nodes",
-    tools: [
-      { id: "nodes", label: "nodes", descriptionKey: "agents.toolCatalog.descriptions.nodes" },
-    ],
-  },
-  {
-    id: "agents",
-    labelKey: "agents.toolCatalog.groups.agents",
-    tools: [
-      {
-        id: "agents_list",
-        label: "agents_list",
-        descriptionKey: "agents.toolCatalog.descriptions.agentsList",
-      },
-    ],
-  },
-  {
-    id: "media",
-    labelKey: "agents.toolCatalog.groups.media",
-    tools: [
-      { id: "image", label: "image", descriptionKey: "agents.toolCatalog.descriptions.image" },
-    ],
-  },
-];
-
-// Canonical UI tool-profile list; Security and Agents surfaces share it so
-// labels stay translated and consistent.
-export const PROFILE_OPTIONS = [
-  { id: "minimal", labelKey: "agents.toolCatalog.profiles.minimal" },
-  { id: "coding", labelKey: "agents.toolCatalog.profiles.coding" },
-  { id: "messaging", labelKey: "agents.toolCatalog.profiles.messaging" },
-  { id: "full", labelKey: "agents.toolCatalog.profiles.full" },
-] as const;
-
-// Gateway catalog labels are English-only strings. Translate the known core
-// group/profile enum labels locally so localized UIs don't render English
-// section names; plugin groups (`plugin:<id>` ids) never match and keep the
-// catalog-provided label.
-const CORE_GROUP_LABEL_KEYS = new Map<string, string>(
-  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelKey]),
-);
-const PROFILE_LABEL_KEYS = new Map<string, string>(
-  PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
-);
-
-export function resolveToolSections(
-  toolsCatalogResult: ToolsCatalogResult | null,
-): AgentToolSection[] {
-  if (toolsCatalogResult?.groups?.length) {
-    return toolsCatalogResult.groups.map((group) => {
-      const labelKey = CORE_GROUP_LABEL_KEYS.get(group.id);
-      return {
-        id: group.id,
-        label: labelKey ? t(labelKey) : group.label,
-        source: group.source,
-        pluginId: group.pluginId,
-        tools: group.tools.map((tool) => ({
-          id: tool.id,
-          label: tool.label,
-          description: tool.description,
-          source: tool.source,
-          pluginId: tool.pluginId,
-          optional: tool.optional,
-          defaultProfiles: [...tool.defaultProfiles],
-        })),
-      };
-    });
-  }
-  return FALLBACK_TOOL_SECTIONS.map((section) => ({
-    id: section.id,
-    label: t(section.labelKey),
-    tools: section.tools.map((tool) => ({
-      id: tool.id,
-      label: tool.label,
-      description: t(tool.descriptionKey),
-    })),
-  }));
-}
-
-export function resolveToolProfileOptions(
-  toolsCatalogResult: ToolsCatalogResult | null,
-): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
-  if (toolsCatalogResult?.profiles?.length) {
-    return toolsCatalogResult.profiles.map((profile) => {
-      const labelKey = PROFILE_LABEL_KEYS.get(profile.id);
-      return labelKey ? { id: profile.id, label: t(labelKey) } : profile;
-    });
-  }
-  return PROFILE_OPTIONS.map((profile) => ({
-    id: profile.id,
-    label: t(profile.labelKey),
-  }));
-}
-
-type ToolPolicy = {
-  allow?: string[];
-  deny?: string[];
+type GitHubIdentityConfigValue = {
+  profileId?: string;
+  gitAuthor?: { name?: string; email?: string };
 };
 
 type AgentConfigEntry = {
@@ -300,6 +45,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
   skills?: string[];
   tools?: {
@@ -307,12 +53,18 @@ type AgentConfigEntry = {
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
+    github?: GitHubIdentityConfigValue;
   };
 };
 
 type ConfigSnapshot = {
   agents?: {
-    defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
+    defaults?: {
+      workspace?: string;
+      model?: unknown;
+      models?: Record<string, { alias?: unknown }>;
+      skills?: string[];
+    };
     entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {
@@ -320,6 +72,7 @@ type ConfigSnapshot = {
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
+    github?: GitHubIdentityConfigValue;
   };
 };
 
@@ -406,6 +159,17 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
   };
 }
 
+/** Resolves the effective skill allowlist, including inherited agent defaults. */
+export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
+  const resolved = resolveAgentConfig(config, agentId);
+  if (Array.isArray(resolved.entry?.skills)) {
+    return normalizeStringEntries(resolved.entry.skills);
+  }
+  return Array.isArray(resolved.defaults?.skills)
+    ? normalizeStringEntries(resolved.defaults.skills)
+    : undefined;
+}
+
 export type AgentContext = {
   workspace: string;
   model: string;
@@ -429,15 +193,18 @@ export function buildAgentContext(
   const workspace =
     workspaceFromFiles ||
     config.entry?.workspace ||
-    config.defaults?.workspace ||
     agent.workspace ||
+    config.defaults?.workspace ||
     "default";
-  const modelLabel = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agent.model);
-  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
+  const primary =
+    resolveModelPrimary(config.entry?.model) ??
+    resolveModelPrimary(config.defaults?.model) ??
+    resolveModelPrimary(agent.model);
+  const fallbacks =
+    resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
+    (configForm ? null : resolveModelFallbacks(agent.model));
+  const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
+  const runtime = formatAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||
@@ -447,7 +214,7 @@ export function buildAgentContext(
   const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity)
     ? "custom"
     : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
+  const skillFilter = resolveAgentSkillsFilter(configForm, agent.id);
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
@@ -460,14 +227,6 @@ export function buildAgentContext(
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
-}
-
-export function resolveAgentRuntimeLabel(
-  agentRuntime?: AgentsListResult["agents"][number]["agentRuntime"],
-): string {
-  const id = normalizeOptionalString(agentRuntime?.id) ?? "pi";
-  const fallback = normalizeOptionalString(agentRuntime?.fallback);
-  return fallback ? `${id} (fallback ${fallback})` : id;
 }
 
 export function resolveModelLabel(model?: unknown): string {
@@ -554,34 +313,35 @@ type ConfiguredModelOption = {
   value: string;
   label: string;
   provider?: string;
+  tags?: string[];
+  alias?: string;
 };
 
 function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
+  agentId?: string,
 ): ConfiguredModelOption[] {
-  const cfg = configForm as ConfigSnapshot | null;
-  const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
-    return [];
-  }
+  const defaultModels = (configForm as ConfigSnapshot | null)?.agents?.defaults?.models;
+  const agentModels = agentId ? resolveAgentConfig(configForm, agentId)?.entry?.models : undefined;
+  const modelIds = Object.keys({ ...defaultModels, ...agentModels });
   const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
+  for (const modelId of modelIds) {
     const trimmed = modelId.trim();
     if (!trimmed) {
       continue;
     }
+    const defaultMetadata = defaultModels?.[modelId];
+    const agentMetadata = agentModels?.[modelId];
     const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
-        : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+      agentMetadata?.alias !== undefined
+        ? (normalizeOptionalString(agentMetadata.alias) ?? "")
+        : normalizeOptionalString(defaultMetadata?.alias);
     const separator = trimmed.indexOf("/");
     options.push({
       value: trimmed,
-      label,
-      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+      label: alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed,
+      provider: separator > 0 ? trimmed.slice(0, separator) : undefined,
+      alias,
     });
   }
   return options;
@@ -591,43 +351,55 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  agentId?: string,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const addOption = (value: string, label: string, provider?: string) => {
-    const key = normalizeLowercaseStringOrEmpty(value);
+  const configuredOptions = resolveConfiguredModels(configForm, agentId);
+  const addOption = (option: ConfiguredModelOption) => {
+    const key = normalizeLowercaseStringOrEmpty(option.value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label, ...(provider ? { provider } : {}) });
+    options.push(option);
   };
 
   if (catalog) {
-    const displayLookup = buildCatalogDisplayLookup(catalog);
-    for (const entry of catalog) {
+    const configuredAliases = new Map(
+      configuredOptions.map(
+        (option) => [normalizeLowercaseStringOrEmpty(option.value), option.alias] as const,
+      ),
+    );
+    const displayCatalog = catalog.map((entry) => {
+      const key = normalizeLowercaseStringOrEmpty(`${entry.provider}/${entry.id}`);
+      const alias = configuredAliases.get(key);
+      if (alias === undefined) {
+        return entry;
+      }
+      return { ...entry, alias: alias || undefined };
+    });
+    const displayLookup = buildCatalogDisplayLookup(displayCatalog);
+    for (const entry of displayCatalog) {
       const option = buildChatModelOptionFromLookup(entry, displayLookup);
       catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
         ...option,
         provider: entry.provider,
+        tags: entry.tags,
       });
     }
   }
 
-  for (const opt of resolveConfiguredModels(configForm)) {
-    // Configured options keep their order and fallback aliases; an authoritative
-    // catalog match must still expose the same model identity as the chat picker.
+  for (const opt of configuredOptions) {
+    // Raw config supplies rows the Gateway catalog lacks and explicit alias edits;
+    // catalog identity and tags remain authoritative for matching rows.
     const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
-    addOption(
-      opt.value,
-      catalogOption?.label ?? opt.label,
-      catalogOption?.provider ?? opt.provider,
-    );
+    addOption(catalogOption ?? opt);
   }
 
   for (const option of catalogOptions.values()) {
-    addOption(option.value, option.label, option.provider);
+    addOption(option);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
@@ -635,96 +407,9 @@ export function buildModelOptions(
     options.unshift({
       value: current,
       label: `Current (${current})`,
-      ...(separator > 0 ? { provider: current.slice(0, separator) } : {}),
+      provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }
 
   return options;
-}
-
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
-
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolPolicyName(pattern);
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
-  if (normalized === "*") {
-    return { kind: "all" };
-  }
-  if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
-  }
-  const escaped = normalized.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-  return { kind: "regex", value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`) };
-}
-
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => {
-      return pattern.kind !== "exact" || pattern.value.length > 0;
-    });
-}
-
-function matchesAny(name: string, patterns: CompiledPattern[]) {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && name === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {
-  if (!policy) {
-    return true;
-  }
-  const normalized = normalizeToolPolicyName(name);
-  const deny = compilePatterns(policy.deny);
-  if (matchesAny(normalized, deny)) {
-    return false;
-  }
-  const allow = compilePatterns(policy.allow);
-  if (allow.length === 0) {
-    return true;
-  }
-  if (matchesAny(normalized, allow)) {
-    return true;
-  }
-  if (normalized === "apply_patch" && matchesAny("exec", allow)) {
-    return true;
-  }
-  return false;
-}
-
-export function matchesList(name: string, list?: string[]) {
-  if (!Array.isArray(list) || list.length === 0) {
-    return false;
-  }
-  const normalized = normalizeToolPolicyName(name);
-  const patterns = compilePatterns(list);
-  if (matchesAny(normalized, patterns)) {
-    return true;
-  }
-  if (normalized === "apply_patch" && matchesAny("exec", patterns)) {
-    return true;
-  }
-  return false;
-}
-
-export function resolveToolProfile(profile: string) {
-  return resolveToolProfilePolicy(profile) ?? undefined;
 }

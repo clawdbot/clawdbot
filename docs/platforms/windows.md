@@ -44,8 +44,8 @@ Check for Updates, and uninstall.
 - Native chat window plus access to the browser Control UI.
 - Command Center diagnostics for sessions, usage, channels, nodes, pairing,
   and repair commands.
-- Windows node mode for agent-controlled canvas, screen, camera,
-  notifications, device status, talk, and controlled `system.run`.
+- Windows node mode for screen, camera, notifications, device status, talk,
+  and controlled `system.run`.
 - Local MCP server mode for MCP clients such as Claude Desktop, Claude Code,
   and Cursor.
 
@@ -76,14 +76,13 @@ declared by the node and allowed by Gateway policy before they run; see
 
 Common commands:
 
-| Family | Commands                                                                             |
-| ------ | ------------------------------------------------------------------------------------ |
-| Canvas | `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot` |
-| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                          |
-| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                  |
-| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                  |
-| Device | `location.get`, `device.info`, `device.status`                                       |
-| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak`  |
+| Family | Commands                                                                            |
+| ------ | ----------------------------------------------------------------------------------- |
+| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                         |
+| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                 |
+| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                 |
+| Device | `location.get`, `device.info`, `device.status`                                      |
+| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak` |
 
 Node mode requires Gateway pairing. If the app shows a pairing request,
 approve it from the Gateway host:
@@ -137,6 +136,8 @@ the readable `gateway.cmd` script in the OpenClaw state dir but launches it
 through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
+
+Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
 Install the Gateway service:
 

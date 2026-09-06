@@ -64,54 +64,38 @@ describe("reconcileSidebarZone", () => {
     ).toEqual(["route:usage"]);
   });
 
-  it("keeps active Workboard boards, drops stale ids, and preserves plugin-off pins", () => {
-    const boards = [
-      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
-      { id: "ops", total: 0, active: 0, archived: 0, byStatus: {} },
-    ];
-    expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "workboard:deleted", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        boards,
-        true,
-        true,
-      ).sidebarEntries,
-    ).toEqual(["workboard:ops", "route:usage"]);
-    // Disabled is indistinguishable from an unloaded config snapshot at
-    // startup; a zone write then must not erase persisted pins.
-    expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        boards,
-        false,
-        true,
-      ),
-    ).toEqual({
-      entries: [{ type: "route", route: "usage" }],
-      sidebarEntries: ["workboard:ops", "route:usage"],
-    });
+  it("migrates shipped Workboard placements to plugin destinations", () => {
+    const result = reconcileSidebarZone(
+      ["route:usage", "route:workboard", "workboard:ops"],
+      [],
+      SIDEBAR_NAV_ROUTES,
+      new Set(),
+      new Set(["workboard/workboard", "workboard/board-ops"]),
+    );
+    expect(result.sidebarEntries).toEqual([
+      "route:usage",
+      "plugin:workboard/workboard",
+      "plugin:workboard/board-ops",
+    ]);
+    expect(result.entries).toEqual([
+      { type: "route", route: "usage" },
+      { type: "plugin", key: "workboard/workboard" },
+      { type: "plugin", key: "workboard/board-ops" },
+    ]);
   });
 
-  it("preserves Workboard pins until the active plugin's board catalog is authoritative", () => {
-    expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        [],
-        true,
-        false,
-      ),
-    ).toEqual({
+  it("preserves unavailable plugin positions through reloads and permission loss", () => {
+    const entries = ["plugin:example/review", "route:usage"];
+    expect(reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES)).toEqual({
       entries: [{ type: "route", route: "usage" }],
-      sidebarEntries: ["workboard:ops", "route:usage"],
+      sidebarEntries: entries,
     });
+    expect(
+      reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES, new Set(), new Set(["example/review"]))
+        .entries,
+    ).toEqual([
+      { type: "plugin", key: "example/review" },
+      { type: "route", route: "usage" },
+    ]);
   });
 });

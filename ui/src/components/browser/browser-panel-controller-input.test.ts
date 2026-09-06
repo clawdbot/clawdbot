@@ -1,5 +1,7 @@
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -15,6 +17,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelController } from "./browser-panel-controller.ts";
+import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -549,6 +552,118 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(screenshotCount).toBe(2);
     expect(controller.loading).toBe(false);
   });
+
+  it("clears stale inspected elements and owned errors across a failed inspection retry", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    let inspections = 0;
+    const initialNode = createInspectedNode("initial");
+    const recoveredNode = createInspectedNode("recovered");
+    const { client } = createBrowserClient(async () => {
+      inspections += 1;
+      if (inspections === 2) {
+        throw new Error("Browser connection temporarily unavailable");
+      }
+      return { result: inspections === 1 ? initialNode : recoveredNode };
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.setMode("inspect");
+
+    controller.handleOverlayPointerMove(createPointer(10, 20));
+    await flushBrowserResponses();
+    expect(controller.inspected).toEqual(initialNode);
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(30, 40));
+    expect(controller.inspected).toBeNull();
+    await flushBrowserResponses();
+
+    expect(controller.errorText).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+    expect(controller.mode).toBe("inspect");
+    expect(controller.evaluateUnavailable).toBe(false);
+    expect(controller.inspected).toBeNull();
+    const renderedPanel = document.createElement("div");
+    const renderPanel = () =>
+      render(
+        renderBrowserPanelChrome(
+          controller,
+          "right",
+          400,
+          400,
+          () => {},
+          () => {},
+          nothing,
+        ),
+        renderedPanel,
+      );
+    renderPanel();
+    expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(70, 80));
+    await flushBrowserResponses();
+
+    expect(controller.inspected).toEqual(recoveredNode);
+    expect(controller.errorText).toBeNull();
+    expect(controller.inspectPointer).toEqual({ x: 0.7, y: 0.8 });
+    renderPanel();
+    expect(renderedPanel.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      renderedPanel.querySelector<HTMLButtonElement>('button[aria-label="Inspect element"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "structured action code",
+      message: "evaluation disabled",
+      details: { code: "ACT_EVALUATE_DISABLED" },
+      expected: true,
+    },
+    {
+      name: "legacy Browser node message without an action code",
+      message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { nodeError: { message: "legacy Browser node" } },
+      expected: true,
+    },
+    {
+      name: "unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { code: "ACT_UNKNOWN" },
+      expected: false,
+    },
+    {
+      name: "sanitized unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { unrecognizedCode: true },
+      expected: false,
+    },
+  ])(
+    "classifies $name without reinterpreting structured errors",
+    async ({ message, details, expected }) => {
+      const { client } = createBrowserClient(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message,
+          details,
+        });
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a");
+      controller.setMode("inspect");
+
+      controller.handleOverlayPointerMove(createPointer(10, 20));
+      await flushBrowserResponses();
+
+      expect(controller.evaluateUnavailable).toBe(expected);
+      expect(controller.mode).toBe(expected ? "interact" : "inspect");
+      expect(controller.errorText).toBeTruthy();
+      expect(controller.errorText?.includes("Browser request failed")).toBe(!expected);
+    },
+  );
 
   it("keeps the newest inspected element when pointer responses finish out of order", async () => {
     vi.useFakeTimers({ now: 1_000 });

@@ -4,8 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { countPendingDescendantRuns } from "./subagent-registry-read.js";
-import { countActiveDescendantRuns } from "./subagent-registry-read.js";
+import { countPendingDescendantRuns, countActiveDescendantRuns } from "./subagent-registry-read.js";
 
 vi.mock("../../../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../../../config/config.js")>(
@@ -21,7 +20,6 @@ vi.mock("../../../config/config.js", async () => {
 
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-  buildSubagentSystemPrompt: vi.fn(() => "test prompt"),
 }));
 
 let subagentRegistry: typeof import("./subagent-registry.test-helpers.js");
