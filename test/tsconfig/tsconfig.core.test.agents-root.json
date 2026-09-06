@@ -6,5 +6,12 @@
   "include": [
     "../../src/agents/*.test.ts",
     "../../src/agents/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/bash-tools.exec-runtime*.test.ts",
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx"
   ]
 }

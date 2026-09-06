@@ -320,7 +320,8 @@ describe("routeReply", () => {
       deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
     });
 
-    expect(res.ok).toBe(true);
+    expect(res).toMatchObject({ ok: true, delivered: false });
+    expect(res.queueCustody).toBeUndefined();
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",

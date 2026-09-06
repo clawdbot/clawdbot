@@ -57,6 +57,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
@@ -802,6 +803,7 @@ export async function runExecProcess({
         timedOut: outcome.timedOut,
       });
     } catch (error) {
+      recordAgentCleanupFailure();
       if (outcome.status === "completed") {
         finalOutcome = buildExecRuntimeErrorOutcome({
           error,

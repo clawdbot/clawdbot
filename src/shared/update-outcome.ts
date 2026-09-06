@@ -24,3 +24,19 @@ export function classifyUpdateOutcome(outcome: {
     ? SKIPPED_UPDATE_OUTCOMES[outcome.reason]
     : "failed";
 }
+
+/** Ledger refusals can be failed attempts even when no update work started. */
+export function isReportableUpdateRun(run: { status: string; reason: string | null }): boolean {
+  if (run.status === "failed" || run.status === "rolled-back") {
+    return true;
+  }
+  // These are intentional CLI ledger outcomes, not failed update attempts.
+  // Reuse the result owner's classification for all other skipped outcomes.
+  return (
+    run.status === "skipped" &&
+    run.reason !== null &&
+    run.reason !== "dry-run" &&
+    run.reason !== "cancelled" &&
+    classifyUpdateOutcome({ status: run.status, reason: run.reason }) === "failed"
+  );
+}

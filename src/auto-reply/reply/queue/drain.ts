@@ -706,6 +706,9 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
+    // A definitive native rejection can return an already-committed source.
+    // Keep its original recorder/event; only unconsumed sources may regroup.
+    item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||

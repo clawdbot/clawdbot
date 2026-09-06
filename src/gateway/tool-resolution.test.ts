@@ -6,7 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import {
+  McpLoopbackToolCache,
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -201,6 +205,50 @@ describe("resolveGatewayScopedTools", () => {
       }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
+
+  it.each(
+    [
+      { mode: "policy", resolve: resolveMcpLoopbackPolicyTools },
+      { mode: "exact grant", resolve: resolveMcpLoopbackScopedTools },
+    ].flatMap(({ mode, resolve }) =>
+      [
+        { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
+        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
+        { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
+        {
+          label: "filesystem group",
+          toolsAllow: ["group:fs"],
+          expected: mode === "policy" ? ["ls", "read"] : [],
+        },
+      ].map((testCase) => Object.assign(testCase, { mode, resolve })),
+    ),
+  )(
+    "materializes $label loopback $mode without widening its cap",
+    async ({ resolve, toolsAllow, expected }) => {
+      const scope = {
+        cfg: {
+          plugins: { enabled: false },
+          tools: { profile: "minimal", alsoAllow: ["ls", "read"] },
+        } satisfies OpenClawConfig,
+        context: {
+          sessionKey: "agent:main:cron:listing-surface",
+          workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
+          senderIsOwner: true,
+          toolsAllow,
+        },
+      };
+      const allowed = await resolve(scope);
+      expect(allowed.tools.map((tool) => tool.name)).toEqual(expected);
+
+      const denied = await resolve({
+        ...scope,
+        cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
+      });
+      expect(denied.tools.map((tool) => tool.name)).toEqual(
+        expected.filter((name) => name !== "ls"),
+      );
+    },
+  );
 
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));

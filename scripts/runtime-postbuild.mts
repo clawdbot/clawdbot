@@ -48,10 +48,10 @@ const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
 ].join("\n");
 
 const ROOT = resolveRepoRoot(import.meta.url);
-const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
+const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.m?js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
-  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
+  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.m?js)\1/gu;
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const EXPORT_HTML_SOURCE_DIR = "src/auto-reply/reply/export-html";
 const EXPORT_HTML_OUTPUT_DIR = "dist/export-html";
@@ -536,7 +536,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".js")) {
+    if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
     }
     if (ROOT_STABLE_RUNTIME_ALIAS_PATTERN.test(entry.name)) {
@@ -576,7 +576,10 @@ function resolveRootRuntimeCandidateByMarkers(
     return null;
   }
   const aliasBaseFileName = aliasFileName.replace(/\.js$/u, "");
-  const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
+  const hashedPattern = new RegExp(
+    `^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.m?js$`,
+    "u",
+  );
   let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });

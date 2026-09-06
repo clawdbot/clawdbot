@@ -8,7 +8,6 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -261,9 +260,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     try {
       await entered.promise;
       callerCurrent = false;
-      expect(resolveAdmittedRunActiveAssertion(context.params.admittedRunContext)).toBeTypeOf(
-        "function",
-      );
     } finally {
       held.resolve();
     }

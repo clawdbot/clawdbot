@@ -53,6 +53,7 @@ import {
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
@@ -542,11 +543,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
     const supervisor = getProcessSupervisor();
-    // Register before launch: root completion can precede final cleanup,
-    // which must retain the tree and any earlier extinction failure.
-    options.registerRunCleanup(
-      supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true }),
-    );
+    // Sandbox runtimes retain their configured lifetime; host commands still
+    // need tree cleanup, including elevated commands from sandboxed sessions.
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+    options.registerRunCleanup(async () => {
+      // Transport closure can precede backend finalization. Join both owners
+      // before their local artifacts or the invocation state can be released.
+      const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+      const failed = settled.find((result) => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
+    });
   }
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });

@@ -35,7 +35,6 @@ import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
-  ackDelivery,
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
@@ -1751,8 +1750,8 @@ describe("delivery-queue recovery", () => {
       queuePolicy: "best_effort",
       payloads: [{ text: "secret" }],
     });
-    const deliver = vi.fn(async (params: PayloadOutcomeSink) => {
-      await ackDelivery(id, tmpDir());
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      await params.deliveryQueueOwner!.ack();
       reportPayloadFailure(params, new Error("provider rejected send"));
       throw new Error("provider rejected send");
     });

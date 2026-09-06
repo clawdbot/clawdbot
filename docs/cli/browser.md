@@ -380,7 +380,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, and `fill` reject per-call timeout overrides; `evaluate` accepts `--timeout-ms`.
 - `select` supports one value only.
 - `wait --load networkidle` is not supported (works on managed and raw/remote CDP profiles).
-- File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
+- File uploads require `--ref` / `--input-ref` and do not support CSS `--element`. Pass multiple paths when the page's file input accepts multiple files.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
 - `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.

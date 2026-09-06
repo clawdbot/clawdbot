@@ -42,6 +42,27 @@ launcher scripts).
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
 
+After a final interactive update failure, **Diagnose update failure** and
+**Report update failure** are separate choices. Reporting first shows the exact
+sanitized issue body and defaults confirmation to **No**. After confirmation,
+OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
+read-only request before issue creation. Fallback and pending outcomes retain the
+sanitized report locally; a confirmed issue keeps only its durable issue URL.
+If the CLI is missing or that check cannot confirm authentication, OpenClaw
+provides a prefilled issue link without starting issue creation. If the exact
+report exceeds the browser URL limit, OpenClaw keeps the sanitized body locally
+and returns to the action menu, where reporting can be chosen and confirmed
+again. A report preparation or submission
+error also returns to that menu; Diagnose runs only when selected explicitly.
+In the Control UI, an interrupted
+pre-create preparation becomes retryable after its local reservation expires.
+After an uncertain creation result, OpenClaw checks for an issue matching the
+exact report. If neither a verified issue URL nor a definitive rejection is
+available, the report stays pending with no replay link because an issue may
+already exist.
+`--yes`, `--json`, non-interactive runs, and managed-service handoffs never
+submit a report.
+
 ## Options
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
@@ -521,11 +542,12 @@ the service is absent and the selected Gateway has no active lock or listener.
 The command reports that there is no Gateway to restart. Existing service files,
 manager runtime state, or failed filesystem inspection still require service access.
 
-If service inspection is unavailable, a restart-enabled code update refuses to
-mutate the checkout or package tree; it does not assume that no service exists.
-Run `openclaw gateway status --deep` and retry when access is restored. Use
-`--no-restart` only after manually stopping the Gateway, then restart it
-manually after the update. Services owned by another install remain untouched.
+If service inspection is unavailable or installation ownership is unresolved,
+the update refuses to mutate the checkout or package tree, including with
+`--no-restart`. It cannot assess another service-owned profile's databases from
+the invoking profile alone. Run `openclaw gateway status --deep` and retry when
+ownership can be inspected. Proven-absent services and inspectable stopped
+services remain supported. Services owned by another install remain untouched.
 
 The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
 Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway

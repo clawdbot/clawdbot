@@ -26,12 +26,34 @@ export type PrivateCommandRouteTarget = {
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
 
-/** Resolves expiry timestamp for temporary private approval routes. */
-export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()): number {
-  return (
-    resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, { nowMs }) ??
-    EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS
-  );
+export function buildPrivateCommandApprovalRequest(params: {
+  commandParams: HandleCommandsParams;
+  id: string;
+  command: string;
+  commandArgv?: string[];
+  agentId: string | undefined;
+  createdAtMs: number;
+}): ExecApprovalRequest {
+  const { commandParams } = params;
+  return {
+    approvalKind: "exec",
+    id: params.id,
+    request: {
+      command: params.command,
+      ...(params.commandArgv === undefined ? {} : { commandArgv: params.commandArgv }),
+      agentId: params.agentId,
+      ...(commandParams.sessionKey ? { sessionKey: commandParams.sessionKey } : {}),
+      turnSourceChannel: commandParams.command.channel,
+      turnSourceTo: readCommandDeliveryTarget(commandParams) ?? null,
+      turnSourceAccountId: commandParams.ctx.AccountId ?? null,
+      turnSourceThreadId: readCommandMessageThreadId(commandParams) ?? null,
+    },
+    createdAtMs: params.createdAtMs,
+    expiresAtMs:
+      resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, {
+        nowMs: params.createdAtMs,
+      }) ?? EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS,
+  };
 }
 
 /** Finds private owner DM routes that can receive sensitive command replies. */
@@ -84,38 +106,46 @@ export async function resolvePrivateCommandRouteTargets(params: {
   });
 }
 
-/** Delivers a sensitive command reply to the resolved private targets. */
+/** Tries private targets in priority order until delivery stops or owns further recovery. */
 export async function deliverPrivateCommandReply(params: {
   commandParams: HandleCommandsParams;
   targets: PrivateCommandRouteTarget[];
   reply: ReplyPayload;
-}): Promise<boolean> {
-  const results = await Promise.allSettled(
-    params.targets.map((target) =>
-      routeReply({
-        payload: params.reply,
-        channel: target.channel as OriginatingChannelType,
-        to: target.to,
-        accountId: target.accountId ?? undefined,
-        threadId: target.threadId ?? undefined,
-        cfg: params.commandParams.cfg,
-        agentId: params.commandParams.agentId,
-        sessionKey: params.commandParams.sessionKey,
-        policyConversationType: "direct",
-        mirror: false,
-        isGroup: false,
-        replyKind: "final",
-      }),
-    ),
-  );
-  return results.some(
-    (result) =>
-      result.status === "fulfilled" && (result.value.delivered || result.value.suppressed === true),
-  );
+}): Promise<"delivered" | "pending" | "suppressed" | "failed"> {
+  for (const target of params.targets) {
+    const result = await routeReply({
+      payload: params.reply,
+      channel: target.channel as OriginatingChannelType,
+      to: target.to,
+      accountId: target.accountId ?? undefined,
+      threadId: target.threadId ?? undefined,
+      cfg: params.commandParams.cfg,
+      agentId: params.commandParams.agentId,
+      sessionKey: params.commandParams.sessionKey,
+      policyConversationType: "direct",
+      mirror: false,
+      isGroup: false,
+      replyKind: "final",
+    }).catch(() => undefined);
+    // Transport failures resolve with custody; rejection is a pre-send preparation failure.
+    if (!result) {
+      continue;
+    }
+    if (result.queueCustody === "held" || result.ambiguous) {
+      return "pending";
+    }
+    if (result.delivered) {
+      return "delivered";
+    }
+    if (result.suppressed) {
+      return "suppressed";
+    }
+  }
+  return "failed";
 }
 
 /** Reads the command message thread id from command context. */
-export function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
+function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
   return typeof params.ctx.MessageThreadId === "string" ||
     typeof params.ctx.MessageThreadId === "number"
     ? String(params.ctx.MessageThreadId)
@@ -123,7 +153,7 @@ export function readCommandMessageThreadId(params: HandleCommandsParams): string
 }
 
 /** Reads the best delivery target for command route resolution. */
-export function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
+function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
   return (
     normalizeOptionalString(params.ctx.OriginatingTo) ??
     normalizeOptionalString(params.command.to) ??

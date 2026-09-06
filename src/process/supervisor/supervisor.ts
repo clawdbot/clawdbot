@@ -14,6 +14,7 @@ import { createRunRegistry } from "./registry.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
+  ProcessScopeCleanupPolicy,
   RunExit,
   SpawnInput,
   SpawnProcessAdapter,
@@ -30,7 +31,11 @@ type OwnedRun = {
   cleanupOwners: ScopeCleanupOwner[];
 };
 
-type ScopeCleanupOwner = { requireProcessTree: boolean; failure?: { error: unknown } };
+type ScopeCleanupOwner = { processTree: ProcessScopeCleanupPolicy; failure?: { error: unknown } };
+
+function requiresProcessTree(scope: ScopeCleanupOwner, external: boolean): boolean {
+  return scope.processTree === "required-all" || (scope.processTree === "owned-only" && !external);
+}
 
 function recordScopeCleanupFailure(owner: OwnedRun, error: unknown): void {
   for (const cleanupOwner of owner.cleanupOwners) {
@@ -184,9 +189,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   };
   const acquireScopeCleanup = (
     scopeKey: string,
-    options: { requireProcessTree: boolean },
+    options: { processTree: ProcessScopeCleanupPolicy },
   ): (() => Promise<void>) => {
-    const cleanupOwner: ScopeCleanupOwner = { requireProcessTree: options.requireProcessTree };
+    const cleanupOwner: ScopeCleanupOwner = { processTree: options.processTree };
     const owners = scopeCleanupOwners.get(scopeKey) ?? new Set<ScopeCleanupOwner>();
     owners.add(cleanupOwner);
     scopeCleanupOwners.set(scopeKey, owners);
@@ -211,9 +216,18 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   };
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
+    const external = input.cleanupOwnership === "external";
+    const requireProcessTree = owner.cleanupOwners.some((scope) =>
+      requiresProcessTree(scope, external),
+    );
     // A queued replacement must still own authority before stopping the surviving run.
     if (!owner.terminationReason) {
       input.assertCurrent?.();
+      // Native PTY has no tree-extinction owner. Reject before spawning so exec's
+      // existing PTY-unavailable fallback can run once under the child anchor.
+      if (input.mode === "pty" && requireProcessTree) {
+        throw new Error("PTY is unavailable when execution requires process-tree cleanup");
+      }
     }
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
@@ -394,10 +408,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 assertCurrent: input.assertCurrent,
-                ...(owner.cleanupOwners.some((scope) => scope.requireProcessTree) &&
-                input.cleanupOwnership !== "external"
-                  ? { ownProcessTree: true as const }
-                  : {}),
+                ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
                 argv: input.argv,
                 argv0: input.argv0,
                 cwd: input.cwd,
@@ -414,9 +425,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         .then(
           async (started) => {
             ownedAdapter = started;
-            if (input.cleanupOwnership === "external" || !started.waitForExtinction) {
+            if (external || !started.waitForExtinction) {
               for (const scope of owner.cleanupOwners) {
-                if (scope.requireProcessTree) {
+                if (requiresProcessTree(scope, external)) {
                   scope.failure ??= {
                     error: new Error(
                       "process cleanup cannot confirm owned execution-tree settlement",
@@ -491,7 +502,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       };
 
       cancelAdapter = (reason: TerminationReason) => {
-        const requireProcessTree = owner.cleanupOwners.some((scope) => scope.requireProcessTree);
         if (
           cleanupSettled ||
           (cancelRequested && (requireProcessTree || !(resultSettled && forceKillTimer)))

@@ -3,6 +3,13 @@
 import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
+export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+
+export type PlatformSendRoute = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
 /** Channel send result or explicit non-outcome normalized for delivery accounting. */
 export type OutboundDeliveryResult = {
   outcome?: MessageReceiptSourceResult["outcome"];
@@ -133,7 +140,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
-  recoveryOwnedRetry?: true;
+  queueCustody?: "held" | "released";
 
   constructor(
     message: string,

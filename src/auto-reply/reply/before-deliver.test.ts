@@ -4,9 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -130,34 +135,56 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(skipped).toEqual(["channel_transform"]);
   });
 
-  it("delivers the attached fallback after a proven pre-transport failure", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        if (payload.mediaUrl) {
-          throw Object.assign(new Error("connect failed"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          });
-        }
-        delivered.push(payload.text ?? "");
-      },
-    });
+  it.each([
+    { queueCustody: undefined, deferred: false },
+    { queueCustody: "held", deferred: false },
+    { queueCustody: "released", deferred: false },
+    { queueCustody: undefined, deferred: true },
+    { queueCustody: "held", deferred: true },
+    { queueCustody: "released", deferred: true },
+  ] as const)(
+    "retries a proven pre-transport failure only without held queue custody ($queueCustody, deferred=$deferred)",
+    async ({ queueCustody, deferred }) => {
+      const delivered: string[] = [];
+      const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (payload.mediaUrl) {
+            const cause = Object.assign(new Error("connect failed"), {
+              code: "ECONNREFUSED",
+              syscall: "connect",
+            });
+            const error = Object.assign(new OutboundDeliveryError(cause.message, { cause }), {
+              queueCustody,
+            });
+            if (deferred) {
+              return { finalization: Promise.reject(error) };
+            }
+            throw error;
+          }
+          delivered.push(payload.text ?? "");
+          return undefined;
+        },
+        propagateRetryableNoSendFailure: true,
+      });
 
-    dispatcher.sendFinalReply(primary);
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+      dispatcher.sendFinalReply(primary);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual(["caption"]);
-    expect(receipt?.counts.final.failedBeforeSend).toBe(0);
-  });
+      expect(delivered).toEqual(queueCustody === "held" ? [] : ["caption"]);
+      expect(receipt?.counts.final.failedBeforeSend).toBe(queueCustody === "held" ? 1 : 0);
+      expect(receipt?.counts.final.failedAfterSend).toBe(0);
+      expect(receipt?.anyVisibleDelivered).toBe(queueCustody !== "held");
+    },
+  );
 
   it("does not duplicate text after an ambiguous transport failure", async () => {
     const delivered: string[] = [];
     const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
     attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+    const capture = captureReplyDispatchDeliveryOutcome(primary);
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload.text ?? "");
@@ -171,6 +198,27 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(delivered).toEqual(["caption"]);
     expect(receipt?.counts.final.failedAfterSend).toBe(1);
+    expect(receipt?.hasPendingDelivery).toBe(true);
+    expect(capture.hasPendingDelivery()).toBe(true);
+  });
+
+  it("does not call a proven permanent rejection pending", async () => {
+    const payload: ReplyPayload = { text: "rejected", mediaUrl: "/tmp/voice.ogg" };
+    attachReplyDispatchUndeliveredFallback(payload, { text: "rejected" });
+    const capture = captureReplyDispatchDeliveryOutcome(payload);
+    const deliver = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("rejected before dispatch", {
+        cause: undefined,
+        retryable: false,
+      });
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(payload);
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(receipt?.hasPendingDelivery).toBeUndefined();
+    expect(capture.hasPendingDelivery()).toBe(false);
   });
 
   it("cancels delivery before queueing when transformReplyPayload returns null", async () => {
@@ -404,43 +452,100 @@ describe("beforeDeliver in reply dispatcher", () => {
     }
   });
 
-  it.each([
-    {
-      label: "proven pre-send failure",
-      error: () =>
-        Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
-      expected: "prepared",
-    },
-    {
-      label: "ambiguous provider failure",
-      error: () => new Error("send outcome unknown"),
-      expected: "unknown",
-    },
-  ] as const)("records $label before reporting the error", async ({ error, expected }) => {
-    const fixture = await makePendingFinalFixture();
-    try {
-      const dispatcher = createReplyDispatcher({
-        deliver: async () => {
-          throw error();
-        },
-      });
+  it.each(
+    [
+      {
+        label: "proven pre-send failure",
+        error: () =>
+          Object.assign(new Error("connect failed"), { code: "ECONNREFUSED", syscall: "connect" }),
+        expected: "prepared",
+        failedBeforeSend: true,
+      },
+      {
+        label: "ambiguous provider failure",
+        error: () => new Error("send outcome unknown"),
+        expected: "unknown",
+        failedBeforeSend: false,
+      },
+      {
+        label: "queue-owned pre-send failure",
+        error: () =>
+          Object.assign(
+            new OutboundDeliveryError("connect failed", {
+              cause: Object.assign(new Error("connect failed"), {
+                code: "ECONNREFUSED",
+                syscall: "connect",
+              }),
+            }),
+            { queueCustody: "held" },
+          ),
+        expected: "queued",
+        failedBeforeSend: true,
+      },
+      {
+        label: "queue-owned wrapped partial send",
+        error: () =>
+          createChannelPartialDeliveryError(
+            Object.assign(
+              new OutboundDeliveryError("remaining send failed", {
+                cause: new Error("remaining send failed"),
+                results: [{ channel: "matrix", messageId: "accepted-prefix" }],
+              }),
+              { queueCustody: "held" },
+            ),
+            { visibleReplySent: true, messageIds: ["accepted-prefix"] },
+          ),
+        expected: "queued",
+        failedBeforeSend: false,
+      },
+    ].flatMap((entry) => [
+      { ...entry, deferred: false },
+      { ...entry, deferred: true },
+    ]),
+  )(
+    "records $label before reporting the error (deferred=$deferred)",
+    async ({ error, expected, failedBeforeSend, deferred }) => {
+      const fixture = await makePendingFinalFixture();
+      const failure = error();
+      const onError = vi.fn();
+      try {
+        const dispatcher = createReplyDispatcher({
+          deliver: async () => {
+            if (deferred) {
+              return { finalization: Promise.reject(failure) };
+            }
+            throw failure;
+          },
+          onError,
+        });
 
-      dispatcher.sendFinalReply(fixture.payload);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
 
-      expect(
-        (
-          loadSessionEntry({
-            sessionKey: fixture.sessionKey,
-            storePath: fixture.storePath,
-          }) as InternalSessionEntry
-        )?.pendingFinalDelivery?.deliveries,
-      ).toEqual([{ id: "delivery-1", state: expected }]);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        if (deferred) {
+          expect(onError).not.toHaveBeenCalled();
+        } else {
+          expect(onError.mock.calls[0]?.[0]).toBe(failure);
+        }
+        expect(receipt?.counts.final).toMatchObject({
+          failedBeforeSend: failedBeforeSend ? 1 : 0,
+          failedAfterSend: failedBeforeSend ? 0 : 1,
+        });
+
+        expect(
+          (
+            loadSessionEntry({
+              sessionKey: fixture.sessionKey,
+              storePath: fixture.storePath,
+            }) as InternalSessionEntry
+          )?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state: expected }]);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("restores prepared custody when a pre-I/O admitted send proves no-send", async () => {
     const fixture = await makePendingFinalFixture();

@@ -39,23 +39,38 @@ async function writeSkill(dir: string, name: string, body = ""): Promise<void> {
 }
 
 describe("listWritableWorkshopSkillSummaries", () => {
-  it("ignores a SKILL.md placed directly in the Workshop root", async () => {
-    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
-    await fs.mkdir(workshopDir, { recursive: true });
-    await fs.writeFile(path.join(workshopDir, "SKILL.md"), "# Root skill\n");
-    await writeSkill(path.join(workshopDir, "real"), "real");
+  it.each(
+    [false, true].flatMap((rootManifest) =>
+      [["real"], ["skills"], ["real", "skills"]].map((names) => ({ rootManifest, names })),
+    ),
+  )(
+    "discovers Workshop children $names with root manifest=$rootManifest",
+    async ({ rootManifest, names }) => {
+      const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+      for (const name of names) {
+        await writeSkill(path.join(workshopDir, name), name);
+      }
+      if (rootManifest) {
+        await fs.writeFile(path.join(workshopDir, "SKILL.md"), "# Root skill\n");
+      }
 
-    expect(
-      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["real"]);
-    expect(
-      loadSkillRootRecords({ dir: workshopDir, source: "openclaw-workshop" }).map(
-        ({ skill }) => skill.name,
-      ),
-    ).toEqual(["real"]);
-  });
+      expect(
+        listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
+          (skill) => skill.name,
+        ),
+      ).toEqual(names);
+      expect(
+        loadSkillRootRecords({ dir: workshopDir, source: "openclaw-workshop" }).map(
+          ({ skill }) => skill.name,
+        ),
+      ).toEqual(names);
+      for (const name of names) {
+        await expect(
+          readWritableWorkshopSkill(name, { config: {}, agentId: "main", env: testState.env }),
+        ).resolves.toMatchObject({ skillName: name, baseDir: path.join(workshopDir, name) });
+      }
+    },
+  );
 
   it("uses the declared name for grouped skills when reading and updating", async () => {
     const baseDir = path.join(

@@ -24,7 +24,6 @@ import {
   type AuthProfileStore,
 } from "./auth-profiles.js";
 import {
-  applyCliRuntimeModelAuthAvailability,
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
   type ModelAuthAvailabilityRef,
@@ -248,6 +247,7 @@ export function createProviderAuthChecker(params: {
     });
     modelAuthResolver = createModelAuthAvailabilityResolver({
       cfg: params.cfg ?? {},
+      agentId: params.agentId,
       authStore,
       preparedRuntimeAuthStore: params.preparedAuth?.authStore,
       preparedRuntimeAuthModes: params.preparedAuth?.authModes,
@@ -306,23 +306,10 @@ export function createProviderAuthChecker(params: {
       async (): Promise<ModelAuthAvailabilityEvaluation> => {
         if (hasRouteFacts) {
           const authResolver = resolveModelAuthResolver();
-          const modelEvaluation = authResolver.evaluateModelAuth(key, ref);
           // Native readiness belongs to prepared owners; setup hints stay provider-only.
-          // Explicit runtime account bindings retain their own auth decision.
-          if (!params.preparedAuth || ref.requiredProfileId?.trim()) {
-            return modelEvaluation;
-          }
-          return applyCliRuntimeModelAuthAvailability({
-            authResolver,
-            evaluation: modelEvaluation,
-            cfg: params.cfg ?? {},
-            agentId: params.agentId,
-            metadataSnapshot: params.metadataSnapshot,
-            provider: key,
-            modelId: ref.modelId,
-            preferredProfileId: ref.preferredProfileId,
-            pinnedProfileId: ref.pinnedProfileId,
-          });
+          return params.preparedAuth
+            ? authResolver.evaluateRuntimeModelAuth(key, ref)
+            : authResolver.evaluateModelAuth(key, ref);
         }
         return {
           availability: await resolveLegacyProviderAuth(),

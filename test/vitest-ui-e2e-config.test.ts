@@ -109,9 +109,11 @@ const qaLabFiles = [
 ] as const;
 const realGatewayFiles = [
   "agent-file-lifecycle.real-gateway",
+  "chat-agent-avatar.real-gateway",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
   "chat-widget-sandbox.real-gateway",
+  "command-palette-catalog.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
   "device-alias-rename.real-gateway",
@@ -499,7 +501,8 @@ describe("Control UI E2E resource ownership", () => {
 
   it.each([undefined, 1])(
     "admits every prebuilt real-Gateway file once with the native worker cap %s",
-    (workers) => {
+    async (workers) => {
+      const { uiE2ePrivateServerTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
       const result = probeOwnership({
         prebuilt: true,
         cli: workers === undefined ? [] : ["--maxWorkers", String(workers)],
@@ -516,6 +519,20 @@ describe("Control UI E2E resource ownership", () => {
         expect(result.rootWorkers).toBe(workers);
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
+        {
+          file: "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
         {
           file: "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
@@ -542,10 +559,13 @@ describe("Control UI E2E resource ownership", () => {
       expect(parallel).toHaveLength(13);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
-      expect(parallel.filter((entry) => entry.project === "ui-e2e-real-gateway")).toHaveLength(9);
-      expect(
-        parallel.filter((entry) => entry.project === "ui-e2e-real-gateway-standalone"),
-      ).toHaveLength(4);
+      for (const entry of parallel) {
+        expect(entry.project).toBe(
+          uiE2ePrivateServerTestFiles.includes(entry.file)
+            ? "ui-e2e-real-gateway-standalone"
+            : "ui-e2e-real-gateway",
+        );
+      }
       expect(result.admissions.toSorted()).toEqual(
         result.contexts.map((entry) => entry.name).toSorted(),
       );

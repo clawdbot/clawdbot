@@ -125,6 +125,13 @@ export type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  /** Expose a new checkout only after target admission; subsequent work uses the published path. */
+  publishGitCheckout?: () => Promise<string>;
+  /** Read-only admission before executing a fetched candidate; never stops a service. */
+  inspectGitTarget?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: (
     candidateRoot: string,

@@ -79,6 +79,30 @@ describe("doctor plugin state import", () => {
     expect(store.entries()).toEqual(entries.slice(-600));
   });
 
+  it("preserves a transaction-abort failure and reopens without committing its batch prefix", () => {
+    const db = openOpenClawStateDatabase().db;
+    db.exec(`CREATE TEMP TRIGGER abort_import BEFORE INSERT ON plugin_state_entries
+      WHEN NEW.entry_key = 'row-750' BEGIN SELECT RAISE(ROLLBACK, 'import transaction aborted'); END`);
+    let failure: unknown;
+    try {
+      importPluginStateEntriesForDoctor(pluginId, options, entries);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "PLUGIN_STATE_WRITE_FAILED",
+      cause: { message: "import transaction aborted" },
+    });
+    expect(db.isOpen).toBe(false);
+    const reopened = openOpenClawStateDatabase().db;
+    expect(reopened === db).toBe(false);
+    const store = createPluginStateSyncKeyedStore(pluginId, options);
+    // The first bounded batch committed; the entire second batch was aborted.
+    expect(store.entries()).toEqual(entries.slice(0, 500));
+    importPluginStateEntriesForDoctor(pluginId, options, entries);
+    expect(store.entries()).toEqual(entries);
+  });
+
   it.each([false, true])("refreshes retention across clock changes (backward: %s)", (backward) => {
     let clock = backward ? 10_002 : 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);

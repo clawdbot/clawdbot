@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -17,7 +18,7 @@ function rejectAfterSend(
 
 describe("custodian page nudges", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {

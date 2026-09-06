@@ -158,10 +158,13 @@ describe("createReplyTurnLedger", () => {
 
   it("records routed settlements only when delivered and contentful", () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
-    ledger.recordRoutedDelivery({ text: "suppressed" }, false);
-    ledger.recordRoutedDelivery({ text: "" }, true);
+    ledger.recordRoutedDelivery({ text: "suppressed" }, { delivered: false });
+    ledger.recordRoutedDelivery({ text: "" }, { delivered: true });
     expect(ledger.hasVisibleDelivery()).toBe(false);
-    ledger.recordRoutedDelivery({ mediaUrl: "https://example.com/seatmap.png" }, true);
+    ledger.recordRoutedDelivery(
+      { mediaUrl: "https://example.com/seatmap.png" },
+      { delivered: true },
+    );
     expect(ledger.hasVisibleDelivery()).toBe(true);
   });
 

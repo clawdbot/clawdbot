@@ -2,8 +2,7 @@ import type { Part } from "@google/genai";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
-import { convertMessages } from "./google-shared.js";
-import { makeGoogleAssistantMessage } from "./google-shared.test-helpers.js";
+import { convertMessages, makeGoogleAssistantMessage } from "./google-shared.test-helpers.js";
 
 const convertMessagesForTest = convertMessages as unknown as (
   model: Model<"google-generative-ai">,

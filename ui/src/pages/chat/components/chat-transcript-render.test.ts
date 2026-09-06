@@ -43,6 +43,49 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
+  it.each([
+    ["blob:configured-agent", "gutter"],
+    ["🤖", "gutter"],
+    [null, "gutter"],
+    ["blob:configured-agent", "none"],
+    ["blob:configured-agent", "footer"],
+  ] as const)(
+    "keeps configured avatar %s consistent across saved and streaming replies with %s placement",
+    async (avatar, avatarPlacement) => {
+      const props = threadProps("pane-agent-avatar");
+      props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
+      props.assistantAvatar = avatar;
+      props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
+      props.avatarPlacement = avatarPlacement === "none" ? "none" : undefined;
+      props.stream = "Reply in progress";
+      props.streamStartedAt = 5_000;
+      props.runActive = true;
+      const container = document.body.appendChild(document.createElement("div"));
+      const transcript = createTestTranscript();
+      try {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostConnected();
+        transcript.hostUpdated();
+        await flushDeferredRowPrune();
+        const replies = container.querySelectorAll(".chat-group.assistant");
+        expect(replies).toHaveLength(3);
+        for (const reply of replies) {
+          const image = reply.querySelector(".chat-avatar.assistant");
+          if (avatar === null || avatarPlacement !== "gutter") {
+            expect(image).toBeNull();
+          } else if (avatar.startsWith("blob:")) {
+            expect(image?.getAttribute("src")).toBe(avatar);
+          } else {
+            expect(image?.textContent?.trim()).toBe(avatar);
+          }
+        }
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
+
   it("keeps one inline compaction row through completion and history refresh", async () => {
     const props: ReturnType<typeof threadProps> = {
       ...threadProps("pane-compaction"),
