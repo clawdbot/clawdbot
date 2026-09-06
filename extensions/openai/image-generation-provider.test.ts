@@ -1844,6 +1844,40 @@ describe("openai image generation provider", () => {
     );
   });
 
+  it("strips control characters from completed refusal text", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "refusal",
+                refusal: "Rejected\u0000by\u0007the safety system.",
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const error = await generateOpenAIImage("Draw a refused prompt with control characters").then(
+      () => {
+        throw new Error("expected image generation to reject");
+      },
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Image generation refused by provider safety system: "Rejected by the safety system."',
+    );
+    expect((error as Error).message).not.toContain("\u0000");
+    expect((error as Error).message).not.toContain("\u0007");
+  });
+
   it("bounds completed refusal text instead of forwarding the raw provider payload", async () => {
     mockCodexAuthOnly();
     const longRefusal = `${"x".repeat(400)} secret-payload`;

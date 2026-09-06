@@ -603,11 +603,14 @@ function sanitizeCodexRefusalText(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value
-    .replace(/safety_violations=\[[^\]]*\]/gi, " ")
-    .replace(/[\u0000-\u001F\u007F]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const withoutSafetyMetadata = value.replace(/safety_violations=\[[^\]]*\]/gi, " ");
+  let withoutControls = "";
+  for (const character of withoutSafetyMetadata) {
+    const code = character.charCodeAt(0);
+    const isControl = (code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f);
+    withoutControls += isControl ? " " : character;
+  }
+  const normalized = withoutControls.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return undefined;
   }
