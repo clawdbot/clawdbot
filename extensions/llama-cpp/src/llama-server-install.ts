@@ -28,6 +28,11 @@ export {
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const VERSION_TIMEOUT_MS = 15_000;
+// macOS 26 blocks the first exec of a freshly downloaded unsigned binary for
+// ~35-40s while syspolicyd evaluates it (see #138672). The evaluation is
+// cached per binary hash, so retrying the same command with a wider budget
+// succeeds; the steady-state timeout stays fast for genuinely broken systems.
+const VERSION_RETRY_TIMEOUT_MS = 120_000;
 
 export type LlamaDownloadProgress = (status: {
   downloadedSize: number;
@@ -236,25 +241,40 @@ export async function downloadVerifiedFile(params: {
   }
 }
 
+function isExecTimeoutError(error: unknown): boolean {
+  // SAFETY: runServerCommand wraps execFile failures with the original error as cause; only timeout kills set killed+SIGTERM.
+  const cause = (error as { cause?: { killed?: boolean; signal?: string } }).cause;
+  return cause?.killed === true && cause?.signal === "SIGTERM";
+}
+
 async function runServerCommand(
   command: string,
   args: string[],
   signal?: AbortSignal,
 ): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      { timeout: VERSION_TIMEOUT_MS, signal, windowsHide: true },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(error.message, { cause: error }));
-        } else {
-          resolve(`${stdout}${stderr}`.trim());
-        }
-      },
-    );
-  });
+  const attempt = (timeoutMs: number) =>
+    new Promise<string>((resolve, reject) => {
+      execFile(
+        command,
+        args,
+        { timeout: timeoutMs, signal, windowsHide: true },
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(error.message, { cause: error }));
+          } else {
+            resolve(`${stdout}${stderr}`.trim());
+          }
+        },
+      );
+    });
+  try {
+    return await attempt(VERSION_TIMEOUT_MS);
+  } catch (error) {
+    if (!isExecTimeoutError(error) || signal?.aborted) {
+      throw error;
+    }
+    return await attempt(VERSION_RETRY_TIMEOUT_MS);
+  }
 }
 
 function formatRuntimeDependencyError(error: unknown): Error {
