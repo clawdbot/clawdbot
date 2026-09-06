@@ -223,14 +223,10 @@ enum CLIInstaller {
         }
 
         let preferredPaths = await CommandResolver.preferredPathsAsync()
-        let status = await self.status(
+        return await self.status(
             location: location,
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
-        if status.isReady {
-            self.rememberValidated(status, defaults: AppDefaults.standard)
-        }
-        return status
     }
 
     static func status(location: String) async -> Status {
@@ -375,6 +371,7 @@ enum CLIInstaller {
                         "or retry after the channel is updated.")
                 return false
             }
+            self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
@@ -549,6 +546,7 @@ enum CLIInstaller {
             return .failure(message: message, details: managedStatus.message)
         }
 
+        self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
         await statusHandler(String(
