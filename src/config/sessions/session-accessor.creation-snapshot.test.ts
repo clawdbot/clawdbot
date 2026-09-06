@@ -95,7 +95,9 @@ describe("session creation snapshot", () => {
         { ...scope, sessionKey: sibling },
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
-      if (cold) closeOpenClawAgentDatabasesForTest();
+      if (cold) {
+        closeOpenClawAgentDatabasesForTest();
+      }
       const result = await createSessionEntryWithTranscript(
         { ...scope, sessionKey: "AGENT:MAIN:MATRIX:GROUP:!Room:example.org" },
         (context) => {
@@ -225,7 +227,9 @@ describe("session creation snapshot", () => {
     });
     const target = mixed.entries.get(scope.sessionKey);
     expect(target?.skillsSnapshot?.prompt).toBe("saved target");
-    if (!target) throw new Error("Missing target");
+    if (!target) {
+      throw new Error("Missing target");
+    }
     target.label = "caller mutation";
     const metadata = readSessionEntryCache(database, options).entries.get(scope.sessionKey);
     expect(metadata?.label).toBe("original");

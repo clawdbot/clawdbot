@@ -18,7 +18,9 @@ describe("Gateway creation preparation", () => {
       expect(first.ok).toBe(true);
       const scope = { agentId: "main", sessionKey: "agent:main:target" };
       const initial = loadSessionEntry(scope);
-      if (!initial) throw new Error("Missing initial session");
+      if (!initial) {
+        throw new Error("Missing initial session");
+      }
       const saved = {
         ...initial,
         skillsSnapshot: { prompt: "Saved skill prompt", skills: [] },
