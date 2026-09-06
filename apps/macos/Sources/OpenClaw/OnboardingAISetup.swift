@@ -13,7 +13,7 @@ import OpenClawProtocol
 @Observable
 final class OnboardingAISetupModel {
     private(set) var phase: Phase = .idle {
-        didSet { self.updateBusyReason() }
+        didSet { OnboardingController.shared.busyReason = self.busyReason }
     }
 
     private(set) var candidates: [Candidate] = []
@@ -33,7 +33,7 @@ final class OnboardingAISetupModel {
     private(set) var authError: Failure?
     private(set) var providerAuthCancellation: ProviderAuthCancellation?
     private(set) var authBusy = false {
-        didSet { self.updateBusyReason() }
+        didSet { OnboardingController.shared.busyReason = self.busyReason }
     }
 
     var authText = ""
@@ -47,13 +47,11 @@ final class OnboardingAISetupModel {
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
     private(set) var configuredGatewayBlocker: ConfiguredGatewayBlocker?
-    /// Set once every detected candidate failed; opens the manual key form.
-    private(set) var exhaustedAutoCandidates = false
 
     var manualProviderID = ""
     var manualKey: String = ""
     private(set) var manualTesting = false {
-        didSet { self.updateBusyReason() }
+        didSet { OnboardingController.shared.busyReason = self.busyReason }
     }
 
     private(set) var manualError: Failure?
@@ -98,21 +96,6 @@ final class OnboardingAISetupModel {
         self.defaults = defaults
         self.routeIdentityProvider = routeIdentityProvider
         self.connectionModeProvider = connectionModeProvider
-    }
-
-    private func updateBusyReason() {
-        // Every connection attempt must make quitting mid-setup confirmable.
-        OnboardingController.shared.busyReason = if self.phase == .testing || self.manualTesting ||
-            self.phase == .detecting && self.pendingActivationVerification
-        {
-            "OpenClaw is testing your AI connection."
-        } else if self.activeAuthOption != nil {
-            self.isPreparingModel
-                ? "OpenClaw is preparing a local model."
-                : "OpenClaw is completing provider sign-in."
-        } else {
-            nil
-        }
     }
 
     var automaticSetupIntent: SetupIntent {
@@ -541,7 +524,6 @@ final class OnboardingAISetupModel {
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
         self.configuredGatewayBlocker = nil
-        self.exhaustedAutoCandidates = false
         self.serverLease = nil
         self.manualProviderID = ""
         self.manualKey = ""
@@ -761,10 +743,6 @@ extension OnboardingAISetupModel {
         guard let context = beginAttemptContext(
             supersededAttemptDeadline: supersededAttemptDeadline)
         else { return }
-        // A fresh user-picked attempt owns the verdict; keeping the stale
-        // "none of the found options worked" card up during its test would
-        // contradict the visible Testing state.
-        self.exhaustedAutoCandidates = false
         if let supersededKind {
             self.statuses[supersededKind] = .untried
             self.selectedKind = kind
@@ -794,7 +772,7 @@ extension OnboardingAISetupModel {
             return
         }
         await self.activate(
-            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label, tryNextOnFailure: false),
+            .candidate(kind: kind, modelRef: candidate.modelRef, label: candidate.label),
             context: context)
     }
 
@@ -963,7 +941,7 @@ extension OnboardingAISetupModel {
             return false
         }
         self.phase = .ready
-        if !request.isManual, !request.tryNextOnFailure { self.showManualEntry = !self.manualProviders.isEmpty }
+        if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
         return true
     }
 
@@ -1023,7 +1001,7 @@ extension OnboardingAISetupModel {
             self.manualError = failure
         } else {
             self.statuses[request.kind] = .failed(failure)
-            if !request.tryNextOnFailure { self.detectError = failure }
+            self.detectError = failure
         }
     }
 
@@ -1179,7 +1157,11 @@ extension OnboardingAISetupModel {
             self.providerWizardKind = kind
             self.authError = Failure(
                 summary: "Set up this endpoint on the Gateway host.",
-                detail: "Custom endpoint setup is available here only for a local Gateway. On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, finish the endpoint wizard there, then return here and choose Try again.")
+                detail: """
+                Custom endpoint setup is available here only for a local Gateway. \
+                On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, \
+                finish the endpoint wizard there, then return here and choose Try again.
+                """)
             return
         }
         guard let serverLease else { return }
@@ -1504,8 +1486,7 @@ extension OnboardingAISetupModel {
                         .candidate(
                             kind: kind,
                             modelRef: preparedModel,
-                            label: preparedProvider.label,
-                            tryNextOnFailure: false),
+                            label: preparedProvider.label),
                         context: context)
                 }
                 return

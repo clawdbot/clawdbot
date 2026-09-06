@@ -254,20 +254,6 @@ struct OnboardingAISetupView: View {
             }
         }
 
-        if model.exhaustedAutoCandidates {
-            OnboardingErrorCard(
-                title: "None of the found options worked",
-                message: """
-                The details are listed on each option above. \
-                You can fix the login and retry, or connect with an API key or token below.
-                """,
-                docsSlug: "concepts/model-providers",
-                retryTitle: "Check again"
-            ) {
-                self.model.retryFromScratch()
-            }
-        }
-
         if model.providerCatalogLoaded {
             providerPrepareSection
             providerAuthSection
@@ -507,7 +493,8 @@ struct OnboardingAISetupView: View {
                                 .font(.callout.weight(.semibold))
                             Text(String(
                                 format: String(localized: """
-                                Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.
+                                Include existing %@ conversations in the sidebar. \
+                                This discovers them in place; it does not copy transcripts.
                                 """),
                                 self.model.nativeSessionCatalogSummary
                             ))

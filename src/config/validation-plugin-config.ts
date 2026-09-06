@@ -11,7 +11,10 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { shippedNativeSessionCatalogs } from "../plugins/native-session-catalog-config.js";
+import {
+  isNativeSessionCatalogOptOutOnly,
+  shippedNativeSessionCatalogs,
+} from "../plugins/native-session-catalog-config.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
@@ -291,7 +294,11 @@ export function validateExplicitPluginConfig(params: {
     isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId) && !hasIntentionalDisableMarker(pluginId)) {
+      if (
+        !knownIds.has(pluginId) &&
+        !hasIntentionalDisableMarker(pluginId) &&
+        !isNativeSessionCatalogOptOutOnly(pluginId, entries[pluginId])
+      ) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }

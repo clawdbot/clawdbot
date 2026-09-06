@@ -1482,7 +1482,6 @@ struct OnboardingAISetupTests {
                 #expect(!failure.copyText.isEmpty)
             }
         }
-        #expect(!model.exhaustedAutoCandidates)
         let requests = await recorder.snapshot()
         #expect(!requests.methods.contains("openclaw.setup.activate"))
         #expect(requests.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 1)
@@ -5230,7 +5229,6 @@ struct OnboardingAISetupTests {
             nil
         }
         #expect(failure?.copyText.contains("OpenClaw setup is already in progress") == true)
-        #expect(!model.exhaustedAutoCandidates)
         await harness.gateway.shutdown()
     }
 
