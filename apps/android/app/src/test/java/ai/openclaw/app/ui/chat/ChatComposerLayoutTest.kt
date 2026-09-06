@@ -385,31 +385,37 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun slashSuggestionsKeepEditorAndStopVisibleAndLastSuggestionReachable() {
+  fun slashSuggestionsKeepEditorAndSendVisibleAndLastSuggestionReachable() {
     showChat()
     val editor = composeRule.onNode(hasSetTextAction())
     editor.performTextReplacement("/")
     editor.assertTextEquals("/")
 
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     val sidebar = composeRule.onNodeWithContentDescription(nativeString("Show Sidebar")).assertIsDisplayed()
     val lastSuggestion = composeRule.onNodeWithText("/loop").performScrollTo().assertIsDisplayed()
     sidebar.assertIsDisplayed()
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
     lastSuggestion.performClick()
     editor.assertTextEquals("/loop ")
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
-  fun normalTextAndShortSuggestionListsKeepComposerVisible() {
+  fun activeRunKeepsNewTextSendableAndRestoresStopForAnEmptyDraft() {
     showChat()
+    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
     val editor = composeRule.onNode(hasSetTextAction())
     listOf("hello", "/help", "/unknown").forEach { input ->
       editor.performTextReplacement(input)
       editor.assertTextEquals(input)
-      assertComposerControlsVisible()
+      assertComposerControlsVisible(primaryAction = "Send")
+      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
+      assertTrue("Typing must not end the active run", controller.pendingRunCount.value > 0)
     }
+    editor.performTextReplacement("")
+    assertComposerControlsVisible(primaryAction = "Stop")
+    composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
   }
 
   @Test
@@ -557,7 +563,7 @@ class ChatComposerLayoutTest {
       assertTrue("The editor must grow from ${index + 1} to ${index + 2} visible lines", next > current)
     }
     assertEquals("The seventh line must scroll inside the six-line editor", heights[5], heights[6])
-    assertComposerControlsVisible()
+    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
@@ -1340,11 +1346,7 @@ class ChatComposerLayoutTest {
     val viewModel = showChat()
     val owner = viewModel.captureChatShareOwner()
     composeRule.runOnIdle {
-      val runId = requireNotNull(controller.selectedActiveRunPresentation.value.runId)
-      controller.handleGatewayEvent(
-        "agent",
-        """{"sessionKey":"${controller.sessionKey.value}","runId":"$runId","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
-      )
+      assertTrue("The prior run must remain active", controller.pendingRunCount.value > 0)
       viewModel.chatComposerState.addAttachments(owner, listOfNotNull(attachment))
     }
     val editor = composeRule.onNode(hasSetTextAction())
