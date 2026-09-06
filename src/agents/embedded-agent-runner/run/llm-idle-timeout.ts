@@ -1,4 +1,4 @@
-import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 /**
  * Wraps LLM streams with idle-timeout detection and diagnostics.
@@ -458,6 +458,7 @@ export function streamWithIdleTimeout(
       (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
         function () {
           const iterator = originalAsyncIterator();
+          const producerCompletion = getEventStreamCompletion(stream);
           let idleTimer: NodeJS.Timeout | null = null;
           let rejectIdleTimeout: ((error: Error) => void) | undefined;
           let firstArmPending = true;
@@ -482,7 +483,7 @@ export function streamWithIdleTimeout(
           };
           const armTimer = () => {
             clearTimer();
-            if (!guardIterationGaps || settled) {
+            if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
               return;
             }
             const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
@@ -523,11 +524,11 @@ export function streamWithIdleTimeout(
             unsubscribeStreamToolActivity?.();
             cleanupSourceSignal();
           };
-          // A producer that already finished cannot be idle; stop policing even if
-          // the consumer has not drained the terminal event yet.
-          if (typeof stream.result === "function") {
-            void Promise.resolve(stream.result()).then(settle, settle);
-          }
+          // Producer completion must not invoke result() decorators: they may
+          // clear repair state that queued events still need when consumed.
+          // Without native completion, preserve structural streams' historical
+          // pending-next guard: a parked consumer cannot prove producer silence.
+          void producerCompletion?.then(settle, settle);
 
           return createStreamIteratorWrapper({
             iterator,
@@ -550,8 +551,8 @@ export function streamWithIdleTimeout(
                 }
 
                 rejectIdleTimeout = undefined;
-                // Delivered progress restores the budget; the timer keeps running
-                // while the consumer handles the event.
+                // Native producer completion lets us safely police parked consumers.
+                // Structural streams retain their pending-next-only guard.
                 armTimer();
                 return result;
               } catch (error) {

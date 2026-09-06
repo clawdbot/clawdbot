@@ -35,8 +35,8 @@ function createJwt(payload: Record<string, unknown>): string {
 const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
 
 const model = {
-  id: "gpt-5.6-sol",
-  name: "gpt-5.6-sol",
+  id: "test-codex-model",
+  name: "test-codex-model",
   api: "openai-chatgpt-responses",
   provider: "openai",
   baseUrl: "https://chatgpt.com/backend-api/codex",
