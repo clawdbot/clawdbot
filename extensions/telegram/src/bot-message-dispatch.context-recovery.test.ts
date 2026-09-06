@@ -3,6 +3,7 @@ import {
   describeTelegramDispatch,
   createChannelMessageReplyPipeline,
   createContext,
+  createBot,
   createDraftStream,
   createTelegramDraftStream,
   deliverInboundReplyWithMessageSendContext,
@@ -163,8 +164,8 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
   });
 
   it("renders default draft previews with standard Telegram HTML", async () => {
-    const draftStream = createDraftStream();
-    createTelegramDraftStream.mockReturnValue(draftStream);
+    const draft = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+    createTelegramDraftStream.mockImplementation(draft.createTelegramDraftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "# Heading" });
@@ -174,18 +175,16 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext() });
-
-    const params = expectDraftStreamParams({});
-    const renderText = params.renderText as ((text: string) => Record<string, unknown>) | undefined;
-    expect(renderText?.("# Heading")).toEqual({
-      text: "Heading",
-      parseMode: "HTML",
-      markdownSource: {
-        text: "# Heading",
-        tableMode: "preserve",
-      },
+    const bot = createBot();
+    await dispatchWithContext({
+      context: createContext({ threadSpec: { scope: "none" } }),
+      bot,
     });
+    expect(bot.api.sendMessage).toHaveBeenCalledWith(
+      123,
+      "Heading",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
   });
 
   it("renders rich draft previews only when enabled", async () => {
