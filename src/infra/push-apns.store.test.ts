@@ -92,7 +92,7 @@ describe("push APNs registration store", () => {
     );
 
     await expect(loadApnsRegistration("legacy-node", baseDir)).resolves.toBeNull();
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 
   it("round-trips direct and sandbox relay fields including relay origin", async () => {

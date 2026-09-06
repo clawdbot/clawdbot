@@ -2,15 +2,16 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveFallbackOriginModel } from "./agent-runner-core.js";
+import { refreshSessionEntryFromStore, resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
+import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -385,6 +386,12 @@ export async function accountFollowupTurn(params: {
     });
     return undefined;
   }
+  const resolvedVerboseLevel =
+    normalizeVerboseLevel(
+      turn.queued.run.verboseLevelOverride ??
+        turn.session.current()?.verboseLevel ??
+        turn.queued.run.verboseLevel,
+    ) ?? "off";
   const accounting = await accountAgentTurn({
     activeSessionEntry: turn.session.current(),
     activeSessionStore: turn.sessionStore,
@@ -396,9 +403,7 @@ export async function accountFollowupTurn(params: {
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
     preflightCompactionApplied: turn.preflightCompactionApplied,
-    resolvedVerboseLevel:
-      normalizeVerboseLevel(turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel) ??
-      "off",
+    resolvedVerboseLevel,
     execution: settled,
     runId: execution.execution.runId,
     runStartedAt: execution.runStartedAt,
@@ -425,7 +430,7 @@ export async function accountFollowupTurn(params: {
       nextModel: accounting.sessionModel.model,
       nextModelOverrideSource: entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
-      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(entry),
+      nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
     });
   }
   let compactionNotice: ReplyPayload | undefined;
@@ -447,5 +452,26 @@ export async function accountFollowupTurn(params: {
       compactionNotice = { text: `🧹 Auto-compaction complete${suffix}.` };
     }
   }
-  return { ...accounting, compactionNotice };
+  if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
+    turn.session.publish(
+      refreshSessionEntryFromStore({
+        storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+        sessionKey,
+        fallbackEntry: turn.session.current(),
+        expectedGeneration: accounting.expectedSession,
+      }),
+    );
+  }
+  const diagnosticsPayload = await buildReplyDiagnosticsPayload({
+    activeSessionEntry: turn.session.current(),
+    followupRun: turn.queued,
+    accounting,
+    cfg: turn.config,
+    storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+    userText: turn.queued.prompt,
+    resolvedVerboseLevel,
+    resolvedBlockStreamingBreak: turn.queued.run.blockReplyBreak,
+    preflightCompactionApplied: turn.preflightCompactionApplied,
+  });
+  return { ...accounting, compactionNotice, diagnosticsPayload };
 }

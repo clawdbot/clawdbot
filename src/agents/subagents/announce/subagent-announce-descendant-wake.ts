@@ -3,7 +3,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import {
@@ -105,7 +105,7 @@ export async function runDescendantWake(params: {
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.childSessionKey,
-              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+              sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
               sourceTool: "subagent_announce",
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),

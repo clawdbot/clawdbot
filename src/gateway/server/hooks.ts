@@ -32,22 +32,20 @@ import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   normalizeHookDispatchSessionKey,
 } from "../hooks.js";
+import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
 import {
   fenceScheduledGatewayContextResolver,
   runWithScheduledGatewayContext,
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import {
-  createHooksRequestHandler,
-  type HookAgentDispatchResult,
-  type HookClientIpConfig,
-} from "./hooks-request-handler.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 /**
  * Gateway hook HTTP handler factory.
@@ -301,6 +299,7 @@ export function createGatewayHookDispatcher(params: {
     const safeName = sanitizeHookConsoleValue(value.name) ?? "Hook";
     const jobId = randomUUID();
     const runId = randomUUID();
+    const completion = createDeferredCore<HookAgentCompletion>();
     const logContext = sanitizeHookLogMetadata({
       runId,
       jobId,
@@ -333,6 +332,18 @@ export function createGatewayHookDispatcher(params: {
       // A delivery error is separate from execution status; missing acknowledgments are not failures.
       const level = result.status !== "ok" || result.deliveryError ? "warn" : "info";
       logHooks[level](message, meta);
+      return {
+        status: result.status,
+        replyDisposition: result.replyDisposition ?? "empty",
+        ...(result.delivered !== undefined ? { delivered: result.delivered } : {}),
+        ...(result.deliveryAttempted !== undefined
+          ? { deliveryAttempted: result.deliveryAttempted }
+          : {}),
+        ...(result.deliveryError ? { deliveryError: "delivery-failed" as const } : {}),
+        ...(result.deliverySuppressionReason
+          ? { deliverySuppressionReason: result.deliverySuppressionReason }
+          : {}),
+      };
     };
     const nowMs = resolveDateTimestampMs(Date.now());
     const job: CronJob = {
@@ -373,7 +384,7 @@ export function createGatewayHookDispatcher(params: {
       return undefined;
     };
     const reportHookFailure = (err: unknown) => {
-      logHookRunTerminal({ status: "error", error: String(err) });
+      completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
       const eventTarget =
         hookEventTarget ??
         resolveHookEventTarget({
@@ -458,7 +469,7 @@ export function createGatewayHookDispatcher(params: {
     const startupAbortController = new AbortController();
     const settleSuccessfulAdmission = () => {
       startupAbortController.signal.throwIfAborted();
-      settleAdmission({ ok: true, runId });
+      settleAdmission({ ok: true, runId, completion: completion.promise });
     };
     // Background admission (fan-out items) skips the start deadline: the
     // producer's redelivery plus the replay cache own retry semantics, and a
@@ -564,7 +575,7 @@ export function createGatewayHookDispatcher(params: {
             if (!admissionSettled) {
               settleAdmission(
                 result.status === "ok" || result.executionStarted === true
-                  ? { ok: true, runId }
+                  ? { ok: true, runId, completion: completion.promise }
                   : createHookAdmissionFailure({
                       runId,
                       disposition: result.admissionDisposition,
@@ -574,7 +585,7 @@ export function createGatewayHookDispatcher(params: {
             const prefix =
               result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
             const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
-            logHookRunTerminal(result);
+            completion.resolve(logHookRunTerminal(result));
             if (shouldAnnounce) {
               const eventSessionKey = eventTarget.eventSessionKey;
               const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
@@ -675,7 +686,7 @@ export function createGatewayHookDispatcher(params: {
         },
         pluginId,
       );
-      return result.ok ? result : { ok: false, reason: result.error };
+      return result.ok ? { ok: true, runId: result.runId } : { ok: false, reason: result.error };
     };
     const idempotencyKey = normalizeOptionalString(value.idempotencyKey);
     if (!idempotencyKey) {

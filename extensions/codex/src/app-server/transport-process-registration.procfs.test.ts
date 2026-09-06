@@ -1,11 +1,13 @@
-import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { PassThrough } from "node:stream";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
+import {
+  terminateCodexAppServerDescendants,
+  terminateCodexAppServerOrphan,
+} from "./transport-process-containment.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
 const procfs = vi.hoisted(() => ({ files: new Map<string, string | Error | (() => string)>() }));
@@ -43,10 +45,10 @@ const neighbor = 500003;
 const command = "/opt/codex app-server --listen stdio://";
 const commandFingerprint = createHash("sha256").update(command).digest("hex");
 
-function addProcess(pid: number, ppid: number) {
+function addProcess(pid: number, ppid: number, state = "S", threads = 1) {
   procfs.files.set(
     `/proc/${pid}/stat`,
-    `${pid} (worker) S ${ppid} ${pid}${" 0".repeat(16)} 12345\n`,
+    `${pid} (worker) ${state} ${ppid} ${pid}${" 0".repeat(14)} ${threads} 0 12345\n`,
   );
   procfs.files.set(`/proc/${pid}/cmdline`, command.replaceAll(" ", "\0"));
 }
@@ -90,11 +92,14 @@ describe("Codex registration procfs boundary", () => {
     await state.cleanup();
   });
 
-  it.for(["immediate", "delayed"])(
+  it.for(["immediate", "delayed", "threaded zombie"])(
     "preserves a live owner's registration during %s inspection despite an unreadable unrelated process",
     async (mode) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
       store.register("owned", registration);
+      if (mode === "threaded zombie") {
+        addProcess(parent.pid, 1, "Z", 2);
+      }
       if (mode === "delayed") {
         let now = Date.now();
         vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -131,26 +136,11 @@ describe("Codex registration procfs boundary", () => {
     "registers a direct child despite an unreadable unrelated process only with usable ownership: %s",
     async (mode, ctx) => {
       addProcess(child.pid, process.pid);
-      const stdin = new PassThrough();
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      const spawned = Object.assign(new ChildProcess(), {
-        pid: child.pid,
-        stdin,
-        stdout,
-        stderr,
-        stdio: [stdin, stdout, stderr, null, null] as [
-          PassThrough,
-          PassThrough,
-          PassThrough,
-          null,
-          null,
-        ],
-      });
+      const spawned = new RegistrationTestChildProcess(child.pid);
       ctx.onTestFinished(() => {
-        stdin.destroy();
-        stdout.destroy();
-        stderr.destroy();
+        spawned.stdin.destroy();
+        spawned.stdout.destroy();
+        spawned.stderr.destroy();
         spawned.removeAllListeners();
       });
       const register = await prepareCodexAppServerProcessRegistration();
@@ -236,7 +226,7 @@ describe("Codex registration procfs boundary", () => {
           fault === "empty"
             ? ""
             : fault === "group-zero"
-              ? `${parent.pid} (worker) S 1 0${" 0".repeat(16)} 12345\n`
+              ? `${parent.pid} (worker) S 1 0${" 0".repeat(14)} 1 0 12345\n`
               : Object.assign(new Error("required inspection failed"), { code: fault }),
         );
       }
@@ -254,6 +244,43 @@ describe("Codex registration procfs boundary", () => {
     await expect(terminateCodexAppServerOrphan(child)).resolves.toBe(false);
     expect(kill).not.toHaveBeenCalled();
   });
+
+  it.for(["dead descendant", "threaded descendant", "threaded root", "unrelated threaded zombie"])(
+    "requires whole-process quiescence only from the owned tree: %s",
+    async (mode) => {
+      const threadedRoot = mode === "threaded root";
+      const related = mode !== "unrelated threaded zombie";
+      addProcess(child.pid, process.pid, threadedRoot ? "Z" : "S", threadedRoot ? 2 : 1);
+      addProcess(neighbor, related ? child.pid : 1, "Z", mode === "dead descendant" ? 1 : 2);
+      kill.mockImplementation((pid, signal) => {
+        if (pid === child.pid && !threadedRoot) {
+          addProcess(child.pid, process.pid, signal === "SIGSTOP" ? "T" : "S");
+        }
+        return true;
+      });
+
+      const contained = await terminateCodexAppServerDescendants({
+        pid: child.pid,
+        kill: (signal) => process.kill(child.pid, signal),
+      });
+
+      if (mode === "threaded descendant" || threadedRoot) {
+        expect(contained).toBeUndefined();
+        expect(kill).toHaveBeenCalledWith(child.pid, "SIGCONT");
+        if (!threadedRoot) {
+          expect(kill).toHaveBeenCalledWith(neighbor, "SIGSTOP");
+          expect(kill).toHaveBeenCalledWith(neighbor, "SIGCONT");
+        }
+      } else {
+        expect(contained).toMatchObject({ root: child });
+        if (contained && contained !== "exited") {
+          contained.resume();
+        }
+        expect(kill.mock.calls.every(([pid]) => pid === child.pid)).toBe(true);
+      }
+      expect(kill.mock.calls.some(([, signal]) => signal === "SIGKILL")).toBe(false);
+    },
+  );
 
   it.for(["ENOENT", "ESRCH"])(
     "retires verified disappeared identities only after full containment inspection: %s",

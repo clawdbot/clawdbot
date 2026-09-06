@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import "./memory-import-page.ts";
 
@@ -109,6 +111,57 @@ afterEach(() => {
 });
 
 describe("MemoryImportPage", () => {
+  it("settles a failed roster load until Refresh retries it", async () => {
+    const roster = createDeferredCore<unknown>();
+    const request = vi.fn((method: string) =>
+      method === "agents.list" ? roster.promise : Promise.resolve(createPlan()),
+    );
+    const context = createContext(request);
+    const agents = createAgentCapability(context.gateway);
+    // The application shell owns the initial shared roster request.
+    const initial = agents.ensureList();
+    const page = await mountPage({ ...context, agents });
+    try {
+      roster.reject(new Error("Agent roster unavailable"));
+      request.mockImplementation((method: string) =>
+        method === "agents.list" ? createDeferredCore().promise : Promise.resolve(createPlan()),
+      );
+      await initial;
+      await page.updateComplete;
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(page.textContent).toContain("Agent roster unavailable");
+
+      request.mockImplementation((method: string) =>
+        Promise.resolve(
+          method === "agents.list"
+            ? { defaultId: "research", agents: [{ id: "research", name: "Research" }] }
+            : createPlan(),
+        ),
+      );
+      [...page.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Refresh")
+        ?.click();
+      await waitForMemoryImport(() =>
+        expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull(),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
+      expect(page.textContent).not.toContain("Agent roster unavailable");
+      request.mockImplementation((method: string) =>
+        method === "agents.list"
+          ? Promise.reject(new Error("Agent roster unavailable"))
+          : Promise.resolve(createPlan()),
+      );
+      await agents.refreshList();
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Agent roster unavailable");
+      expect(page.querySelector("[data-test-id='memory-import-provider-button']")).not.toBeNull();
+    } finally {
+      page.parentElement?.remove();
+      agents.dispose();
+    }
+  });
+
   it("does not plan memory import without admin access", async () => {
     const request = vi.fn();
     const context = createContext(request);

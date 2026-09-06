@@ -1123,6 +1123,139 @@ extension GatewayEndpointStoreTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `remote recovery publishes its outcome after its only waiter cancels`(fails: Bool) async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .remote, token: "remote-token", transport: .ssh)
+            let oldRoute = LockIsolated<RemoteTunnelManager.Route?>(.init(localPort: 28788, generation: 6))
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: .init(localPort: 28789, generation: 7))
+            let store = self.makeStore(
+                sourceSnapshot: { source },
+                remoteRouteIfRunning: {
+                    if let route = oldRoute.value { return route }
+                    return await remoteGate.routeIfRunning()
+                },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    let route = await remoteGate.ensure()
+                    if fails {
+                        throw NSError(domain: "TunnelFixture", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "fixture tunnel unavailable",
+                        ])
+                    }
+                    return route
+                })
+            let original = try await store.requireEndpoint()
+            oldRoute.setValue(nil)
+            let stream = await store.subscribe(bufferingNewest: 10)
+            let recovery = Task { try await store.ensureRemoteControlTunnel() }
+            await remoteGate.waitUntilEnsureStarts()
+            let connecting = await store.currentState()
+            #expect(connecting.routeRevision != original.revision)
+            recovery.cancel()
+            await remoteGate.releaseEnsure()
+            await #expect(throws: CancellationError.self) { try await recovery.value }
+
+            // Observe publication only. Another endpoint read would hide this bug by
+            // completing the abandoned waiter's ready/error publication itself.
+            let outcome = try? await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { CancellationError() },
+                operation: { () async -> GatewayEndpointState? in
+                    for await state in stream where state.routeRevision == connecting.routeRevision {
+                        if case .connecting = state { continue }
+                        return state
+                    }
+                    return nil
+                })
+            if fails {
+                #expect(outcome == .unavailable(
+                    mode: .remote,
+                    reason: "Remote control tunnel failed (fixture tunnel unavailable)",
+                    routeRevision: connecting.routeRevision))
+            } else {
+                #expect(outcome == .ready(
+                    mode: .remote,
+                    url: URL(string: "ws://127.0.0.1:28789")!,
+                    token: "remote-token",
+                    password: nil,
+                    routeRevision: connecting.routeRevision))
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `completed remote ensure cannot publish over a replacement selection`(fails: Bool) async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let sourceGate = GatewayEndpointSourceGate(self.source(mode: .remote, token: "token-a", transport: .ssh))
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: .init(localPort: 28789, generation: 7))
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
+                remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    let route = await remoteGate.ensure()
+                    if fails { throw URLError(.cannotConnectToHost) }
+                    return route
+                })
+            let stale = Task { try await store.requireEndpoint() }
+            await remoteGate.waitUntilEnsureStarts()
+            let sourceB = self.source(
+                mode: .remote,
+                token: "token-b",
+                transport: .direct,
+                directURL: URL(string: "wss://gateway-b.example.test"),
+                deviceAuthGatewayID: "route-b")
+            await sourceGate.update(sourceB)
+            _ = try await store.requireEndpoint()
+            let replacement = await store.currentState()
+            await remoteGate.releaseEnsure()
+            await #expect(throws: CancellationError.self) { try await stale.value }
+            #expect(await store.currentState() == replacement)
+        }
+    }
+
+    @Test func `older tunnel lookup cannot retire a concurrently completed endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .remote, token: "remote-token", transport: .ssh)
+            let lookupGate = GatewayEndpointRouteLookupGate()
+            let route = RemoteTunnelManager.Route(localPort: 28789, generation: 7)
+            let remoteGate = GatewayEndpointRemoteEnsureGate(route: route)
+            let lookups = LockIsolated(0)
+            let store = self.makeStore(
+                sourceSnapshot: { source },
+                remoteRouteIfRunning: {
+                    let first = lookups.withValue { count in
+                        count += 1
+                        return count == 1
+                    }
+                    return await (first ? lookupGate.lookup() : remoteGate.routeIfRunning())
+                },
+                remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
+                ensureRemoteTunnel: {
+                    if let running = await remoteGate.routeIfRunning() { return running }
+                    return await remoteGate.ensure()
+                })
+            let olderRefresh = Task { await store.refresh() }
+            await lookupGate.waitUntilStarted()
+            let request = Task { try await store.requireEndpoint() }
+            await remoteGate.waitUntilEnsureStarts()
+            await remoteGate.releaseEnsure()
+            let endpoint = try await request.value
+            await lookupGate.release()
+            await olderRefresh.value
+
+            let revision = try #require(endpoint.revision)
+            #expect(store.routeRevision == revision)
+            #expect(await store.currentState() == .ready(
+                mode: .remote,
+                url: endpoint.config.url,
+                token: "remote-token",
+                password: nil,
+                routeRevision: revision))
+        }
+    }
+
     @Test func `cancelling one remote waiter does not poison a shared tunnel ensure`() async throws {
         try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let source = self.source(

@@ -1,4 +1,5 @@
 // Argv tests cover CLI argument parsing helpers and platform-specific normalization.
+import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,
@@ -284,6 +285,26 @@ describe("argv helpers", () => {
       expected: false,
     },
     {
+      name: "implicit root help command after terminator",
+      argv: ["node", "openclaw", "--", "help", "config"],
+      expected: true,
+    },
+    {
+      name: "implicit parent help command after terminator",
+      argv: ["node", "openclaw", "config", "--", "help"],
+      expected: true,
+    },
+    {
+      name: "literal root help-looking command",
+      argv: ["node", "openclaw", "--", "--help"],
+      expected: false,
+    },
+    {
+      name: "literal parent help-looking command",
+      argv: ["node", "openclaw", "--", "config", "--help"],
+      expected: false,
+    },
+    {
       name: "help flag after terminator",
       argv: ["node", "openclaw", "nodes", "invoke", "--", "--help"],
       expected: false,
@@ -364,6 +385,30 @@ describe("argv helpers", () => {
     },
   ])("detects help/version invocations: $name", ({ argv, expected }) => {
     expect(isHelpOrVersionInvocation(argv)).toBe(expected);
+  });
+
+  it.each([
+    { path: ["skills", "verify"], option: "tag" },
+    { path: ["skills", "verify"], option: "version" },
+    { path: ["models", "list"], option: "provider" },
+    { path: ["agent"], option: "message" },
+  ])("keeps actual help after a root-looking $option value on $path", async ({ path, option }) => {
+    const program = new Command()
+      .name("openclaw")
+      .enablePositionalOptions()
+      .option("--log-level <level>")
+      .exitOverride();
+    program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
+    const leaf = path.reduce((parent, name) => parent.command(name), program);
+    leaf.option(`--${option} <value>`);
+    const argv = ["node", "openclaw", ...path, `--${option}`, "--log-level", "--help"];
+
+    await expect(program.parseAsync(argv)).rejects.toMatchObject({
+      code: "commander.helpDisplayed",
+      exitCode: 0,
+    });
+    expect(leaf.opts()[option]).toBe("--log-level");
+    expect(isHelpOrVersionInvocation(argv)).toBe(true);
   });
 
   it.each([

@@ -8,13 +8,13 @@ install_update_restart_systemctl_shim() {
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
 BUSCTL
-  cat >"$shim_dir/systemctl" <<'SHIM'
-#!/usr/bin/env bash
-set -euo pipefail
-
-log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
-pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
-daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+  # Capture endpoint identity once; projected native clients cannot carry fixture-only env.
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'log_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-$shim_dir/systemctl-shim.log}"
+    printf 'pid_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}"
+    printf 'daemon_log=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}"
+    cat <<'SHIM'
 supervisor_script="${pid_file}.supervisor.mjs"
 manager_script="$(dirname "$0")/systemd-fixture.mjs"
 printf '%s\n' "$*" >>"$log_file"
@@ -359,6 +359,7 @@ EXIT_STATUS
     ;;
 esac
 SHIM
+  } >"$shim_dir/systemctl"
   chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
   export PATH="$shim_dir:$PATH"
 }
@@ -374,91 +375,6 @@ assert_update_restart_service_replaced() {
     return 1
   fi
   echo "Update-owned fixture restart replaced supervisor $previous_pid with $current_pid."
-}
-
-seed_update_restart_probe_device_auth() {
-  node --input-type=module <<'NODE'
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-
-const stateDir = process.env.OPENCLAW_STATE_DIR;
-if (!stateDir) {
-  throw new Error("missing OPENCLAW_STATE_DIR");
-}
-
-const base64UrlEncode = (buf) =>
-  buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
-const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-const spki = crypto.createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
-const rawPublicKey =
-  spki.length === ed25519SpkiPrefix.length + 32 &&
-  spki.subarray(0, ed25519SpkiPrefix.length).equals(ed25519SpkiPrefix)
-    ? spki.subarray(ed25519SpkiPrefix.length)
-    : spki;
-const publicKeyRaw = base64UrlEncode(rawPublicKey);
-const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
-const token = base64UrlEncode(crypto.randomBytes(32));
-const now = Date.now();
-const scopes = ["operator.read"];
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-  }
-}
-
-writeJson(path.join(stateDir, "identity", "device.json"), {
-  version: 1,
-  deviceId,
-  publicKeyPem,
-  privateKeyPem,
-  createdAtMs: now,
-});
-writeJson(path.join(stateDir, "identity", "device-auth.json"), {
-  version: 1,
-  deviceId,
-  tokens: {
-    operator: {
-      token,
-      role: "operator",
-      scopes,
-      updatedAtMs: now,
-    },
-  },
-});
-writeJson(path.join(stateDir, "devices", "paired.json"), {
-  [deviceId]: {
-    deviceId,
-    publicKey: publicKeyRaw,
-    displayName: "upgrade survivor restart probe",
-    platform: process.platform,
-    clientId: "openclaw-cli",
-    clientMode: "probe",
-    role: "operator",
-    roles: ["operator"],
-    scopes,
-    approvedScopes: scopes,
-    tokens: {
-      operator: {
-        token,
-        role: "operator",
-        scopes,
-        createdAtMs: now,
-      },
-    },
-    createdAtMs: now,
-    approvedAtMs: now,
-  },
-});
-writeJson(path.join(stateDir, "devices", "pending.json"), {});
-NODE
 }
 
 write_update_restart_service_auth_env() {
@@ -477,8 +393,8 @@ write_update_restart_service_auth_env() {
 
 migrate_update_restart_probe_device_auth() {
   local doctor_log="$1" command_timeout="$2"
-  # Both setup paths migrate their probe identity under parked, plugin-disabled
-  # config. The published path runs this before creating migration specimens.
+  # Current-install setup repairs state under parked, plugin-disabled config.
+  # The published-upgrade path leaves its migration specimens to the candidate.
   openclaw_e2e_maybe_timeout \
     "$command_timeout" \
     env \
@@ -603,7 +519,7 @@ prepare_update_restart_probe_current_install() {
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
+  # Use the managed service token; setup may already own a canonical device identity.
   # Service installation persists OPENCLAW_CONFIG_PATH, so isolate the canonical file in place.
   # Keep reload off until the manager owns the installed service and its descendants.
   node "$parking_helper" \
@@ -624,7 +540,7 @@ prepare_update_restart_probe_current_install() {
       failure_stage="doctor"
     }
   if [ "$probe_status" -ne 0 ]; then
-    echo "candidate device identity migration failed" >&2
+    echo "candidate setup Doctor failed" >&2
     openclaw_e2e_print_log "$doctor_log" >&2
   fi
   if [ "$probe_status" -eq 0 ]; then

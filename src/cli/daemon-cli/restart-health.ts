@@ -20,7 +20,7 @@ import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
   type GatewayReachability,
-  type GatewayRestartProbeAuth,
+  type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -129,10 +129,12 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   includeUnknownListenersAsStale?: boolean;
-  probeAuth?: GatewayRestartProbeAuth;
+  probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
+  signal?: AbortSignal;
 }): Promise<GatewayRestartSnapshot> {
+  params.signal?.throwIfAborted();
   const env = params.env ?? process.env;
   const probeHosts =
     params.probeHosts ??
@@ -151,10 +153,10 @@ export async function inspectGatewayRestart(params: {
     if (!reachability) {
       reachability = await confirmGatewayReachable({
         port: params.port,
-        includeHealthDetails: requiresGatewayProbe,
-        auth: params.probeAuth,
+        ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       probeError = reachability.probeError;
       activatedPluginErrors = reachability.activatedPluginErrors;
@@ -169,6 +171,7 @@ export async function inspectGatewayRestart(params: {
     runtime = { status: "unknown", detail: String(err) };
   }
 
+  params.signal?.throwIfAborted();
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(params.port, {
@@ -184,6 +187,7 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  params.signal?.throwIfAborted();
   if (portUsage.status === "busy" && runtime.status !== "running") {
     const reachable = await loadReachability();
     if (reachable.reachable) {
@@ -339,7 +343,9 @@ export async function waitForGatewayHealthyRestart(params: {
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
   probeHosts?: readonly string[];
+  signal?: AbortSignal;
 }): Promise<GatewayRestartSnapshot> {
+  params.signal?.throwIfAborted();
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
@@ -365,9 +371,10 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-    probeAuth: probeContext.auth,
+    probeContext,
     configuredProbe,
     probeHosts,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -383,6 +390,7 @@ export async function waitForGatewayHealthyRestart(params: {
   let healthyStreak: { pid: number | undefined; probes: number } | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
+    params.signal?.throwIfAborted();
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
@@ -470,7 +478,7 @@ export async function waitForGatewayHealthyRestart(params: {
         return withWaitContext(snapshot, "timeout", elapsedMs);
       }
     }
-    await sleep(delayMs);
+    await sleep(delayMs, params.signal);
     snapshot = await inspectGatewayRestart({
       service: params.service,
       port: params.port,
@@ -478,9 +486,10 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      probeAuth: probeContext.auth,
+      probeContext,
       configuredProbe,
       probeHosts,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   }
 }

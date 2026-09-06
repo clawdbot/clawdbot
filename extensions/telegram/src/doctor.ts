@@ -33,7 +33,11 @@ import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramMalformedGroupsHit = { path: string; actualType: string };
-type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
+type TelegramSelectedQuoteToolProgressHit = {
+  path: string;
+  replyToMode: string;
+  streamMode: ReturnType<typeof resolveTelegramPreviewStreamMode>;
+};
 type TelegramApiRootBotEndpointHit = {
   path: string;
   pathSegments: string[];
@@ -232,7 +236,8 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     if (replyToMode === "off") {
       return [];
     }
-    if (resolveTelegramPreviewStreamMode(account) === "off") {
+    const streamMode = resolveTelegramPreviewStreamMode(account);
+    if (streamMode === "off") {
       return [];
     }
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account, {
@@ -241,11 +246,7 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     });
     if (
       blockStreamingEnabled ||
-      !resolveChannelStreamingPreviewToolProgress(
-        account,
-        true,
-        resolveTelegramPreviewStreamMode(account),
-      )
+      !resolveChannelStreamingPreviewToolProgress(account, streamMode !== "progress", streamMode)
     ) {
       return [];
     }
@@ -253,6 +254,7 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
       {
         path: formatTelegramAccountConfigPath(cfg, accountId),
         replyToMode,
+        streamMode,
       },
     ];
   });
@@ -261,13 +263,14 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
 function collectTelegramSelectedQuoteToolProgressWarnings(params: {
   hits: TelegramSelectedQuoteToolProgressHit[];
 }): string[] {
-  if (params.hits.length === 0) {
+  const sample = params.hits[0];
+  if (!sample) {
     return [];
   }
-  const sample = params.hits[0] ?? { path: "channels.telegram", replyToMode: "first" };
+  const toolProgressSection = sample.streamMode === "progress" ? "progress" : "preview";
   return [
     `- ${sanitizeForLog(sample.path)} has replyToMode: "${sanitizeForLog(sample.replyToMode)}" while Telegram preview tool-progress is enabled. Telegram selected quote replies must send the final answer through the native quote-reply path, so those turns skip the short "Working" tool-progress preview. Current-message replies without selected quote text still keep preview streaming.`,
-    '- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.preview.toolProgress: false to keep quote replies and silence this warning.',
+    `- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.${toolProgressSection}.toolProgress: false to keep quote replies and silence this warning.`,
   ];
 }
 

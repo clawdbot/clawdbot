@@ -1,3 +1,4 @@
+import type { ChatAccountSelection } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   AgentsListResult,
@@ -15,6 +16,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -42,6 +44,7 @@ export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
+  PullRequestRefreshHost &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
     chatSubmissions: ApplicationContext["chatSubmissions"];
@@ -55,7 +58,6 @@ export type ChatPageHost = ChatHost &
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
-    localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     automaticallyFetchFavicons: boolean;
@@ -75,6 +77,7 @@ export type ChatPageHost = ChatHost &
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
+    chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
@@ -98,10 +101,6 @@ export type ChatPageHost = ChatHost &
     fallbackStatus: FallbackStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
-    /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */
-    streamPullRequestRefreshKeys?: Set<string>;
-    /** Rolling stream suffix so a PR URL split across delta chunks still matches. */
-    streamPullRequestTail?: { scope: string; text: string };
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
@@ -109,10 +108,7 @@ export type ChatPageHost = ChatHost &
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
-    chatScrollCommitCleanup: (() => void) | null;
     chatStreamRenderFrame: number | null;
-    chatScrollFrame: number | null;
-    chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
@@ -165,6 +161,5 @@ export type ChatPageHost = ChatHost &
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-    refreshSessionPullRequests?: (options?: { refresh?: boolean }) => Promise<void>;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

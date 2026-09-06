@@ -125,6 +125,7 @@ type CallGatewayBaseOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
+  assertDispatchCurrent?: () => void;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
@@ -138,6 +139,8 @@ type CallGatewayBaseOptions = {
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
   sharedStateMode?: "read-only";
+  /** Keep caller-resolved token/password authoritative, including an empty result. */
+  skipImplicitAuth?: boolean;
   onHelloOk?: GatewayClientOptions["onHelloOk"];
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
@@ -992,6 +995,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
             if (!activeClient) {
               throw new Error("gateway client not initialized");
             }
+            // This check must stay synchronous with request -> ws.send. Moving
+            // an await into that chain requires moving enforcement to the send owner.
+            opts.assertDispatchCurrent?.();
             primaryRequestStarted = true;
             const result = await activeClient.request<T>(opts.method, opts.params, {
               expectFinal: opts.expectFinal,
@@ -1129,7 +1135,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
     localPortOverride: opts.localPortOverride,
     explicitTlsFingerprint: opts.tlsFingerprint,
-    skipImplicitAuth: useStoredDeviceAuth,
+    skipImplicitAuth: useStoredDeviceAuth || opts.skipImplicitAuth === true,
     ...(useStoredDeviceAuth
       ? {}
       : {

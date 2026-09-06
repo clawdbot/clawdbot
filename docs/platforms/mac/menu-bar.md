@@ -14,10 +14,19 @@ title: "Menu bar"
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
 - When two or more Gateways are available, the first status row includes the primary Gateway name and a root "Gateways" section lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway's dashboard; hold Option to reveal "Set as Primary…" for eligible saved Gateways.
 - **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
+- **Settings…** (Cmd-,) opens Dashboard settings. App and device preferences live under **This Mac**, voice controls under **Talk**, and app update preferences under **Updates**.
+- **Connection…** opens the native Connection window with **Connection** and **Gateways** tabs, plus **Debug** while the developer toggle is enabled. It remains available when the Gateway is unreachable.
+- **About OpenClaw** opens the standard macOS About panel with version, build information, and credits.
 
-Single-Gateway setups keep the existing menu unchanged. With two or more Gateways, the app's main **Gateways** menu also assigns Command-1 through Command-9 in catalog order. Its checkmark follows the frontmost dashboard window, and selecting an item switches that window in place or opens the selected Gateway when no dashboard window exists.
+The app's main **Gateways** menu is always present. It lists the primary Gateway, when configured, followed by saved Gateways, with Command-1 through Command-9 assigned in that order. Each card shows health, version and shortened build ID, endpoint, latency, and the number of open dashboard windows when available. Browser-authenticated profiles also show **Access** and their session expiry. A **Primary** badge identifies the primary Gateway; a front-window marker follows the frontmost dashboard window. Selecting a card opens that Gateway's dashboard window or brings its existing window to the front. Hold Option to reveal **New … Window**, or press Option-Command with the same digit, to open another independent window for that Gateway. **Manage Gateways…** opens **Connection → Gateways** and remains available when no Gateways are configured.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. An active native Cron Jobs settings pane keeps its own refresh running. Cached summaries remain available when the menu reopens.
+Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, **checking…** before the first result, or **unreachable** with the last successful contact time after a failure. Closing the menu cancels its probes and disconnects probed saved Gateways with no open dashboard windows. The primary connection stays connected, and cached facts remain available until the app quits.
+
+The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+
+The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
+
+Manual Cron refreshes and successful job changes supersede older reads, so an in-flight response cannot restore a deleted job to the list.
 
 ## State model
 
@@ -79,7 +88,7 @@ The Devices and Automations summaries refresh while the menu is open. Closing it
 
 ## Debug override
 
-- Settings > Debug > "Icon override" picker:
+- Enable the developer toggle in **Dashboard → Settings → This Mac → Developer**, then open **Connection… → Debug → Icon override**:
   - `System (auto)` (default)
   - `Working: main` / `Working: other` (per tool kind: bash, read, write, edit, other)
   - `Idle`

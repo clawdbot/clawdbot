@@ -1,10 +1,12 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
@@ -195,11 +197,14 @@ suite.define(() => {
       await pollLocatorText(cliGroup).toContain("Claude Code");
       expect(await cliGroup.textContent()).not.toContain("History only");
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "picker-group.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [cliGroup],
+          ),
+        );
       }
 
       await cliGroup.getByRole("option", { name: "Claude Code" }).click();
@@ -214,11 +219,12 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "catalog-target.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__runtime"),
+          ]),
+        );
       }
     } finally {
       await context.close();
@@ -245,11 +251,7 @@ suite.define(() => {
       startTerminal: false,
     },
   ])("blocks native submission visibly when $label", async (testCase) => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: testCase.cliAgentsEnabled,
@@ -401,14 +403,12 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cli-agents-picker"),
-            "terminal-primary.png",
-          ),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "terminal-primary.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__message"),
+          ]),
+        );
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
@@ -474,11 +474,7 @@ suite.define(() => {
   });
 
   it("shows the terminal-start server error without rewriting it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const serverMessage = "cwd is no longer available; choose another folder and retry";
     await installMockGateway(page, {
@@ -590,11 +586,7 @@ suite.define(() => {
   );
 
   it("navigates to a created session while canonical session refresh is pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:refresh-overlap-e2e";
     const listResponse = {
@@ -665,11 +657,7 @@ suite.define(() => {
   });
 
   it("resolves a pending catalog target after reconnect without clearing the draft", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
@@ -775,7 +763,9 @@ suite.define(() => {
         .toBe(3);
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
       const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
@@ -792,11 +782,7 @@ suite.define(() => {
   });
 
   it("clears the draft after a genuine new-session route navigation settles", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -840,11 +826,7 @@ suite.define(() => {
   });
 
   it("preserves a manually selected agent across a same-client reconnect", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -925,7 +907,9 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
       await pollLocatorText(
         page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");

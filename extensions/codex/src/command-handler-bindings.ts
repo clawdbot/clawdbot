@@ -6,6 +6,7 @@ import {
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
+import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
@@ -21,8 +22,7 @@ import type { CodexThread } from "./app-server/protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
   createCodexSessionGenerationSupersededError,
-  normalizeCodexAppServerBindingModelProvider,
-  reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
 import {
@@ -64,7 +64,8 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
   // SessionEntry is the durable authority even when a native binding is absent or stale.
   // Never infer this lock from binding model metadata such as preserveNativeModel.
   const { agentId } = resolveCodexConversationControlScope(ctx);
-  const storePath = resolveStorePath(ctx.config.session?.store, { agentId });
+  const storePath =
+    ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId });
   return isModelSelectionLocked(
     getSessionEntry({
       storePath,
@@ -247,7 +248,8 @@ export async function describeConversationBinding(
   const sessionEntry = sessionKey
     ? getSessionEntry({
         agentId,
-        storePath: resolveStorePath(ctx.config.session?.store, { agentId }),
+        storePath:
+          ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId }),
         sessionKey,
         hydrateSkillPromptRefs: false,
         readConsistency: "latest",
@@ -337,18 +339,24 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
+  const { assertCurrent: assertHostGeneration } = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    bindingStore: deps.bindingStore,
+    identity,
+    config: ctx.config,
+    storePath: ctx.sessionTarget?.storePath,
+  });
   return await withExclusiveCodexAppServerThread({
     bindingStore: deps.bindingStore,
     identity,
     threadId: normalizedThreadId,
     run: async () =>
       await deps.bindingStore.withLease(identity, async () => {
-        const reclaimed = await reclaimCurrentCodexSessionGeneration({
-          bindingStore: deps.bindingStore,
-          identity,
-          config: ctx.config,
-        });
-        if (!reclaimed) {
+        // The host can rotate while its binding remains one generation behind.
+        // Keep both fences after native queue and binding lease waits.
+        const generation = await deps.bindingStore.prepareSessionGenerationReclaim(identity);
+        assertHostGeneration();
+        if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }
         const currentBinding = deps.bindingStore.read(identity);
@@ -415,7 +423,9 @@ export async function resumeThread(
             if (bindingBeforeCommit && !sameOwner) {
               // The old row must remain authoritative until its subscription
               // is gone; otherwise another session can claim and lose it.
-              await releaseCodexAppServerBindingSubscription(bindingBeforeCommit);
+              await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
+                assertCurrent,
+              });
             }
             assertCurrent();
             const committed = await deps.bindingStore.mutate(
@@ -475,6 +485,8 @@ export async function resumeThread(
             authProfileId: currentBinding?.authProfileId,
             sessionKey: ctx.sessionKey,
             sessionId: ctx.sessionId,
+            storePath: ctx.sessionTarget?.storePath,
+            assertCurrent: assertHostGeneration,
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
                 method: "thread/read",

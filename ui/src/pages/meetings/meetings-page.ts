@@ -1,285 +1,428 @@
+import "./meetings.css";
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import type {
-  TranscriptSessionSummary,
+  TranscriptsExportParams,
+  TranscriptsExportResult,
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "@openclaw/gateway-protocol";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { t } from "../../i18n/index.ts";
-import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatDurationCompact } from "../../lib/format.ts";
+import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import "./meetings.css";
+import {
+  transcriptListParams,
+  transcriptRouteSearch,
+  TRANSCRIPT_PAGE_SIZE,
+  TRANSCRIPT_QUERY_LIMIT,
+  TRANSCRIPT_FILTER_KEYS,
+} from "./route-state.ts";
+import { renderTranscripts, type TranscriptReadState } from "./view.ts";
 
-registerMeetingsEnglish();
-
-function meetingDay(startedAt: string) {
-  return new Date(startedAt).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
+type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+type ArchiveReadResults = {
+  "transcripts.list": TranscriptsListResult;
+  "transcripts.get": TranscriptsGetResult;
+  "transcripts.export": TranscriptsExportResult;
+};
+// Keep a bounded reading window even when a room has stayed subscribed for days.
+const READER_WINDOW_PAGES = 5;
 
 class MeetingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) routeSearch = "";
-  @state() private sessions: TranscriptSessionSummary[] | null = null;
-  @state() private detail: TranscriptsGetResult | null = null;
-  @state() private listLoading = false;
-  @state() private detailLoading = false;
-  @state() private listError: string | null = null;
-  @state() private detailError: string | null = null;
-  private detailGeneration = 0;
+  private drafts: Record<string, string> = {};
+  @state() private list: TranscriptsListResult | null = null;
+  @state() private listDenial: unknown = null;
+  @state() private readerDenial: unknown = null;
+  private accessGeneration = 0;
+  @state() private readerCursor: string | null = null;
+  @state() private summary: TranscriptsGetResult | null = null;
+  @state() private readerPages: TranscriptsGetResult[] = [];
+  @state() private trimmed = false;
+  @state() private exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string } =
+    { kind: "idle" };
+  private connectionHello: unknown;
+  private connectionAuth: unknown;
+  private exportAbort: AbortController | null = null;
+  private focusSelection = false;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => {
-      this.detailGeneration++;
-      this.sessions = null;
-      this.detail = null;
-      this.listLoading = false;
-      this.detailLoading = false;
-      this.listError = null;
-      this.detailError = null;
+    invalidateRequests: () => this.resetConnection(),
+    onSnapshot: ({ snapshot: { hello } }) => {
+      // A new handshake or authorization can replace a still-connected client.
+      if (hello !== this.connectionHello || hello?.auth !== this.connectionAuth) {
+        this.gateway.invalidate();
+        this.resetConnection();
+      }
+      this.connectionHello = hello;
+      this.connectionAuth = hello?.auth;
     },
-    ensureInitialData: () => this.refresh(),
   });
 
-  private get selector() {
-    return new URLSearchParams(this.routeSearch).get("selector");
+  private requestClient() {
+    const snapshot = this.context?.gateway.snapshot;
+    return this.isConnected &&
+      snapshot?.phase === "connected" &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+      ? snapshot.client
+      : null;
   }
 
-  override updated(changed: PropertyValues) {
-    if (changed.has("routeSearch")) {
-      this.detailGeneration++;
-      this.detail = null;
-      this.detailLoading = false;
-      this.detailError = null;
-      void this.loadDetail();
+  private get selection() {
+    const query = new URLSearchParams(this.routeSearch);
+    return {
+      selector: query.get("selector") ?? "",
+      query: (query.get("find") ?? "").slice(0, TRANSCRIPT_QUERY_LIMIT),
+    };
+  }
+
+  private get readerTab(): "text" | "summary" {
+    const params = new URLSearchParams(this.routeSearch);
+    return params.get("tab") === "transcript" ||
+      (!params.has("tab") && Boolean(this.selection.query))
+      ? "text"
+      : "summary";
+  }
+
+  private async readArchive<Method extends keyof ArchiveReadResults>(request: {
+    client: GatewayClient;
+    method: Method;
+    params: unknown;
+    signal: AbortSignal;
+    current: () => boolean;
+    accept: (result: ArchiveReadResults[Method]) => void;
+  }) {
+    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const hello = gateway.snapshot.hello;
+    const auth = gateway.snapshot.hello?.auth;
+    const generation = this.accessGeneration;
+    const current = () =>
+      !request.signal.aborted &&
+      this.requestClient() === request.client &&
+      this.context.gateway === gateway &&
+      gateway.snapshot.hello === hello &&
+      gateway.snapshot.hello?.auth === auth &&
+      scope !== null &&
+      this.gateway.isCurrent(scope) &&
+      this.accessGeneration === generation &&
+      request.current();
+    try {
+      const result = await request.client.request<ArchiveReadResults[Method]>(
+        request.method,
+        request.params,
+        {
+          signal: request.signal,
+        },
+      );
+      if (!current()) {
+        return initialState;
+      }
+      return request.accept(result);
+    } catch (error) {
+      if (!current()) {
+        return initialState;
+      }
+      if (isArchiveAccessDeniedError(error)) {
+        // Archive access is shared across these RPCs. Retire every older request,
+        // but leave Task args alone: changing cursors here would auto-retry denial.
+        this.accessGeneration++;
+        this.listDenial = error;
+        this.readerDenial = error;
+        this.list = null;
+        this.summary = null;
+        this.readerPages = [];
+        this.trimmed = false;
+        this.cancelExport();
+      }
+      throw error;
     }
+  }
+
+  private readonly listTask = new Task(this, {
+    args: () =>
+      [
+        this.requestClient(),
+        this.gateway.epoch,
+        JSON.stringify(transcriptListParams(this.routeSearch)),
+        this.selection.selector,
+      ] as const,
+    task: async ([client, , params, selector], { signal }) => {
+      if (!client) {
+        return initialState;
+      }
+      return this.readArchive({
+        client,
+        method: "transcripts.list",
+        params: transcriptListParams(this.routeSearch),
+        signal,
+        current: () =>
+          this.selection.selector === selector &&
+          JSON.stringify(transcriptListParams(this.routeSearch)) === params,
+        accept: (result) => {
+          this.listDenial = null;
+          this.list = result;
+        },
+      });
+    },
+  });
+
+  private readonly summaryTask = new Task(this, {
+    args: () => [this.requestClient(), this.gateway.epoch, this.selection.selector] as const,
+    task: async ([client, , selector], { signal }) => {
+      if (!client || !selector) {
+        return initialState;
+      }
+      return this.readArchive({
+        client,
+        method: "transcripts.get",
+        // Stored notes retain the shipped summary-read budget, independent of speech pages.
+        params: { selector },
+        signal,
+        current: () => this.selection.selector === selector,
+        accept: (result) => {
+          this.readerDenial = null;
+          this.summary = result;
+        },
+      });
+    },
+  });
+
+  private readonly readerTask = new Task(this, {
+    args: () =>
+      [
+        this.requestClient(),
+        this.gateway.epoch,
+        this.selection.selector,
+        this.selection.query,
+        this.readerCursor,
+      ] as const,
+    task: async ([client, , selector, query, cursor], { signal }) => {
+      if (!client || !selector) {
+        return initialState;
+      }
+      return this.readArchive({
+        client,
+        method: "transcripts.get",
+        params: {
+          selector,
+          includeUtterances: true,
+          query: query || undefined,
+          cursor: cursor ?? undefined,
+          limit: TRANSCRIPT_PAGE_SIZE,
+        },
+        signal,
+        current: () =>
+          this.selection.selector === selector &&
+          this.selection.query === query &&
+          this.readerCursor === cursor,
+        accept: (result) => {
+          this.readerDenial = null;
+          const pages = cursor ? [...this.readerPages, result] : [result];
+          this.trimmed ||= pages.length > READER_WINDOW_PAGES;
+          this.readerPages = pages.slice(-READER_WINDOW_PAGES);
+        },
+      });
+    },
+  });
+
+  override willUpdate(changed: PropertyValues) {
+    if (changed.has("routeSearch")) {
+      const previous = new URLSearchParams(String(changed.get("routeSearch") ?? ""));
+      const next = new URLSearchParams(this.routeSearch);
+      if (previous.get("selector") !== next.get("selector")) {
+        this.summary = null;
+      }
+      // Only route-owned changes replace drafts; async reader/list work does not.
+      for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
+        if (
+          previous.get(key) !== next.get(key) ||
+          changed.get("routeSearch") === undefined ||
+          (key === "find" && previous.get("selector") !== next.get("selector"))
+        ) {
+          this.drafts[key] = next.get(key) ?? "";
+        }
+      }
+      if (
+        previous.get("selector") !== (this.selection.selector || null) ||
+        previous.get("find") !== (this.selection.query || null)
+      ) {
+        this.resetReader();
+        this.cancelExport();
+        this.focusSelection = changed.get("routeSearch") !== undefined;
+      }
+    }
+  }
+
+  override updated() {
+    if (!this.focusSelection) {
+      return;
+    }
+    const target = this.selection.selector
+      ? this.querySelector<HTMLElement>(".transcripts-reader h1, .transcripts-reader [role=alert]")
+      : this.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
+    if (target) {
+      target.focus();
+      this.focusSelection = false;
+    }
+  }
+
+  private resetConnection() {
+    this.list = null;
+    this.listDenial = null;
+    this.readerDenial = null;
+    this.summary = null;
+    this.listTask.abort();
+    this.summaryTask.abort();
+    this.readerTask.abort();
+    this.cancelExport();
+    this.resetReader();
+  }
+
+  private resetReader() {
+    this.readerCursor = null;
+    this.readerPages = [];
+    this.trimmed = false;
+  }
+
+  private cancelExport() {
+    this.exportAbort?.abort();
+    this.exportAbort = null;
+    this.exportState = { kind: "idle" };
+  }
+
+  private navigate(patch: Record<string, string | null>) {
+    // Clear/submit must also synchronize when the URL value was already equal.
+    for (const [key, value] of Object.entries(patch)) {
+      this.drafts[key] = value ?? "";
+    }
+    this.requestUpdate();
+    this.context.navigate("meetings", {
+      search: transcriptRouteSearch(this.routeSearch, patch),
+    });
   }
 
   private refresh() {
-    void this.loadList();
-    void this.loadDetail();
+    this.cancelExport();
+    this.summary = null;
+    this.resetReader();
+    // A refresh starts a new cursor snapshot, rather than reusing an old list page.
+    if (new URLSearchParams(this.routeSearch).has("cursor")) {
+      this.navigate({ cursor: null });
+    } else {
+      void this.listTask.run();
+    }
+    void this.summaryTask.run();
+    void this.readerTask.run();
   }
 
-  private async loadList() {
-    const client = this.gateway.client;
-    const scope = this.gateway.capture();
-    if (!client || !scope || this.listLoading) {
+  private async download(format: TranscriptsExportParams["format"]) {
+    const client = this.requestClient();
+    const { selector } = this.selection;
+    if (!client || !selector || this.exportState.kind === "loading") {
       return;
     }
-    this.listLoading = true;
-    this.listError = null;
+    const abort = new AbortController();
+    this.exportAbort = abort;
+    this.exportState = { kind: "loading" };
     try {
-      const result = await client.request<TranscriptsListResult>("transcripts.list", {
-        limit: 200,
+      await this.readArchive({
+        client,
+        method: "transcripts.export",
+        params: { selector, format },
+        signal: abort.signal,
+        current: () => this.selection.selector === selector,
+        accept: (result) => {
+          const bytes = Uint8Array.from(atob(result.data), (character) => character.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], { type: result.mimeType }));
+          const anchor = document.createElement("a");
+          try {
+            anchor.href = url;
+            anchor.download = result.filename;
+            document.body.append(anchor);
+            anchor.click();
+            this.exportState = { kind: "done" };
+          } finally {
+            anchor.remove();
+            // Allow the browser to consume the object URL before releasing the bytes.
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }
+        },
       });
-      if (this.gateway.isCurrent(scope)) {
-        this.sessions = result.sessions;
-      }
     } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.listError = formatUiError(error);
+      if (this.exportAbort === abort && !abort.signal.aborted) {
+        this.exportState = { kind: "error", message: formatUiError(error) };
       }
     } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.listLoading = false;
+      if (this.exportAbort === abort) {
+        this.exportAbort = null;
       }
     }
-  }
-
-  private async loadDetail() {
-    const selector = this.selector;
-    const client = this.gateway.client;
-    const scope = this.gateway.capture();
-    if (!selector || !client || !scope) {
-      return;
-    }
-    const generation = ++this.detailGeneration;
-    const current = () =>
-      this.gateway.isCurrent(scope) &&
-      generation === this.detailGeneration &&
-      this.selector === selector;
-    this.detailLoading = true;
-    this.detailError = null;
-    try {
-      const result = await client.request<TranscriptsGetResult>("transcripts.get", {
-        selector,
-      });
-      if (current()) {
-        this.detail = result;
-      }
-    } catch (error) {
-      if (current()) {
-        this.detailError = formatUiError(error);
-      }
-    } finally {
-      if (current()) {
-        this.detailLoading = false;
-      }
-    }
-  }
-
-  private selectMeeting(selector: string) {
-    this.context.navigate("meetings", { search: `?${new URLSearchParams({ selector })}` });
-  }
-
-  private renderRow(session: TranscriptSessionSummary) {
-    const silent = session.utteranceCount === 0;
-    const participants = session.participants.slice(0, 3).join(", ");
-    const extra = session.participants.length - 3;
-    const duration = session.stoppedAt
-      ? formatDurationCompact(
-          Math.max(0, Date.parse(session.stoppedAt) - Date.parse(session.startedAt)),
-        )
-      : null;
-    return html`<button
-      class="meetings-row ${this.selector === session.selector ? "selected" : ""} ${silent
-        ? "meetings-row--silent"
-        : ""}"
-      type="button"
-      aria-current=${this.selector === session.selector ? "true" : nothing}
-      @click=${() => this.selectMeeting(session.selector)}
-    >
-      <span class="meetings-row__title"
-        >${session.title || session.providerName || session.providerId}</span
-      >
-      <span class="meetings-row__meta"
-        >${session.providerName || session.providerId} ·
-        ${new Date(session.startedAt).toLocaleTimeString(undefined, {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}
-        ${session.active
-          ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
-          : duration
-            ? html` · ${duration}`
-            : nothing}
-      </span>
-      ${participants
-        ? html`<span class="meetings-row__meta meetings-row__participants"
-            >${participants}${extra > 0 ? ` +${extra}` : ""}</span
-          >`
-        : nothing}
-      <span class="meetings-row__meta"
-        >${t("meetings.utterances", { count: String(session.utteranceCount) })}</span
-      >
-      ${silent || session.overview
-        ? html`<span class="meetings-row__overview"
-            >${silent ? t("meetings.noSpeech") : session.overview}</span
-          >`
-        : nothing}
-    </button>`;
-  }
-
-  private renderList() {
-    const days = new Map<string, TranscriptSessionSummary[]>();
-    for (const session of (this.sessions ?? []).toSorted((a, b) =>
-      b.startedAt.localeCompare(a.startedAt),
-    )) {
-      const day = meetingDay(session.startedAt);
-      const meetings = days.get(day) ?? [];
-      meetings.push(session);
-      days.set(day, meetings);
-    }
-    return html`<aside class="meetings-list" aria-label=${t("meetings.listLabel")}>
-      ${Array.from(
-        days,
-        ([day, meetings]) =>
-          html`<section class="meetings-day">
-            <h2>${day}</h2>
-            ${meetings.map((session) => this.renderRow(session))}
-          </section>`,
-      )}
-    </aside>`;
-  }
-
-  private renderDetail() {
-    const detail = this.detail;
-    return html`<section class="meetings-detail" aria-busy=${this.detailLoading}>
-      ${this.detailError
-        ? html`<div class="callout danger" role="alert">${this.detailError}</div>`
-        : nothing}
-      ${!detail
-        ? html`<p class="muted">
-            ${t(this.detailLoading ? "meetings.loadingNotes" : "meetings.select")}
-          </p>`
-        : html`
-            <div class="meetings-detail__meta">
-              ${detail.session.summarySource
-                ? html`<span
-                    >${t("meetings.notesSource", { source: detail.session.summarySource })}</span
-                  >`
-                : nothing}
-              ${detail.session.active
-                ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
-                : nothing}
-            </div>
-            ${detail.summary?.participants.length
-              ? html`<p>
-                  <strong>${t("meetings.participants")}:</strong>
-                  ${detail.summary.participants.join(", ")}
-                </p>`
-              : nothing}
-            ${detail.summary
-              ? html`<div class="meetings-notes markdown">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(detail.summary.markdown))}
-                </div>`
-              : html`<h2>
-                    ${detail.session.title ||
-                    detail.session.providerName ||
-                    detail.session.providerId}
-                  </h2>
-                  <p>${t("meetings.noNotes")}</p>
-                  ${detail.session.active ? html`<p>${t("meetings.activeNotes")}</p>` : nothing}`}
-          `}
-    </section>`;
   }
 
   override render() {
-    return html`<section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("meetings")}</div>
-          <div class="page-sub">${subtitleForRoute("meetings")}</div>
-        </div>
-        <button
-          class="btn"
-          type="button"
-          ?disabled=${this.listLoading || !this.gateway.connected}
-          @click=${() => this.refresh()}
-        >
-          ${t("meetings.refresh")}
-        </button>
-      </section>
-      ${this.listError
-        ? html`<div class="callout danger" role="alert">${this.listError}</div>`
-        : nothing}
-      ${this.sessions?.length || this.selector
-        ? html`<div class="meetings-layout">${this.renderList()}${this.renderDetail()}</div>`
-        : this.sessions && !this.listError
-          ? html`<section class="meetings-empty" role="status">
-              <h2>${t("meetings.emptyTitle")}</h2>
-              <p>${t("meetings.emptyBody")}</p>
-              <a
-                href="https://docs.openclaw.ai/cli/transcripts"
-                target="_blank"
-                rel="noopener noreferrer"
-                >${t("meetings.docs")}</a
-              >
-            </section>`
-          : this.listLoading
-            ? html`<p role="status">${t("meetings.loading")}</p>`
-            : nothing}`;
+    const snapshot = this.context.gateway.snapshot;
+    const client = this.requestClient();
+    const activeReaderTask = this.readerTab === "summary" ? this.summaryTask : this.readerTask;
+    const reader: TranscriptReadState = {
+      summary: this.summary,
+      pages: this.readerPages,
+      loading: activeReaderTask.status === TaskStatus.PENDING,
+      error:
+        this.readerDenial ??
+        (activeReaderTask.status === TaskStatus.ERROR ? activeReaderTask.error : null),
+      trimmed: this.trimmed,
+    };
+    return renderTranscripts({
+      basePath: this.context.basePath,
+      search: this.routeSearch,
+      drafts: this.drafts,
+      onDraft: (key, value) => {
+        this.drafts[key] = value;
+      },
+      connected: snapshot.phase === "connected",
+      allowed: hasOperatorReadAccess(snapshot.hello?.auth ?? null),
+      list: client && this.listTask.status === TaskStatus.COMPLETE ? this.list : null,
+      listLoading: !this.listDenial && this.listTask.status === TaskStatus.PENDING,
+      listError:
+        this.listDenial ?? (this.listTask.status === TaskStatus.ERROR ? this.listTask.error : null),
+      reader,
+      readerTab: this.readerTab,
+      exportState: this.exportState,
+      onNavigate: (patch) => this.navigate(patch),
+      onRefresh: () => this.refresh(),
+      onReaderRetry: () => {
+        if (this.readerTab === "summary") {
+          void this.summaryTask.run();
+          return;
+        }
+        if (!this.readerPages.length) {
+          this.resetReader();
+        }
+        if (!this.summary) {
+          void this.summaryTask.run();
+        }
+        void this.readerTask.run();
+      },
+      onReaderTab: (tab) => {
+        this.navigate({ tab: tab === "text" ? "transcript" : "summary" });
+      },
+      onLoadMore: () => {
+        this.readerCursor = this.readerPages.at(-1)?.nextCursor ?? null;
+      },
+      onReaderStart: () => {
+        this.resetReader();
+        void this.readerTask.run();
+      },
+      onDownload: (format) => void this.download(format),
+    });
   }
 }
 
@@ -290,6 +433,7 @@ export const meetingsPageComponent = {
       .routeSearch=${typeof search === "string" ? search : ""}
     ></openclaw-meetings-page>`,
 };
+
 if (!customElements.get("openclaw-meetings-page")) {
   customElements.define("openclaw-meetings-page", MeetingsPage);
 }

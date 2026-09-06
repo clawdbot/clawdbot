@@ -4,10 +4,8 @@ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
-import {
-  materializePluginAutoEnableCandidatesInternal,
-  resolvePluginAutoEnableManifestRegistry,
-} from "./plugin-auto-enable.shared.js";
+import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
+import { resolvePluginAutoEnableManifestRegistry } from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,

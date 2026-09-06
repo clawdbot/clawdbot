@@ -24,10 +24,7 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
-export {
-  resolveSessionWorkerPlacementMutationError,
-  SessionWorkerPlacementMutationError,
-} from "../worker-environments/session-placement-lifecycle.js";
+export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
@@ -156,15 +153,20 @@ export function loadSessionEntriesForTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  includeStoreChildEntries?: boolean;
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,
+    exactRead: true,
+    includeStoreChildEntries: params.includeStoreChildEntries,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = isInternalSessionEffectsKey(target.canonicalKey)
+    ? undefined
+    : resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 

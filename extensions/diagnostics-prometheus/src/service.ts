@@ -1,6 +1,7 @@
 // Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  isDiagnosticsEnabled,
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -16,7 +17,7 @@ import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.j
 
 type LabelSet = Record<string, string>;
 
-type CounterSample = {
+type ScalarSample = {
   help: string;
   labels: LabelSet;
   value: number;
@@ -29,18 +30,6 @@ type HistogramSample = {
   help: string;
   labels: LabelSet;
   sum: number;
-};
-
-type GaugeSample = {
-  help: string;
-  labels: LabelSet;
-  value: number;
-};
-
-type MetricSnapshot = {
-  counters: Map<string, CounterSample>;
-  gauges: Map<string, GaugeSample>;
-  histograms: Map<string, HistogramSample>;
 };
 
 type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
@@ -63,7 +52,9 @@ function seconds(ms: number | undefined): number | undefined {
 }
 
 function sortedLabels(labels: LabelSet): [string, string][] {
-  return Object.entries(labels).toSorted(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(labels);
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  return entries;
 }
 
 function metricKey(name: string, labels: LabelSet): string {
@@ -78,12 +69,16 @@ function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
 }
 
+function formatLabelEntry([key, value]: [string, string]): string {
+  return `${key}="${escapeLabelValue(value)}"`;
+}
+
 function formatLabels(labels: LabelSet): string {
   const entries = sortedLabels(labels);
   if (entries.length === 0) {
     return "";
   }
-  return `{${entries.map(([key, value]) => `${key}="${escapeLabelValue(value)}"`).join(",")}}`;
+  return `{${entries.map(formatLabelEntry).join(",")}}`;
 }
 
 function formatPrometheusNumber(value: number): string {
@@ -94,8 +89,8 @@ function formatPrometheusNumber(value: number): string {
 }
 
 function createPrometheusMetricStore() {
-  const counters = new Map<string, CounterSample>();
-  const gauges = new Map<string, GaugeSample>();
+  const counters = new Map<string, ScalarSample>();
+  const gauges = new Map<string, ScalarSample>();
   const histograms = new Map<string, HistogramSample>();
   let droppedSeries = 0;
 
@@ -176,19 +171,22 @@ function createPrometheusMetricStore() {
     }
   };
 
-  const snapshot = (): MetricSnapshot => {
-    const counterSnapshot = new Map(counters);
+  const snapshot = () => {
+    const counterSnapshot = [...counters];
     if (droppedSeries > 0) {
-      counterSnapshot.set(metricKey(DROPPED_SERIES_COUNTER_NAME, {}), {
-        help: "Prometheus metric series dropped because the exporter series cap was reached.",
-        labels: {},
-        value: droppedSeries,
-      });
+      counterSnapshot.push([
+        metricKey(DROPPED_SERIES_COUNTER_NAME, {}),
+        {
+          help: "Prometheus metric series dropped because the exporter series cap was reached.",
+          labels: {},
+          value: droppedSeries,
+        },
+      ]);
     }
     return {
       counters: counterSnapshot,
-      gauges: new Map(gauges),
-      histograms: new Map(histograms),
+      gauges: [...gauges],
+      histograms: [...histograms],
     };
   };
 
@@ -230,46 +228,43 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
     lines.push(`# TYPE ${name} ${type}`);
   };
 
-  const counterEntries = [...snapshot.counters.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of counterEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "counter", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+  for (const [type, entries] of [
+    ["counter", snapshot.counters],
+    ["gauge", snapshot.gauges],
+  ] as const) {
+    entries.sort(([left], [right]) => left.localeCompare(right));
+    for (const [key, sample] of entries) {
+      const name = key.split("|", 1)[0] ?? "";
+      emitHeader(name, type, sample.help);
+      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+    }
   }
 
-  const gaugeEntries = [...snapshot.gauges.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of gaugeEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "gauge", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
-  }
-
-  const histogramEntries = [...snapshot.histograms.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of histogramEntries) {
+  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
+  for (const [key, sample] of snapshot.histograms) {
     const name = key.split("|", 1)[0] ?? "";
     emitHeader(name, "histogram", sample.help);
+    const labels = formatLabels(sample.labels);
+    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
+    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
+    const bucketFragments = bucketLabels.map(formatLabelEntry);
+    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket === undefined) {
         continue;
       }
+      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
       lines.push(
-        `${name}_bucket${formatLabels({ ...sample.labels, le: String(bucket) })} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
       );
     }
+    bucketFragments[boundIndex] = 'le="+Inf"';
     lines.push(
-      `${name}_bucket${formatLabels({ ...sample.labels, le: "+Inf" })} ${formatPrometheusNumber(sample.count)}`,
+      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
     );
-    lines.push(`${name}_sum${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(
-      `${name}_count${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.count)}`,
-    );
+    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
   }
 
   lines.push("");
@@ -545,6 +540,73 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
+    case "gateway.rpc": {
+      const labels = { method: evt.method };
+      if (evt.phase === "received") {
+        store.counter(
+          "openclaw_gateway_rpc_requests_total",
+          "Authenticated Gateway WebSocket requests received.",
+          labels,
+        );
+        return;
+      }
+      store.counter(
+        "openclaw_gateway_rpc_outcomes_total",
+        "Gateway RPC observations by phase and outcome.",
+        { phase: evt.phase, outcome: evt.outcome },
+      );
+      if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
+        store.histogram(
+          "openclaw_gateway_rpc_first_response_seconds",
+          "Elapsed time until the first Gateway RPC response is sent.",
+          labels,
+          seconds(evt.durationMs),
+        );
+      } else if (evt.phase === "handler") {
+        store.histogram(
+          "openclaw_gateway_rpc_handler_seconds",
+          "Gateway RPC handler duration until return or throw.",
+          labels,
+          seconds(evt.durationMs),
+        );
+        store.histogram(
+          "openclaw_gateway_rpc_admission_seconds",
+          "Elapsed time from Gateway RPC receipt until handler invocation.",
+          labels,
+          seconds(evt.admissionMs),
+        );
+      } else if (evt.phase === "dispatch") {
+        store.histogram(
+          "openclaw_gateway_rpc_queue_wait_seconds",
+          "Gateway operator request start queue wait.",
+          labels,
+          seconds(evt.queueWaitMs),
+        );
+      }
+      return;
+    }
     case "model.usage":
       recordModelUsage(store, evt);
       return;
@@ -905,7 +967,7 @@ function recordDiagnosticEvent(
       );
       store.histogram(
         "openclaw_liveness_cpu_core_ratio",
-        "CPU core ratio reported by diagnostic liveness warnings.",
+        "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
         livenessLabels(evt),
         numericValue(evt.cpuCoreRatio),
         RATIO_BUCKETS,
@@ -1035,6 +1097,21 @@ export function createDiagnosticsPrometheusExporter() {
       if (!subscribe) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
+      }
+      const identity = isDiagnosticsEnabled(ctx.config)
+        ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
+        : undefined;
+      if (identity) {
+        // Reserve one sample before event traffic; runtime identity must survive saturation.
+        store.gauge(
+          "openclaw_gateway_build_info",
+          "Identity of the hosting process and its loaded build; not a health or exporter epoch.",
+          {
+            process_instance_id: identity.processInstanceId,
+            ...(identity.buildId ? { build_id: identity.buildId } : {}),
+          },
+          1,
+        );
       }
       unsubscribe = subscribe((event, metadata) => {
         try {

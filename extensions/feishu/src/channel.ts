@@ -1,4 +1,3 @@
-// Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -1121,7 +1120,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },
-      reload: { configPrefixes: ["channels.feishu"] },
+      reload: { configPrefixes: ["channels.feishu"], noopPrefixes: ["messages.inbound"] },
       doctor: feishuDoctor,
       configSchema: FeishuChannelConfigSchema,
       config: {

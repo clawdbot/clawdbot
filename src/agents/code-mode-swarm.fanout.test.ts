@@ -7,19 +7,21 @@ afterEach(resetCodeModeTestState);
 
 describe("Swarm pipeline backpressure", () => {
   it.each([
-    { limit: 1, count: 3, partial: false },
-    { limit: 2, count: 6, partial: false },
-    { limit: 16, count: 20, partial: false },
-    { limit: 3, count: 6, partial: true },
+    { limit: 1, count: 3, partial: false, followup: false },
+    { limit: 2, count: 6, partial: false, followup: false },
+    { limit: 16, count: 20, partial: false, followup: false },
+    { limit: 3, count: 6, partial: true, followup: false },
+    { limit: 16, count: 30, partial: true, followup: true },
   ])(
-    "accounts for $count items with $limit slots and partial settlement $partial",
-    async ({ limit, count, partial }) => {
+    "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
+    async ({ limit, count, partial, followup }) => {
       const config = resolveCodeModeConfig({
         tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
       });
       const source = `
       const outcomes = await Promise.allSettled(Array.from({ length: ${count} }, async (_, index) => {
         const next = await agents.run("first-" + index, { phase: "First" });
+        if (${followup}) await progress({ value: index });
         return await agents.run(next, { phase: "Second" });
       }));
       return outcomes.map(outcome => outcome.status === "fulfilled"
@@ -31,7 +33,7 @@ describe("Swarm pipeline backpressure", () => {
           kind: "exec",
           source,
           config,
-          catalog: [],
+          catalog: [{ callableName: "progress", name: "progress", source: "openclaw" }],
           apiFiles: [],
           namespaces: [],
           swarmEnabled: true,
@@ -40,9 +42,10 @@ describe("Swarm pipeline backpressure", () => {
       );
       const collectors = new Map<string, string>();
       const spawnedPrompts: string[] = [];
+      const progressItems: unknown[] = [];
       // Drive real worker snapshots with controlled child results; this tests request
       // admission and resumption, not a mock of the guest's Promise implementation.
-      for (let round = 0; result.status === "waiting" && round < count * 6; round++) {
+      for (let round = 0; result.status === "waiting" && round < count * 8; round++) {
         expect(result.pendingRequests.length).toBeGreaterThan(0);
         expect(result.pendingRequests.length).toBeLessThanOrEqual(limit);
         const frontier = partial ? result.pendingRequests.slice(-1) : result.pendingRequests;
@@ -60,6 +63,10 @@ describe("Swarm pipeline backpressure", () => {
             collectors.set(runId, prompt);
             spawnedPrompts.push(prompt);
             value = { status: "accepted", runId };
+          } else if (request.method === "callValue") {
+            expect(request.args[0]).toBe("progress");
+            progressItems.push(request.args[1]);
+            value = { recorded: true };
           } else {
             expect(request.method).toBe("agentWait");
             const runId = request.args[0];
@@ -98,40 +105,79 @@ describe("Swarm pipeline backpressure", () => {
       );
       expect(spawnedPrompts).toHaveLength(count * 2 - 1);
       expect(new Set(spawnedPrompts).size).toBe(spawnedPrompts.length);
+      const expectedProgress = followup
+        ? Array.from({ length: count }, (_, value) => ({ value })).filter(
+            ({ value }) => value !== 1,
+          )
+        : [];
+      expect(progressItems).toHaveLength(expectedProgress.length);
+      expect(progressItems).toEqual(expect.arrayContaining(expectedProgress));
     },
   );
 
-  it("releases a canceled timer slot without changing queued collector arguments", async () => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
-    });
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: `
+  it.each([false, true])(
+    "preserves queued collector arguments and structured=%s results",
+    async (structured) => {
+      const config = resolveCodeModeConfig({
+        tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
+      });
+      let result = await testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: `
           const timer = setTimeout(() => { throw new Error("canceled timer fired"); }, 60_000);
-          const options = { label: "original" };
+          const options = { label: "original", ...(${structured} ? { schema: { type: "object" } } : {}) };
           const collector = agents.run("Queued research", options);
           options.label = "changed";
+          if (${structured}) delete options.schema;
+          else options.schema = { type: "object" };
           clearTimeout(timer);
           return await collector;
         `,
-        config,
-        catalog: [],
-        swarmEnabled: true,
-      },
-      10_000,
-    );
-    expect(result).toMatchObject({
-      status: "waiting",
-      canceledRequestIds: ["bridge:sleep:1"],
-      pendingRequests: [
-        {
-          id: "bridge:agentSpawn:1",
-          method: "agentSpawn",
-          args: ["Queued research", { label: "original" }],
+          config,
+          catalog: [],
+          swarmEnabled: true,
         },
-      ],
-    });
-  });
+        10_000,
+      );
+      expect(result).toMatchObject({
+        status: "waiting",
+        canceledRequestIds: ["bridge:sleep:1"],
+        pendingRequests: [
+          {
+            id: "bridge:agentSpawn:1",
+            method: "agentSpawn",
+            args: [
+              "Queued research",
+              { label: "original", ...(structured ? { schema: { type: "object" } } : {}) },
+            ],
+          },
+        ],
+      });
+      for (let round = 0; result.status === "waiting" && round < 2; round++) {
+        const settledRequests = result.pendingRequests.map((request) => ({
+          id: request.id,
+          ok: true as const,
+          value:
+            request.method === "agentSpawn"
+              ? { runId: "collector" }
+              : {
+                  runId: "collector",
+                  status: "done",
+                  result: "text",
+                  ...(structured ? { structured: { answer: 42 } } : {}),
+                },
+        }));
+        result = await testing.runCodeModeWorker(
+          { kind: "resume", snapshot: result.snapshot, config, settledRequests },
+          10_000,
+        );
+      }
+      expect(result.status).toBe("completed");
+      if (result.status !== "completed") {
+        throw new Error("collector must complete");
+      }
+      expect(JSON.parse(result.value.json)).toEqual(structured ? { answer: 42 } : "text");
+    },
+  );
 });

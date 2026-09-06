@@ -98,8 +98,14 @@ function resolveBrowserProxyConfig() {
 }
 
 let browserControlReady: Promise<void> | null = null;
+let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
 
 async function ensureBrowserControlService(): Promise<void> {
+  const current = getBrowserControlState();
+  // Admission survives config refresh only for this exact live runtime generation.
+  if (current && current === admittedBrowserControlState) {
+    return;
+  }
   if (browserControlReady) {
     return browserControlReady;
   }
@@ -113,13 +119,13 @@ async function ensureBrowserControlService(): Promise<void> {
     if (!started) {
       throw new Error("browser control disabled");
     }
+    admittedBrowserControlState = started;
   })();
-  const sharedStartup = startup.catch((error: unknown) => {
-    // A failed attempt must not poison later calls or clear a newer shared startup.
+  const sharedStartup = startup.finally(() => {
+    // Share pending failures, but never keep settled startup as runtime authority.
     if (browserControlReady === sharedStartup) {
       browserControlReady = null;
     }
-    throw error;
   });
   browserControlReady = sharedStartup;
   return sharedStartup;

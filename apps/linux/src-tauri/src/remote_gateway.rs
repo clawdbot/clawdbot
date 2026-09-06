@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -703,17 +703,9 @@ pub(crate) fn start_tunnel(
         .spawn()
         .map_err(|error| format!("Could not start the SSH tunnel: {error}"))?;
     let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
+    let local_address = SocketAddr::from(([127, 0, 0, 1], local_port));
     loop {
-        if TcpStream::connect_timeout(
-            &("127.0.0.1", local_port)
-                .to_socket_addrs()
-                .map_err(|error| format!("Could not resolve local tunnel: {error}"))?
-                .next()
-                .ok_or_else(|| "Could not resolve local tunnel.".to_string())?,
-            Duration::from_millis(150),
-        )
-        .is_ok()
-        {
+        if TcpStream::connect_timeout(&local_address, Duration::from_millis(150)).is_ok() {
             let url = Url::parse(&format!("ws://127.0.0.1:{local_port}"))
                 .map_err(|_| "Could not construct local SSH tunnel URL.".to_string())?;
             return Ok((SshTunnel { child }, url));
@@ -742,7 +734,7 @@ pub(crate) fn start_tunnel(
     }
 }
 
-pub(crate) fn dashboard_url(gateway_url: &Url, token: Option<&str>) -> Result<Url, String> {
+pub(crate) fn dashboard_url(gateway_url: &Url) -> Result<Url, String> {
     let mut url = gateway_url.clone();
     let scheme = if gateway_url.scheme() == "wss" {
         "https"
@@ -751,12 +743,6 @@ pub(crate) fn dashboard_url(gateway_url: &Url, token: Option<&str>) -> Result<Ur
     };
     url.set_scheme(scheme)
         .map_err(|_| "Could not construct Gateway dashboard URL.".to_string())?;
-    if let Some(token) = token.filter(|token| !token.is_empty()) {
-        let mut fragment = Url::parse("http://localhost/")
-            .map_err(|_| "Could not prepare Gateway authentication.".to_string())?;
-        fragment.query_pairs_mut().append_pair("token", token);
-        url.set_fragment(fragment.query());
-    }
     Ok(url)
 }
 
@@ -917,20 +903,13 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_auth_is_fragment_only_and_password_never_enters_url() {
+    fn dashboard_url_preserves_gateway_path_without_credentials() {
         let url = normalize_gateway_url("wss://gateway.example.com/openclaw").expect("URL");
-        let dashboard = dashboard_url(&url, Some("one+two/three=secret")).expect("dashboard");
+        let dashboard = dashboard_url(&url).expect("dashboard");
         assert_eq!(dashboard.scheme(), "https");
         assert_eq!(dashboard.path(), "/openclaw");
         assert_eq!(dashboard.query(), None);
-        assert_eq!(
-            dashboard.fragment(),
-            Some("token=one%2Btwo%2Fthree%3Dsecret")
-        );
-        assert_eq!(
-            dashboard_url(&url, None).expect("dashboard").fragment(),
-            None
-        );
+        assert_eq!(dashboard.fragment(), None);
     }
 
     #[test]

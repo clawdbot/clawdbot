@@ -11,6 +11,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { isToolResultError } from "../tool-result-error.js";
 import {
   takeCodeModeResponseSource,
   prepareCodeModeSourceAppend,
@@ -256,9 +257,11 @@ export abstract class AgentSessionBase {
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+      // Normalize adapted failures before middleware, which may explicitly recover.
+      const resultIsError = isError || isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return undefined;
+        return { isError: resultIsError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -270,21 +273,23 @@ export abstract class AgentSessionBase {
             input: args as Record<string, unknown>,
             content: result.content,
             details: result.details,
-            isError,
+            isError: resultIsError,
             ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
-      if (!hookResult) {
-        return undefined;
+      if (hookResult) {
+        this.extensionModifiedToolResultIds.add(toolCall.id);
       }
-      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         ...hookResult,
-        isError: hookResult.isError ?? isError,
+        isError: hookResult?.isError ?? resultIsError,
       };
     };
+    // Pre-execution failures skip afterToolCall and its recovery handlers.
+    this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
+      executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
   // =========================================================================
@@ -472,23 +477,13 @@ export abstract class AgentSessionBase {
       return false;
     }
 
-    for (const message of event.messages.toReversed()) {
-      if (message.role === "assistant") {
-        return this.isRetryableError(message);
-      }
-    }
-    return false;
+    const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+    return lastAssistant !== undefined && this.isRetryableError(lastAssistant);
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
   protected findLastAssistantMessage(): AssistantMessage | undefined {
-    const messages = this.agent.state.messages;
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "assistant") {
-        return msg;
-      }
-    }
-    return undefined;
+    return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
   /** Emit extension events based on agent events */

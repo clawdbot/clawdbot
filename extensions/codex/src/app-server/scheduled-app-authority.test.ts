@@ -433,6 +433,99 @@ describe("scheduled Codex app authority", () => {
   });
 
   it.each([
+    { current: "ask", captured: "allow" },
+    { current: "allow", captured: "ask" },
+  ] as const)(
+    "keeps link approvals with the user for current $current and captured $captured policy",
+    ({ current, captured }) => {
+      const config = threadConfig();
+      config.policyContext.apps.calendar = {
+        source: "account",
+        appName: "Calendar",
+        mcpServerNames: [],
+        allowDestructiveActions: true,
+        allowOpenWorld: true,
+        destructiveApprovalMode: current,
+      };
+      config.configPatch = {
+        apps: {
+          calendar: {
+            enabled: true,
+            ...(current === "ask"
+              ? {
+                  links: {
+                    account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
+                  },
+                }
+              : {}),
+          },
+          newly_connected: { enabled: true },
+        },
+      };
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        authority({
+          apps: [
+            {
+              id: "calendar",
+              allowDestructiveActions: true,
+              allowOpenWorld: true,
+              destructiveApprovalMode: captured,
+              tools: { edit: "approve", blocked: "approve" },
+            },
+          ],
+        }),
+        {
+          config: {
+            apps: {
+              calendar: {
+                enabled: true,
+                links: {
+                  account: {
+                    approvals_reviewer: "auto_review",
+                    default_tools_approval_mode: "approve",
+                  },
+                },
+                tools: {
+                  edit: { approval_mode: "approve" },
+                  blocked: { enabled: false, approval_mode: "approve" },
+                },
+              },
+              newly_connected: { enabled: true },
+            },
+          },
+          toolsByApp: new Map([
+            [
+              "calendar",
+              new Map([
+                ["edit", {}],
+                ["blocked", {}],
+              ]),
+            ],
+          ]),
+        },
+      );
+
+      expect(intersected.provisionalAppIds).toEqual(["calendar"]);
+      expect(intersected.configPatch).toMatchObject({
+        apps: {
+          calendar: {
+            approvals_reviewer: "user",
+            links: {
+              account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
+            },
+            tools: {
+              edit: { enabled: true, approval_mode: "prompt" },
+              blocked: { enabled: false, approval_mode: "prompt" },
+            },
+          },
+          newly_connected: { enabled: false },
+        },
+      });
+    },
+  );
+
+  it.each([
     {
       name: "explicit tool disablement",
       appConfig: {

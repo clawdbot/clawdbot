@@ -131,6 +131,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
+  precedingMessages?: readonly DiscordMessageEvent["message"][];
   data: DiscordMessageEvent;
   client: Client;
 };

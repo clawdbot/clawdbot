@@ -5,16 +5,19 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
@@ -23,14 +26,27 @@ const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
-    it.each(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+    const test = createMacScriptTest();
+    test.for(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
       "joins architecture workers and preserves assembly safety: %s",
-      async (mode) => {
-        const root = tempDirs.make("openclaw-swift-parallel-");
+      { timeout: 15_000 },
+      async (mode, { mac, onTestFinished }) => {
+        const root = mac.createTempDir("openclaw-swift-parallel-");
         const stage = path.join(root, "stage");
         const scripts = path.join(root, "scripts/lib");
         mkdirSync(scripts, { recursive: true });
         mkdirSync(stage);
+        const mountParent = path.join(root, "Darwin private temp");
+        mkdirSync(mountParent);
+        const getconf = path.join(root, "getconf");
+        writeFileSync(
+          getconf,
+          `#!/bin/bash
+[[ "$*" == DARWIN_USER_TEMP_DIR ]] || exit 2
+printf '%s\\n' '${mountParent.replaceAll("'", "'\\''")}'
+`,
+        );
+        chmodSync(getconf, 0o755);
         const commit = "b".repeat(40);
         writeFileSync(
           path.join(scripts, "mac-swift-build.sh"),
@@ -45,19 +61,28 @@ exec "${process.execPath}" "${path.join(root, "worker.mjs")}" "$@"
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-const [operation, root, arch, config, jobs, commit, skip, work] = process.argv.slice(2);
+const [operation, root, arch, config, jobs, commit, skip, work, mount] = process.argv.slice(2);
 const mode = ${JSON.stringify(mode)};
 const event = (value) => fs.appendFileSync(path.join(root, 'events'), value + '\\n');
-if (operation === 'cleanup') {
-  event('cleanup:' + arch);
-  process.exit(mode === 'cleanup-failure' ? 55 : 0);
+if (!mount || path.dirname(path.dirname(mount)) !== fs.realpathSync(path.join(root, 'Darwin private temp'))) {
+  throw new Error('snapshot mount must use the OS temp location, independently of work or TMPDIR');
 }
+if (operation === 'cleanup') {
+  if (fs.readFileSync(path.join(root, 'mount-' + arch), 'utf8') !== mount) throw new Error('cleanup lost the build mount');
+  event('cleanup:' + arch);
+  if (mode === 'cleanup-failure') process.exit(55);
+  fs.rmdirSync(mount);
+  process.exit(0);
+}
+fs.mkdirSync(mount);
+fs.writeFileSync(path.join(root, 'mount-' + arch), mount);
 event('build:' + arch + ':' + jobs);
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
 const exited = new Promise(resolve => child.on('exit', resolve));
 process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
 fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
+console.log('ready:' + arch);
 const deadline = Date.now() + 5000;
 while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
   if (Date.now() > deadline) throw new Error('architecture barrier did not open');
@@ -95,37 +120,62 @@ ${cleanup}
 ${build}
 touch "$ROOT_DIR/assembled"
 `;
-        const child = spawn("/bin/bash", ["-c", launcher], { stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn("/bin/bash", ["-c", launcher], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            PATH: `${root}:${process.env.PATH}`,
+            TMPDIR: path.join(root, "unavailable"),
+          },
+        });
         let stderr = "";
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
         });
-        child.stdout.resume();
-        const closed = new Promise<number | null>((resolve) => {
-          child.on("close", resolve);
+        const closed = mac.lifetime.track(
+          new Promise<number | null>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", resolve);
+          }),
+        );
+        const output = createInterface({ input: child.stdout });
+        const ready = new Set<string>();
+        output.on("line", (line) => {
+          if (line === "ready:arm64" || line === "ready:x86_64") {
+            ready.add(line);
+            if (mode === "cancel" && ready.size === 2) {
+              child.kill("SIGTERM");
+            }
+          }
         });
-        if (mode === "cancel") {
-          await expect
-            .poll(
-              () =>
-                existsSync(path.join(root, "ready-arm64")) &&
-                existsSync(path.join(root, "ready-x86_64")),
-            )
-            .toBe(true);
-          child.kill("SIGTERM");
-        }
+        onTestFinished(async () => {
+          try {
+            if (child.exitCode === null && child.signalCode === null) {
+              child.kill("SIGTERM");
+            }
+            await closed;
+          } finally {
+            output.close();
+          }
+        });
         const code = await closed;
         expect(code, stderr).toBe(
           mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
         );
         expect(existsSync(path.join(root, "assembled"))).toBe(mode === "success");
         expect(existsSync(stage)).toBe(mode === "cleanup-failure");
+        expect(readdirSync(mountParent)).toHaveLength(mode === "cleanup-failure" ? 1 : 0);
         const events = readFileSync(path.join(root, "events"), "utf8").trim().split("\n");
         expect(events.filter((event) => event.startsWith("cleanup:")).toSorted()).toEqual([
           "cleanup:arm64",
           "cleanup:x86_64",
         ]);
         for (const arch of ["arm64", "x86_64"]) {
+          const mount = readFileSync(path.join(root, `mount-${arch}`), "utf8");
+          expect(existsSync(mount)).toBe(mode === "cleanup-failure");
+          if (mode === "cleanup-failure") {
+            expect(statSync(path.dirname(mount)).mode & 0o777).toBe(0o700);
+          }
           const pid = Number(readFileSync(path.join(root, `pid-${arch}`), "utf8"));
           expect(() => process.kill(pid, 0)).toThrow();
           expect(
@@ -133,7 +183,6 @@ touch "$ROOT_DIR/assembled"
           ).toBe(mode === "cleanup-failure");
         }
       },
-      15_000,
     );
   },
 );
@@ -299,7 +348,8 @@ function makePlist(): string {
 }
 
 function runHelper(script: string, shell = "bash") {
-  return spawnSync(shell, ["-lc", script], {
+  // Login/logout hooks can replace the helper's exit status on headless hosts.
+  return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -712,7 +762,7 @@ function getStopPackagedAppBlock(): string {
 function getSwiftCompatibilityBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Copying app icon"');
+  const end = script.indexOf('echo "🖼  Compiling app icon"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -818,6 +868,8 @@ function runSwiftPMResourceBundleHarness(
 
 function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
+  const workRoot = tempDirs.make("openclaw-resource-backups-");
+  const backupRoot = path.join(workRoot, "resource-backups");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
   const keyboardShortcuts = path.join(
@@ -875,20 +927,20 @@ function runSwiftPMResourcePatchHarness(failRestore = false) {
 
   const result = runHelper(`
     set -euo pipefail
-    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    SWIFT_WORK_ROOT=${JSON.stringify(workRoot)}
     BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    ${failRestore ? "mv() { return 13; }" : ""}
+    ${failRestore ? "mv() { printf 'restore failed\\n' >&2; return 13; }" : ""}
     cleanup_status=0
     restore_swiftpm_resource_sources || cleanup_status=$?
     exit "$cleanup_status"
   `);
 
-  return { fixtures, result };
+  return { backupRoot, fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -1893,19 +1945,25 @@ try {
   });
 
   it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     for (const [file, contents] of fixtures) {
       expect(readFileSync(file, "utf8")).toBe(contents);
-      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
     }
+    expect(readdirSync(backupRoot)).toEqual([]);
   });
 
   it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).not.toBe(0);
+    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("restore failed\n");
+    const backups = readdirSync(backupRoot).map((file) =>
+      readFileSync(path.join(backupRoot, file), "utf8"),
+    );
+    expect(backups).toHaveLength(fixtures.size);
+    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
   });
 
   it("fails closed when any required SwiftPM resource bundle is missing", () => {
@@ -1987,6 +2045,7 @@ try {
       const buildPath = path.join(root, "build with spaces");
       const checkout = path.join(buildPath, "checkouts", "Peekaboo");
       const scratch = path.join(root, "temporary snapshots");
+      const mount = path.join(scratch, "mounted source");
       const unrelated = path.join(scratch, "unrelated-snapshot", "marker");
       const operationsPath = path.join(root, "operations");
       const expectedCommit = "b".repeat(40);
@@ -2028,7 +2087,7 @@ try {
         mountCommand,
         `#!/bin/bash
 printf 'mount\\n' >> "$operations"
-${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s/work/snapshot/mount (apfs, read-only)\\n' "$fixture_root"` : "exit 0"}
+${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s (apfs, read-only)\\n' "$fixture_mount"` : "exit 0"}
 `,
       );
       chmodSync(mountCommand, 0o755);
@@ -2038,10 +2097,12 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       set -euo pipefail
       export fixture_root=${JSON.stringify(root)}
       export operations=${JSON.stringify(operationsPath)}
+      export fixture_mount=${JSON.stringify(mount)}
       export PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
       TMPDIR=${JSON.stringify(scratch)}
       ROOT_DIR=${JSON.stringify(root)}
       ${getSwiftPackageResolutionBlock()}
+      PEEKABOO_SNAPSHOT_MOUNT="$fixture_mount"
       trap cleanup_swift_architecture EXIT
       BUILD_PATH=${JSON.stringify(buildPath)}
       compiled_peekaboo_commit() {
@@ -2060,7 +2121,6 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
 
       const snapshotRoot = readFileSync(path.join(root, "snapshot-root"), "utf8");
       const image = path.join(snapshotRoot, "Peekaboo.dmg");
-      const mount = path.join(snapshotRoot, "mount");
       const expectedOperations = [`verify:${checkout}:${expectedCommit}`, "create"];
       if (operation !== "create") {
         expectedOperations.push("attach");
@@ -2075,12 +2135,13 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       const retained = mounts !== "empty";
       if (!retained) {
         expectedOperations.push(
-          `remove:-rf ${snapshotRoot}  ${path.join(root, "work/resource-backups")}`,
+          `remove:-rf ${snapshotRoot} ${mount}  ${path.join(root, "work/resource-backups")}`,
         );
       }
       expect(result.status).toBe(retained ? 1 : exitCode);
       expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
       expect(existsSync(snapshotRoot)).toBe(retained);
+      expect(existsSync(mount)).toBe(retained);
       expect(readFileSync(path.join(checkout, "source"), "utf8")).toBe("source preserved\n");
       expect(readFileSync(unrelated, "utf8")).toBe("unrelated snapshot preserved\n");
       const readArgs = (command: string) =>
@@ -2234,9 +2295,9 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.22.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6",
+      "0bc95dab9543eec416b1c840754eea8bc8a53a7ffcae93dfef7f1825a7938b84",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

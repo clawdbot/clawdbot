@@ -188,12 +188,12 @@ class ActivityPage extends OpenClawLightDomElement {
     this.syncSessionActivity();
   }
 
-  private syncSessionActivity(force = false) {
+  private syncSessionActivity(reason: "query" | "retry" = "query") {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
       this.routeData.mode === "sessions" ? this.routeData.filters : null,
-      force,
+      reason,
     );
   }
 
@@ -576,8 +576,9 @@ class ActivityPage extends OpenClawLightDomElement {
         presenceViewers,
         result: this.sessionActivity.result,
         loading: this.sessionActivity.loading,
+        retrying: this.sessionActivity.retrying,
         error: this.sessionActivity.error,
-        onRetry: () => this.syncSessionActivity(true),
+        onRetry: () => this.syncSessionActivity("retry"),
         onAutomationDayToggle: (dayKey) => {
           const next = new Set(this.expandedAutomationDays);
           if (next.has(dayKey)) {
@@ -656,21 +657,23 @@ class ActivityPage extends OpenClawLightDomElement {
   override render() {
     const mode = this.routeData.mode;
     const body = html`
-      ${mode === "run"
-        ? nothing
-        : renderHubTabs({
-            id: "activity-mode",
-            active: mode,
-            tabs: [
-              { value: "sessions", label: t("activityFeed.sessionsMode") },
-              { value: "live", label: t("activity.runInspector.liveMode") },
-            ],
-            ariaLabel: t("activity.runInspector.activityView"),
-            panelId: "activity-mode-panel",
-            className: "activity-mode-tabs",
-            variant: "sub",
-            onSelect: (selected) => this.selectMode(selected),
-          })}
+      ${
+        mode === "run"
+          ? nothing
+          : renderHubTabs({
+              id: "activity-mode",
+              active: mode,
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              className: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) => this.selectMode(selected),
+            })
+      }
       <div
         id="activity-mode-panel"
         role=${mode === "run" ? nothing : "tabpanel"}
@@ -683,9 +686,9 @@ class ActivityPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          ${mode === "live"
-            ? nothing
-            : html`<div class="page-sub">${t("subtitles.activity")}</div>`}
+          ${
+            mode === "live" ? nothing : html`<div class="page-sub">${t("subtitles.activity")}</div>`
+          }
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}

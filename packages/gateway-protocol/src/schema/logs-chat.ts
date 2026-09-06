@@ -37,6 +37,7 @@ export const ChatHistoryParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
+  maxBytes: Type.Optional(Type.Integer({ minimum: 1024 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
   inputRunIds: Type.Optional(
@@ -50,6 +51,18 @@ export const ChatHistoryParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Resolve a short chat link and fetch its first page under the same discovery policy. */
+export const ChatStartupParamsSchema = Type.Union([
+  ChatHistoryParamsSchema,
+  closedObject({
+    shortId: NonEmptyString,
+    slugHint: Type.Optional(NonEmptyString),
+    agentId: NonEmptyString,
+    limit: ChatHistoryParamsSchema.properties.limit,
+    maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+  }),
+]);
 
 /** Accepted input awaiting a turn, separate from canonical model history. */
 export const ChatPendingInputsPageSchema = closedObject({
@@ -125,16 +138,27 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 ]);
 
 /** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
-export const ChatMetadataParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKey: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
-    }),
-  ),
-});
+export const ChatMetadataParamsSchema = Object.assign(
+  closedObject({
+    agentId: Type.Optional(NonEmptyString),
+    authProfileId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          "Preview your own saved model account for a new chat without changing defaults. Cannot be combined with sessionKey.",
+      }),
+    ),
+    sessionKey: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+      }),
+    ),
+  }),
+  { not: { required: ["sessionKey", "authProfileId"] } },
+);
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({
@@ -300,11 +324,18 @@ export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("starting_model"),
 ]);
 
-/** Non-terminal run status emitted before assistant or tool activity becomes visible. */
+/** Transient working status; only the run owner publishes terminal failures. */
 export const ChatStatusEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("status"),
   phase: ChatRunStartupPhaseSchema,
+  retry: Type.Optional(
+    closedObject({
+      attempt: Type.Integer({ minimum: 1, maximum: 10 }),
+      maxAttempts: Type.Integer({ minimum: 1, maximum: 10 }),
+      reason: Type.Literal("rate_limit"),
+    }),
+  ),
 });
 
 /** Incremental assistant output event; `replace` marks full-content refresh deltas. */
@@ -407,6 +438,7 @@ export const ChatEventSchema = Type.Union([
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type ChatHistoryParams = Static<typeof ChatHistoryParamsSchema>;
+export type ChatStartupParams = Static<typeof ChatStartupParamsSchema>;
 export type ChatHistoryDeltaResult = Static<typeof ChatHistoryDeltaResultSchema>;
 export type ChatHistoryResetResult = Static<typeof ChatHistoryResetResultSchema>;
 export type ChatHistoryCursorResult = Static<typeof ChatHistoryCursorResultSchema>;

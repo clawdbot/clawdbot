@@ -129,16 +129,13 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
 
   const eligible = hooks.filter((h) => h.loadable);
   const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => {
-    const missing = formatHookMissingSummary(hook);
-    return {
-      Status: formatHookStatus(hook),
-      Hook: formatHookName(hook),
-      Description: theme.muted(hook.description),
-      Source: formatHookSource(hook),
-      Missing: missing ? theme.warn(missing) : "",
-    };
-  });
+  const rows = hooks.map((hook) => ({
+    Status: formatHookStatus(hook),
+    Hook: formatHookName(hook),
+    Description: theme.muted(hook.description),
+    Source: formatHookSource(hook),
+    Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+  }));
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },

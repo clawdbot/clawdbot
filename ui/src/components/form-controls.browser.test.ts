@@ -211,6 +211,59 @@ describeBrowserLayout("settings icon buttons", () => {
   });
 });
 
+describeBrowserLayout("settings row wrapping", () => {
+  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setViewportSize({ width, height: 1000 });
+      const description =
+        "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
+        <body><main style="max-width: 1100px">
+          <div class="settings-row plugins-item">
+            <span class="plugins-tile" aria-hidden="true">C</span>
+            <div class="settings-row__text"><span class="settings-row__title">Connector</span>
+              <span class="settings-row__desc">${description}</span></div>
+            <div class="settings-row__control"><button class="btn btn--sm">Disable</button>
+              <button class="btn btn--sm btn--icon" aria-label="Remove connector">×</button></div>
+            <div class="plugins-row-message" role="status">Connector remains disabled.</div>
+          </div>
+        </main></body></html>`);
+      const geometry = await page.locator(".settings-row").evaluate((row) => {
+        const [tile, text, control, message] = Array.from(row.children, (child) =>
+          child.getBoundingClientRect(),
+        );
+        if (!tile || !text || !control || !message) {
+          throw new Error("Missing settings row fixture child");
+        }
+        const style = getComputedStyle(row);
+        const contentWidth =
+          row.clientWidth -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        return {
+          copyBesideTile:
+            text.left >= tile.right && text.top < tile.bottom && tile.top < text.bottom,
+          desktopControls:
+            control.left >= text.right && control.top < text.bottom && text.top < control.bottom,
+          narrowControls: control.top >= Math.max(tile.bottom, text.bottom),
+          messageBelow: message.top >= Math.max(tile.bottom, text.bottom, control.bottom),
+          messageWidth: message.width,
+          contentWidth,
+          overflow: row.scrollWidth - row.clientWidth,
+        };
+      });
+      expect(geometry.copyBesideTile).toBe(true);
+      expect(width <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
+      expect(geometry.messageBelow).toBe(true);
+      expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
+      expect(geometry.overflow).toBeLessThanOrEqual(1);
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
 describeBrowserLayout("settings media device controls", () => {
   it("keeps paired selectors the same width across device labels and viewports", async () => {
     const page = await desktopContext.newPage();

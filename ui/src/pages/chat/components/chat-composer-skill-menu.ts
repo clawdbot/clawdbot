@@ -308,42 +308,44 @@ export function renderSkillMenu(
             event.currentTarget instanceof Element ? event.currentTarget : undefined,
           )}
       >
-        ${state.skillCommandRefreshPending || state.skillMenuItems.length === 0
-          ? html`<div class="slash-menu-group">
-              <div class="slash-menu-group__label">${t("chat.skills.loading")}</div>
-            </div>`
-          : html`<div class="slash-menu-group">
-              <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
-              ${state.skillMenuItems.map(
-                (command, index) => html`
-                  <div
-                    id=${skillOptionId(host.paneId, command)}
-                    class="slash-menu-item ${index === state.skillMenuIndex
-                      ? "slash-menu-item--active"
-                      : ""}"
-                    role="option"
-                    aria-selected=${index === state.skillMenuIndex}
-                    @mousedown=${(event: MouseEvent) => event.preventDefault()}
-                    @click=${() => selectSkillMention(command, state, host, requestUpdate)}
-                    @mouseenter=${() => {
-                      state.skillMenuIndex = index;
-                      requestUpdate();
-                    }}
-                  >
-                    <span class="slash-menu-icon">${icons.pencilSparkles}</span>
-                    <span class="slash-menu-copy">
-                      <span class="slash-menu-name"
-                        >${renderSkillName(
-                          getSkillDisplayName(command),
-                          state.skillMenuTarget?.query ?? "",
-                        )}</span
-                      >
-                      <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
-                    </span>
-                  </div>
-                `,
-              )}
-            </div>`}
+        ${
+          state.skillCommandRefreshPending || state.skillMenuItems.length === 0
+            ? html`<div class="slash-menu-group">
+                <div class="slash-menu-group__label">${t("chat.skills.loading")}</div>
+              </div>`
+            : html`<div class="slash-menu-group">
+                <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
+                ${state.skillMenuItems.map(
+                  (command, index) => html`
+                    <div
+                      id=${skillOptionId(host.paneId, command)}
+                      class="slash-menu-item ${
+                        index === state.skillMenuIndex ? "slash-menu-item--active" : ""
+                      }"
+                      role="option"
+                      aria-selected=${index === state.skillMenuIndex}
+                      @mousedown=${(event: MouseEvent) => event.preventDefault()}
+                      @click=${() => selectSkillMention(command, state, host, requestUpdate)}
+                      @mouseenter=${() => {
+                        state.skillMenuIndex = index;
+                        requestUpdate();
+                      }}
+                    >
+                      <span class="slash-menu-icon">${icons.pencilSparkles}</span>
+                      <span class="slash-menu-copy">
+                        <span class="slash-menu-name"
+                          >${renderSkillName(
+                            getSkillDisplayName(command),
+                            state.skillMenuTarget?.query ?? "",
+                          )}</span
+                        >
+                        <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
+                      </span>
+                    </div>
+                  `,
+                )}
+              </div>`
+        }
       </div>
     </div>
   `;

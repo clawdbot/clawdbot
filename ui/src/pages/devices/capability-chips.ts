@@ -72,9 +72,11 @@ export function renderCapabilityChips(caps: readonly string[]) {
   const runtimeTitle = runtimes.join(", ");
   return html`
     <div class="device-capabilities" role="list" aria-label=${t("devices.inventory.capabilities")}>
-      ${runtimes.length > 0
-        ? renderCapabilityChip(icons.squareTerminal, runtimeLabel, runtimeTitle)
-        : nothing}
+      ${
+        runtimes.length > 0
+          ? renderCapabilityChip(icons.squareTerminal, runtimeLabel, runtimeTitle)
+          : nothing
+      }
       ${visible.map((cap) => {
         const presentation = CAPABILITY_PRESENTATIONS.get(cap);
         const icon = presentation?.icon ?? icons.puzzle;
@@ -84,14 +86,16 @@ export function renderCapabilityChips(caps: readonly string[]) {
           : cap;
         return renderCapabilityChip(icon, label, title);
       })}
-      ${overflow > 0
-        ? html`<span
-            class="device-capability device-capability--overflow"
-            role="listitem"
-            title=${t("devices.capabilities.overflow", { count: String(overflow) })}
-            >+${overflow}</span
-          >`
-        : nothing}
+      ${
+        overflow > 0
+          ? html`<span
+              class="device-capability device-capability--overflow"
+              role="listitem"
+              title=${t("devices.capabilities.overflow", { count: String(overflow) })}
+              >+${overflow}</span
+            >`
+          : nothing
+      }
     </div>
   `;
 }

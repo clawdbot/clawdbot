@@ -8,9 +8,9 @@ import {
   resolveHeartbeatSchedulerSeed,
 } from "../infra/heartbeat-schedule.js";
 import type { CronService } from "./service.js";
+import { partitionSystemMonitors } from "./system-monitor-jobs.js";
+import { HEARTBEAT_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
-
-const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 
 type HeartbeatMonitorSpec = { agentId: string; input: CronJobCreate };
 
@@ -73,13 +73,10 @@ export function resolveHeartbeatMonitorPlan(
   existingJobs: readonly CronJob[],
   options: { schedulerSeed?: string } = {},
 ): HeartbeatMonitorPlan {
-  const existingByAgentId = new Map<string, CronJob>();
-  for (const job of existingJobs) {
-    const agentId = heartbeatMonitorAgentId(job);
-    if (agentId) {
-      existingByAgentId.set(agentId, job);
-    }
-  }
+  const { retained: existingByAgentId, duplicates } = partitionSystemMonitors(
+    existingJobs,
+    heartbeatMonitorAgentId,
+  );
 
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
   const specs: HeartbeatMonitorSpec[] = resolveHeartbeatAgents(cfg).flatMap((agent) => {
@@ -122,7 +119,13 @@ export function resolveHeartbeatMonitorPlan(
     ];
   });
 
-  const changes: HeartbeatMonitorChange[] = [];
+  // Remove duplicate declaration keys before declarative upserts, which reject
+  // ambiguous matches by design.
+  const changes: HeartbeatMonitorChange[] = duplicates.map(({ agentId, job }) => ({
+    kind: "remove",
+    agentId,
+    job,
+  }));
   for (const spec of specs) {
     const existing = existingByAgentId.get(spec.agentId);
     if (!existing) {

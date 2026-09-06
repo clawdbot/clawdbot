@@ -2,8 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
-  resolveInstalledPluginLifecycleOwnership,
-  resolveInstalledPluginPackageOwnership,
+  createInstalledPluginOwnershipResolver,
   type InstalledPluginLifecycleOwnership,
 } from "./installed-plugin-package-ownership.js";
 import {
@@ -20,12 +19,9 @@ export function capturePluginPackageUpdateSnapshot(params: {
   env?: NodeJS.ProcessEnv;
 }): { ok: true; value: PluginPackageUpdateSnapshot } | { ok: false; error: string } {
   const snapshot = new Map<string, InstalledPluginLifecycleOwnership>();
+  const resolver = createInstalledPluginOwnershipResolver(params.index, params.env);
   for (const installOwner of new Set(params.installOwners)) {
-    const ownership = resolveInstalledPluginLifecycleOwnership(
-      params.index,
-      installOwner,
-      params.env,
-    );
+    const ownership = resolver.resolveLifecycle(installOwner);
     if (!ownership.ok) {
       return ownership;
     }
@@ -63,19 +59,12 @@ export function reconcilePluginPackageUpdateConfig(params: {
   env?: NodeJS.ProcessEnv;
 }): { ok: true; config: OpenClawConfig } | { ok: false; error: string } {
   let config = params.config;
+  const resolver = createInstalledPluginOwnershipResolver(params.afterIndex, params.env);
   for (const [installOwner, before] of params.snapshot) {
     const nextInstallOwner = params.installOwnerMigrations?.[installOwner] ?? installOwner;
-    const after = resolveInstalledPluginPackageOwnership(
-      params.afterIndex,
-      nextInstallOwner,
-      params.env,
-    );
+    const after = resolver.resolvePackage(nextInstallOwner);
     if (before.kind === "orphan") {
-      const lifecycleAfter = resolveInstalledPluginLifecycleOwnership(
-        params.afterIndex,
-        nextInstallOwner,
-        params.env,
-      );
+      const lifecycleAfter = resolver.resolveLifecycle(nextInstallOwner);
       const unchangedOrphan =
         nextInstallOwner === installOwner &&
         isDeepStrictEqual(

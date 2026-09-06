@@ -21,6 +21,7 @@ type Scenario = {
   authless?: boolean;
   outcome?: "fail" | "cancel" | "prompt-cancel";
   surface?: "cli" | "gateway";
+  isLocalGateway?: boolean;
 };
 
 async function runCustomSetup(scenario: Scenario) {
@@ -124,8 +125,9 @@ async function runCustomSetup(scenario: Scenario) {
     "fixture-alias",
   ];
   const selectAnswers = [
+    "__more",
     "custom",
-    ...(scenario.surface === "gateway"
+    ...(scenario.surface === "gateway" && !scenario.isLocalGateway
       ? []
       : [...(scenario.secretRef ? ["ref", "env"] : ["plaintext"]), scenario.protocol]),
     "skip",
@@ -167,16 +169,15 @@ async function runCustomSetup(scenario: Scenario) {
       workspace,
       setupComplete: true,
     },
-    autoAttemptedKinds: new Set(),
     config: initialConfig,
     workspace,
     prompter,
     runtime,
-    hasActiveRoute: true,
     activate: async (params) => {
       const result = await activateSetupInference({
         ...params,
         surface: scenario.surface ?? "cli",
+        ...(scenario.isLocalGateway ? { isRemoteProviderAuth: false } : {}),
         signal: controller.signal,
       });
       activationResults.push(result);
@@ -211,6 +212,8 @@ describe("guided custom provider activation", () => {
     { protocol: "openai-responses" as const, secretRef: true },
     { protocol: "anthropic" as const },
     { protocol: "openai" as const, authless: true },
+    { protocol: "openai", surface: "gateway", isLocalGateway: true },
+    { protocol: "anthropic", surface: "gateway", isLocalGateway: true },
   ])(
     "verifies and persists $protocol with its selected credential shape",
     { timeout: 300_000 },
@@ -241,17 +244,25 @@ describe("guided custom provider activation", () => {
     },
   );
 
-  it.each(["fail", "cancel"] as const)(
-    "preserves the prior route after completion %s",
+  it.each<Scenario>([
+    { protocol: "openai", outcome: "fail" },
+    { protocol: "openai", outcome: "cancel" },
+    { protocol: "openai", outcome: "fail", surface: "gateway", isLocalGateway: true },
+    { protocol: "anthropic", outcome: "cancel", surface: "gateway", isLocalGateway: true },
+  ])(
+    "preserves the prior route after $surface completion $outcome",
     { timeout: 300_000 },
-    async (outcome) => {
-      const setup = await runCustomSetup({ protocol: "openai", outcome });
+    async (scenario) => {
+      const setup = await runCustomSetup(scenario);
       expect(setup.requests).toHaveLength(2);
       expect(setup.result).toBeNull();
       expect(setup.config).toEqual(setup.initialConfig);
       expect(setup.output).not.toContain(setup.credential);
       expect(setup.activationResults).toEqual([
-        expect.objectContaining({ ok: false, status: outcome === "fail" ? "auth" : "unavailable" }),
+        expect.objectContaining({
+          ok: false,
+          status: scenario.outcome === "fail" ? "auth" : "unavailable",
+        }),
       ]);
     },
   );
@@ -269,7 +280,9 @@ describe("guided custom provider activation", () => {
     expect(setup.textPrompts).toEqual([]);
     expect(setup.result).toBeNull();
     expect(setup.config).toEqual(setup.initialConfig);
-    expect(setup.output).toContain("run openclaw onboard on the Gateway host");
+    expect(setup.output).toContain(
+      "run openclaw onboard --auth-choice custom-api-key on the Gateway host",
+    );
   });
 });
 

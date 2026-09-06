@@ -568,38 +568,17 @@ suite.define(() => {
       name: "Hannah",
       avatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7",
     };
-    let avatarRequestCount = 0;
     const avatarRequests: Array<{ resourceType: string; url: string }> = [];
-    let releaseRetry: () => void = () => undefined;
-    const retryGate = new Promise<void>((resolve) => {
-      releaseRetry = resolve;
-    });
-    let markRetryStarted: () => void = () => undefined;
-    const retryStarted = new Promise<void>((resolve) => {
-      markRetryStarted = resolve;
-    });
-    let markRetrySettled: () => void = () => undefined;
-    const retrySettled = new Promise<void>((resolve) => {
-      markRetrySettled = resolve;
-    });
     await page.route(`**/api/users/${viewer.id}/avatar*`, async (route) => {
       avatarRequests.push({
         resourceType: route.request().resourceType(),
         url: route.request().url(),
       });
-      const requestIndex = ++avatarRequestCount;
-      if (requestIndex === 2) {
-        markRetryStarted();
-        await retryGate;
-      }
       await route.fulfill({
         body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
         contentType: "application/json",
         status: 404,
       });
-      if (requestIndex === 2) {
-        markRetrySettled();
-      }
     });
     await installMockGateway(page, {
       presenceUsers: [
@@ -626,7 +605,15 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const avatarResponse = page.waitForResponse((response) =>
+        response.url().endsWith(viewer.avatarUrl),
+      );
+      const [response] = await Promise.all([
+        avatarResponse,
+        page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")),
+      ]);
+      expect(response.status()).toBe(404);
+      expect(await response.finished()).toBeNull();
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {
@@ -635,17 +622,13 @@ suite.define(() => {
       const slot = userGroup.locator(".chat-avatar-slot");
       const image = slot.locator("img.chat-avatar.user");
       const initials = slot.locator(".chat-avatar--sender-initials");
-      await retryStarted;
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       expect(
         avatarRequests.map((request) => ({
           resourceType: request.resourceType,
           url: new URL(request.url).pathname + new URL(request.url).search,
         })),
-      ).toEqual([
-        { resourceType: "fetch", url: viewer.avatarUrl },
-        { resourceType: "fetch", url: viewer.avatarUrl },
-      ]);
+      ).toEqual([{ resourceType: "fetch", url: viewer.avatarUrl }]);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
@@ -666,20 +649,15 @@ suite.define(() => {
           }),
       );
 
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-local-avatar-after-rerender.png");
 
-      releaseRetry();
-      await retrySettled;
       await expect.poll(() => image.getAttribute("src")).toBeNull();
-      await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect(initials).toBeVisible();
     } finally {
-      releaseRetry();
       await context.close();
     }
   });

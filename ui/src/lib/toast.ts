@@ -181,28 +181,32 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           }
         }}
       >
-        ${toast.icon
-          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-          : nothing}
+        ${
+          toast.icon
+            ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
+            : nothing
+        }
         <span class="app-toast__message"
-          >${typeof toast.message === "string"
-            ? formatUiExternalText(toast.message)
-            : toast.message}</span
+          >${
+            typeof toast.message === "string" ? formatUiExternalText(toast.message) : toast.message
+          }</span
         >
-        ${toast.actionLabel && toast.onAction
-          ? html`
-              <button
-                type="button"
-                class="app-toast__action"
-                @click=${() => {
-                  this.dismiss("action");
-                  toast.onAction?.();
-                }}
-              >
-                ${toast.actionLabel}
-              </button>
-            `
-          : nothing}
+        ${
+          toast.actionLabel && toast.onAction
+            ? html`
+                <button
+                  type="button"
+                  class="app-toast__action"
+                  @click=${() => {
+                    this.dismiss("action");
+                    toast.onAction?.();
+                  }}
+                >
+                  ${toast.actionLabel}
+                </button>
+              `
+            : nothing
+        }
         <button
           type="button"
           class="app-toast__dismiss"

@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
+import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
+import * as startRepair from "../daemon-cli/start-repair.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -123,6 +127,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           mocks.events.push("restart managed service");
           mocks.running = true;
           servingBuildId = "target-build";
+          return true;
         });
       }
       mocks.child.mockImplementation(async (argv) => {
@@ -173,7 +178,6 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           steps: [],
           durationMs: 0,
         },
-        channel: mode === "git" ? "dev" : "stable",
         opts: { json: true },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
@@ -185,7 +189,9 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       });
       expect(activated).toBe(
         scenario !== "same-version stale launcher after refresh" &&
-          scenario !== "failed Git refresh retains original launcher",
+          scenario !== "failed Git refresh retains original launcher"
+          ? "ok"
+          : "failed",
       );
       expect(mocks.configSnapshot).toHaveBeenCalledTimes(
         scenario === "Git still serves previous build" ? 1 : 0,
@@ -204,6 +210,185 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         );
       }
       expect(mocks.child.mock.calls.filter(([argv]) => argv.includes("install"))).toHaveLength(1);
+    },
+  );
+}
+
+export function registerRestartOutcomeTests(
+  getFixture: () => {
+    root: string;
+    mocks: Pick<
+      InstallRootTransitionFixture["mocks"],
+      "child" | "health" | "configSnapshot" | "capability"
+    > & {
+      restart: Mock<() => Promise<{ outcome: "completed" }>>;
+      writeJson: Mock;
+    };
+  },
+) {
+  // Select the restart overload; Vitest otherwise infers the final start overload.
+  const restartRepairOwner: {
+    repairLoadedGatewayServiceForStart: (
+      params: Omit<
+        Parameters<typeof startRepair.repairLoadedGatewayServiceForStart>[0],
+        "action"
+      > & { action: "restart" },
+    ) => Promise<{ result: "restarted"; message: string; loaded: boolean }>;
+  } = startRepair;
+  it.each([
+    ["health", "restart-health-failed"],
+    ["native refusal", "failed"],
+    ["unexpected check", "failed"],
+    ["retry refusal", "failed"],
+    ["repair health", "failed"],
+    ["repair retry health", "restart-health-failed"],
+  ])(
+    "carries the real lifecycle's serialized %s result through a child process",
+    async (scenario, expected) => {
+      const { root, mocks } = getFixture();
+      const repairing = scenario.startsWith("repair ");
+      if (repairing) {
+        vi.spyOn(restartRepairOwner, "repairLoadedGatewayServiceForStart").mockResolvedValueOnce({
+          result: "restarted",
+          message: "Synthetic definition repair completed.",
+          loaded: true,
+        });
+        mocks.configSnapshot.mockResolvedValueOnce(undefined);
+        mocks.capability.mockResolvedValue({ kind: "writable" });
+      }
+      const exit = new Error("test lifecycle exit");
+      vi.mocked(defaultRuntime.exit).mockImplementationOnce(() => {
+        throw exit;
+      });
+      if (scenario === "native refusal") {
+        mocks.restart.mockRejectedValueOnce(new Error("native owner refused"));
+      } else if (scenario === "retry refusal") {
+        mocks.restart
+          .mockResolvedValueOnce({ outcome: "completed" })
+          .mockRejectedValueOnce(new Error("later native refusal"));
+      }
+      mocks.health.mockResolvedValue({
+        healthy: false,
+        staleGatewayPids:
+          scenario === "retry refusal" || scenario === "repair retry health" ? [4242] : [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 19305, status: "free", listeners: [], hints: [] },
+      });
+      if (scenario === "unexpected check") {
+        mocks.health.mockRejectedValueOnce(new Error("health observer crashed"));
+      }
+      const actual =
+        await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+      mocks.child.mockImplementationOnce(async (argv, options) => {
+        await expect(
+          runDaemonRestart({
+            json: true,
+            preserveDefinition: argv.includes("--preserve-definition"),
+          }),
+        ).rejects.toBe(exit);
+        expect(mocks.writeJson).toHaveBeenCalledOnce();
+        const serialized = JSON.stringify(mocks.writeJson.mock.lastCall?.[0]);
+        await fs.writeFile(
+          path.join(root, "dist", "index.js"),
+          `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = 1;`,
+        );
+        return actual.runCommandWithTimeout(argv, options);
+      });
+      expect(
+        await maybeRestartService({
+          shouldRestart: true,
+          result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
+          opts: { json: false },
+          refreshServiceEnv: false,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root,
+            refreshDefinition: repairing,
+            fingerprint: "fixture",
+          },
+          serviceEnv: process.env,
+          requireRunningServiceAfterRestart: repairing,
+          gatewayPort: 19305,
+          timeoutMs: 1000,
+          nodeRunner: process.execPath,
+        }),
+      ).toBe(expected);
+      expect(mocks.child).toHaveBeenCalledOnce();
+    },
+  );
+
+  const healthFailure = {
+    action: "restart",
+    ok: false,
+    result: "restart-health-failed",
+    error: "Gateway is unhealthy",
+  };
+  const json = JSON.stringify(healthFailure);
+  const success = JSON.stringify({ action: "restart", ok: true, result: "restarted" });
+  it.each<{
+    scenario: string;
+    response?: Partial<
+      Awaited<ReturnType<typeof import("../../process/exec.js").runCommandWithTimeout>>
+    >;
+    action?: "install" | "restart";
+  }>([
+    { scenario: "health" },
+    { scenario: "missing", response: { stdout: "" } },
+    { scenario: "malformed", response: { stdout: "{" } },
+    { scenario: "mixed", response: { stdout: `log before result\n${json}` } },
+    { scenario: "multiple", response: { stdout: `${json}\n${json}` } },
+    {
+      scenario: "wrong action",
+      response: { stdout: JSON.stringify({ ...healthFailure, action: "install" }) },
+    },
+    {
+      scenario: "wrong result",
+      response: { stdout: JSON.stringify({ ...healthFailure, result: "unknown" }) },
+    },
+    { scenario: "wrong ok", response: { stdout: JSON.stringify({ ...healthFailure, ok: true }) } },
+    {
+      scenario: "missing error",
+      response: { stdout: JSON.stringify({ ...healthFailure, error: undefined }) },
+    },
+    { scenario: "signal", response: { signal: "SIGTERM", termination: "signal" } },
+    { scenario: "timeout", response: { termination: "timeout" } },
+    { scenario: "truncated", response: { stdoutTruncatedBytes: 1 } },
+    { scenario: "killed", response: { killed: true } },
+    { scenario: "wrong exit", response: { code: 2 } },
+    { scenario: "forced", response: { cleanup: "forced" } },
+    { scenario: "uncertain", response: { cleanup: "uncertain" } },
+    { scenario: "forced success", response: { cleanup: "forced", code: 0, stdout: success } },
+    { scenario: "uncertain success", response: { cleanup: "uncertain", code: 0, stdout: success } },
+    { scenario: "install", action: "install" },
+  ])(
+    "classifies only the complete owned restart health response ($scenario)",
+    async ({ scenario, response, action = "restart" }) => {
+      const { root, mocks } = getFixture();
+      mocks.child.mockResolvedValueOnce({
+        code: 1,
+        stdout: json,
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+        cleanup: "normal",
+        ...response,
+      });
+      await expect(
+        runUpdatedInstallGatewayCommand(
+          {
+            result: { root, mode: "npm" },
+            opts: { json: false },
+            invocationEnv: process.env,
+            nodeRunner: process.execPath,
+          },
+          action,
+          true,
+        ),
+      ).rejects.toMatchObject({
+        name: scenario === "health" ? "GatewayRestartHealthError" : "Error",
+      });
+      expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
     },
   );
 }

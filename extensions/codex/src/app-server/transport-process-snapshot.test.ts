@@ -122,7 +122,7 @@ describe("Codex procfs command inspector", () => {
       const pgid = process.pid + Number(changed && mode === "regrouped");
       const replaced =
         (changed && mode === "replaced") || (commandReads > 1 && mode === "replaced after read");
-      return `${process.pid} (codex) ${state} ${ppid} ${pgid}${" 0".repeat(16)} ${replaced ? 54321 : 12345}\n`;
+      return `${process.pid} (codex) ${state} ${ppid} ${pgid}${" 0".repeat(14)} 1 0 ${replaced ? 54321 : 12345}\n`;
     });
     const observed = (await readCodexAppServerProcessSnapshot(undefined, [process.pid]))[0]!;
     const inspected = readCodexAppServerProcessCommand(observed, deadline);
@@ -188,8 +188,34 @@ describe("Codex procfs command inspector", () => {
 });
 
 describe("Codex procfs process inspector", () => {
-  it.for(["ENOENT", "ESRCH", "EACCES"] as const)(
-    "distinguishes a vanished neighbor from unreadable state: %s",
+  it.for(["1", "2", "0", "-1", "1.5", "missing", "9007199254740992"])(
+    "requires explicit thread evidence before classifying a zombie leader: %s",
+    async (threads, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      procfs.readFile.mockImplementation(async (file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return "00000000-0000-0000-0000-000000000001";
+        }
+        expect(file).toBe(`/proc/${process.pid}/stat`);
+        return `${process.pid} (worker) Z ${process.ppid} ${process.pid}${" 0".repeat(14)} ${threads} 0 12345\n`;
+      });
+      const snapshot = readCodexAppServerProcessSnapshot(undefined, [process.pid]);
+      if (threads === "1" || threads === "2") {
+        await expect(snapshot).resolves.toEqual([
+          { ...observedProcess, state: threads === "1" ? "Z" : "Zl" },
+        ]);
+      } else {
+        await expect(snapshot).rejects.toMatchObject({ reason: "unavailable" });
+      }
+    },
+  );
+
+  it.for(["ENOENT", "ESRCH", "EACCES", "exiting"] as const)(
+    "distinguishes vanished or exiting neighbors from unreadable state: %s",
     async (code, ctx) => {
       ctx.onTestFinished(() => {
         procfs.readFile.mockReset();
@@ -206,9 +232,12 @@ describe("Codex procfs process inspector", () => {
         }
         if (file === `/proc/${process.pid}/stat`) {
           // Fields 3..22 follow the final ')', even when comm contains ')' and spaces.
-          return `${process.pid} (codex ) worker) S ${process.ppid} ${process.pid}${" 0".repeat(16)} 12345${" 0".repeat(30)}\n`;
+          return `${process.pid} (codex ) worker) S ${process.ppid} ${process.pid}${" 0".repeat(14)} 1 0 12345${" 0".repeat(30)}\n`;
         }
         if (file === `/proc/${neighborPid}/stat`) {
+          if (code === "exiting") {
+            return `${neighborPid} (worker) Z 0 -1${" 0".repeat(16)} 12345\n`;
+          }
           throw Object.assign(new Error("neighbor process read failed"), { code });
         }
         throw new Error(`Unexpected procfs read: ${file}`);
@@ -226,6 +255,11 @@ describe("Codex procfs process inspector", () => {
             startedAt: `${bootId}:12345`,
           },
         ]);
+      }
+      if (code === "exiting") {
+        await expect(
+          readCodexAppServerProcessSnapshot(undefined, [neighborPid]),
+        ).rejects.toMatchObject({ reason: "unavailable" });
       }
     },
   );

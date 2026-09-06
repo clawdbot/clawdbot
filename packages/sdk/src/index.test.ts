@@ -1,4 +1,3 @@
-// OpenClaw SDK tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { EventHub, OpenClaw, normalizeGatewayEvent } from "./index.js";
 import type {
@@ -122,6 +121,13 @@ function requireTransportCall(calls: readonly RequestCall[], index: number): Req
 function createClientFixture(responses: Record<string, FakeResponse> = {}) {
   const transport = new FakeTransport(responses);
   return { transport, oc: new OpenClaw({ transport }) };
+}
+
+async function observeGatewaySequence(oc: OpenClaw, seq: number): Promise<OpenClawEvent> {
+  for await (const event of oc.events((eventLocal) => eventLocal.raw?.seq === seq)) {
+    return event;
+  }
+  throw new Error(`event stream ended before sequence ${seq}`);
 }
 
 function createListFixture() {
@@ -267,6 +273,26 @@ describe("OpenClaw SDK", () => {
     expect(result.status).toBe("cancelled");
   });
 
+  it("keeps superseded writer runs cancelled in both events and waits", async () => {
+    const event = normalizeGatewayEvent(
+      createAgentEvent("run_superseded", 1, 123, "lifecycle", {
+        phase: "end",
+        aborted: true,
+        status: "superseded",
+        stopReason: "superseded",
+        endedAt: 123,
+      }),
+    );
+    const result = await waitForSnapshot("run_superseded", {
+      status: "error",
+      stopReason: "superseded",
+      endedAt: 123,
+    });
+
+    expect.soft(event.type).toBe("run.cancelled");
+    expect(result.status).toBe("cancelled");
+  });
+
   it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
     const result = await waitForSnapshot("run_hard_timeout", {
       stopReason: "rpc",
@@ -330,6 +356,17 @@ describe("OpenClaw SDK", () => {
     const result = await waitForSnapshot("run_still_active");
 
     expect(result.runId).toBe("run_still_active");
+    expect(result.status).toBe("accepted");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("keeps queued wait snapshots non-terminal", async () => {
+    const result = await waitForSnapshot("run_queued", {
+      status: "pending",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+
     expect(result.status).toBe("accepted");
     expect(result.error).toBeUndefined();
   });
@@ -894,49 +931,45 @@ describe("OpenClaw SDK", () => {
     }
   });
 
-  it("rejects run event streams after replaying events when the event pump fails", async () => {
-    const failure = new Error("synthetic post-yield transport event failure");
-    const rawEvent = createAgentEvent("run_pump_failure", 1, 1_777_000_000_050, "lifecycle", {
-      phase: "start",
-    });
-    const transport = new EventsOnlyTransport({
-      async *[Symbol.asyncIterator]() {
-        yield rawEvent;
-        throw failure;
-      },
-    });
-    const oc = new OpenClaw({ transport });
-    const run = await oc.runs.get("run_pump_failure");
-    const iterator = run.events()[Symbol.asyncIterator]();
-    let futureIterator: AsyncIterator<OpenClawEvent> | undefined;
+  it.each(["ends", "fails"])(
+    "replays run events for late consumers after the pump %s",
+    async (end) => {
+      const failure =
+        end === "fails" ? new Error("synthetic post-yield transport event failure") : null;
+      const rawEvent = createAgentEvent("run_pump_failure", 1, 1_777_000_000_050, "lifecycle", {
+        phase: "start",
+      });
+      const transport = new EventsOnlyTransport({
+        async *[Symbol.asyncIterator]() {
+          yield rawEvent;
+          if (failure) {
+            throw failure;
+          }
+        },
+      });
+      const oc = new OpenClaw({ transport });
+      const run = await oc.runs.get("run_pump_failure");
+      let iterator: AsyncIterator<OpenClawEvent> | undefined;
 
-    try {
-      const first = await iterator.next();
-      expect(first.done).toBe(false);
-      if (first.done !== false) {
-        throw new Error("expected first run event");
+      try {
+        for (let consumer = 0; consumer < 2; consumer += 1) {
+          iterator = run.events()[Symbol.asyncIterator]();
+          await expect(iterator.next()).resolves.toMatchObject({
+            done: false,
+            value: { type: "run.started", runId: "run_pump_failure" },
+          });
+          if (failure) {
+            await expect(iterator.next()).rejects.toThrow(failure);
+          } else {
+            await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+          }
+        }
+      } finally {
+        await iterator?.return?.();
+        await oc.close();
       }
-      expect(first.value.type).toBe("run.started");
-      expect(first.value.runId).toBe("run_pump_failure");
-
-      await expect(iterator.next()).rejects.toThrow("synthetic post-yield transport event failure");
-
-      futureIterator = run.events()[Symbol.asyncIterator]();
-      const replayed = await futureIterator.next();
-      expect(replayed.done).toBe(false);
-      if (replayed.done !== false) {
-        throw new Error("expected replayed run event");
-      }
-      expect(replayed.value.type).toBe("run.started");
-      await expect(futureIterator.next()).rejects.toThrow(
-        "synthetic post-yield transport event failure",
-      );
-    } finally {
-      await futureIterator?.return?.();
-      await iterator.return?.();
-      await oc.close();
-    }
-  });
+    },
+  );
 
   it("does not surface raw chat projection events in per-run streams", async () => {
     const ts = 1_777_000_000_100;
@@ -1080,7 +1113,7 @@ describe("OpenClaw SDK", () => {
     }
   });
 
-  it("uses cumulative text for the first replayed chat projection", async () => {
+  it("replays the chat tail before queued live events and drains it after close", async () => {
     const { transport, oc } = createClientFixture();
     const runId = "run_chat_delta_text_replay";
     let text = "";
@@ -1088,14 +1121,7 @@ describe("OpenClaw SDK", () => {
 
     try {
       await oc.connect();
-      const observedLast = (async () => {
-        for await (const event of oc.events(
-          (eventLocal) => eventLocal.raw?.event === "chat" && eventLocal.raw.seq === 501,
-        )) {
-          return event;
-        }
-        throw new Error("expected final replay setup event");
-      })();
+      const observedLast = observeGatewaySequence(oc, 501);
 
       for (let index = 0; index <= 500; index += 1) {
         const deltaText = index === 0 ? "hello" : ` ${index}`;
@@ -1123,6 +1149,106 @@ describe("OpenClaw SDK", () => {
       }
       expect(first.value.type).toBe("assistant.delta");
       expect(first.value.data).toEqual({ text: "hello 1", delta: "hello 1" });
+
+      const observedLive = observeGatewaySequence(oc, 502);
+      text += " 501";
+      transport.emit(
+        createChatEvent(runId, "chat-delta-text-replay", 502, "delta", text, 1_777_000_000_801, {
+          deltaText: " 501",
+        }),
+      );
+      await observedLive;
+      await oc.close();
+
+      const seen = [first.value];
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) {
+          break;
+        }
+        seen.push(next.value);
+      }
+      expect(seen.map((event) => event.raw?.seq)).toEqual(
+        Array.from({ length: 501 }, (_, index) => index + 2),
+      );
+      expect(seen.at(-1)?.data).toEqual({ text, delta: " 501" });
+      await expect(run.events()[Symbol.asyncIterator]().next()).rejects.toThrow(
+        "OpenClaw SDK client is closed",
+      );
+      await expect(oc.connect()).rejects.toThrow("OpenClaw SDK client is closed");
+    } finally {
+      await iterator?.return?.();
+      await oc.close();
+    }
+  });
+
+  it("retains a quiet run for independent filtered consumers while another run is busy", async () => {
+    const { transport, oc } = createClientFixture();
+    const run = await oc.runs.get("quiet");
+    const all = run.events()[Symbol.asyncIterator]();
+    const filteredSource = run.events((event) => event.type === "assistant.delta");
+    const filtered = filteredSource[Symbol.asyncIterator]();
+    const failedSource = run.events(() => {
+      throw new Error("consumer filter failed");
+    });
+    const failed = failedSource[Symbol.asyncIterator]();
+
+    try {
+      await oc.connect();
+      const observedLast = observeGatewaySequence(oc, 2003);
+      transport.emit(createAgentEvent(run.id, 1, 1, "lifecycle", { phase: "start" }));
+      transport.emit(createAgentEvent(run.id, 2, 2, "assistant", { delta: "retained" }));
+      for (let seq = 3; seq <= 2003; seq += 1) {
+        transport.emit(createAgentEvent("busy", seq, seq, "assistant", { delta: "busy" }));
+      }
+      await observedLast;
+
+      await expect(all.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: "run.started", raw: { seq: 1 } },
+      });
+      await expect(filtered.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: "assistant.delta", data: { delta: "retained" }, raw: { seq: 2 } },
+      });
+      await expect(failed.next()).rejects.toThrow("consumer filter failed");
+      await all.return?.();
+
+      transport.emit(createAgentEvent(run.id, 2004, 2004, "assistant", { delta: "live" }));
+      await expect(filtered.next()).resolves.toMatchObject({
+        done: false,
+        value: { data: { delta: "live" }, raw: { seq: 2004 } },
+      });
+      await expect(all.next()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      await all.return?.();
+      await filtered.return?.();
+      await failed.return?.();
+      await oc.close();
+    }
+  });
+
+  it("does not resurrect an evicted run when it becomes active again", async () => {
+    const { transport, oc } = createClientFixture();
+    let iterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      await oc.connect();
+      const observedLast = observeGatewaySequence(oc, 101);
+      for (let seq = 1; seq <= 101; seq += 1) {
+        transport.emit(createAgentEvent(`run-${seq}`, seq, seq, "assistant", { delta: "old" }));
+      }
+      await observedLast;
+
+      iterator = oc.runEvents("run-1")[Symbol.asyncIterator]();
+      const first = iterator.next();
+      transport.emit(createAgentEvent("run-1", 102, 102, "assistant", { delta: "new" }));
+      await expect(first).resolves.toMatchObject({
+        done: false,
+        value: { data: { delta: "new" }, raw: { seq: 102 } },
+      });
+      await oc.close();
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     } finally {
       await iterator?.return?.();
       await oc.close();
@@ -1216,7 +1342,7 @@ describe("OpenClaw SDK", () => {
     expect(completed.data).toEqual({ phase: "end" });
 
     const aborted = normalize(4, { phase: "end", aborted: true });
-    expect(aborted.type).toBe("run.timed_out");
+    expect(aborted.type).toBe("run.cancelled");
     expect(aborted.runId).toBe("run_1");
     expect(aborted.data).toEqual({ phase: "end", aborted: true });
 
@@ -1289,6 +1415,7 @@ describe("OpenClaw SDK", () => {
 
     const providerStartedError = normalize(10, {
       phase: "error",
+      executionSettled: true,
       error: "provider authentication failed",
       providerStarted: true,
     });
@@ -1296,6 +1423,7 @@ describe("OpenClaw SDK", () => {
     expect(providerStartedError.runId).toBe("run_1");
     expect(providerStartedError.data).toEqual({
       phase: "error",
+      executionSettled: true,
       error: "provider authentication failed",
       providerStarted: true,
     });
@@ -1324,11 +1452,17 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const authRevoked = normalize(13, { phase: "end", aborted: true, stopReason: "auth-revoked" });
+    const authRevoked = normalize(13, {
+      phase: "end",
+      status: "cancelled",
+      aborted: true,
+      stopReason: "auth-revoked",
+    });
     expect(authRevoked.type).toBe("run.cancelled");
     expect(authRevoked.runId).toBe("run_1");
     expect(authRevoked.data).toEqual({
       phase: "end",
+      status: "cancelled",
       aborted: true,
       stopReason: "auth-revoked",
     });

@@ -12,18 +12,18 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
+import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
-  closeCliLiveSession,
+  restartCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
@@ -32,6 +32,7 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -61,10 +62,7 @@ function createPluginToolPermissionHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return denyTool("OpenClaw denied native tool use: the admitted run is no longer active.");
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -261,12 +259,7 @@ function createPluginUserInputHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return cancelUserInput(
-        "OpenClaw cancelled operator input: the admitted run is no longer active.",
-      );
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -290,38 +283,44 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
     }
 
+    const questionAuthority = params.context.bindQuestionAnswerAuthority?.(assertActive);
+    const assertQuestionActive = () => {
+      assertActive();
+      questionAuthority?.assertActive();
+    };
     params.onPendingInput(1);
     try {
-      const result = await runStructuredInput({
-        input: compileStructuredInputQuestions({
-          questions: request.questions.map((question) => ({
-            ...question,
-            isSecret: false,
-          })),
-          intro: request.intro?.trim() || "Agent needs input:",
+      const result = await withAgentQuestionAnswerAuthority(questionAuthority, () =>
+        runStructuredInput({
+          input: compileStructuredInputQuestions({
+            questions: request.questions.map((question) => ({
+              ...question,
+              isSecret: false,
+            })),
+            intro: request.intro?.trim() || "Agent needs input:",
+          }),
+          sessionKey: run.sessionKey ?? run.sessionId,
+          agentId: run.agentId,
+          runId: run.runId,
+          timeoutMs: run.timeoutMs,
+          delivery: {
+            onBlockReply: run.onBlockReply,
+            onPartialReply: run.onPartialReply,
+          },
+          signal,
+          isActive: () => {
+            try {
+              assertQuestionActive();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
         }),
-        sessionKey: run.sessionKey ?? run.sessionId,
-        agentId: run.agentId,
-        runId: run.runId,
-        timeoutMs: run.timeoutMs,
-        gatewayCall: callGatewayTool,
-        delivery: {
-          onBlockReply: run.onBlockReply,
-          onPartialReply: run.onPartialReply,
-        },
-        signal,
-        isActive: () => {
-          try {
-            assertActive();
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
-      });
+      );
       try {
-        assertActive();
+        assertQuestionActive();
       } catch {
         return cancelUserInput(
           "OpenClaw cancelled operator input: the admitted run closed before the answer was committed.",
@@ -385,6 +384,9 @@ async function closePluginIterator(
         timeout.unref();
       }),
     ]);
+  } catch (error) {
+    recordAgentCleanupFailure();
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -395,6 +397,7 @@ export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
   execute: CliBackendExecute;
   executionCommand: string;
+  executionArgv0?: string;
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
@@ -404,6 +407,7 @@ export async function executePluginOwnedProcess(params: {
   sessionId?: string;
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
+  onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
@@ -425,6 +429,7 @@ export async function executePluginOwnedProcess(params: {
   const signal = run.abortSignal
     ? AbortSignal.any([controller.signal, run.abortSignal])
     : controller.signal;
+  const assertCurrent = createCliRunCurrentAssertion(run, signal);
   const termination: { reason: TerminationReason } = { reason: "exit" };
   const outstanding = {
     approvals: 0,
@@ -433,8 +438,12 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
-  const updatePendingApproval = (delta: number) =>
-    (outstanding.approvals = Math.max(0, outstanding.approvals + delta));
+  const reportOutstandingWork = () =>
+    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const updatePendingApproval = (delta: number) => {
+    outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+    reportOutstandingWork();
+  };
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
   const noOutputTimeoutMs = clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs);
@@ -503,6 +512,7 @@ export async function executePluginOwnedProcess(params: {
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
   try {
+    assertCurrent();
     resetNoOutputTimer();
     if (
       params.liveSession &&
@@ -512,27 +522,24 @@ export async function executePluginOwnedProcess(params: {
       if (params.liveSession.requiredGeneration) {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
-      await closeCliLiveSession(params.context, "restart");
-      const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-      if (!assertActive) {
-        throw new Error("CLI live session turn closed while restarting its process.");
-      }
-      assertActive();
+      await restartCliLiveSession(params.context, signal);
     }
+    assertCurrent();
     if (params.liveSession) {
       liveSession = createCliLiveSessionCapability({
         context: params.context,
         argv: [command, ...params.executionArgs],
+        argv0: params.executionArgv0,
         env: params.env,
         ...params.liveSession,
         abortSignal: signal,
         claimResources: params.context.preparedBackend.claimLiveSessionResources,
       });
     }
-    run.assertCurrent?.();
-    signal.throwIfAborted();
+    assertCurrent();
     const execution = params.execute({
       command,
+      argv0: params.executionArgv0,
       args: params.executionArgs,
       cwd,
       env: params.env,
@@ -543,6 +550,7 @@ export async function executePluginOwnedProcess(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,
+      assertCurrent,
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
@@ -583,6 +591,7 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
+        reportOutstandingWork();
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
@@ -630,6 +639,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {

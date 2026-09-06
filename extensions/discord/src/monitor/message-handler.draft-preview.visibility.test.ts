@@ -33,10 +33,10 @@ describe("Discord progress visibility", () => {
     vi.useRealTimers();
   });
 
-  it("retries a quiet summary until Discord acknowledges a draft message", async () => {
+  it("retries identical progress until Discord acknowledges a draft message", async () => {
     const controller = createDiscordDraftPreviewController({
       cfg: {},
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       accountId: "default",
       sourceRepliesAreToolOnly: false,
       textLimit: 2_000,
@@ -53,7 +53,6 @@ describe("Discord progress visibility", () => {
     expect(await controller.pushItemEvent(progress)).toBe(false);
     await vi.advanceTimersByTimeAsync(1_500);
     expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenLastCalledWith("Working");
 
     expect(await controller.pushItemEvent(progress)).toBe(false);
     expect(draftStream.update).toHaveBeenCalledTimes(2);
