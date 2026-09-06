@@ -123,6 +123,7 @@ export type ModelAuthAvailabilityEvaluation = {
 };
 export type ModelAuthAvailabilityResolver = {
   evaluateRuntimeModelAuth(
+    this: void,
     provider: string,
     ref?: ModelAuthAvailabilityRef,
   ): ModelAuthAvailabilityEvaluation;
