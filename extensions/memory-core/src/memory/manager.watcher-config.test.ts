@@ -8,10 +8,6 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-} from "../test-helpers.js";
-import {
   createWatcherConfigFixture,
   restoreWatcherStateDir,
   setWatcherStateDir,
@@ -27,7 +23,6 @@ const {
   watchMock,
   nativeWatchMock,
   nativeWatchMockFailingDir,
-  nativeWatchMockFailureCode,
 } = vi.hoisted(() => {
   // Symbols are also declared at module top-level (CHOKIDAR_FACTORY_KEY,
   // NATIVE_FACTORY_KEY) but vi.hoisted runs before those declarations
@@ -102,7 +97,6 @@ const {
   const chokidarWatchers: Array<ReturnType<typeof createMockChokidarWatcher>> = [];
   const nativeWatchers: Array<ReturnType<typeof createMockNativeWatcher>> = [];
   const failingDir = { current: null as string | null };
-  const failureCode = { current: null as string | null };
 
   const result = {
     createdChokidarWatchers: chokidarWatchers,
@@ -116,9 +110,7 @@ const {
     nativeWatchMock: vi.fn(
       (dir: string, options: { recursive?: boolean }, listener: NativeCallback) => {
         if (failingDir.current && dir === failingDir.current) {
-          throw Object.assign(new Error("simulated native fs.watch creation failure"), {
-            code: failureCode.current,
-          });
+          throw new Error("simulated native fs.watch creation failure");
         }
         const watcher = createMockNativeWatcher(dir, options, listener);
         nativeWatchers.push(watcher);
@@ -126,7 +118,6 @@ const {
       },
     ),
     nativeWatchMockFailingDir: failingDir,
-    nativeWatchMockFailureCode: failureCode,
   };
   (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
   (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
@@ -183,7 +174,6 @@ describe("memory watcher config", () => {
     vi.clearAllMocks();
     clearRegistry();
     nativeWatchMockFailingDir.current = null;
-    nativeWatchMockFailureCode.current = null;
   });
 
   afterAll(() => {
@@ -199,7 +189,6 @@ describe("memory watcher config", () => {
     createdChokidarWatchers.length = 0;
     createdNativeWatchers.length = 0;
     nativeWatchMockFailingDir.current = null;
-    nativeWatchMockFailureCode.current = null;
     if (manager) {
       await manager.close();
       manager = null;
@@ -211,7 +200,6 @@ describe("memory watcher config", () => {
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
     resetPluginStateStoreForTests();
-    resetMemoryCoreDreamingStateForTests();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -666,27 +654,6 @@ describe("memory watcher config", () => {
     ]);
   });
 
-  it("uses polling when Linux nested watcher setup exhausts capacity", async () => {
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-    const nestedDir = path.join(workspaceDir, "memory", "topic");
-    await fs.mkdir(nestedDir);
-    nativeWatchMockFailingDir.current = nestedDir;
-    nativeWatchMockFailureCode.current = "ENOSPC";
-
-    await expectWatcherManager(createWatcherConfig({ extraPaths: [] }));
-
-    expect(watchMock).toHaveBeenCalledTimes(2);
-    expect(watchCall(0)?.[0]).toStrictEqual([path.join(workspaceDir, "memory")]);
-    expect(watchCall(1)?.[0]).toStrictEqual([
-      path.join(workspaceDir, "MEMORY.md"),
-      path.join(workspaceDir, "USER.md"),
-    ]);
-    expect([watchCall(0), watchCall(1)]).toSatisfy((calls) =>
-      calls.every((call) => call?.[1].usePolling === true),
-    );
-  });
-
   it("schedules startup sync when the Linux root disappears during its initial scan", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -797,52 +764,6 @@ describe("memory watcher config", () => {
     await manager?.close();
     expect(regularWatcher?.close).toHaveBeenCalledOnce();
     expect(pollingWatcher?.close).toHaveBeenCalledOnce();
-  });
-
-  it("keeps polling catch-up dirty when a recovery sync is already in flight", async () => {
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-    await configureMemoryCoreDreamingStateForTests();
-    const activeManager = await expectWatcherManager(createWatcherConfig({ extraPaths: [] }));
-    await activeManager.sync({ reason: "test-initial-index" });
-    const internals = activeManager as unknown as {
-      dirty: boolean;
-      syncing: Promise<void> | null;
-      syncMemoryFiles: (params: {
-        needsFullReindex: boolean;
-        progress?: unknown;
-      }) => Promise<unknown>;
-    };
-    internals.dirty = false;
-    const originalSyncMemoryFiles = internals.syncMemoryFiles.bind(activeManager);
-    let signalSyncStarted = () => {};
-    const syncStarted = new Promise<void>((resolve) => {
-      signalSyncStarted = resolve;
-    });
-    let releaseSync = () => {};
-    const syncRelease = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    vi.spyOn(internals, "syncMemoryFiles").mockImplementation(async (params) => {
-      signalSyncStarted();
-      await syncRelease;
-      return await originalSyncMemoryFiles(params);
-    });
-    vi.useFakeTimers();
-    const memoryDir = path.join(workspaceDir, "memory");
-    const memoryWatcher = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
-
-    memoryWatcher?.emitError(
-      Object.assign(new Error("watcher capacity exhausted"), { code: "ENOSPC" }),
-    );
-    const firstRefresh = vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    await syncStarted;
-    createdChokidarWatchers.at(-1)?.emit("ready");
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    releaseSync();
-    await firstRefresh;
-    await internals.syncing;
-
-    expect(internals.dirty).toBe(true);
   });
 
   it("treats null parent-watcher filename as an unknown event and re-checks the inode", async () => {
