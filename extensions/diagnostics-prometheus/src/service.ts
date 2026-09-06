@@ -540,6 +540,14 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
     case "gateway.event_loop.sample":
       store.histogram(
         "openclaw_gateway_event_loop_delay_max_seconds",
