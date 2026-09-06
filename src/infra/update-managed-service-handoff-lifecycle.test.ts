@@ -3,46 +3,28 @@
  */
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeTriageUpdateFailure } from "../commands/triage-update.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { writeRestartSentinel } from "./restart-sentinel.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
+import {
+  createManagedServiceManagerBoundary,
+  pathExists,
+} from "./update-managed-service-handoff-boundary.test-support.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "./update-managed-service-handoff-cleanup.js";
 import {
-  awaitEmulatedRecoveryHandoffExit,
-  createManagedServiceCommandFixture,
-  LAUNCHD_GATEWAY_IDENTITY_ENV,
   registerManagedRecoveryCommandTests,
   registerManagedLaunchdTeardownTests,
-  waitForHandoffResponse,
 } from "./update-managed-service-handoff-command.test-support.js";
 import {
-  createManagedServiceLaunchdClockPreload,
-  createManagedServiceUpdaterFixtureScript,
-  createManagedServiceManagerFixtureScript,
   registerManagedSystemdHandoffConvergenceTests,
   registerManagedHandoffOwnerTests,
-  type ManagedServiceCommandTiming,
-  type ManagedServiceManagerBoundaryOptions,
-  type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import {
   registerManagedRecoveryOutcomeTests,
@@ -50,12 +32,14 @@ import {
 } from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
-import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
-const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
-  forceKillChildProcessTreeMock: vi.fn(),
-  spawnMock: vi.fn(),
-}));
+const { forceKillChildProcessTreeMock, resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(
+  () => ({
+    forceKillChildProcessTreeMock: vi.fn(),
+    resolvePreferredOpenClawTmpDirMock: vi.fn(),
+    spawnMock: vi.fn(),
+  }),
+);
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
 
 function createSpawnMock(params?: { pid?: number }) {
@@ -87,10 +71,20 @@ vi.mock("../process/child-process-tree.js", async () => {
   return { ...actual, forceKillChildProcessTree: forceKillChildProcessTreeMock };
 });
 
-const tempDirs = new Set<string>();
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
 
-beforeEach(() => {
+const tempDirs = new Set<string>();
+
+beforeEach(async () => {
+  // Helpers in one fixture share a coordinator without touching the operator's database.
+  const coordinatorDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
+  );
+  tempDirs.add(coordinatorDir);
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
   spawnMock.mockImplementation((_command: string, args: string[]) => {
@@ -117,440 +111,10 @@ afterEach(async () => {
   vi.resetModules();
 });
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
-  );
-  return row
-    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
-    : null;
-}
-
-async function runManagedServiceManagerBoundary(
-  kind: "systemd" | "launchd",
-  options?: ManagedServiceManagerBoundaryOptions & {
-    controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
-    relativeInput?: boolean;
-  },
-): Promise<ManagedServiceManagerBoundaryResult> {
-  const { spawn } =
-    await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
-  const root = await fs.realpath(
-    await fs.mkdtemp(
-      path.join(
-        os.tmpdir(),
-        `openclaw-${kind}-manager-boundary-${options?.updaterOutput === "split-utf8" ? "安装-" : ""}`,
-      ),
-    ),
-  );
-  tempDirs.add(root);
-  const commandsPath = path.join(root, "manager-commands.log");
-  const statePath = path.join(root, "manager-state.json");
-  const updaterPath = path.join(root, "updater-ran");
-  const commandTimingsPath = path.join(root, "manager-command-timings.jsonl");
-  const recoveryModulePath = path.join(root, "recovery-health.mjs");
-  const stateDatabasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root });
-  const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); { const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.consumedNotifications = Number(cleared.changes); fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`;
-  if (options?.updaterNotification) {
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  }
-  await fs.writeFile(
-    recoveryModulePath,
-    `
-    import fs from "node:fs";
-    import { createRequire } from "node:module";
-    const require = createRequire(import.meta.url);
-    export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
-      const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-      state.healthProbed = true;
-      state.healthProbeCount = (state.healthProbeCount || 0) + 1;
-      state.expectedVersion = expectedVersion;
-      state.expectedBuildId = expectedBuildId;
-      fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-      ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
-      ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
-      const fault = ${JSON.stringify(options?.gatewayHealth)};
-      return { healthy: !["unready", "wrong-version", "wrong-build", "exited"].includes(fault),
-        runtime: { status: fault === "exited" ? "stopped" : "running" },
-        gatewayVersion: fault === "wrong-version" ? "0.0.1" : expectedVersion,
-        gatewayBuildId: fault === "wrong-build" ? "another-build-same-version" : expectedBuildId };
-    }
-  `,
-  );
-  const invocationCwd = options?.relativeInput ? path.join(root, "invoking-directory") : undefined;
-  if (invocationCwd) {
-    await fs.mkdir(invocationCwd);
-    await fs.writeFile(path.join(invocationCwd, "update-input.txt"), "selected target");
-  }
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
-    stdio: ["pipe", "ignore", "ignore"],
-  });
-  const parentPid = parent.pid;
-  const parentStartIdentity = parentPid ? getFileLockProcessStartTime(parentPid) : null;
-  if (!parentPid || parentStartIdentity === null) {
-    parent.kill("SIGKILL");
-    throw new Error("expected the managed Gateway parent to have a stable process identity");
-  }
-  await fs.writeFile(
-    path.join(root, kind === "systemd" ? "systemctl" : "launchctl"),
-    createManagedServiceManagerFixtureScript({
-      kind,
-      parentPid,
-      statePath,
-      commandsPath,
-      options,
-    }),
-    {
-      mode: 0o755,
-    },
-  );
-  const env = {
-    ...process.env,
-    ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
-    OPENCLAW_STATE_DIR: root,
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-  };
-  const run = options?.ledger ? createUpdateRun({ trigger: "api" }, { env }) : undefined;
-  if (run) {
-    await fs.appendFile(
-      recoveryModulePath,
-      `
-      const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-      register();
-      const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
-      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
-    `,
-    );
-  }
-  if (options?.requester) {
-    await fs.writeFile(
-      env.OPENCLAW_CONFIG_PATH,
-      JSON.stringify({
-        commands: { ownerAllowFrom: ["slack:owner"] },
-        channels: { slack: { enabled: true } },
-      }),
-    );
-    await fs.appendFile(
-      recoveryModulePath,
-      `
-      export async function isManagedUpdateRequesterOwner(requester) {
-        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-        state.ownerChecked = true;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-        register();
-        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
-        return runtime.isManagedUpdateRequesterOwner(requester);
-      }
-    `,
-    );
-  }
-  let helper: import("node:child_process").ChildProcess | undefined;
-  try {
-    await startManagedServiceUpdateHandoff({
-      runId: run?.runId,
-      root,
-      restartDrainTimeoutMs: 300_000,
-      parentPid,
-      invocationCwd,
-      requester: options?.requester,
-      execPath: process.execPath,
-      argv1: process.argv[1],
-      handoffId: `${kind}-boundary`,
-      env,
-      meta: { handoffId: `${kind}-boundary` },
-    });
-    const spawnCall = spawnMock.mock.calls.at(-1) as [string, string[], { env: NodeJS.ProcessEnv }];
-    const [, generatedArgs, { env: childEnv }] = spawnCall;
-    const scriptPath = generatedArgs[0];
-    const generatedParamsPath = generatedArgs[1];
-    if (!scriptPath || !generatedParamsPath) {
-      throw new Error("expected generated managed handoff script and parameters");
-    }
-    const generated = JSON.parse(await fs.readFile(generatedParamsPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    const mockedChild = spawnMock.mock.results.at(-1)?.value as ReturnType<typeof createSpawnMock>;
-    mockedChild.emit("exit", 0, null);
-    tempDirs.add(path.dirname(scriptPath));
-    const paramsPath = path.join(root, "manager-helper.json");
-    const commandFixture = createManagedServiceCommandFixture({
-      kind,
-      root,
-      statePath,
-      stateDatabasePath,
-      options,
-    });
-    let updaterScript = createManagedServiceUpdaterFixtureScript({
-      kind,
-      root,
-      statePath,
-      updaterPath,
-      logPath: String(generated.logPath),
-      stateDatabasePath,
-      consumeNotification,
-      options,
-    });
-    if (invocationCwd) {
-      // Consuming a relative input then removing cwd forces recovery and triage
-      // to launch from the durable helper directory, not the vanished caller cwd.
-      updaterScript =
-        `const inputFs=require("node:fs");if(inputFs.readFileSync("update-input.txt","utf8")!=="selected target")process.exit(42);inputFs.rmSync(process.cwd(),{recursive:true});` +
-        updaterScript;
-    }
-    await fs.writeFile(
-      paramsPath,
-      JSON.stringify({
-        ...generated,
-        parentPid,
-        parentStartIdentity: String(parentStartIdentity),
-        ...(options?.parentExitTimeoutMs === undefined
-          ? {}
-          : {
-              parentExitDeadlineAt: Date.now() + options.parentExitTimeoutMs,
-              parentExitTimeoutMs: options.parentExitTimeoutMs,
-            }),
-        ...(options?.overdueCommit ? { parentExitDeadlineAt: Date.now() - 1 } : {}),
-        ...(options?.systemdHandoffDeadlineMs === undefined
-          ? {}
-          : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
-        ...commandFixture,
-        ...(options?.recoveryHang || options?.triageHang ? { recoveryTimeoutMs: 1000 } : {}),
-        recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        recoveryModulePath,
-        commandArgv: [process.execPath, "-e", updaterScript],
-      }),
-    );
-    if (options?.recoverySentinel) {
-      await writeRestartSentinel(
-        {
-          kind: "update",
-          status: "error",
-          ts: Date.now(),
-          stats: { reason: "build failed", handoffId: `${kind}-boundary`, steps: [] },
-        },
-        env,
-      );
-    }
-    if (options?.recordedFailure) {
-      await writeTriageUpdateFailure(options.recordedFailure, {
-        env,
-        outputPath: String(generated.triageContextPath),
-      });
-    }
-    let helperEnv = childEnv;
-    if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
-      const preloadPath = path.join(root, "launchd-clock-preload.cjs");
-      await fs.writeFile(
-        preloadPath,
-        createManagedServiceLaunchdClockPreload({
-          commandTimingsPath,
-          clockEachCommandMs: options.launchdTeardown?.clockEachCommandMs ?? 0,
-          recoveryClockAdvanceMs: options.recoveryClockAdvanceMs,
-          recoveryCommandArgv: commandFixture.recoveryCommandArgv,
-        }),
-      );
-      helperEnv = { ...childEnv, NODE_OPTIONS: `--require ${preloadPath}` };
-    }
-    const runningHelper = spawn(process.execPath, [scriptPath, paramsPath], {
-      env: helperEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    helper = runningHelper;
-    let stdout = "";
-    runningHelper.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    let stderr = "";
-    runningHelper.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    const completion = new Promise<number | null>((resolve, reject) => {
-      runningHelper.once("error", reject);
-      runningHelper.once("close", resolve);
-    });
-    await waitForHandoffResponse(runningHelper.stdout, "OPENCLAW_UPDATE_HANDOFF_READY");
-
-    const databasePath = String(generated.updateLeaseDatabasePath);
-    const owner = String(generated.updateLeaseOwner);
-    const readLease = (): Record<string, unknown> | null => {
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        const row = db
-          .prepare(
-            "SELECT payload_json FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
-          )
-          .get(root, owner) as { payload_json: string } | undefined;
-        return row ? (JSON.parse(row.payload_json) as Record<string, unknown>) : null;
-      } finally {
-        db.close();
-      }
-    };
-    expect(readLease()).toEqual({
-      version: 1,
-      pid: runningHelper.pid,
-      startIdentity: expect.any(String),
-    });
-    await expect(pathExists(commandsPath)).resolves.toBe(false);
-    if (options?.controlDisconnect) {
-      if (options.controlDisconnect !== "unarmed") {
-        const transferred = waitForHandoffResponse(runningHelper.stdout, "transferred");
-        runningHelper.stdin?.write("transfer\n");
-        await transferred;
-        await expect(pathExists(commandsPath)).resolves.toBe(false);
-      }
-      if (options.controlDisconnect === "dead-parent") {
-        parent.stdin?.end();
-        await vi.waitFor(() => expect(parent.exitCode).toBe(0));
-      }
-      runningHelper.stdin?.end();
-      if (options.controlDisconnect === "transferred") {
-        await vi.waitFor(async () => {
-          expect(JSON.parse(await fs.readFile(statePath, "utf8"))).toMatchObject({ parked: true });
-        });
-        parent.stdin?.end();
-      }
-      expect(await completion, stderr).toBe(options.helperExitCode ?? 0);
-      await expect(pathExists(updaterPath)).resolves.toBe(
-        options.controlDisconnect === "transferred",
-      );
-    } else if (options?.parentExitTimeoutMs !== undefined) {
-      const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        expect(
-          await Promise.race([
-            completion,
-            new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(
-                () => reject(new Error("managed helper did not restore the stalled parent")),
-                timeout,
-              );
-            }),
-          ]),
-          stderr,
-        ).toBe(0);
-      } finally {
-        clearTimeout(timer);
-      }
-      expect(parent.signalCode).toBe("SIGKILL");
-      expect(stdout).not.toContain("committed\n");
-      await expect(pathExists(updaterPath)).resolves.toBe(false);
-    } else if (options?.launchdFault === "wrong-parent") {
-      const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
-      runningHelper.stdin?.write("park\n");
-      await cancelled;
-      expect(await completion, stderr).toBe(0);
-      expect(parent.exitCode).toBeNull();
-      expect(parent.signalCode).toBeNull();
-      await expect(pathExists(updaterPath)).resolves.toBe(false);
-    } else if (options?.overdueCommit) {
-      const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
-      runningHelper.stdin?.write("park\n");
-      await cancelled;
-      expect(await completion, stderr).toBe(0);
-      expect(parent.exitCode).toBeNull();
-      expect(parent.signalCode).toBeNull();
-      await expect(pathExists(updaterPath)).resolves.toBe(false);
-    } else {
-      const parked = waitForHandoffResponse(runningHelper.stdout, "parked");
-      runningHelper.stdin?.write("park\n");
-      await parked;
-      expect(parent.exitCode).toBeNull();
-      await expect(pathExists(updaterPath)).resolves.toBe(false);
-      if (options?.cancelAfterPark) {
-        const restoring = waitForHandoffResponse(runningHelper.stdout, "restore-after-exit");
-        runningHelper.stdin?.write("cancel\n");
-        await restoring;
-        expect(stdout).not.toContain("committed\n");
-        parent.stdin?.end();
-        expect(await completion, stderr).toBe(0);
-        await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else {
-        const committed = waitForHandoffResponse(runningHelper.stdout, "committed");
-        runningHelper.stdin?.write("commit\n");
-        await committed;
-        parent.stdin?.end();
-        const code = await completion;
-        const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
-        expect
-          .soft(code, `${stderr}\n${helperLog}`)
-          .toBe(
-            options?.helperExitCode ??
-              (options?.systemdHandoffFailure ? 1 : (options?.updaterExitCode ?? 7)),
-          );
-        await expect(pathExists(updaterPath)).resolves.toBe(
-          !options?.systemdHandoffFailure && !options?.revokeOwner,
-        );
-      }
-    }
-    expect(readLease()).toBeNull();
-    if (options?.diagnosticReadFailure) {
-      const db = new DatabaseSync(stateDatabasePath);
-      db.exec(
-        "ALTER TABLE gateway_restart_sentinel RENAME COLUMN unreadable_thread_id TO thread_id",
-      );
-      db.close();
-    }
-    const contextPath = String(generated.triageContextPath);
-    const savedFailure = (await pathExists(contextPath))
-      ? {
-          path: contextPath,
-          mode: (await fs.stat(contextPath)).mode & 0o777,
-          contents: JSON.parse(await fs.readFile(contextPath, "utf8")),
-        }
-      : null;
-    return {
-      ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
-      commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
-        .trim()
-        .split("\n")
-        .filter(Boolean),
-      parentSignal: parent.signalCode,
-      state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as Record<
-        string,
-        unknown
-      >,
-      sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
-      log: await fs.readFile(String(generated.logPath), "utf8"),
-      savedFailure,
-      sensitiveFilesRemoved: (
-        await Promise.all((generated.sensitivePaths as string[]).map(pathExists))
-      ).every((exists) => !exists),
-      commandTimings: (await fs.readFile(commandTimingsPath, "utf8").catch(() => ""))
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as ManagedServiceCommandTiming),
-    };
-  } finally {
-    parent.stdin?.end();
-    if (helper && helper.exitCode === null && helper.signalCode === null) {
-      helper.kill("SIGKILL");
-    }
-    if (options?.recoveryChecksServiceIdentity) {
-      await awaitEmulatedRecoveryHandoffExit(statePath);
-    }
-  }
-}
+const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
+  spawnMock,
+  tempDirs,
+});
 
 describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
@@ -592,6 +156,113 @@ describe("managed service update handoff", () => {
       expect(sensitiveFilesRemoved).toBe(true);
     },
   );
+
+  itUnix("carries the activation acknowledgement through the spawn fallback runner", async () => {
+    const { state } = await runManagedServiceManagerBoundary("systemd", {
+      controlDisconnect: "transferred",
+      runnerFallback: true,
+      updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
+    });
+    expect(state).toMatchObject({ parked: true, stopCompleted: true });
+  });
+
+  itUnix(
+    "finalizes through the installed runtime after the updater replaces its module graph",
+    async () => {
+      const { run, log } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        ledger: true,
+        replaceLedgerWriter: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(run).toMatchObject({ status: "succeeded", phase: "finished" });
+      expect(log).not.toContain("the previous runtime must not finalize the candidate");
+      expect(log).toContain("managed update finalize command exited code=0");
+    },
+  );
+
+  itUnix.each(["failed", "skipped"] as const)(
+    "leaves the serving generation untouched when validation finishes %s",
+    async (validationResult) => {
+      const { commands, parentSignal, log } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        validationResult,
+        helperExitCode: validationResult === "failed" ? 1 : 0,
+      });
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(log).not.toContain("gateway service recovery");
+    },
+  );
+
+  itUnix(
+    "rechecks revoked chat ownership after validation before stopping the Gateway",
+    async () => {
+      const { commands, parentSignal, sentinel } = await runManagedServiceManagerBoundary(
+        "systemd",
+        {
+          controlDisconnect: "transferred",
+          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+          revokeWhileValidating: true,
+          helperExitCode: 1,
+        },
+      );
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(sentinel).toMatchObject({
+        payload: { status: "error", stats: { reason: "owner_required" } },
+      });
+    },
+  );
+
+  itUnix("expires admission without interrupting the serving generation", async () => {
+    const { commands, parentSignal, sentinel } = await runManagedServiceManagerBoundary("systemd", {
+      parentExitTimeoutMs: 100,
+    });
+    expect(commands).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(sentinel).toMatchObject({
+      payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
+    });
+  });
+
+  itUnix("cancels a validating updater without stopping the serving generation", async () => {
+    const { commands, parentSignal, log } = await runManagedServiceManagerBoundary("systemd", {
+      controlDisconnect: "transferred",
+      cancelDuringValidation: true,
+    });
+    expect(commands).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(log).not.toContain("gateway service recovery");
+    expect(log).toContain("managed update helper completed code=0");
+  });
+
+  itUnix.each([
+    ["systemd", "requester"],
+    ["systemd", "inspection"],
+    ["launchd", "requester"],
+    ["launchd", "inspection"],
+  ] as const)("cancels before %s activation completes its %s check", async (kind, boundary) => {
+    const { commands, parentSignal, state, sentinel } = await runManagedServiceManagerBoundary(
+      kind,
+      {
+        controlDisconnect: "transferred",
+        cancelAtActivation: boundary,
+        ...(boundary === "requester"
+          ? { requester: { channel: "synthetic", senderId: "owner" } }
+          : {}),
+      },
+    );
+    expect(commands.filter((command) => !/\b(?:show|print)\b/u.test(command))).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(state.parked).toBeUndefined();
+    expect(state.disabled).toBeUndefined();
+    expect(sentinel).toMatchObject({
+      payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
+    });
+  });
 
   itUnix.each(["unarmed", "dead-parent"] as const)(
     "does not stop or update the service after %s control disconnect",
