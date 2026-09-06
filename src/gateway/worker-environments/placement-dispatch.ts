@@ -10,6 +10,7 @@ import {
   type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
+import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
@@ -49,7 +50,7 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type {
   WorkerWorkspaceRecoveryFailureReport,
-  WorkerWorkspaceResultConflict,
+  WorkspaceResultConflictLookup,
 } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
@@ -112,7 +113,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     sessionId: string;
     sessionKey: string;
     agentId: string;
-  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  }) => Promise<WorkspaceResultConflictLookup>;
   prepareAcceptedWorkspacePublication?: (
     claim: import("./placement-store.js").WorkerSessionTurnClaim,
   ) => Promise<void>;
@@ -475,13 +476,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 if (conflictPaths.length > 0 && !recordedStagedResultRef) {
                   throw new Error("Cloud worker stop conflict has no staged result reference");
                 }
-                const priorWorkspaceResultConflict =
-                  current.workspaceResultConflict ??
-                  (await options.resolveWorkspaceResultConflict({
-                    sessionId: current.sessionId,
-                    sessionKey: current.sessionKey,
-                    agentId: current.agentId,
-                  }));
+                const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
+                  options.resolveWorkspaceResultConflict,
+                  current,
+                );
                 reauthorize?.();
                 const finalized = await finalizeWorkspaceResultConflicts({
                   placements,

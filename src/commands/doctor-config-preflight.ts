@@ -330,10 +330,7 @@ export async function runDoctorConfigPreflight(
           : null;
       let configRepaired = false;
       if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
-        note(
-          "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
-          "Config",
-        );
+        note("Removed non-JSON prefix from openclaw.json.", "Config");
         configRepaired = true;
       } else if (
         !activeConfigRepair &&

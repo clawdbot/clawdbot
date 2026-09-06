@@ -943,6 +943,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.clientCaps = ["tool-events", "inline-widgets"];
+    params.pinnedWidgetAuthoring = true;
     params.chatId = "native-chat-123";
     params.chatType = "direct";
     params.messageActionTurnCapability = "turn-capability-1";
@@ -956,6 +957,7 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({
       clientCaps: ["tool-events", "inline-widgets"],
+      pinnedWidgetAuthoring: true,
       chatType: "direct",
       nativeChannelId: "native-chat-123",
       messageActionTurnCapability: "turn-capability-1",

@@ -1,4 +1,5 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -17,7 +18,7 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
+type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
 
 function resolveOpencodeGoCatalogAuth(
   resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
@@ -107,12 +108,16 @@ export default defineSingleProviderPluginEntry({
             provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
           };
         }
-        return {
-          provider: await buildOpencodeGoLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
+        return await runLiveProviderCatalog({
+          providerId: PROVIDER_ID,
+          profileId: auth.profileId,
+          run: async () => ({
+            provider: await buildOpencodeGoLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           }),
-        };
+        });
       },
     },
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
