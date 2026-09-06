@@ -1579,6 +1579,48 @@ function resolveIssueRelationshipPages(nodes) {
   return nodes;
 }
 
+function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
+  const candidates = new Set();
+  const required = new Set([...requiredReferences, ...source.pullRequests]);
+  for (const commit of source.activeCommits) {
+    if (commit.isRevert) {
+      continue;
+    }
+    const message = `${commit.subject}\n${commit.body}`;
+    // Mask only explicitly labelled, unqualified occurrences. The same number
+    // anywhere else remains an issue/PR requirement, even in a different commit.
+    const remaining = message.replace(
+      /(?<![A-Za-z0-9_])(?:CI(?:[ \t]+run)?|Actions[ \t]+run|workflow[ \t]+run)[ \t]+#([1-9]\d*)(?![A-Za-z0-9_])/gi,
+      (_match, number) => {
+        candidates.add(Number(number));
+        return " ";
+      },
+    );
+    for (const number of referencesIn(remaining)) {
+      required.add(number);
+    }
+  }
+  const runs = [];
+  for (const number of candidates) {
+    if (!source.references.includes(number) || nodes.has(number) || required.has(number)) {
+      continue;
+    }
+    const run = githubApi([`repos/${repo}/actions/runs/${number}`]);
+    if (run?.id === number && run.repository?.full_name === repo) {
+      runs.push({ id: number, repository: repo });
+    }
+  }
+  const runIds = new Set(runs.map((run) => run.id));
+  source.references = source.references.filter((number) => !runIds.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !runIds.has(number));
+  }
+  for (const number of runIds) {
+    source.coauthorsByReference.delete(number);
+  }
+  return runs;
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
   for (let index = 0; index < numbers.length; index += 40) {
@@ -2354,6 +2396,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     mergeBase: source.mergeBase,
     version: options.version,
     shippedBaselines: source.shippedBaselines,
+    workflowRuns: source.workflowRuns,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2497,7 +2540,7 @@ function main() {
         .join(", ")}`,
     );
   }
-  const references = [...source.references];
+  let references = [...source.references];
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
@@ -2530,6 +2573,15 @@ function main() {
     recordTarget: committedRecordTarget,
     source,
   });
+  const workflowRuns = resolveSourceWorkflowRuns(source, nodes, [
+    ...noteReferences,
+    ...effectiveRenderedRecordReferences,
+    ...recordedReferences,
+    ...legacyIssuePullRequests,
+  ]);
+  source.workflowRuns = workflowRuns;
+  const workflowRunIds = new Set(workflowRuns.map((run) => run.id));
+  references = references.filter((number) => !workflowRunIds.has(number));
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2653,6 +2705,7 @@ function main() {
   }
 
   const result = {
+    workflowRuns,
     base: options.base,
     target: source.target,
     mergeBase: source.mergeBase,

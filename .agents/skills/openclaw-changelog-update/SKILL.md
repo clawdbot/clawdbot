@@ -75,6 +75,13 @@ every human `Thanks @...` attribution.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
 <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
+   Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
+   in active source are classified separately only when issue/PR resolution
+   fails and a live same-repository Actions lookup confirms the exact run ID.
+   Any ordinary occurrence of that number in active source, notes, or the
+   contribution record remains a strict issue/PR requirement. Confirmed runs
+   appear as `workflowRuns` in verification output and the manifest, never as
+   PR associations or contributor credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
