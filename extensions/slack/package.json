@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.8.1",
+  "version": "2026.9.2",
   "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -9,12 +9,12 @@
   "type": "module",
   "dependencies": {
     "@slack/bolt": "5.0.0",
-    "@slack/socket-mode": "3.0.0",
-    "@slack/types": "3.0.0",
-    "@slack/web-api": "8.0.0",
+    "@slack/socket-mode": "3.0.1",
+    "@slack/types": "3.1.0",
+    "@slack/web-api": "8.1.1",
     "get-east-asian-width": "1.6.0",
     "typebox": "1.3.18",
-    "undici": "7.29.0",
+    "undici": "7.29.1",
     "ws": "8.21.3",
     "zod": "4.4.3"
   },
@@ -23,7 +23,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -42,7 +42,11 @@
       "id": "slack",
       "configuredState": {
         "env": {
-          "anyOf": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]
+          "anyOf": [
+            "SLACK_BOT_TOKEN",
+            "SLACK_APP_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
         },
         "specifier": "./configured-state",
         "exportName": "hasConfiguredSlackChannelState"
@@ -137,7 +141,9 @@
               "flags": "--use-env",
               "description": "Use Slack environment credentials"
             },
-            "envVars": ["SLACK_BOT_TOKEN"]
+            "envVars": [
+              "SLACK_BOT_TOKEN"
+            ]
           }
         ]
       }
@@ -149,10 +155,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.2"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.2",
       "bundledDist": false
     },
     "release": {

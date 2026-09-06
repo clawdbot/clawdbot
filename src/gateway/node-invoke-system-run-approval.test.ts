@@ -6,7 +6,8 @@ import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../infra/system-run-approval-binding.js";
-import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
@@ -820,8 +821,8 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
 
-  test("consumes allow-once approvals and blocks same runId replay", async () => {
-    const approvalManager = new ExecApprovalManager();
+  test("consumes allow-once approvals and blocks same runId replay", async (testContext) => {
+    const approvalManager = createTestApprovalManager(testContext);
     const runId = "approval-replay-1";
     const record = approvalManager.create(
       {

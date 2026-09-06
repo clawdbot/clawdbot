@@ -365,19 +365,21 @@ export function renderBar(params: {
     <div class="new-session-page__triggers">
       ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
       ${params.placeSelect}
-      ${pending
-        ? html`<span class="new-session-page__catalog-unavailable">
-            ${t("newSession.catalogUnavailable")}
-            <button
-              class="btn btn--sm"
-              type="button"
-              ?disabled=${params.retrying}
-              @click=${params.onRetry}
-            >
-              ${params.retrying ? t("common.loading") : t("lazyView.retry")}
-            </button>
-          </span>`
-        : nothing}
+      ${
+        pending
+          ? html`<span class="new-session-page__catalog-unavailable">
+              ${t("newSession.catalogUnavailable")}
+              <button
+                class="btn btn--sm"
+                type="button"
+                ?disabled=${params.retrying}
+                @click=${params.onRetry}
+              >
+                ${params.retrying ? t("common.loading") : t("lazyView.retry")}
+              </button>
+            </span>`
+          : nothing
+      }
     </div>
   `;
 }

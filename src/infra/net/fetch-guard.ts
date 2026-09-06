@@ -43,15 +43,9 @@ import {
 } from "./undici-runtime.js";
 
 function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  if (fromParams !== undefined) {
-    return fromParams;
-  }
   // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
   // (avoids reading Undici's non-public `.options` field)
-  if (globalUndiciStreamTimeoutMs !== undefined) {
-    return globalUndiciStreamTimeoutMs;
-  }
-  return undefined;
+  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
 }
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -228,13 +222,11 @@ function createPolicyDispatcherWithoutPinnedDns(
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  if (dispatcherPolicy.proxyTls) {
-    return createHttp1ProxyAgent(
-      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
-      timeoutMs,
-    );
-  }
-  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
+  const requestTls = dispatcherPolicy.proxyTls;
+  return createHttp1ProxyAgent(
+    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    timeoutMs,
+  );
 }
 
 async function assertExplicitProxyAllowed(

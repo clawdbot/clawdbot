@@ -11,7 +11,7 @@ import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.j
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
-import type { TuiBackend, TuiTaskSuggestionAcceptMode } from "./tui-backend.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
 
@@ -27,7 +27,6 @@ type TaskSuggestionControllerDeps = {
     TuiBackend,
     | "getTaskSuggestionActionCapabilities"
     | "listTaskSuggestions"
-    | "listCloudWorkerProfiles"
     | "acceptTaskSuggestion"
     | "dismissTaskSuggestion"
   >;
@@ -49,63 +48,22 @@ const PAGE_DOWN_INPUT = "\u001b[6~";
 
 type TaskAction = SelectItem & {
   kind: "accept" | "dismiss";
-  mode?: TuiTaskSuggestionAcceptMode;
-  cloudProfileId?: string;
 };
 
-const TASK_ACTIONS = {
-  worktree: {
+const TASK_ACTIONS = [
+  {
     value: "accept",
-    label: "Start in worktree",
-    description: "Create an isolated session and begin this task",
+    label: "Start in a new session",
+    description: "Open a new session to address this task",
     kind: "accept",
-    mode: "worktree",
   },
-  local: {
-    value: "accept-local",
-    label: "Start locally",
-    description: "Start a new session in this checkout",
-    kind: "accept",
-    mode: "local",
-  },
-  session: {
-    value: "accept-session",
-    label: "Fix in this session",
-    description: "Deliver the task into this transcript",
-    kind: "accept",
-    mode: "session",
-  },
-  dismiss: {
+  {
     value: "dismiss",
     label: "Dismiss",
-    description: "Leave the repository untouched",
+    description: "Dismiss this suggestion without starting work",
     kind: "dismiss",
   },
-} as const satisfies Record<string, TaskAction>;
-
-function taskActions(cloudProfileIds: string[]): TaskAction[] {
-  return [
-    TASK_ACTIONS.local,
-    ...cloudProfileIds.map(
-      (profileId): TaskAction => ({
-        value: "accept-cloud",
-        label: `Send to cloud · ${clean(profileId)}`,
-        description: "Start a new session on this cloud worker",
-        kind: "accept",
-        mode: "cloud",
-        cloudProfileId: profileId,
-      }),
-    ),
-    TASK_ACTIONS.session,
-    // Keep the established one-Up shortcut from the default Dismiss selection.
-    TASK_ACTIONS.worktree,
-    TASK_ACTIONS.dismiss,
-  ];
-}
-
-function taskActionKey(action: SelectItem): string {
-  return `${action.value}\0${(action as TaskAction).cloudProfileId ?? ""}`;
-}
+] as const satisfies readonly TaskAction[];
 
 function clean(text: string): string {
   return sanitizeTaskText(text.replace(/\s+/g, " ").trim());
@@ -252,7 +210,6 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   let activeOverlay: OverlayHandle | null = null;
   let activeSelector: TaskSelector | null = null;
   let activeActionKey: string | null = null;
-  let cloudProfileIds: string[] = [];
   let revision = 0;
   let disposed = false;
 
@@ -281,13 +238,9 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const availableActions = () => {
     const capabilities = deps.client.getTaskSuggestionActionCapabilities?.() ?? {
       canAccept: Boolean(deps.client.acceptTaskSuggestion),
-      canAcceptModes: false,
       canDismiss: Boolean(deps.client.dismissTaskSuggestion),
     };
-    const actions: TaskAction[] = capabilities.canAcceptModes
-      ? taskActions(cloudProfileIds)
-      : [TASK_ACTIONS.worktree, TASK_ACTIONS.dismiss];
-    return actions.filter((action) =>
+    return TASK_ACTIONS.filter((action) =>
       action.kind === "accept" ? capabilities.canAccept : capabilities.canDismiss,
     );
   };
@@ -297,7 +250,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return;
     }
     const actions = availableActions();
-    const actionKey = actions.map(taskActionKey).join(",");
+    const actionKey = actions.map((action) => action.value).join(",");
     if (activeId) {
       if (activeActionKey === actionKey) {
         return;
@@ -340,11 +293,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
           if (!deps.client.acceptTaskSuggestion) {
             throw new Error("task suggestion acceptance is unavailable");
           }
-          const result = await deps.client.acceptTaskSuggestion(
-            suggestion.id,
-            action.mode,
-            action.cloudProfileId,
-          );
+          const result = await deps.client.acceptTaskSuggestion(suggestion.id);
           acceptedKey = result.key;
         } else {
           if (!deps.client.dismissTaskSuggestion) {
@@ -362,7 +311,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         deps.chatLog.addSystem(
           acceptedKey ? `follow-up task started in ${acceptedKey}` : "follow-up task dismissed",
         );
-        if (acceptedKey && action.mode !== "session" && matchesSession(suggestion)) {
+        if (acceptedKey && matchesSession(suggestion)) {
           await deps.onAccepted(acceptedKey);
         }
       } catch (error) {
@@ -394,13 +343,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       if (activeSelector !== selector) {
         return;
       }
-      const selectedAction = actions.find(
-        (action) => taskActionKey(action) === taskActionKey(item),
-      );
-      if (
-        !selectedAction ||
-        !availableActions().some((action) => taskActionKey(action) === taskActionKey(item))
-      ) {
+      const selectedAction = actions.find((action) => action.value === item.value);
+      if (!selectedAction || !availableActions().some((action) => action.value === item.value)) {
         closeActive();
         presentNext();
         deps.requestRender();
@@ -436,10 +380,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const refreshRunner = createTuiRefreshCoalescer(
     async (requestRerun) => {
       const startRevision = revision;
-      const [listed, profiles] = await Promise.all([
-        deps.client.listTaskSuggestions?.(),
-        deps.client.listCloudWorkerProfiles?.() ?? Promise.resolve([]),
-      ]);
+      const listed = await deps.client.listTaskSuggestions?.();
       if (disposed || !listed) {
         return false;
       }
@@ -449,7 +390,6 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         return true;
       }
       suggestions.clear();
-      cloudProfileIds = profiles;
       for (const value of listed) {
         const suggestion = parseTuiTaskSuggestion(value);
         if (suggestion) {

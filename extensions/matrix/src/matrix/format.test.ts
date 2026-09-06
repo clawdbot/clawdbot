@@ -285,9 +285,10 @@ describe("markdownToMatrixHtml", () => {
     expect(html).toBe("<p>alt</p>");
   });
 
-  it("preserves line breaks", () => {
-    const html = markdownToMatrixHtml("line1\nline2");
-    expect(html).toBe("<p>line1<br>\nline2</p>");
+  it.each(["\n", "\r\n", "\r"])("preserves %j line breaks in text and HTML", (newline) => {
+    const markdown = `line1${newline}line2`;
+    expect(markdownToMatrixBody(markdown)).toBe("line1\nline2");
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>line1<br>\nline2</p>");
   });
 
   it("compacts loose ordered lists without paragraph tags", () => {
@@ -555,6 +556,21 @@ describe("markdownToMatrixHtml", () => {
       name: "does not convert mentions inside code spans",
       markdown: "`@alice:example.org`",
       html: "<p><code>@alice:example.org</code></p>",
+    },
+    {
+      name: "does not convert code mentions after an unclosed link label",
+      markdown: "[foo `@alice:example.org` baz`",
+      html: "<p>[foo <code>@alice:example.org</code> baz`</p>",
+    },
+    {
+      name: "preserves three spaces in an inline code span",
+      markdown: "`   `",
+      html: "<p><code>   </code></p>",
+    },
+    {
+      name: "preserves IPv6 host brackets while encoding path and query brackets",
+      markdown: "[foo](http://[2001:db8::1]:1896/a[b]?x=[y])",
+      html: '<p><a href="http://[2001:db8::1]:1896/a%5Bb%5D?x=%5By%5D">foo</a></p>',
     },
     {
       name: "keeps backslashes inside tilde fenced code blocks",

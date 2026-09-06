@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { annotateSourceDelivery } from "./message-action-execution.js";
 
 const actionParams = {
@@ -26,11 +27,13 @@ const input = {
 
 const annotationParams = {
   cfg: {},
-  actionParams,
+  params: actionParams,
   channel: "testchat" as const,
   accountId: "default",
   input,
-  replyToIsExplicit: false,
+  dryRun: false,
+  channelPlugin: createChannelTestPluginBase({ id: "testchat" }),
+  mediaAccess: { localRoots: [] },
 };
 
 describe("annotateSourceDelivery thread replies", () => {
@@ -45,6 +48,7 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
@@ -66,6 +70,7 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
@@ -83,6 +88,7 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).not.toHaveProperty("sourceReplyRoute");

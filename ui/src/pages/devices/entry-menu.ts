@@ -25,6 +25,7 @@ export function renderDeviceEntryMenu(
     deviceId?: string;
     desktopEnvironment?: string;
     pendingRequestId?: string;
+    onEditAlias?: () => void;
     onRemove?: () => void;
   },
 ) {
@@ -45,6 +46,11 @@ export function renderDeviceEntryMenu(
           case "copy":
             if (entry.deviceId) {
               void copyDeviceId(entry.deviceId);
+            }
+            break;
+          case "editAlias":
+            if (props.canManagePairing) {
+              entry.onEditAlias?.();
             }
             break;
           case "approve":
@@ -76,41 +82,59 @@ export function renderDeviceEntryMenu(
       >
         ${icons.moreHorizontal}
       </button>
-      ${entry.desktopEnvironment
-        ? html`<wa-dropdown-item value="desktop"
-            >${t("devices.inventory.openDesktop")}</wa-dropdown-item
-          >`
-        : nothing}
-      ${entry.pendingRequestId
-        ? html`
-            <wa-dropdown-item
-              value="approve"
+      ${
+        entry.desktopEnvironment
+          ? html`<wa-dropdown-item value="desktop"
+              >${t("devices.inventory.openDesktop")}</wa-dropdown-item
+            >`
+          : nothing
+      }
+      ${
+        entry.pendingRequestId
+          ? html`
+              <wa-dropdown-item
+                value="approve"
+                ?disabled=${!props.canManagePairing}
+                title=${pairingHint}
+                >${t("devices.inventory.approve")}</wa-dropdown-item
+              >
+              <wa-dropdown-item
+                value="reject"
+                ?disabled=${!props.canManagePairing}
+                title=${pairingHint}
+                >${t("devices.inventory.reject")}</wa-dropdown-item
+              >
+            `
+          : nothing
+      }
+      ${
+        entry.deviceId
+          ? html`<wa-dropdown-item value="copy"
+              >${t("devices.inventory.copyDeviceId")}</wa-dropdown-item
+            >`
+          : nothing
+      }
+      ${
+        entry.onEditAlias
+          ? html`<wa-dropdown-item
+              value="editAlias"
               ?disabled=${!props.canManagePairing}
               title=${pairingHint}
-              >${t("devices.inventory.approve")}</wa-dropdown-item
-            >
-            <wa-dropdown-item
-              value="reject"
+              >${t("devices.inventory.editAlias")}</wa-dropdown-item
+            >`
+          : nothing
+      }
+      ${
+        entry.onRemove
+          ? html`<wa-dropdown-item
+              value="remove"
+              variant="danger"
               ?disabled=${!props.canManagePairing}
               title=${pairingHint}
-              >${t("devices.inventory.reject")}</wa-dropdown-item
-            >
-          `
-        : nothing}
-      ${entry.deviceId
-        ? html`<wa-dropdown-item value="copy"
-            >${t("devices.inventory.copyDeviceId")}</wa-dropdown-item
-          >`
-        : nothing}
-      ${entry.onRemove
-        ? html`<wa-dropdown-item
-            value="remove"
-            variant="danger"
-            ?disabled=${!props.canManagePairing}
-            title=${pairingHint}
-            >${t("devices.inventory.removeAction")}</wa-dropdown-item
-          >`
-        : nothing}
+              >${t("devices.inventory.removeAction")}</wa-dropdown-item
+            >`
+          : nothing
+      }
     </wa-dropdown>
   `;
 }

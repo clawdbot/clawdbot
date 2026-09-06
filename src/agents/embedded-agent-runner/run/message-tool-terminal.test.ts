@@ -3,6 +3,7 @@
 // the run before the model can observe the tool result.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 
 async function recordsDeliveredSourceReply(params: {
@@ -172,34 +173,50 @@ describe("message-tool-only source replies", () => {
     },
   );
 
-  it("preserves existing after-tool-call output while recording delivered source replies", async () => {
-    const previousAfterToolCall = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "rewritten" }],
-      details: { rewritten: true },
-    }));
-    const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
-    const onDeliveredSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
-      agent,
-      sourceReplyDeliveryMode: "message_tool_only",
-      onDeliveredSourceReply,
-    });
+  it.each(["send", "reply", "thread-reply", "poll"])(
+    "preserves rewritten output while terminating after a recorded source %s",
+    async (action) => {
+      const rewritten = {
+        content: [{ type: "text" as const, text: "rewritten" }],
+        details: {
+          messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+        },
+      };
+      const previousAfterToolCall = vi.fn(async () => rewritten);
+      const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+      const onDeliveredSourceReply = vi.fn();
+      installMessageToolOnlyTerminalHook({
+        agent,
+        sourceReplyDeliveryMode: "message_tool_only",
+        onDeliveredSourceReply,
+      });
 
-    await expect(
-      agent.afterToolCall?.(
-        createAfterToolCallContext({
-          toolName: "message",
-          args: { action: "send", message: "visible reply" },
-        }),
-      ),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: "rewritten" }],
-      details: { rewritten: true },
-      terminate: true,
-    });
-    expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
-    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
-  });
+      await expect(
+        agent.afterToolCall?.(
+          createAfterToolCallContext({
+            toolName: "message",
+            args: { action, target: "channel:source", message: "visible reply" },
+            result: {
+              content: [],
+              details: {
+                messageDelivery: {
+                  status: "settled",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                  sourceReplyDelivered: true,
+                },
+              },
+            },
+          }),
+        ),
+      ).resolves.toEqual({
+        ...rewritten,
+        terminate: true,
+      });
+      expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+      expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("terminates after a delivered completed source reply", async () => {
     const agent = {} as unknown as Agent;
@@ -459,14 +476,7 @@ function createToolCallAssistant(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "toolUse",
     timestamp: 0,
   };

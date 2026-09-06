@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../agents/live-test-helpers.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
@@ -9,6 +10,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import { runSkillHistoryScanReview } from "./history-scan-review.js";
 import { formatSkillHistoryScanTranscript } from "./history-scan-transcript-content.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 import { listSkillProposals } from "./service.js";
 
 const LIVE =
@@ -130,10 +132,23 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
       { role: "assistant", content: "This again shows the manifest should be read first." },
     ];
 
-    let recoveryCompletionIdeas: number | undefined;
-    const ideas = await runSkillHistoryScanReview({
+    const config = liveConfig();
+    const reviewParams = {
       agentId: "main",
-      config: liveConfig(),
+      config,
+      modelRef: resolveDefaultModelForAgent({ cfg: config, agentId: "main" }),
+      onProgress: async () => {},
+      progress: {
+        proposalIds: [],
+        remaining: HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
+        successfulMutations: 0,
+      },
+      workspaceDir,
+    };
+    let recoveryCompletionIdeas: number | undefined;
+    await runSkillHistoryScanReview({
+      ...reviewParams,
+      runId: "live-history-recovery",
       onComplete: async (ideasFound) => {
         recoveryCompletionIdeas = ideasFound;
       },
@@ -141,11 +156,9 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
         session("agent:main:live-history-alpha", "2026-07-13T02:00:00.000Z", recoveryOne),
         session("agent:main:live-history-beta", "2026-07-12T02:00:00.000Z", recoveryTwo),
       ],
-      workspaceDir,
     });
-    expect(ideas).toBe(1);
     expect(recoveryCompletionIdeas).toBe(1);
-    const afterRecovery = await listSkillProposals({ workspaceDir });
+    const afterRecovery = await listSkillProposals({ config: liveConfig(), agentId: "main" });
     expect(afterRecovery.proposals).toHaveLength(1);
     expect(afterRecovery.proposals[0]).toMatchObject({ status: "pending" });
 
@@ -154,9 +167,9 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
       { role: "toolResult", toolName: "receipt", content: "valid" },
     ]).flat();
     let routineCompletionIdeas: number | undefined;
-    const routineIdeas = await runSkillHistoryScanReview({
-      agentId: "main",
-      config: liveConfig(),
+    await runSkillHistoryScanReview({
+      ...reviewParams,
+      runId: "live-history-routine",
       onComplete: async (ideasFound) => {
         routineCompletionIdeas = ideasFound;
       },
@@ -171,10 +184,10 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
           { role: "assistant", content: "All receipts are valid." },
         ]),
       ],
-      workspaceDir,
     });
-    expect(routineIdeas).toBe(0);
     expect(routineCompletionIdeas).toBe(0);
-    expect(await listSkillProposals({ workspaceDir })).toEqual(afterRecovery);
+    expect(await listSkillProposals({ config: liveConfig(), agentId: "main" })).toEqual(
+      afterRecovery,
+    );
   }, 240_000);
 });

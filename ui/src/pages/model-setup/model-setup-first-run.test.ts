@@ -17,6 +17,7 @@ import {
   mountPage,
   requestParameters,
 } from "./model-setup-first-run.test-support.ts";
+import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage first-run inference", () => {
   beforeEach(async () => {
@@ -35,29 +36,53 @@ describe("ModelSetupPage first-run inference", () => {
     vi.unstubAllGlobals();
   });
 
-  it("stops after a rejected candidate instead of authorizing another setup", async () => {
-    const { context, client, request } = createFirstRunContext();
-    request.mockResolvedValue({ done: true, status: "error", error: "Saved provider key expired" });
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [
-            candidate("claude-cli", "provider/signed-out", false),
-            candidate("openai-api-key", "provider/expired", true),
-            candidate("provider-auto:local", "provider/other"),
-          ],
+  it.each(["rejected", "uncertain"] as const)(
+    "stops after a %s candidate and only permits retry after a proven rejection",
+    async (outcome) => {
+      const { context, client, request } = createFirstRunContext();
+      request.mockResolvedValue({
+        done: true,
+        status: "error",
+        error: "The model could not finish setup",
+        ...(outcome === "rejected"
+          ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
+          : {}),
+      });
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            candidates: [
+              candidate("claude-cli", "provider/signed-out", false),
+              candidate("openai-api-key", "provider/expired", true),
+              candidate("provider-auto:local", "provider/other"),
+            ],
+          },
         },
-      },
-      client,
-      firstRun: true,
-    });
-    await waitForFast(() => expect(page.textContent).toContain("Saved provider key expired"));
-    expect(request).toHaveBeenCalledOnce();
-    expect(context.navigate).not.toHaveBeenCalled();
-    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-  });
+        client,
+        firstRun: true,
+      });
+      await waitForFast(() =>
+        expect(page.textContent).toContain("The model could not finish setup"),
+      );
+      expect(request).toHaveBeenCalledOnce();
+      expect(context.navigate).not.toHaveBeenCalled();
+      const retry = page.querySelector<HTMLButtonElement>("[data-candidate-kind] button")!;
+      expect(retry.disabled).toBe(outcome === "uncertain");
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
+        outcome === "rejected",
+      );
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+        .find((button) => button.textContent?.trim() === "Close")!
+        .click();
+      await page.updateComplete;
+      expect(page.querySelector(".model-setup__recovery") !== null).toBe(outcome === "uncertain");
+      retry.click();
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledTimes(outcome === "rejected" ? 2 : 1);
+    },
+  );
 
   it("automatically activates newly discovered credentials when first-run setup is checked again", async () => {
     const { context, client, request } = createFirstRunContext();
@@ -488,7 +513,11 @@ describe("ModelSetupPage first-run inference", () => {
       }
       expect(original.request).toHaveBeenCalledOnce();
       expect(relaunched.request).toHaveBeenCalledOnce();
-      expect(relaunched.request).toHaveBeenCalledWith("openclaw.setup.verify", { agentId: "main" });
+      expect(relaunched.request).toHaveBeenCalledWith(
+        "openclaw.setup.verify",
+        { agentId: "main" },
+        { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+      );
     },
   );
 

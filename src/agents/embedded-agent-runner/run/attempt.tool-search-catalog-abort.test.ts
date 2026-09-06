@@ -1,14 +1,30 @@
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
+import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
+import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
+import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
+  createDefaultEmbeddedSession,
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
@@ -57,6 +73,168 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
   });
+
+  it.each([
+    { mode: "direct spawn", toolName: "sessions_spawn", code: undefined, failurePhase: undefined },
+    { mode: "direct wait", toolName: "agents_wait", code: undefined, failurePhase: undefined },
+    {
+      mode: "raw catalog spawn",
+      failurePhase: "bridge",
+      toolName: "sessions_spawn",
+      code: 'return await sessions_spawn({ task: "inspect", collect: true });',
+    },
+    {
+      mode: "raw catalog wait",
+      failurePhase: "bridge",
+      toolName: "agents_wait",
+      code: 'return await agents_wait({ ids: ["child"] });',
+    },
+    {
+      mode: "joined Code Mode",
+      failurePhase: "guest",
+      toolName: "sessions_spawn",
+      code: 'return await agents.run("inspect");',
+    },
+  ])(
+    "does not enter the original preparer or action through denied $mode",
+    async ({ toolName, code, failurePhase }) => {
+      const sessionManager = SessionManager.inMemory();
+      const execute = vi.fn(async () => ({ content: [], details: {} }));
+      const prepare = vi.fn(async (args: unknown) => args);
+      const native =
+        toolName === "sessions_spawn"
+          ? createSessionsSpawnTool({ agentSessionKey: "agent:main:main" })
+          : createAgentsWaitTool({ agentSessionKey: "agent:main:main" });
+      native.execute = execute;
+      native.prepareBeforeToolCallParams = prepare;
+      const source = wrapToolWithBeforeToolCallHook(native);
+      expect(getInternalToolExecutionPreparer(source)).toBeDefined();
+      hoisted.createOpenClawCodingToolsMock.mockReturnValue([source]);
+      const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        createSession: () => {
+          const session = createDefaultEmbeddedSession();
+          // SAFETY: The runner supplied the model and finalized tools to this session factory.
+          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+            model: Model;
+            customTools: AgentTool[];
+          };
+          const allTools = options.customTools;
+          expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
+          let turn = 0;
+          const agent = new Agent({
+            initialState: { model: options.model, tools: allTools },
+            // AgentSession's result middleware normally classifies structured tool failures.
+            afterToolCall: async ({ result, isError }) => ({
+              isError: isError || isToolResultError(result),
+            }),
+            streamFn: () => {
+              const content: AssistantMessage["content"] =
+                turn++ === 0
+                  ? [
+                      {
+                        type: "toolCall",
+                        id: "denied",
+                        name: code ? "exec" : toolName,
+                        arguments: code
+                          ? { code }
+                          : toolName === "sessions_spawn"
+                            ? { task: "inspect" }
+                            : { ids: ["child"] },
+                      },
+                    ]
+                  : [{ type: "text", text: "Denied as expected." }];
+              const message: AssistantMessage = {
+                role: "assistant",
+                content,
+                api: options.model.api,
+                provider: options.model.provider,
+                model: options.model.id,
+                usage: createZeroUsageFixture(),
+                stopReason: turn === 1 ? "toolUse" : "stop",
+                timestamp: Date.now(),
+              };
+              const stream = createAssistantMessageEventStream();
+              queueMicrotask(() => {
+                stream.push({ type: "done", reason: turn === 1 ? "toolUse" : "stop", message });
+                stream.end();
+              });
+              return stream;
+            },
+          });
+          agent.subscribe((event) => {
+            if (event.type === "tool_execution_end") {
+              outcomes.push(event);
+            }
+          });
+          // SAFETY: This session fixture delegates its agent operations to the real loop below.
+          session.agent = agent as typeof session.agent;
+          Object.defineProperty(session, "messages", {
+            get: () => agent.state.messages,
+            set: (messages) => {
+              agent.state.messages = messages;
+            },
+          });
+          session.setActiveToolsByName = (names) => {
+            agent.state.tools = allTools.filter((tool) => names.includes(tool.name));
+          };
+          session.getActiveToolNames = () => agent.state.tools.map((tool) => tool.name);
+          session.prompt = async (prompt, opts) => {
+            opts?.preflightResult?.(true);
+            await agent.prompt(prompt);
+          };
+          return session;
+        },
+        attemptOverrides: {
+          disableTools: false,
+          toolExecutionAllow: ["read"],
+          sessionManager,
+          config: { tools: { codeMode: Boolean(code), toolSearch: false } },
+        },
+      });
+      const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
+      expect(outcome).toMatchObject({ isError: true });
+      const expectedError =
+        failurePhase === "guest" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE;
+      expect(outcome?.result).toMatchObject({
+        content: [expect.objectContaining({ text: expect.stringContaining(expectedError) })],
+      });
+      if (code) {
+        expect(outcome?.result).toMatchObject({
+          details: {
+            status: "failed",
+            failurePhase,
+            bridgeDispatchStarted: failurePhase === "bridge",
+            error: expect.stringContaining(expectedError),
+          },
+        });
+      }
+      const activities = sessionManager.getEntries().flatMap((entry) => {
+        const activity = entry.type === "message" && readNestedToolActivity(entry.message);
+        return activity ? [activity.details] : [];
+      });
+      expect(activities).toEqual(
+        failurePhase === "bridge"
+          ? [
+              expect.objectContaining({
+                toolName,
+                isError: true,
+                result: expect.objectContaining({
+                  content: [
+                    expect.objectContaining({ text: expect.stringContaining(expectedError) }),
+                  ],
+                }),
+              }),
+            ]
+          : [],
+      );
+      expect(prepare).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

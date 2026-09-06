@@ -1,4 +1,5 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import {
@@ -22,9 +23,9 @@ import {
   isSidebarRegionCollapsed,
   openSlot,
   reorderPanel,
-  setSidebarDock,
-  setSidebarExpanded,
   sidebarDock,
+  sidebarMainPanel,
+  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -118,7 +119,7 @@ export function sidebarRegionCallbacks(params: {
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
-      if (slot === "dashboard") {
+      if (slot === "conversation") {
         params.setPanelOpen(false);
         return;
       }
@@ -131,8 +132,6 @@ export function sidebarRegionCallbacks(params: {
     reorderPanel: (panelId, targetPanelId, placement) =>
       state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(layout, dock)),
-    setExpanded: (expanded) => state.updateSidebarLayout(setSidebarExpanded(layout, expanded)),
     setOpen: params.setPanelOpen,
   };
 }
@@ -146,12 +145,14 @@ export function renderSidebarRegion(params: {
   panelDefinitions?: SidebarPanelDefinition[];
   panelActions: SidebarPanelTemplates;
   panelTemplates: SidebarPanelTemplates;
+  header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
-  const regionError = panelOpen ? ensureLazyElement("region", params.requestUpdate) : undefined;
+  const hasPanels = params.layout.columns.length > 0;
+  const regionError = hasPanels ? ensureLazyElement("region", params.requestUpdate) : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
     const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
@@ -164,6 +165,9 @@ export function renderSidebarRegion(params: {
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
   const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const main = sidebarMainPanel(params.layout);
+  const chatMain = !main || main.slot === "conversation";
+  const column = params.layout.columns[0];
   const activePanelId = params.layout.columns[0]?.activePanelId;
   const activePanelSlot = params.layout.columns[0]?.panels.find(
     (panel) => panel.id === activePanelId,
@@ -172,26 +176,38 @@ export function renderSidebarRegion(params: {
     (definition) => definition.slot === activePanelSlot,
   )?.loading;
   return html`<div
-    class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
-    params.layout.expanded
-      ? "sidebar-region--expanded"
-      : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
+    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+      params.layout.expanded ? "sidebar-region--expanded" : ""
+    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    style=${styleMap({
+      "--side-panel-width": `${column?.width ?? 480}px`,
+      "--side-panel-height": `${column?.height ?? 360}px`,
+    })}
   >
-    ${regionError !== undefined
-      ? regionError === null
-        ? (regionLoading ?? null)
-        : null
-      : html`<openclaw-chat-sidebar-region
-          .layout=${params.layout}
-          .panelDefinitions=${panelDefinitions}
-          .panelTemplates=${panelTemplates ?? params.panelTemplates}
-          .panelActions=${params.panelActions}
-          .availableSlots=${params.availableSlots}
-          .callbacks=${params.callbacks}
-          .narrow=${params.narrow}
-          .availableWidth=${params.availableWidth}
-        ></openclaw-chat-sidebar-region>`}
-    <div class="sidebar-region__primary">${params.primary}</div>
+    <div class="sidebar-region__header">${params.header ?? nothing}</div>
+    ${
+      regionError !== undefined
+        ? regionError === null
+          ? (regionLoading ?? null)
+          : null
+        : html`<openclaw-chat-sidebar-region
+            .layout=${params.layout}
+            .panelDefinitions=${panelDefinitions}
+            .panelTemplates=${panelTemplates ?? params.panelTemplates}
+            .panelActions=${params.panelActions}
+            .availableSlots=${params.availableSlots}
+            .callbacks=${params.callbacks}
+            .narrow=${params.narrow}
+            .availableWidth=${params.availableWidth}
+          ></openclaw-chat-sidebar-region>`
+    }
+    <div
+      class="sidebar-region__primary"
+      data-region=${chatMain ? "main" : "side"}
+      ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
+    >
+      ${params.primary}
+    </div>
     <div class="sidebar-region__right-runtime">${regionError ?? null}</div>
   </div>`;
 }
@@ -202,22 +218,14 @@ export function resolveSidebarLayoutForBoard(params: {
   paneWidth: number;
 }): SidebarLayout {
   let layout = params.layout;
-  if (!params.board.hasBoard) {
+  if (!params.board.available) {
     layout = closeSlot(layout, "dashboard");
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
-  if (params.board.face !== "dashboard") {
+  if (params.board.face !== "dashboard" || layout.columns.length > 0) {
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
-  const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
-  const selectedPanelId = layout.columns[0]?.activePanelId;
   layout = openSlot(layout, "dashboard");
-  // Route projection guarantees the dashboard exists without stealing a
-  // side-panel tab the user selected after arriving.
-  if (selectedPanelId) {
-    layout = activatePanel(layout, selectedPanelId);
-  }
-  layout = { ...layout, open: !explicitlyClosed };
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 

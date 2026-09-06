@@ -13,7 +13,6 @@ import {
   validateTaskSuggestionsDismissParams,
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -206,13 +205,13 @@ function finishSuggestedTaskAcceptance(params: {
   return { ok: true, result: { taskId: params.taskId, key: params.sessionKey } };
 }
 
-function failSuggestedTaskDelivery(params: {
+function restoreSuggestedTaskClaim(params: {
   taskId: string;
   options: GatewayRequestHandlerOptions;
   error: NonNullable<Parameters<RespondFn>[2]>;
 }): TaskSuggestionAcceptanceResult {
-  // Session-mode delivery owns only the registry claim. Never roll back the
-  // operator-owned source session or its worktree when message delivery fails.
+  // Before session creation or after source-session delivery fails, only the
+  // suggestion claim can be rolled back; never delete the source session.
   const restored = cancelTaskSuggestionAcceptance(params.taskId);
   if (restored) {
     params.options.context.broadcast(
@@ -222,17 +221,6 @@ function failSuggestedTaskDelivery(params: {
     );
   }
   return { ok: false, error: params.error };
-}
-
-function resolveSuggestionOwner(
-  suggestion: TaskSuggestion,
-  options: GatewayRequestHandlerOptions,
-): ReturnType<typeof resolveRequestedSessionAgentId> {
-  return resolveRequestedSessionAgentId(
-    options.context.getRuntimeConfig(),
-    suggestion.sessionKey,
-    suggestion.agentId,
-  );
 }
 
 async function sendSuggestedTaskPrompt(params: {
@@ -267,15 +255,17 @@ async function createSuggestedTaskSession(params: {
   taskId: string;
   suggestion: TaskSuggestion;
   options: GatewayRequestHandlerOptions;
+  agentId: string;
   mode: Exclude<TaskSuggestionAcceptMode, "session">;
   cloudProfileId?: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
   let sessionResponse: Parameters<RespondFn> | undefined;
-  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
-  if (!sourceOwner.ok) {
-    return { ok: false, error: sourceOwner.error };
-  }
-  const agentId = normalizeAgentId(sourceOwner.agentId);
+  const { agentId } = params;
+  // Starting a follow-up authorizes the task, not a change of workspace.
+  const task =
+    params.mode === "local"
+      ? `Start by addressing this task in the current folder. If an isolated Git worktree is needed, explain why and ask the user before creating or switching to it.\n\n${params.suggestion.prompt}`
+      : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskSession({
@@ -293,7 +283,7 @@ async function createSuggestedTaskSession(params: {
         agentId,
         parentSessionKey: params.suggestion.sessionKey,
         label: params.suggestion.title,
-        ...(params.mode === "cloud" ? {} : { task: params.suggestion.prompt }),
+        ...(params.mode === "cloud" ? {} : { task }),
         ...(params.mode === "local" ? {} : { worktree: true }),
         cwd: params.suggestion.cwd,
       },
@@ -403,14 +393,11 @@ async function deliverSuggestedTaskToSourceSession(params: {
   taskId: string;
   suggestion: TaskSuggestion;
   options: GatewayRequestHandlerOptions;
+  agentId: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
-  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
-  if (!sourceOwner.ok) {
-    return { ok: false, error: sourceOwner.error };
-  }
-  const agentId = normalizeAgentId(sourceOwner.agentId);
+  const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
-    failSuggestedTaskDelivery({ taskId: params.taskId, options: params.options, error });
+    restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
   let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
   try {
     source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
@@ -421,7 +408,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
     return fail(
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a worktree instead",
+        "source session no longer exists; start it in a new session instead",
       ),
     );
   }
@@ -523,14 +510,6 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!insideGitCheckout(params.cwd)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
-      );
-      return;
-    }
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const sourceOwner = resolveRequestedSessionAgentId(
       context.getRuntimeConfig(),
@@ -572,6 +551,8 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
+    // clients always send local; retain this wire contract for those callers.
     const mode = params.mode ?? "worktree";
     const config = options.context.getRuntimeConfig();
     if (hasOperatorBoundary(options.client, config)) {
@@ -648,21 +629,36 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const pending = (
-      mode === "session"
+    const pending = (async () => {
+      const sourceOwner = resolveRequestedSessionAgentId(
+        config,
+        acceptance.suggestion.sessionKey,
+        acceptance.suggestion.agentId,
+      );
+      if (!sourceOwner.ok) {
+        return restoreSuggestedTaskClaim({
+          taskId: params.taskId,
+          options,
+          error: sourceOwner.error,
+        });
+      }
+      const agentId = normalizeAgentId(sourceOwner.agentId);
+      return mode === "session"
         ? deliverSuggestedTaskToSourceSession({
             taskId: params.taskId,
             suggestion: acceptance.suggestion,
             options,
+            agentId,
           })
         : createSuggestedTaskSession({
             taskId: params.taskId,
             suggestion: acceptance.suggestion,
             options,
+            agentId,
             mode,
             ...(cloudProfileId ? { cloudProfileId } : {}),
-          })
-    ).catch((error: unknown) => {
+          });
+    })().catch((error: unknown) => {
       abandonSuggestedTaskAcceptance(params.taskId, options);
       throw error;
     });

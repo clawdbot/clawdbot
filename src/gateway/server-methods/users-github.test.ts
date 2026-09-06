@@ -11,6 +11,7 @@ import {
 import {
   prepareGitHubToolEnvironment,
   resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import { cleanupRetiredManagedGitHubProfiles } from "../../agents/github-tool-profile-cleanup.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -217,6 +218,48 @@ afterEach(async () => {
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it.each(["native", "managed"] as const)(
+    "reads personal and %s system status without selecting an agent",
+    async (systemKind) => {
+      const profileId = "ghp_12121212121212121212121212121212";
+      config.agents = {
+        entries: {
+          alpha: {
+            workspace: state.path("alpha-workspace"),
+            tools: { github: { profileId: "ghp_34343434343434343434343434343434" } },
+          },
+          beta: { workspace: state.path("beta-workspace") },
+        },
+      };
+      if (systemKind === "managed") {
+        config.tools = { github: { profileId } };
+        await writeManagedGitHubProfileFiles(
+          resolveManagedGitHubProfileDir({ scope: "system", agentId: "", profileId }),
+          { login: "system-bot", token: "synthetic-native" },
+        );
+      }
+      await connect();
+      network.verify.mockClear();
+      const response = await rpc(alice, "users.github.status");
+      expect(response.mock.calls[0]?.[0]).toBe(true);
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        personal: { state: "connected", account: { login: "personal-alice" } },
+        system: {
+          source: systemKind === "managed" ? "system-configured" : "system-detected",
+          credentialState: "available",
+          account: { login: "system-bot" },
+        },
+      });
+      expect(network.verify.mock.calls.map(([token]) => token)).toEqual([
+        "synthetic-native",
+        tokens.accessToken,
+      ]);
+      const gitProbes = network.command.mock.calls.filter(([argv]) => argv[0] === "git");
+      expect(gitProbes).toHaveLength(1);
+      expect(gitProbes[0]?.[1]?.cwd).toBe(state.stateDir);
+    },
+  );
+
   it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
     network.assertCli.mockImplementationOnce(() => {
       throw new GitHubCliUnavailableError();

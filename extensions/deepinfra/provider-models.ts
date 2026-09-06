@@ -1,21 +1,20 @@
-// Deepinfra provider module implements model/runtime integration.
-
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+// Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  fetchLiveProviderModelRows,
-  getCachedLiveProviderModelRows,
-  LiveModelCatalogHttpError,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildManifestModelProviderConfig,
   getCachedLiveCatalogValue,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_TTS_FALLBACK_CATALOG,
+  type DeepInfraSurfaceModel,
+} from "./media-models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
 
@@ -26,7 +25,6 @@ const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   catalog: manifest.modelCatalog.providers.deepinfra,
 });
 
-export const DEEPINFRA_BASE_URL = DEEPINFRA_MANIFEST_PROVIDER.baseUrl;
 const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
 const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
@@ -45,28 +43,10 @@ type DeepInfraDiscoveryOptions = {
   hasApiKey?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
+  discoveryMode?: "strict" | "advisory";
 };
 
-type DeepInfraAuthConfig = {
-  secrets?: { defaults?: { env?: string; file?: string; exec?: string } };
-  models?: { providers?: Record<string, { apiKey?: unknown } | undefined> };
-};
-
-// Wire format — mirrors deepapi/agent_models_api.AgentOpenAIModelsOut.
-interface DeepInfraAgentModelPricing {
-  // chat / vlm / embed
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_tokens?: number;
-  // image-gen
-  per_image_unit?: number;
-  // video-gen
-  output_seconds?: number;
-  // tts
-  input_characters?: number;
-  // stt
-  input_seconds?: number;
-}
+type DeepInfraAgentModelPricing = DeepInfraSurfaceModel["pricing"];
 
 interface DeepInfraAgentModelMetadata {
   description?: string;
@@ -85,19 +65,6 @@ interface DeepInfraAgentModelEntry {
 }
 
 type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
-
-export interface DeepInfraSurfaceModel {
-  id: string;
-  name: string;
-  description?: string;
-  tags: string[];
-  contextWindow?: number;
-  maxTokens?: number;
-  pricing: DeepInfraAgentModelPricing;
-  defaultWidth?: number;
-  defaultHeight?: number;
-  defaultIterations?: number;
-}
 
 interface DeepInfraDiscoveredCatalog {
   chat: DeepInfraSurfaceModel[];
@@ -127,18 +94,22 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceM
     return null;
   }
   const metadata = entry.metadata;
-  if (!metadata) {
+  if (metadata === null) {
     return null;
   }
-  const tags = Array.isArray(metadata.tags)
-    ? metadata.tags.filter((t): t is string => typeof t === "string")
-    : [];
+  if (
+    !isRecord(metadata) ||
+    !Array.isArray(metadata.tags) ||
+    metadata.tags.some((tag) => typeof tag !== "string")
+  ) {
+    throw new Error("DeepInfra model metadata discovery unavailable.");
+  }
   const pricing: DeepInfraAgentModelPricing = metadata.pricing ?? {};
   return {
     id,
     name: id,
-    description: metadata.description ?? undefined,
-    tags,
+    description: typeof metadata.description === "string" ? metadata.description : undefined,
+    tags: metadata.tags,
     contextWindow: asPositiveSafeInteger(metadata.context_length),
     maxTokens: asPositiveSafeInteger(metadata.max_tokens),
     pricing,
@@ -179,10 +150,6 @@ function bucketBySurface(models: DeepInfraSurfaceModel[]): DeepInfraDiscoveredCa
     }
   }
   return catalog;
-}
-
-function hasDeepInfraSurfaceModelRows(rows: readonly unknown[]): boolean {
-  return rows.some((entry) => entryToSurfaceModel(entry as DeepInfraAgentModelEntry) !== null);
 }
 
 // Static fallback. Chat rows live in openclaw.plugin.json (manifest-validated);
@@ -283,35 +250,7 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
   // video-gen — DeepInfra has no live video-gen catalog rows today;
   // intentionally empty here. Live discovery picks up text-to-video
   // models as soon as the backend tags them, no static row required.
-  // tts — Kokoro first so the shipped default voice (af_bella) pairs with
-  // the chosen default model; the rest are alternative TTS providers
-  // currently served by DeepInfra. Qwen3-TTS / chatterbox-turbo / csm-1b
-  // each require their own voice; they ship as discoverable alternatives,
-  // not the implicit default.
-  {
-    id: "hexgrad/Kokoro-82M",
-    name: "hexgrad/Kokoro-82M",
-    tags: ["tts"],
-    pricing: { input_characters: 0.65 },
-  },
-  {
-    id: "Qwen/Qwen3-TTS",
-    name: "Qwen/Qwen3-TTS",
-    tags: ["tts"],
-    pricing: { input_characters: 0.65 },
-  },
-  {
-    id: "ResembleAI/chatterbox-turbo",
-    name: "ResembleAI/chatterbox-turbo",
-    tags: ["tts"],
-    pricing: { input_characters: 1 },
-  },
-  {
-    id: "sesame/csm-1b",
-    name: "sesame/csm-1b",
-    tags: ["tts"],
-    pricing: { input_characters: 7 },
-  },
+  ...DEEPINFRA_TTS_FALLBACK_CATALOG,
   // stt
   {
     id: "openai/whisper-large-v3-turbo",
@@ -340,8 +279,7 @@ function manifestFallbackCatalog(): DeepInfraDiscoveredCatalog {
 }
 
 // Sync per-surface fallback for the (sync) register callback. Media providers
-// register with these defaults; live discovery feeds the chat surface via
-// augmentModelCatalog and the catalog seams for image/video-gen.
+// register with these defaults; live discovery feeds the chat, image, and video catalog hooks.
 export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog {
   return manifestFallbackCatalog();
 }
@@ -387,121 +325,89 @@ function chatSurfaceModelToModelDefinition(
   };
 }
 
-// Gate dynamic discovery on key presence: pre-auth keeps the picker tight and
-// avoids a useless network call. The endpoint itself is unauthenticated.
-// Accepts env-var keys and auth-profile-store keys via the shared
-// `isProviderApiKeyConfigured` helper (covers SecretRef / `OPENCLAW_LIVE_*`
-// indirection too).
-export function hasDeepInfraApiKey(options?: {
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-  config?: DeepInfraAuthConfig;
-}): boolean {
+function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
+  if (options?.hasApiKey !== undefined) {
+    return options.hasApiKey;
+  }
   const env = options?.env ?? process.env;
   const fromEnv = env.DEEPINFRA_API_KEY;
-  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
-    return true;
-  }
-  const providers = options?.config?.models?.providers;
-  for (const [providerId, provider] of Object.entries(providers ?? {})) {
-    if (
-      providerId.trim().toLowerCase() === "deepinfra" &&
-      hasConfiguredSecretInput(provider?.apiKey, options?.config?.secrets?.defaults)
-    ) {
-      return true;
-    }
-  }
-  return isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir });
+  return (
+    (typeof fromEnv === "string" && fromEnv.trim() !== "") ||
+    isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir })
+  );
 }
 
-function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
-  const env = options?.env ?? process.env;
-  if (env.NODE_ENV === "test" || env.VITEST) {
-    return false;
-  }
-  return options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
-}
-
-// Keep pre-auth and tests offline; successful discovery shares the five-minute live catalog cache.
+// Keep pre-auth offline; successful discovery shares the five-minute live catalog cache.
 export async function discoverDeepInfraSurfaces(
   options?: DeepInfraDiscoveryOptions,
 ): Promise<DeepInfraDiscoveredCatalog> {
-  return canDiscoverDeepInfra(options) ? loadDeepInfraSurfaces() : manifestFallbackCatalog();
+  if (canDiscoverDeepInfra(options)) {
+    try {
+      return await loadDeepInfraSurfaces();
+    } catch (error) {
+      log.warn(`Model metadata discovery unavailable: ${String(error)}`);
+    }
+  }
+  return manifestFallbackCatalog();
 }
 
 async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
-  try {
-    const data = await getCachedLiveProviderModelRows({
-      providerId: "deepinfra",
-      endpoint: DEEPINFRA_MODELS_URL,
-      timeoutMs: DISCOVERY_TIMEOUT_MS,
-      ttlMs: DISCOVERY_CACHE_TTL_MS,
-      buildRequestHeaders: () => ({ Accept: "application/json" }),
-      auditContext: "deepinfra-model-discovery",
-      shouldCacheRows: hasDeepInfraSurfaceModelRows,
-      fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
-    });
-    if (data.length === 0) {
-      log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");
-      return manifestFallbackCatalog();
-    }
-    const seenIds = new Set<string>();
-    const surfaceModels: DeepInfraSurfaceModel[] = [];
-    for (const entry of data) {
-      const model = entryToSurfaceModel(entry as DeepInfraAgentModelEntry);
-      if (!model || seenIds.has(model.id)) {
-        continue;
+  return getCachedLiveCatalogValue({
+    keyParts: ["deepinfra", "surfaces", DEEPINFRA_MODELS_URL],
+    ttlMs: DISCOVERY_CACHE_TTL_MS,
+    load: async () => {
+      const data = await fetchLiveProviderModelRows({
+        providerId: "deepinfra",
+        endpoint: DEEPINFRA_MODELS_URL,
+        timeoutMs: DISCOVERY_TIMEOUT_MS,
+        buildRequestHeaders: () => ({ Accept: "application/json" }),
+        auditContext: "deepinfra-model-discovery",
+        fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+      });
+      const seenIds = new Set<string>();
+      const surfaceModels: DeepInfraSurfaceModel[] = [];
+      for (const entry of data) {
+        const model = entryToSurfaceModel(entry as DeepInfraAgentModelEntry);
+        if (!model || seenIds.has(model.id)) {
+          continue;
+        }
+        seenIds.add(model.id);
+        surfaceModels.push(model);
       }
-      seenIds.add(model.id);
-      surfaceModels.push(model);
-    }
-    if (surfaceModels.length === 0) {
-      return manifestFallbackCatalog();
-    }
-    return bucketBySurface(surfaceModels);
-  } catch (error) {
-    if (error instanceof LiveModelCatalogHttpError) {
-      log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);
-      return manifestFallbackCatalog();
-    }
-    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return manifestFallbackCatalog();
-  }
+      if (data.length > 0 && surfaceModels.length === 0) {
+        throw new Error("DeepInfra model metadata discovery unavailable.");
+      }
+      return bucketBySurface(surfaceModels);
+    },
+  });
 }
 
 async function discoverDeepInfraPricing() {
-  try {
-    return await getCachedLiveCatalogValue({
-      keyParts: ["deepinfra", "native-pricing", DEEPINFRA_PRICING_URL],
-      ttlMs: DISCOVERY_CACHE_TTL_MS,
-      load: async () => {
-        const rows = await fetchLiveProviderModelRows({
-          providerId: "deepinfra",
-          endpoint: DEEPINFRA_PRICING_URL,
-          timeoutMs: DISCOVERY_TIMEOUT_MS,
-          buildRequestHeaders: () => ({ Accept: "application/json" }),
-          auditContext: "deepinfra-pricing-discovery",
-          fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
-          readRows: (body) => {
-            if (!Array.isArray(body)) {
-              throw new Error("Native DeepInfra pricing response must be an array");
-            }
-            return body;
-          },
-        });
-        const prices = parseDeepInfraPricingCatalog(rows);
-        if (!prices) {
-          throw new Error("Native DeepInfra pricing is malformed or has no usable schedules");
-        }
-        return prices;
-      },
-    });
-  } catch (error) {
-    log.warn(
-      `Native pricing unavailable: ${String(error)}. Keeping model metadata with unknown estimates; retry discovery or configure explicit model costs.`,
-    );
-    return undefined;
-  }
+  return await getCachedLiveCatalogValue({
+    keyParts: ["deepinfra", "native-pricing", DEEPINFRA_PRICING_URL],
+    ttlMs: DISCOVERY_CACHE_TTL_MS,
+    load: async () => {
+      const rows = await fetchLiveProviderModelRows({
+        providerId: "deepinfra",
+        endpoint: DEEPINFRA_PRICING_URL,
+        timeoutMs: DISCOVERY_TIMEOUT_MS,
+        buildRequestHeaders: () => ({ Accept: "application/json" }),
+        auditContext: "deepinfra-pricing-discovery",
+        fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+        readRows: (body) => {
+          if (!Array.isArray(body)) {
+            throw new Error("Native DeepInfra pricing response must be an array");
+          }
+          return body;
+        },
+      });
+      const prices = parseDeepInfraPricingCatalog(rows);
+      if (!prices) {
+        throw new Error("Native DeepInfra pricing is malformed or has no usable schedules");
+      }
+      return prices;
+    },
+  });
 }
 
 export async function discoverDeepInfraModels(
@@ -510,33 +416,42 @@ export async function discoverDeepInfraModels(
   if (!canDiscoverDeepInfra(options)) {
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
+  const strict = options?.discoveryMode !== "advisory";
   // Resolve auth once and load independent public facts concurrently within the discovery deadline.
-  // Media-only discovery continues to use just the agent projection.
-  const [catalog, prices] = await Promise.all([
+  // Finish both request releases before publishing; media only loads the projection.
+  const [metadata, pricing] = await Promise.allSettled([
     loadDeepInfraSurfaces(),
     discoverDeepInfraPricing(),
   ]);
-  if (!catalog.live && !prices) {
-    return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+  if (metadata.status === "rejected") {
+    if (strict) {
+      throw metadata.reason;
+    }
+    if (pricing.status === "rejected") {
+      return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+    }
   }
-  const chatModels = catalog.chat.length > 0 ? catalog.chat : [...catalog.chat, ...catalog.vlm];
-  // Static surface rows omit chat compatibility metadata; keep the complete
-  // manifest seeds when metadata fails, then attach any available native prices.
-  const liveModels = catalog.live ? chatModels.map(chatSurfaceModelToModelDefinition) : [];
-  const seen = new Set(liveModels.map((model) => model.id));
-  const manifestModels = DEEPINFRA_MODEL_CATALOG.filter((model) => {
-    const unseen = !seen.has(model.id);
-    seen.add(model.id);
-    return unseen;
-  });
-  const models = [...liveModels, ...manifestModels];
+  const catalog = metadata.status === "fulfilled" ? metadata.value : undefined;
+  const chatModels = catalog ? (catalog.chat.length > 0 ? catalog.chat : catalog.vlm) : [];
+  // No price schedule is needed to publish an authoritative empty chat inventory.
+  if (strict && chatModels.length === 0) {
+    return [];
+  }
+  if (strict && pricing.status === "rejected") {
+    throw pricing.reason;
+  }
+  const prices = pricing.status === "fulfilled" ? pricing.value : undefined;
+  const models = chatModels.map(chatSurfaceModelToModelDefinition);
+  if (!strict) {
+    const discovered = new Set(models.map((model) => model.id));
+    models.push(...DEEPINFRA_MODEL_CATALOG.filter((model) => !discovered.has(model.id)));
+  }
   const unknownPrices = models.filter((model) => !prices?.has(model.id)).length;
-  if (prices && unknownPrices > 0) {
+  if (unknownPrices > 0) {
     log.warn(
       `Native pricing unavailable or qualified for ${unknownPrices} models; keeping metadata with unknown estimates. Configure explicit model costs if needed.`,
     );
   }
-  // Price appended seeds too: a missing projection row must not revive stale bundled costs.
   // Runtime requires zeros for unknown prices; this is not evidence of free billing.
   return models.map((model) =>
     buildDeepInfraModelDefinition({

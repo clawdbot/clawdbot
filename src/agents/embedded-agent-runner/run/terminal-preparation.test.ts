@@ -2,6 +2,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   markCoreTtsAttemptResult,
   markCoreTtsToolResult,
@@ -29,14 +30,7 @@ function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop"): 
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content: [
       {
@@ -203,6 +197,38 @@ describe("prepareEmbeddedRunTerminal", () => {
     );
     expect(markedMedia.every((payload) => !payload.text)).toBe(true);
   });
+
+  it.each([
+    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
+    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "\u200b" },
+    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
+    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
+    { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
+    { assistantTexts: [], expected: undefined },
+  ])(
+    "selects final fallback text without changing its source %#",
+    async ({ assistantTexts, expected }) => {
+      const original = [...assistantTexts];
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts,
+          messagesSnapshot: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: undefined,
+        }),
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
+
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantRawText).toBe(expected);
+      expect(assistantTexts).toEqual(original);
+    },
+  );
 
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
@@ -775,6 +801,16 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta.terminalReceipt).not.toHaveProperty("terminalDisposition");
     expect(prepared.agentMeta.model).toBe("cost-model");
     expect(prepared.reportedModelRef.model).toBe("cost-model");
+  });
+
+  it("records producer source delivery without an extracted messaging target", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        sourceReplyDelivered: true,
+        messagingToolSentTargets: [],
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
   it("marks a provider-only response route as rerouted", async () => {

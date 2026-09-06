@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   config: {} as object,
@@ -53,8 +54,7 @@ vi.mock("./prepared-model-runtime.js", () => {
     preparedModelRuntimeConfigsMatch: (left: object, right: object) =>
       JSON.stringify(left) === JSON.stringify(right),
     prepareModelRuntimeSnapshot: (...args: unknown[]) => mocks.prepareSnapshot(...args),
-    refreshStalePreparedModelRuntimeCatalog: (...args: unknown[]) =>
-      mocks.refreshStaleCatalog(...args),
+    refreshPreparedModelRuntimeCatalog: (...args: unknown[]) => mocks.refreshStaleCatalog(...args),
   };
 });
 
@@ -75,6 +75,7 @@ import {
   loadResolvedPublishedModelCatalogOwner,
   loadPublishedPreparedModelCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
+  withPreparedModelCatalogOwner,
 } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -113,6 +114,48 @@ describe("prepared model catalog access", () => {
     mocks.isFullCatalog.mockReset();
     mocks.releaseSnapshot.mockReset();
   });
+
+  it.each([
+    { readOnly: true, rejectProjection: false },
+    { readOnly: true, rejectProjection: true },
+    { readOnly: false, rejectProjection: false },
+    { readOnly: false, rejectProjection: true },
+  ])(
+    "retains the temporary owner through projection and releases it (readOnly=$readOnly, reject=$rejectProjection)",
+    async ({ readOnly, rejectProjection }) => {
+      let current = true;
+      const snapshot = { ...readOnlySnapshot, isCurrent: () => current };
+      const started = createDeferred();
+      const resume = createDeferred();
+      const failure = new Error("projection failed");
+      mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
+      mocks.loadSnapshot.mockResolvedValue(snapshot);
+      mocks.acquireSnapshot.mockResolvedValue(snapshot);
+      mocks.releaseSnapshot.mockImplementation(() => {
+        current = false;
+      });
+
+      const result = withPreparedModelCatalogOwner({ readOnly }, async (owner) => {
+        expect(owner.isCurrent()).toBe(true);
+        started.resolve();
+        await resume.promise;
+        expect(owner.isCurrent()).toBe(true);
+        if (rejectProjection) {
+          throw failure;
+        }
+        return owner.modelCatalog;
+      });
+      const outcome = rejectProjection
+        ? expect(result).rejects.toBe(failure)
+        : expect(result).resolves.toBe(snapshot.modelCatalog);
+      await started.promise;
+      expect(mocks.releaseSnapshot).not.toHaveBeenCalled();
+      resume.resolve();
+      await outcome;
+      expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
+      expect(current).toBe(false);
+    },
+  );
 
   it("uses the requested environment for directory selection and workspace activation", async () => {
     mocks.agentIds = ["main", "worker"];
@@ -209,7 +252,9 @@ describe("prepared model catalog access", () => {
       await expect(
         loadPreparedModelCatalogOwnerSnapshot({ readOnly, refreshFullCatalog }),
       ).resolves.toMatchObject({ modelCatalog: staleCatalog });
-      expect(mocks.refreshStaleCatalog).toHaveBeenCalledWith(snapshot);
+      expect(mocks.refreshStaleCatalog).toHaveBeenCalledWith(snapshot, {
+        refresh: refreshFullCatalog === true && !readOnly,
+      });
       expect(snapshot.readFullModelCatalog).not.toHaveBeenCalled();
       expect(snapshot.loadFullModelCatalog).not.toHaveBeenCalled();
     },

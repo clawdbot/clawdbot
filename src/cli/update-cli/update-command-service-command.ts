@@ -2,11 +2,18 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { runDaemonInstall } from "../daemon-cli/install.js";
+import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
+
+export function isPackageManagerUpdateMode(
+  mode: UpdateRunResult["mode"],
+): mode is "npm" | "pnpm" | "bun" {
+  return mode === "npm" || mode === "pnpm" || mode === "bun";
+}
 
 function formatCommandFailure(stdout: string, stderr: string): string {
   // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
@@ -17,8 +24,8 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
-// Use the candidate's version guards for both refresh and activation. The parsed
-// preservation option makes older targets reject before repair, without a retry.
+// Loaded before package replacement: activation dependencies must stay eager.
+// Candidate version/preservation guards reject older targets before repair, without retry.
 export async function runUpdatedInstallGatewayCommand(
   params: {
     result: { root?: string; mode?: UpdateRunResult["mode"] };
@@ -36,13 +43,9 @@ export async function runUpdatedInstallGatewayCommand(
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
-    if (installing) {
-      const { isPackageManagerUpdateMode } = await import("./update-command-service-recovery.js");
-      if (!isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
-        const { runDaemonInstall } = await import("../daemon-cli/install.runtime.js");
-        await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-        return true;
-      }
+    if (installing && !isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
+      await runDaemonInstall({ force: true, json: params.opts.json || undefined });
+      return true;
     }
     throw new Error(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
@@ -57,7 +60,7 @@ export async function runUpdatedInstallGatewayCommand(
   if (params.opts.json) {
     args.push("--json");
   }
-  const nodeRunner = params.nodeRunner ?? (await import("./shared.js")).resolveNodeRunner();
+  const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   const res = await runCommandWithTimeout([nodeRunner, entrypoint, ...args], {
     // The complete owned env must not regain selectors removed during capture.
     baseEnv: {},

@@ -38,6 +38,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -623,6 +624,120 @@ describe("Browser Talk consult input custody", () => {
         ]);
         expect(messages.map(extractText)).toContain(normalPrompt);
         expect(JSON.stringify(messages)).not.toContain(consultAnswer);
+      }
+    },
+  );
+});
+
+describe("Direct Talk consult history after call closure", () => {
+  it.each(["before-final", "after-final"] as const)(
+    "retains the direct answer when the call closes %s without a spoken replacement",
+    async (ordering) => {
+      const callId = expectDefined(voiceSessionId, "direct voice session");
+      const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
+      const finalCommitted = createDeferred();
+      const releaseResult = createDeferred();
+      const completeModel = expectDefined(
+        runEmbeddedAgent.getMockImplementation(),
+        "held model implementation",
+      );
+      runEmbeddedAgent.mockImplementation(async (params) => {
+        const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
+        await recorder.persistApproved();
+        expect(recorder.hasPersisted()).toBe(true);
+        const result = await completeModel(params);
+        params.abortSignal?.throwIfAborted();
+        const manager = guardSessionManager(SessionManager.open(scope()), {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+        });
+        manager.appendMessage(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: directAnswer }] }),
+        );
+        finalCommitted.resolve();
+        await releaseResult.promise;
+        return { ...result, payloads: [{ text: directAnswer }] };
+      });
+      const runner = createTalkClientAgentConsultRunner({
+        config: getRuntimeConfig(),
+        context,
+        sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+        ownerConnId: connectionId,
+        getVoiceSessionId: () => callId,
+        initialItems: [],
+      });
+      const providerTask = new AbortController();
+      const directRun = runner.runArgs(args, providerTask.signal);
+      void directRun.catch(() => undefined);
+      try {
+        await Promise.race([modelStarted.promise, directRun]);
+        const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "direct core invocation");
+        const backingSignal = expectDefined(run.abortSignal, "direct backing signal");
+        expect(run).toMatchObject({ agentId, sessionId, sessionKey: canonicalKey });
+        expect(backingSignal.aborted).toBe(false);
+        if (ordering === "after-final") {
+          releaseModel.resolve();
+          await Promise.race([finalCommitted.promise, directRun]);
+        }
+        await rpc("talk.client.close", { sessionKey, voiceSessionId: callId });
+        expect(clientVoiceSessionTesting.readRecord(agentId, callId)).toMatchObject({
+          status: "closed",
+          consultRunIds: [run.runId],
+        });
+        expect(providerTask.signal.aborted).toBe(false);
+        expect(backingSignal.aborted).toBe(false);
+        await expect(runner.runArgs(args)).rejects.toThrow("voice session is closed");
+        releaseModel.resolve();
+        releaseResult.resolve();
+        await expect(directRun).resolves.toEqual({ text: directAnswer });
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+        await drainPublications();
+        expectNoGeneratedInput(liveMessages(), "direct live publication");
+
+        const storedMessages = loadTranscriptEventsSync(scope()).flatMap((event) => {
+          const message = asOptionalRecord(asOptionalRecord(event)?.message);
+          return message ? [message] : [];
+        });
+        const generated = storedMessages.filter((message) =>
+          extractText(message)?.includes(args.question),
+        );
+        expect(generated).toHaveLength(1);
+        expect(generated[0]).toMatchObject({
+          role: "user",
+          display: false,
+          excludeFromContext: true,
+        });
+        expect(
+          storedMessages.filter((message) => message.role === "assistant").map(extractText),
+        ).toEqual([directAnswer]);
+        const history = await historyMessages();
+        const databasePath = resolveOpenClawAgentSqlitePath(
+          toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
+        );
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        clearSessionStoreCacheForTest();
+        for (const [view, messages] of [
+          ["chat.history", history],
+          ["reopened chat.history", await historyMessages()],
+        ] as const) {
+          expect
+            .soft(
+              messages.map(extractText).filter((text) => text === directAnswer),
+              view,
+            )
+            .toEqual([directAnswer]);
+          expectNoGeneratedInput(messages, `closed direct call ${view}`);
+        }
+        const modelContext =
+          SessionManager.openModelContext(scope()).buildSessionContext().messages;
+        expectNoGeneratedInput(modelContext, "closed direct call model context");
+        expect(modelContext.map(extractText)).toContain(directAnswer);
+      } finally {
+        releaseModel.resolve();
+        releaseResult.resolve();
+        await directRun.catch(() => undefined);
       }
     },
   );

@@ -42,13 +42,13 @@ not gate this path.
 
 OpenClaw derives the request parameters without adding config options:
 
-| Parameter           | Value                                                                                    |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| `trigger`           | Input tokens: `max(50000, floor(contextWindow * 0.3))`                                   |
-| `keep`              | The 3 most recent tool uses and their results                                            |
-| `clear_at_least`    | Input tokens: `max(12500, floor(contextWindow * 0.05))`                                  |
-| `exclude_tools`     | Names excluded by `tools.deny`, plus exposed tools outside `tools.allow` when configured |
-| `clear_tool_inputs` | `false`, preserving tool-call arguments                                                  |
+| Parameter           | Value                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| `trigger`           | Input tokens: `max(50000, floor(contextWindow * 0.3))`                                              |
+| `keep`              | The 3 most recent tool uses and their results                                                       |
+| `clear_at_least`    | Input tokens: `max(12500, floor(contextWindow * 0.05))`                                             |
+| `exclude_tools`     | Current and historical tool names excluded by `tools.deny` or outside `tools.allow` when configured |
+| `clear_tool_inputs` | `false`, preserving tool-call arguments                                                             |
 
 The request includes the `clear_tool_uses_20250919` edit and
 `context-management-2025-06-27` beta header. If server-side compaction is enabled,

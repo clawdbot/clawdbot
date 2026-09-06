@@ -24,9 +24,8 @@ import {
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import {
-  resolveMessageSendOutcome,
+  resolveMessageActionOutcome,
   type MessageActionInput,
-  type MessageActionNormalization,
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -42,6 +41,7 @@ import {
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
+import { withSendNormalization } from "./message-action-send-payload.js";
 import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
 import type { MessageSendResult } from "./message.js";
 import {
@@ -56,13 +56,6 @@ const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function withSendNormalization(
-  result: MessageActionResult,
-  normalization?: MessageActionNormalization,
-): MessageActionResult {
-  return normalization && result.kind === "send" ? { ...result, normalization } : result;
 }
 
 async function handleBroadcastAction(
@@ -167,10 +160,7 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ...resolveMessageSendOutcome(
-            sendResult.kind === "send" ? sendResult.sendResult : undefined,
-            "Broadcast",
-          ),
+          ...resolveMessageActionOutcome(sendResult, "Broadcast"),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });

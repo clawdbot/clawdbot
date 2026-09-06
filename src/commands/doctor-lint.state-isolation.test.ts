@@ -4,11 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
+import {
+  closeAuthProfileReadPool,
+  inspectPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
@@ -195,6 +207,168 @@ describe("doctor lint state isolation", () => {
         }
       },
     );
+  });
+
+  it.each(["legacy-main", "state-db"] as const)(
+    "retains auth findings and source paths when mixed lint uses %s shared auth",
+    async (location) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-" }, async (state) => {
+        const customDir = state.path("custom-agent");
+        const config: OpenClawConfig = {
+          gateway: { mode: "local" },
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, healthy: {}, custom: { agentDir: customDir }, empty: {} },
+          },
+          plugins: { enabled: false },
+        };
+        await state.writeConfig(config);
+        const store = (profileId: string, expired = true) => ({
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "token" as const,
+              provider: "diagnostic-provider",
+              token: "synthetic-not-a-real-credential",
+              expires: expired ? 1 : Date.now() + 7 * 86_400_000,
+            },
+          },
+        });
+        writeConfigMachineState("auth.sharedStore", { location });
+        noteCommittedSharedAuthStoreOwnership({ location });
+        writePersistedAuthProfileStoreRaw(
+          store("diagnostic-provider:shared"),
+          location === "legacy-main" ? state.agentDir("main") : undefined,
+        );
+        writePersistedAuthProfileStoreRaw(
+          store("diagnostic-provider:alpha"),
+          state.agentDir("alpha"),
+        );
+        writePersistedAuthProfileStoreRaw(store("diagnostic-provider:custom"), customDir);
+        writePersistedAuthProfileStoreRaw(
+          store("diagnostic-provider:healthy", false),
+          state.agentDir("healthy"),
+        );
+        const ownerDirs = [
+          undefined,
+          state.agentDir("alpha"),
+          customDir,
+          state.agentDir("healthy"),
+        ];
+        const before = ownerDirs.map((dir) => inspectPersistedAuthProfileStoreRaw(dir));
+        const expected = [
+          [
+            "diagnostic-provider:alpha",
+            path.join(state.agentDir("alpha"), "openclaw-agent.sqlite"),
+          ],
+          ["diagnostic-provider:custom", path.join(customDir, "openclaw-agent.sqlite")],
+          ["diagnostic-provider:shared", resolveSharedAuthStorePath()],
+        ];
+        const actual = await vi.importActual<
+          typeof import("../flows/doctor-health-contributions.js")
+        >("../flows/doctor-health-contributions.js");
+        const checks = await actual.resolveDoctorContributionHealthChecks();
+        const privateInspection = vi.fn(async () => {
+          expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
+          // Runtime inspectors can refresh OAuth state; that write must stay private.
+          writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
+          closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath());
+          return [];
+        });
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue(
+          checks.map((check) =>
+            check.id === "core/doctor/runtime-tool-schemas"
+              ? Object.assign({}, check, { detect: privateInspection })
+              : check,
+          ),
+        );
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          for (const onlyIds of [
+            ["core/doctor/auth-profiles"],
+            [
+              "core/doctor/auth-profiles",
+              "memory-core/managed-local-embedding-setup",
+              "core/doctor/runtime-tool-schemas",
+            ],
+          ]) {
+            await expect(runDoctorLintCli(runtime, { json: true, onlyIds })).resolves.toBe(1);
+            const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+            expect(
+              report.findings
+                .filter(
+                  (finding: { checkId: string }) => finding.checkId === "core/doctor/auth-profiles",
+                )
+                .map((finding: { target: string; path: string }) => [finding.target, finding.path])
+                .toSorted(),
+            ).toEqual(expected);
+            expect(report.findings).toHaveLength(3);
+            expect(ownerDirs.map((dir) => inspectPersistedAuthProfileStoreRaw(dir))).toEqual(
+              before,
+            );
+          }
+          expect(privateInspection).toHaveBeenCalledOnce();
+          expect(readConfigMachineState("doctorLint.synthetic.privateWrite")).toBeUndefined();
+        } finally {
+          stdout.mockRestore();
+          closeAuthProfileReadPool({ kind: "root", rootPath: state.root });
+        }
+      });
+    },
+  );
+
+  it("restores the private view after an auth detector throws", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-throw-" }, async (state) => {
+      await state.writeConfig({ memory: { search: { enabled: false } } });
+      const sourceConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const observedStates: Array<string | undefined> = [];
+      mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+        {
+          id: "core/doctor/auth-profiles",
+          kind: "core",
+          description: "checks source auth state",
+          async detect() {
+            observedStates.push(process.env.OPENCLAW_STATE_DIR);
+            throw new Error("synthetic auth detector failure");
+          },
+        },
+        {
+          id: "core/doctor/runtime-tool-schemas",
+          kind: "core",
+          description: "checks private runtime state",
+          async detect() {
+            observedStates.push(process.env.OPENCLAW_STATE_DIR);
+            return [];
+          },
+        },
+      ]);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await expect(
+          runDoctorLintCli(runtime, {
+            json: true,
+            onlyIds: [
+              "core/doctor/auth-profiles",
+              "memory-core/managed-local-embedding-setup",
+              "core/doctor/runtime-tool-schemas",
+            ],
+          }),
+        ).resolves.toBe(1);
+        expect(observedStates[0]).toBe(state.stateDir);
+        expect(observedStates[1]).toEqual(expect.any(String));
+        expect(observedStates[1]).not.toBe(state.stateDir);
+        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/auth-profiles",
+            message: "health check threw: synthetic auth detector failure",
+          }),
+        ]);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(sourceConfigPath);
+      } finally {
+        stdout.mockRestore();
+      }
+    });
   });
 
   it("keeps runtime schema OAuth inspection off the writable source state", async () => {

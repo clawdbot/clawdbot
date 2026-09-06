@@ -42,7 +42,6 @@ export async function runSkillWorkshopReview(
       skillWorkshopProposalOnly: true,
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
-      suppressToolErrorWarnings: true,
     });
   } finally {
     preparedRunAdmission.close();

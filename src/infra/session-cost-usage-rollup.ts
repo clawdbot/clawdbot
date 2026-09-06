@@ -348,6 +348,7 @@ function mergeDatedRows<T extends { date: string; quarterIndex?: number }>(
   left: T[] | undefined,
   right: T[] | undefined,
   add: (target: T, source: T) => void,
+  clone: (row: T) => T = (row) => ({ ...row }),
 ): T[] | undefined {
   const rows = new Map<string, T>();
   for (const row of [...(left ?? []), ...(right ?? [])]) {
@@ -356,7 +357,7 @@ function mergeDatedRows<T extends { date: string; quarterIndex?: number }>(
     if (existing) {
       add(existing, row);
     } else {
-      rows.set(key, { ...row });
+      rows.set(key, clone(row));
     }
   }
   return rows.size
@@ -370,14 +371,12 @@ function mergeMessageCountSummaries(
   left: SessionMessageCounts | undefined,
   right: SessionMessageCounts | undefined,
 ): SessionMessageCounts | undefined {
-  if (!left && !right) {
-    return undefined;
+  if (!left) {
+    return right ? { ...right } : undefined;
   }
-  const counts = emptyMessageCounts();
-  for (const source of [left, right]) {
-    if (source) {
-      addMessageCounts(counts, source);
-    }
+  const counts = { ...left };
+  if (right) {
+    addMessageCounts(counts, right);
   }
   return counts;
 }
@@ -450,7 +449,6 @@ function mergeDailyModels(
     : undefined;
 }
 
-/** Merges historical session summaries through the canonical usage aggregation rules. */
 export function mergeSessionCostSummaryInto(
   target: SessionCostSummary,
   source: SessionCostSummary,
@@ -480,9 +478,11 @@ export function mergeSessionCostSummaryInto(
     target.dailyBreakdown,
     source.dailyBreakdown,
     (current, row) => {
+      addCostUsageTotals(current, row);
       current.tokens += row.tokens;
       current.cost += row.cost;
     },
+    (row) => ({ ...row, ...cloneCostUsageTotals(row) }),
   );
   target.dailyMessageCounts = mergeDatedRows(
     target.dailyMessageCounts,
@@ -546,7 +546,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   const tools = new Map<string, number>();
   const models = new Map<string, SessionModelUsage>();
   const activityDates = new Set<string>();
-  const dailyUsage = new Map<string, { tokens: number; cost: number }>();
+  const dailyUsage = new Map<string, CostUsageTotals>();
   const dailyMessages = new Map<string, SessionDailyMessageCounts>();
   const quarterMessages = new Map<string, SessionUtcQuarterHourMessageCounts>();
   const quarterTokens = new Map<string, SessionUtcQuarterHourTokenUsage>();
@@ -572,9 +572,8 @@ export function buildSessionCostSummaryFromRollup(params: {
     mergeTools(tools, bucket.tools);
     mergeModels(models, bucket.models);
 
-    const daily = dailyUsage.get(dayKey) ?? { tokens: 0, cost: 0 };
-    daily.tokens += bucket.totals.totalTokens;
-    daily.cost += bucket.totals.totalCost;
+    const daily = dailyUsage.get(dayKey) ?? createEmptyCostUsageTotals();
+    addCostUsageTotals(daily, bucket.totals);
     dailyUsage.set(dayKey, daily);
 
     const dailyMessage = dailyMessages.get(dayKey) ?? { date: dayKey, ...emptyMessageCounts() };
@@ -663,7 +662,7 @@ export function buildSessionCostSummaryFromRollup(params: {
         : undefined,
     activityDates: Array.from(activityDates).toSorted(),
     dailyBreakdown: Array.from(dailyUsage, ([date, usage]) =>
-      Object.assign({ date }, usage),
+      Object.assign({ date, tokens: usage.totalTokens, cost: usage.totalCost }, usage),
     ).toSorted((a, b) => a.date.localeCompare(b.date)),
     dailyMessageCounts: Array.from(dailyMessages.values()).toSorted((a, b) =>
       a.date.localeCompare(b.date),

@@ -11,7 +11,7 @@ The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
 permission prompts, notifications, WebChat, voice input, a hosted-widget panel,
 and Mac-hosted node tools such as `system.run`.
 
-Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Dashboard → Settings → This Mac → App**.
 
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
@@ -35,7 +35,10 @@ has no macOS app asset, use the newest one that does, or build from source with
 ## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
+2. Pick **This Mac** for a local Gateway, or **Connect to an existing Gateway**
+   to enter its address and sign in. A saved Gateway opens its dashboard after
+   connection and completes first-run setup without changing the Mac's primary
+   Gateway. Continue below when setting up a new Gateway.
 3. For a new local Gateway, wait while the app installs its external CLI runtime
    and starts the Gateway. Connecting to a remote or independently managed local
    Gateway does not require installing a CLI on this Mac.
@@ -44,7 +47,7 @@ has no macOS app asset, use the newest one that does, or build from source with
    picker, including the API-key option.
 5. Finish. The app opens the dashboard, where OpenClaw guides the rest of the
    setup (memory import, channels, permissions) in one conversation. Grant
-   macOS permissions any time from **Settings → Permissions**.
+   macOS permissions any time from **Dashboard → Settings → This Mac → Permissions**.
 
 If the app reaches an existing Gateway whose default agent has a configured
 model, it treats that Gateway as already set up, skips provider onboarding and
@@ -55,10 +58,42 @@ recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
-Resize the Settings window to fit your display. Long settings panes scroll
-independently of the sidebar, keeping permission and capability controls reachable.
+To add another Gateway for dashboard and chat access, open
+**Connection… → Gateways → Add Gateway** and enter its hostname or HTTPS address.
+Cloudflare Access Gateways let you sign in with your personal account in the
+default browser. You can also start from **Get the apps → Open in Mac app** on
+the Gateway's website. See [browser sign-in](/platforms/mac/remote#connect-with-your-browser).
+
+Choose **Settings…** from the menu bar or press Cmd-, to open Dashboard settings.
+**This Mac** contains app preferences, local capabilities, browser login import,
+cookie sync, and permissions. Device voice controls appear under
+**Settings → Talk → This Mac**, and app update preferences under
+**Settings → Updates → This Mac**. These device controls appear only in the
+macOS app's embedded Dashboard, not in an ordinary browser.
+
+Enabling sensitive capabilities opens a native confirmation with **Cancel** as
+the default. Closing or replacing the Dashboard page cancels pending consent;
+request the change again from the current page.
+
+## Connection
+
+Choose **Connection…** to open the small native window even when the Gateway
+is unreachable. Its **Connection** tab contains local Gateway status, remote/SSH
+options, Tailscale, and discovery; **Gateways** manages saved Gateway profiles.
+A **Debug** tab appears while the developer toggle in **This Mac → Developer**
+is enabled. **About OpenClaw** opens the standard macOS About panel with the app
+version, build information, and credits.
+
+App-local settings (permissions, Quick Chat, voice, updates) live in
+Dashboard → Settings → This Mac and require a Gateway release that includes those pages.
+The Connection tab's **Open Dashboard Settings** button opens that Dashboard.
 
 ## Updates
+
+Open **Dashboard → Settings → Updates → This Mac** to turn automatic app updates
+on or off, choose **Check for Updates…**, and see the installed app version and
+build. The page explains when updates are unavailable, including while a named
+app profile is active.
 
 If the primary Gateway connection rejects the app's protocol version, the app
 shows an update alert and keeps the explanation in its connection status.
@@ -102,6 +137,30 @@ unknown values stay on stable app builds.
 
 ## Open dashboard links
 
+For a saved Gateway added with [browser sign-in](/platforms/mac/remote#connect-with-your-browser),
+the dashboard uses that profile's Keychain-backed personal session. You do not
+need a second sign-in inside the embedded browser. **Reconnect** in
+**Connection… → Gateways** renews an expired session.
+
+For a remote Gateway with identity-aware authentication, the app opens the
+dashboard at its sign-in address: HTTPS `gateway.publicOrigin` for trusted-proxy
+authentication, or the active managed Tailscale Serve address when Tailscale
+identity is enabled. Serve does not require `gateway.publicOrigin`. Complete
+the sign-in inside the dashboard window if that profile has no saved browser
+session; your existing Gateway profile then
+owns the displayed identity and chat attribution. The native device connection
+keeps its configured transport, including SSH, and its credentials are not sent
+to the public dashboard or sign-in provider. Shared-secret Gateways without a
+personal sign-in route continue to use the shared owner profile.
+
+Open windows for saved Gateway profiles follow sign-in route changes after a
+reconnect. An unchanged route keeps the current dashboard and its navigation.
+
+Opening the embedded dashboard at its default Chat landing restores the last
+page you visited, such as **Usage**, for that Gateway origin. Explicit session
+links and navigation requests take precedence over the remembered page, and
+first-run model setup still runs when needed.
+
 In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width. Drag the divider in either direction to choose another width; the app remembers it. Widening the browser lets the dashboard switch to compact navigation, with a 400-point minimum for the dashboard and a 320-point minimum for the browser. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
@@ -112,13 +171,15 @@ Right-click an external link to choose **Open in Sidebar**, **Open in Default Br
 
 ## Import browser logins
 
-The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 ## Sync cookies to a remote computer
 
 Import copies cookies once into a profile on the same Mac. When your Gateway and agent browser run on a **separate computer** (a dedicated box, a headless Linux host, or a cloud container), turn on cookie sync so this Mac keeps that remote browser signed in to the sites you choose.
 
-Open **Settings → General → Cookie sync**. It is **off by default** and only takes effect while the app runs in remote mode. Turn on **Sync cookies to the remote computer**, add the sites you want kept in sync to the **Domains** allowlist (for example `github.com` and `accounts.google.com`), and set the **Target profile** that receives them (the managed profile name on the remote Gateway, `imported` by default). A status row shows whether sync is running.
+Open **Dashboard → Settings → This Mac → Browser**. Cookie sync is **off by default** and is available only in remote mode with an external CLI on this Mac. Turn on cookie sync, add the sites you want kept in sync to the **Domains** allowlist (for example `github.com` and `accounts.google.com`), and set the **Target profile** that receives them (the managed profile name on the remote Gateway, `imported` by default). A status row shows whether sync is running.
+
+If a pending addition would restore a domain removed in another Dashboard window, it is discarded. Review the updated list and add the intended domains again.
 
 While enabled, the app supervises the [`openclaw browser cookie-sync --watch`](/cli/browser#cookie-sync-to-a-remote-gateway) command against the connected Gateway. Cookies are decrypted locally on this Mac (one macOS Keychain or Touch ID prompt per session) and pushed to the remote profile over the app's existing encrypted Gateway connection; only the domains on the allowlist are ever sent, and cookie values are never written to logs. An empty allowlist syncs nothing. As with import, some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and may still require re-authentication after sync; for those sites, drive the browser on the Mac itself through the [browser node proxy](/cli/browser#remote-browser-control-node-host-proxy) instead.
 
@@ -138,6 +199,11 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
+Native code owns device-local capabilities and the Connection window; the
+Dashboard owns all settings UI. Device preferences stay on this Mac, while the
+embedded Dashboard asks the app to read or change them and open native permission,
+shortcut, microphone-test, or browser-import panels.
+
 - Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
 - One Mac node that combines the native widget panel, camera/screen capture, notifications,
@@ -148,7 +214,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
 
-In the embedded Control UI, **Settings → Notifications** shows the app's native
+In the embedded Control UI, **Dashboard → Settings → Notifications** shows the app's native
 notification permission instead of browser push because the app delivers notifications natively.
 
 The app does **not** replace the Gateway or general CLI docs. Gateway

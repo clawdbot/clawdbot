@@ -1,10 +1,12 @@
 // Control UI tests cover session pull request chips above the chat composer.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -433,11 +435,12 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => page.getByRole("button", { name: "Publishing…" }).isDisabled())
       .toBe(true);
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "01-publication-pending.png"),
-      });
+      await writeFile(
+        path.join(publicationProofDir, "01-publication-pending.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.getByRole("button", { name: "Publishing…" }),
+        ]),
+      );
     }
 
     await gateway.resolveDeferred("sessions.github.publish", {
@@ -455,11 +458,10 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => open.getAttribute("href"))
       .toBe("https://github.com/openclaw/openclaw/pull/125200");
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "02-publication-published.png"),
-      });
+      await writeFile(
+        path.join(publicationProofDir, "02-publication-published.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [open]),
+      );
     }
 
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {

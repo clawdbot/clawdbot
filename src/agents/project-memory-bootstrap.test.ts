@@ -126,6 +126,27 @@ describe("project memory bootstrap", () => {
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
 
+  it("admits a later exact-fit entry after skipping an oversized entry", async () => {
+    const first = Array.from({ length: 3 }, (_, index) => ({
+      ...entries[0]!,
+      startLine: index + 1,
+      snippet: "a".repeat(550),
+    }));
+    const prefix = await prepareEntries(first);
+    const sourceSuffix = " (Source: MEMORY.md#L5)";
+    const remaining = 2_000 - prefix.join("\n").length;
+    const lastSnippet = "z".repeat(remaining - "- ".length - sourceSuffix.length - 1);
+    const lines = await prepareEntries([
+      ...first,
+      { ...entries[0]!, startLine: 4, snippet: "b".repeat(600) },
+      { ...entries[0]!, startLine: 5, snippet: lastSnippet },
+      { ...entries[0]!, startLine: 6, snippet: "Does not fit." },
+    ]);
+
+    expect(lines).toEqual([...prefix.slice(0, -1), `- ${lastSnippet}${sourceSuffix}`, ""]);
+    expect(lines.join("\n")).toHaveLength(2_000);
+  });
+
   it("keeps sessions without an active repository unchanged", async () => {
     await expect(prepareEntries(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();

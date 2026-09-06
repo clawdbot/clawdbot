@@ -23,10 +23,9 @@ defineDiscordVoiceTests(
     createManager,
     makeVoiceConfig,
     getSessionEntry,
-    getVoiceReceive,
+    receiveRecordedSpeech,
     expectConnectedStatus,
     requireRecord,
-    transcribeAudioFileMock,
     lastRealtimeBridgeParams,
     beginSpeakerTurn,
   }) => {
@@ -77,33 +76,20 @@ defineDiscordVoiceTests(
           ).resolves.toMatchObject({
             details: { sessionId: "first", providerId: "discord-voice", accountId },
           });
-          const entry = getSessionEntry(manager);
-          const segment = {
-            entry,
-            wavPath: path.join(stateDir, "speech.wav"),
-            userId: "u-speaker",
-            durationSeconds: 1,
-          };
-          transcribeAudioFileMock.mockResolvedValueOnce({
-            text: "Keep the original historical note.",
-          });
-          await getVoiceReceive(manager).processSegment(segment);
+          const record = (text: string) =>
+            receiveRecordedSpeech(manager, text, getSessionEntry(manager), "u-speaker");
+          await record("Keep the original historical note.");
 
           await expect(
             execute({ action: "start", sessionId: "second", ...source }),
           ).resolves.toMatchObject({
             details: { sessionId: "second", providerId: "discord-voice", accountId },
           });
-          transcribeAudioFileMock.mockResolvedValueOnce({
-            text: "This belongs only to the replacement.",
-          });
-          await getVoiceReceive(manager).processSegment({
-            ...segment,
-            entry: getSessionEntry(manager),
-          });
+          await record("This belongs only to the replacement.");
 
           const first = expectDefined(await store.readSession("first"), "first capture");
           const second = expectDefined(await store.readSession("second"), "second capture");
+          const secondTexts = ["This belongs only to the replacement."];
           expect(first.source).toMatchObject(source);
           expect(second.source).toEqual(first.source);
           expect(
@@ -111,7 +97,7 @@ defineDiscordVoiceTests(
           ).toEqual(["Keep the original historical note."]);
           expect(
             (await store.readUtterancesForSession(second)).map((utterance) => utterance.text),
-          ).toEqual(["This belongs only to the replacement."]);
+          ).toEqual(secondTexts);
           expectConnectedStatus(manager, "1001");
           expect(providerStop).not.toHaveBeenCalled();
 
@@ -147,25 +133,55 @@ defineDiscordVoiceTests(
           }
           const provider =
             terminal === "manager destruction" ? undefined : lastRealtimeBridgeParams();
-          const turn = provider ? beginSpeakerTurn(getSessionEntry(manager)) : undefined;
+          const speaker = { userId: "u-speaker", speakerLabel: "Speaker", senderIsOwner: false };
+          const turn = provider ? beginSpeakerTurn(getSessionEntry(manager), speaker) : undefined;
           if (provider) {
             expectDefined(
               provider.onClose,
               "provider terminal callback",
             )(terminal === "error" ? "error" : "completed");
+            expectConnectedStatus(manager, "1001");
+            await expect(execute({ action: "status" })).resolves.toMatchObject({
+              details: {
+                active: [expect.objectContaining({ sessionId: "second" })],
+                pendingFinalization: [],
+              },
+            });
+            const ongoing = expectDefined(await store.readSession("second"), "ongoing capture");
+            expect(ongoing.stoppedAt).toBeUndefined();
+
+            beginSpeakerTurn(getSessionEntry(manager), speaker);
+            const recovered = expectDefined(lastRealtimeBridgeParams(), "recovered speaker");
+            expect(recovered).not.toBe(provider);
+            provider.onTranscript?.("user", "Late text from the retired speaker.", true);
+            const recoveredText = "The same capture continues after reconnect.";
+            secondTexts.push(recoveredText);
+            recovered.onTranscript?.("user", recoveredText, true);
+            await record(recoveredText);
+            await vi.waitFor(async () => {
+              expect(
+                (await store.readUtterancesForSession(second)).map((utterance) => utterance.text),
+              ).toEqual(secondTexts);
+            });
+            expect(providerStop).not.toHaveBeenCalled();
+            await expect(manager.leave({ guildId: "g1" })).resolves.toMatchObject({ ok: true });
           } else {
             await manager.destroy();
           }
-          await vi.waitFor(async () => {
-            await expect(execute({ action: "status" })).resolves.toMatchObject({
-              details: { active: [], pendingFinalization: [] },
-            });
-            expect(await store.readSession("second")).toMatchObject({
-              stoppedAt: expect.any(String),
-            });
-          });
           expect(manager.status()).toEqual([]);
+          await expect(execute({ action: "status" })).resolves.toMatchObject({
+            details: { active: [expect.objectContaining({ sessionId: "second" })] },
+          });
+          expect((await store.readSession("second"))?.stoppedAt).toBeUndefined();
           expect(providerStop).not.toHaveBeenCalled();
+          await execute({ action: "stop", sessionId: "second" });
+          await expect(execute({ action: "status" })).resolves.toMatchObject({
+            details: { active: [], pendingFinalization: [] },
+          });
+          expect(await store.readSession("second")).toMatchObject({
+            stoppedAt: expect.any(String),
+          });
+          expect(providerStop).toHaveBeenCalledOnce();
 
           if (provider) {
             const stoppedSecond = expectDefined(await store.readSession("second"), "ended capture");
@@ -182,7 +198,7 @@ defineDiscordVoiceTests(
             provider.onReady?.();
             provider.onTranscript?.("user", "Late text from the retired provider.", true);
             await execute({ action: "stop", sessionId: "second" });
-            expect(providerStop).not.toHaveBeenCalled();
+            expect(providerStop).toHaveBeenCalledOnce();
             expectConnectedStatus(manager, "1001");
             await expect(execute({ action: "status" })).resolves.toMatchObject({
               details: {
@@ -197,12 +213,17 @@ defineDiscordVoiceTests(
               (await store.readUtterancesForSession(stoppedSecond)).map(
                 (utterance) => utterance.text,
               ),
-            ).toEqual(["This belongs only to the replacement."]);
+            ).toEqual(secondTexts);
             const third = expectDefined(await store.readSession("third"), "replacement capture");
             expect(await store.readUtterancesForSession(third)).toEqual([]);
           }
         } finally {
           try {
+            for (const capture of await discordVoiceTranscriptsSourceProvider.status!(source)) {
+              if (capture.sessionId) {
+                await execute({ action: "stop", sessionId: capture.sessionId });
+              }
+            }
             await manager.destroy();
             await vi.waitFor(async () => {
               await expect(execute({ action: "status" })).resolves.toMatchObject({
@@ -210,7 +231,11 @@ defineDiscordVoiceTests(
               });
             });
           } finally {
-            setDiscordTranscriptsVoiceManager({ accountId, manager: null });
+            setDiscordTranscriptsVoiceManager({
+              accountId,
+              manager: null,
+              expectedManager: manager,
+            });
             providerStop.mockRestore();
             closeOpenClawStateDatabaseForTest();
             tempDirs.cleanup();

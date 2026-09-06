@@ -91,7 +91,7 @@ describe("device-pair doctor notify migration", () => {
       subscribers.map(notifySubscriberStoreKey).toSorted(),
     );
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 
@@ -193,7 +193,7 @@ describe("device-pair doctor notify migration", () => {
       expect.stringContaining("Archived Device Pair notify-state legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
     await expect(
       createDoctorContext(env)
         .openPluginStateKeyedStore<NotifySubscription>({
@@ -222,6 +222,6 @@ describe("device-pair doctor notify migration", () => {
       changes: [],
       warnings: [],
     });
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
   });
 });

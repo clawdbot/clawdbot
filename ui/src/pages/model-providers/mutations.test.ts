@@ -72,4 +72,23 @@ describe("model provider config patches", () => {
   it("confirms fallback-array shrinkage for the gateway destructive-array guard", () => {
     expect(DEFAULT_MODELS_REPLACE_PATHS).toEqual(["agents.defaults.model.fallbacks"]);
   });
+
+  it.each(["openai/gpt-5-mini", "", null])(
+    "persists utility setting %j without an explicit primary model",
+    (utilityModel) => {
+      expect(
+        buildDefaultsPatch({
+          primary: "",
+          fallbacks: [],
+          utilityModel,
+          thinkingLevel: undefined,
+          thinkingOverridden: false,
+          fastMode: undefined,
+          fastModeOverridden: false,
+        }),
+      ).toEqual({
+        agents: { defaults: { utilityModel, thinkingDefault: null, fastModeDefault: null } },
+      });
+    },
+  );
 });

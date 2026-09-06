@@ -9,7 +9,6 @@ import {
 } from "../../agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
-import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -17,7 +16,6 @@ import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -32,9 +30,7 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import { applyCodeModeRecoveryPreparedToolSurface } from "./code-mode-reconciliation.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -125,12 +121,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
       isPluginTool: (tool) =>
         Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
     });
-    const coreReadAuthorized = params.uncompactedEffectiveTools.some(
-      (tool) =>
-        normalizeToolPolicyName(tool.name ?? "") === "read" &&
-        !getPluginToolMeta(tool) &&
-        !getChannelAgentToolMeta(tool),
-    );
     const isReplaySafeTool = (tool: { name?: string }) =>
       isAgentToolReplaySafe(tool, params.replaySafetyOptions);
     const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -160,12 +150,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
         wrapToolWithAbortSignal(wrapToolDefinition(definition), params.getToolAbortSignal?.()),
       ),
     );
-    if (params.attempt.codeModeRecovery?.kind === "resume") {
-      clientToolDefs = applyCodeModeRecoveryPreparedToolSurface({
-        tools: clientToolDefs,
-        state: params.attempt.codeModeRecovery,
-      });
-    }
     // Terminal observations are name-only, so ownership is valid only when one
     // concrete OpenClaw or client tool owns the normalized name.
     const sideEffectToolOwners = collectSideEffectToolOwners(
@@ -214,7 +198,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
       allCustomTools,
       builtinToolNames,
       coreBuiltinToolNames,
-      coreReadAuthorized,
       clientToolCallSlots,
       clientToolDefs,
       replaySafeToolNames,

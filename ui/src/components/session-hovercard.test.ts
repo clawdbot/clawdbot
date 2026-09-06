@@ -11,6 +11,7 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
   return {
     key: "agent:main:work",
     label: "Ship the release",
+    hasActiveRun: true,
     createdAt: Date.now() - 2 * 60 * 60_000,
     startedAt: Date.now() - 2 * 60 * 60_000,
     updatedAt: Date.now() - 5 * 60_000,
@@ -398,6 +399,42 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it.each([
+    { hasActiveRun: true, updateOffset: -1 },
+    { hasActiveRun: false, updateOffset: 1 },
+  ])("pauses unfinished progress with run state %j", ({ hasActiveRun, updateOffset }) => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "running", hasActiveRun }),
+        progressCard: { ...progressCard(), updatedAt: startedAt + updateOffset },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+    expect(plan?.querySelector("polyline")).not.toBeNull();
+  });
+
+  it("keeps an older progress card paused after the later run ends", () => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "done" }),
+        progressCard: { ...progressCard(), updatedAt: startedAt - 1 },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+  });
+
   it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
     const container = document.createElement("div");
     render(
@@ -495,7 +532,7 @@ describe("renderSessionHovercard", () => {
   });
 
   it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides stale plan work after the session is %s",
+    "hides plan work updated during the run after the session is %s",
     (status) => {
       const container = document.createElement("div");
       render(

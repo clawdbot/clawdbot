@@ -8,7 +8,7 @@ import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
 } from "./provider-catalog-result.js";
-import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -43,7 +43,7 @@ type PreparedProviderStaticCatalogEntry = Readonly<{
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
-  /** Discovery-entry providers captured for this config/workspace generation. */
+  /** Provider handles captured for this config/workspace generation. */
   providers?: readonly ProviderPlugin[];
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
@@ -82,7 +82,8 @@ export async function resolveRuntimePluginDiscoveryProviders(
       (provider) =>
         resolveProviderCatalogOrderHook(provider) ||
         (params.includeSyntheticAuthProviders === true &&
-          typeof provider.resolveSyntheticAuth === "function"),
+          (typeof provider.resolveSyntheticAuth === "function" ||
+            typeof provider.prepareSyntheticAuth === "function")),
     );
 }
 
@@ -161,20 +162,8 @@ export async function runProviderCatalog(params: {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  resolveProviderApiKey: (providerId?: string) => {
-    apiKey: string | undefined;
-    discoveryApiKey?: string;
-  };
-  resolveProviderAuth: (
-    providerId?: string,
-    options?: { oauthMarker?: string },
-  ) => {
-    apiKey: string | undefined;
-    discoveryApiKey?: string;
-    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-    source: "env" | "profile" | "none";
-    profileId?: string;
-  };
+  resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"];
+  resolveProviderAuth: ProviderCatalogContext["resolveProviderAuth"];
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 }) {
   const hook = resolveProviderCatalogHook(params.provider);

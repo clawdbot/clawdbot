@@ -31,6 +31,38 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar invitation admission", () => {
+  it.each([
+    { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
+    { field: "draggingSidebarSection", value: "ungrouped", finish: "finishSidebarSectionDrag" },
+    { field: "draggingSidebarEntry", value: "route:home", finish: "finishSidebarEntryDrag" },
+  ] as const)(
+    "waits for $field to finish even without hover or focus",
+    async ({ field, value, finish }) => {
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main", "agent:main:task"]),
+      );
+      expect(sidebar.matches(":hover, :focus-within")).toBe(false);
+      sidebar.sessionOrganizer[field] = value;
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+      try {
+        await context.config.refresh();
+        await sidebar.updateComplete;
+        expect(context.config.current.communityInvite).toBe(true);
+        expect(sidebar.querySelector(".community-invite-card")).toBeNull();
+        sidebar.sessionOrganizer[finish]();
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector(".community-invite-card")).not.toBeNull();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+});
+
 describe("AppSidebar new session navigation", () => {
   it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);

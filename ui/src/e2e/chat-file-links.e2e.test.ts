@@ -73,7 +73,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
       await gateway.waitForRequest("sessions.files.get");
 
-      await page.locator(".side-panel").waitFor({ state: "visible" });
+      await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
       expect(await page.locator(".sidebar-file-view").count()).toBe(0);
       await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
 

@@ -87,6 +87,7 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -130,28 +131,8 @@ const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
 
-function loadSessionResetModelRuntime() {
-  return sessionResetModelRuntimeLoader.load();
-}
-
-function loadStageSandboxMediaRuntime() {
-  return stageSandboxMediaRuntimeLoader.load();
-}
-
-function loadMediaUnderstandingApplyRuntime() {
-  return mediaUnderstandingApplyRuntimeLoader.load();
-}
-
-function loadLinkUnderstandingApplyRuntime() {
-  return linkUnderstandingApplyRuntimeLoader.load();
-}
-
-function loadCommandsCoreRuntime() {
-  return commandsCoreRuntimeLoader.load();
-}
-
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.commandText;
+  const message = ctx.agentText;
   if (!message) {
     return false;
   }
@@ -172,7 +153,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
     return undefined;
   }
   try {
-    const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
+    const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     return await applyMediaUnderstanding(params);
   } catch (err) {
     mediaUnderstandingApplyRuntimeLoader.clear();
@@ -296,7 +277,7 @@ async function applyLinkUnderstandingIfNeeded(params: {
     return false;
   }
   try {
-    const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
+    const { applyLinkUnderstanding } = await linkUnderstandingApplyRuntimeLoader.load();
     await applyLinkUnderstanding(params);
     return true;
   } catch (err) {
@@ -570,6 +551,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -782,7 +764,7 @@ export async function getReplyFromConfig(
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    const { applyResetModelOverride } = await sessionResetModelRuntimeLoader.load();
     try {
       await applyResetModelOverride({
         cfg,
@@ -917,6 +899,15 @@ export async function getReplyFromConfig(
     model = resolvedChannelModelOverride.ref.model;
   }
 
+  const conversation =
+    internalResolvedOpts?.replyConversation ??
+    prepareReplyConversation({
+      ctx: sessionCtx,
+      sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
+      groupResolution,
+      isHeartbeat: opts?.isHeartbeat,
+    });
+
   if (
     shouldUseReplyFastDirectiveExecution({
       isFastTestBootstrap: useFastTestRuntime,
@@ -959,6 +950,7 @@ export async function getReplyFromConfig(
       runPreparedReply({
         ctx,
         sessionCtx,
+        conversation,
         cfg,
         agentId,
         agentDir,
@@ -1030,7 +1022,7 @@ export async function getReplyFromConfig(
       sessionKey,
       storePath,
       sessionScope,
-      groupResolution,
+      conversation,
       isGroup,
       triggerBodyNormalized,
       resetTriggered,
@@ -1095,7 +1087,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
+    const { emitResetCommandHooks } = await commandsCoreRuntimeLoader.load();
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -1147,6 +1139,7 @@ export async function getReplyFromConfig(
       typing,
       allowTextCommands,
       inlineStatusRequested,
+      inlineCommand: directiveResult.result.inlineCommand,
       command,
       skillCommands,
       directives,
@@ -1216,11 +1209,10 @@ export async function getReplyFromConfig(
         preparedModelCatalog,
       });
     } catch (error) {
-      if (error instanceof ModelSelectionLockedError) {
-        typing.cleanup();
-        return { text: error.message };
-      }
-      if (!isSessionWorkStartInvalidatedError(error)) {
+      if (
+        !(error instanceof ModelSelectionLockedError) &&
+        !isSessionWorkStartInvalidatedError(error)
+      ) {
         throw error;
       }
       typing.cleanup();
@@ -1239,15 +1231,9 @@ export async function getReplyFromConfig(
       resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
     }
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
-    const canUseReasoningState =
-      command.isAuthorizedSender ||
-      command.senderIsOwner ||
-      (Array.isArray(ctx.GatewayClientScopes) &&
-        ctx.GatewayClientScopes.includes("operator.admin"));
     const hasExplicitReasoningLevel =
       directives.reasoningLevel !== undefined ||
-      (rawSessionReasoningLevel != null && canUseReasoningState) ||
-      (rawSessionReasoningLevel != null && !canUseReasoningState) ||
+      rawSessionReasoningLevel != null ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
     if (!hasExplicitReasoningLevel) {
@@ -1270,7 +1256,7 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1279,6 +1265,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey,
         workspaceDir,
+        abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1312,6 +1299,7 @@ export async function getReplyFromConfig(
     runPreparedReply({
       ctx,
       sessionCtx,
+      conversation,
       cfg,
       agentId,
       agentDir,

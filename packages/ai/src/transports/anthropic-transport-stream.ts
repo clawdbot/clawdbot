@@ -9,6 +9,7 @@ import type {
   TextContent,
   ToolCall,
 } from "@openclaw/llm-core";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
  * Native Anthropic Messages streaming transport.
@@ -550,22 +551,11 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   const projection = projectAnthropicTools(tools ?? [], (name) =>
     isOAuthToken ? toClaudeCodeToolName(name) : name,
   );
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
-  for (const tool of projection.tools) {
-    converted.push({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    });
-  }
+  const converted = projection.tools.map((tool) => ({
+    name: tool.wireName,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
   return { projection, tools: converted };
 }
 
@@ -1157,9 +1147,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-            notifyLlmRequestActivity(options?.signal),
-          )
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
         : undefined;
       const eventSink = refusalBuffer ?? stream;
       // Fallback-served turns bill at the serving model's rates; a boundary
@@ -1277,7 +1265,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (contentIndex === undefined) {
             return false;
           }
-          block.thinking += text;
+          appendAssistantThinking(block, text);
           block.thinkingSignature = "reasoning_content";
           eventSink.push({
             type: "thinking_delta",
@@ -1360,6 +1348,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         for await (const event of anthropicStream) {
           // A serving-model fallback replaces the initial snapshot; report only once at completion.
           inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
+          notifyLlmRequestActivity(transportOptions.signal);
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
             throw new Error(error?.message || "Anthropic Messages stream failed");
@@ -1631,7 +1620,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "thinking_delta" &&
               typeof delta.thinking === "string"
             ) {
-              block.thinking += delta.thinking;
+              appendAssistantThinking(block, delta.thinking);
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,

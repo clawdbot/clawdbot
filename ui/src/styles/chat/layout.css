@@ -56,6 +56,19 @@ openclaw-chat-page {
   user-select: text;
 }
 
+@media (max-width: 560px) {
+  .chat-error:has(> .chat-error__discard) {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .chat-error__discard {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+    text-align: start;
+  }
+}
+
 .chat-error:has(details[open]) {
   align-items: start;
 }
@@ -1387,7 +1400,10 @@ openclaw-chat-video-player {
 /* Bare composers need this fade to cover transcript underlap. A progress card owns
    that boundary itself; painting behind it exposes a veil above the card. */
 .chat-main__conversation
-  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+.chat-main__conversation
+  > openclaw-plugin-view[data-plugin-composer]
+  .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
@@ -1822,32 +1838,22 @@ openclaw-chat-video-player {
   justify-self: end;
 }
 
-/* Both targets share one outer surface; the divider is the only internal edge. */
-.task-suggestion__split {
-  display: inline-flex;
-  align-items: stretch;
-  height: 34px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: 11px;
-  corner-shape: superellipse(1.5);
-  background: var(--task-suggestion-action-bg);
-  user-select: none;
-}
-
-.task-suggestion__start {
+.task-suggestion__start,
+:root[data-theme-mode="light"] .task-suggestion__start {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 34px;
   padding: 0 12px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 11px;
+  corner-shape: superellipse(1.5);
+  background: var(--task-suggestion-action-bg);
   color: var(--task-suggestion-action-fg);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
+  user-select: none;
 }
 
 .task-suggestion__start svg {
@@ -1857,29 +1863,14 @@ openclaw-chat-video-player {
 
 .task-suggestion__start:hover:not(:disabled),
 .task-suggestion__start:focus-visible,
-.task-suggestion__menu-trigger:hover:not(:disabled),
-.task-suggestion__menu-trigger:focus-visible {
-  background: color-mix(in srgb, var(--task-suggestion-action-fg) 8%, transparent);
+:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__start:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--task-suggestion-action-bg) 90%,
+    var(--task-suggestion-action-fg)
+  );
   color: var(--task-suggestion-action-fg);
-}
-
-.task-suggestion__menu-trigger {
-  display: grid;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
-  border-radius: 0 !important;
-  background: transparent;
-  color: var(--task-suggestion-action-fg);
-}
-
-.task-suggestion__menu-trigger:hover:not(:disabled),
-.task-suggestion__menu-trigger:focus-visible {
-  border-left-color: color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
 }
 
 :root[data-theme-mode="light"] .task-suggestions {
@@ -1888,41 +1879,6 @@ openclaw-chat-video-player {
   --task-suggestion-prompt-bg: var(--card);
   --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 72%, var(--text-strong) 28%);
   --task-suggestion-action-fg: var(--primary-foreground);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__start,
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
-  border-top: 0;
-  border-right: 0;
-  border-bottom: 0;
-  background: transparent;
-  color: var(--task-suggestion-action-fg);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
-:root[data-theme-mode="light"] .task-suggestion__start:focus-visible,
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger:hover:not(:disabled),
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger:focus-visible {
-  background: color-mix(in srgb, var(--task-suggestion-action-fg) 10%, transparent);
-  color: var(--task-suggestion-action-fg);
-}
-
-:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
-  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
-}
-
-.task-suggestion__menu-trigger svg {
-  width: 12px;
-  height: 12px;
-}
-
-.task-suggestion__menu[open] .task-suggestion__menu-trigger svg {
-  transform: rotate(180deg);
-}
-
-.task-suggestion__menu::part(menu) {
-  min-width: 190px;
-  max-width: min(320px, calc(100vw - 24px));
 }
 
 .task-suggestion__header-action:disabled {
@@ -1980,64 +1936,72 @@ openclaw-chat-video-player {
   font-variant-numeric: tabular-nums;
 }
 
-.chat-swarm__progress {
+.chat-swarm__summary {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.chat-swarm__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-swarm__markers {
   display: flex;
-  gap: 2px;
-  height: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
-.chat-swarm__progress-segment {
-  position: relative;
-  flex: 1 1 0;
-  overflow: hidden;
+.chat-swarm__marker {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--muted);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 24%, transparent);
 }
 
-.chat-swarm__progress-segment > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
+.chat-swarm__marker--running {
+  border-color: var(--info);
+  background: var(--info);
 }
-
-.chat-swarm__progress-segment > .chat-swarm__progress-fill--failed {
+.chat-swarm__marker--done {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+.chat-swarm__marker--failed {
+  border-color: var(--danger);
   background: var(--danger);
 }
 
-.chat-swarm__tasks {
-  position: absolute;
-  z-index: 20;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 8px);
-  display: grid;
-  gap: 2px;
-  max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  transform: translateY(8px) scale(0.95);
-  transform-origin: center bottom;
-  visibility: hidden;
-  transition:
-    opacity 100ms ease 300ms,
-    transform 100ms ease 300ms,
-    visibility 0ms linear 400ms;
+.chat-swarm__counts,
+.chat-swarm__outcome,
+.chat-swarm__disclosure {
+  color: var(--muted);
+  font-size: 12px;
 }
 
-.chat-swarm__group:is(:hover, :focus-within) .chat-swarm__tasks,
-.chat-swarm__tasks:hover {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  visibility: visible;
-  transition-delay: 600ms, 600ms, 0ms;
+.chat-swarm__disclosure {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-swarm__disclosure svg {
+  width: 12px;
+  height: 12px;
+}
+.chat-swarm__group[open] .chat-swarm__disclosure svg {
+  transform: rotate(180deg);
+}
+
+.chat-swarm__tasks {
+  display: grid;
+  gap: 2px;
+  max-height: min(240px, 30dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 8px;
 }
 
 .chat-swarm__task {
@@ -2719,7 +2683,10 @@ button.chat-pr__diff {
   }
 
   .chat-main__conversation
-    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+  .chat-main__conversation
+    > openclaw-plugin-view[data-plugin-composer]
+    .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
   }
 

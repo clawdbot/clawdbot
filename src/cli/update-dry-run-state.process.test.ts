@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -42,10 +44,6 @@ async function snapshotTree(root: string): Promise<string[]> {
 async function sha256File(filePath: string): Promise<string> {
   const contents = await fs.readFile(filePath);
   return createHash("sha256").update(contents).digest("hex");
-}
-
-function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
-  return snapshot.filter((entry) => /^f .*\.sqlite(?:-(?:wal|shm))? /.test(entry));
 }
 
 function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
@@ -87,7 +85,83 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
   });
 }
 
+async function expectPreviewLedger(root: string, runId: string, before: string[]): Promise<void> {
+  const after = await snapshotTree(root);
+  const ledgerArtifacts = after.filter((entry) =>
+    /^(?:d state\/state$|f state\/state\/openclaw\.sqlite(?:-(?:wal|shm))? )/.test(entry),
+  );
+  expect(ledgerArtifacts).toContain("d state/state");
+  expect(ledgerArtifacts).toContainEqual(
+    expect.stringMatching(/^f state\/state\/openclaw\.sqlite [a-f0-9]{64}$/),
+  );
+  expect(after.filter((entry) => !ledgerArtifacts.includes(entry))).toEqual(before);
+
+  const status = runUpdateProcess(root, ["update", "status", "--json"]);
+  expect(status.error).toBeUndefined();
+  expect(status.status, status.stderr).toBe(0);
+  const report = JSON.parse(status.stdout);
+  expect(report.activeRun).toBeUndefined();
+  expect(report.lastRun).toMatchObject({
+    runId,
+    trigger: "cli",
+    phase: "finished",
+    status: "skipped",
+    reason: "dry-run",
+  });
+}
+
 describe("update process state", () => {
+  it("allows cleanup after an admitted updater dies without finishing its ledger", async () => {
+    const root = tempDirs.make("openclaw-cleanup-orphan-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const env = {
+      PATH: process.env.PATH,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+    };
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local"}}\n');
+    const entry = path.join(root, "admit.mjs");
+    const admissionModule = pathToFileURL(
+      path.resolve("src/cli/update-cli/update-command-run.ts"),
+    ).href;
+    await fs.writeFile(
+      entry,
+      `import { admitUpdateCommandRun } from ${JSON.stringify(admissionModule)};
+const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root: ${JSON.stringify(path.resolve("."))} });
+process.stdout.write(JSON.stringify({ runId: run.runId }) + "\\n");
+process.stdin.resume();
+`,
+    );
+    const admitted = await runCliProcessChild({
+      nodeArgs: ["--import", path.resolve("scripts/tsx.mjs"), entry],
+      env,
+      interact: async (child) => {
+        await once(child.stdout, "data");
+        child.kill("SIGKILL");
+      },
+    });
+    expect(admitted.signal, formatCliProcessFailure({ reason: "updater death", ...admitted })).toBe(
+      "SIGKILL",
+    );
+    const { runId } = JSON.parse(admitted.stdout) as { runId: string };
+    expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
+
+    const cleanup = runUpdateProcess(root, ["update", "cleanup", "--yes", "--json"]);
+
+    expect(cleanup.error).toBeUndefined();
+    expect(JSON.parse(cleanup.stdout)).toMatchObject({
+      status: "complete",
+      artifacts: [],
+      totals: { removedFiles: 0 },
+    });
+    expect(cleanup.status, cleanup.stderr).toBe(0);
+    expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
+  });
+
   it.each([true, false])(
     "keeps cleanup preview/refusal byte-identical (dryRun=%s)",
     async (dryRun) => {
@@ -128,12 +202,14 @@ describe("update process state", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({
+      runId: expect.any(String),
       dryRun: true,
       actions: expect.arrayContaining([expect.any(String)]),
     });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
   });
 
   it("keeps migration-pending config and SQLite markers immutable for the shorthand", async () => {
@@ -156,20 +232,19 @@ describe("update process state", () => {
       wal: await sha256File(walPath),
     };
     const treeBefore = await snapshotTree(root);
-    const databaseArtifactsBefore = snapshotDatabaseArtifacts(treeBefore);
 
     const result = runUpdateProcess(root, ["--update", "--dry-run", "--no-restart", "--json"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true });
+    const preview = JSON.parse(result.stdout);
+    expect(preview).toMatchObject({ runId: expect.any(String), dryRun: true });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    expect(await snapshotTree(root)).toEqual(treeBefore);
+    await expectPreviewLedger(root, preview.runId, treeBefore);
     expect({
       migration: await sha256File(migrationMarkerPath),
       wal: await sha256File(walPath),
     }).toEqual(markerHashesBefore);
-    expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
   it.each(["update", "repair"])(

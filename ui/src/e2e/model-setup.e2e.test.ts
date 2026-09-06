@@ -1,7 +1,9 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -85,10 +87,10 @@ suite.define(() => {
         const row = page.locator('[data-candidate-kind="codex-cli"]');
         await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "auth-account-desktop.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "auth-account-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+          );
         }
         const detectionCount = (await gateway.getRequests("openclaw.setup.detect")).length;
         await page.getByRole("button", { name: "Check again" }).click();
@@ -98,10 +100,10 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).toContain("API key (usage-billed)");
         expect(await row.textContent()).not.toContain("alex@example.com");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "auth-api-key-desktop.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "auth-api-key-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+          );
         }
       },
     );
@@ -962,11 +964,12 @@ suite.define(() => {
           .toBe(0);
         await expect.poll(() => page.locator('[data-candidate-kind="claude-cli"]').count()).toBe(1);
         if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "configured-route-dedup-desktop.png"),
-          });
+          await writeFile(
+            path.join(artifactDir, "configured-route-dedup-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator('[data-candidate-kind="claude-cli"]'),
+            ]),
+          );
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
@@ -975,11 +978,12 @@ suite.define(() => {
                 .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "configured-route-dedup-mobile.png"),
-          });
+          await writeFile(
+            path.join(artifactDir, "configured-route-dedup-mobile.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator('[data-candidate-kind="claude-cli"]'),
+            ]),
+          );
           await page.setViewportSize({ height: 900, width: 1280 });
         }
         await page.getByRole("button", { name: "Check model" }).click();

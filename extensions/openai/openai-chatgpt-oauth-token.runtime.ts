@@ -162,8 +162,9 @@ async function postTokenForm(
   throwIfOAuthLoginAborted(options.signal);
   const { response, release } = await fetchWithSsrFGuard({
     url: TOKEN_URL,
-    // Fake-IP proxies map public hosts into these ranges. The exact-host allowlist
-    // keeps redirects and every other hostname fail-closed.
+    // Match device-code login's operator proxy policy. The guard keeps direct DNS
+    // pinning when no proxy applies; the exact-host policy also permits fake-IP DNS.
+    mode: "trusted_env_proxy",
     policy: OAUTH_TOKEN_SSRF_POLICY,
     init: {
       method: "POST",

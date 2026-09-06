@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   isRestartRecoveryTombstone,
@@ -17,6 +18,7 @@ import {
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
@@ -100,58 +102,64 @@ async function restoreArchivedDispatchSession(params: {
   }
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
-  // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
-  let assertCommitAllowed: (() => void) | undefined;
+  const canRestore = (currentEntry: SessionEntry) => {
+    if (
+      currentEntry.sessionId !== snapshotSessionId ||
+      currentEntry.archivedAt !== snapshotArchivedAt ||
+      isRestartRecoveryTombstone(currentEntry)
+    ) {
+      return false;
+    }
+    try {
+      const placement = currentEntry.sessionId
+        ? placementContext.workerSessionPlacementService
+            ?.getMany([currentEntry.sessionId])
+            .get(currentEntry.sessionId)
+        : undefined;
+      return !resolveWorkerPlacementArchiveRestoreError({
+        context: placementContext,
+        key: sessionKey,
+        placement,
+      });
+    } catch {
+      return false;
+    }
+  };
   return await runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
-    run: async () =>
-      (await patchSessionEntryCore(
-        { sessionKey, storePath },
-        async (currentEntry) => {
-          if (
-            currentEntry.sessionId !== snapshotSessionId ||
-            currentEntry.archivedAt !== snapshotArchivedAt ||
-            isRestartRecoveryTombstone(currentEntry)
-          ) {
-            return null;
-          }
-          try {
-            const placement = currentEntry.sessionId
-              ? placementContext.workerSessionPlacementService
-                  ?.getMany([currentEntry.sessionId])
-                  .get(currentEntry.sessionId)
-              : undefined;
-            if (
-              resolveWorkerPlacementArchiveRestoreError({
-                context: placementContext,
-                key: sessionKey,
-                placement,
-              })
-            ) {
-              return null;
-            }
-          } catch {
-            return null;
-          }
-          if (currentEntry.worktree) {
-            const { synchronizeSessionWorktreeArchive } =
-              await import("../../sessions/session-worktree-lifecycle.js");
-            assertCommitAllowed = prepareSessionWorkerPlacementMutationCheck({
-              context: placementContext,
-              sessionId: currentEntry.sessionId,
-            });
-            await synchronizeSessionWorktreeArchive({
-              archived: false,
-              entry: currentEntry,
-              scope: { sessionKey, storePath },
-              commitGuard: assertCommitAllowed,
-            });
-          }
-          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
-        },
-        { assertCommitAllowed: () => assertCommitAllowed?.() },
-      )) ?? undefined,
+    run: async () => {
+      const scope = { sessionKey, storePath };
+      const currentEntry = loadSessionStoreEntry(scope);
+      if (!currentEntry || !canRestore(currentEntry)) {
+        return currentEntry;
+      }
+      let assertCommitAllowed: (() => void) | undefined;
+      if (currentEntry.worktree) {
+        const { synchronizeSessionWorktreeArchive } =
+          await import("../../sessions/session-worktree-lifecycle.js");
+        // Keep the target fenced through Git/allocation waits without retaining the agent writer.
+        assertCommitAllowed = await synchronizeSessionWorktreeArchive({
+          archived: false,
+          entry: currentEntry,
+          scope,
+          commitGuard: prepareSessionWorkerPlacementMutationCheck({
+            context: placementContext,
+            sessionId: currentEntry.sessionId,
+          }),
+        });
+      }
+      const updatedEntry = await patchSessionEntryCore(
+        scope,
+        (current) =>
+          canRestore(current)
+            ? { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined }
+            : null,
+        // The writer may have waited; revalidate the prepared binding at the actual commit edge.
+        { assertCommitAllowed },
+      );
+      return updatedEntry ?? undefined;
+    },
   });
 }
 
@@ -458,6 +466,9 @@ export function createDispatchReplyOperationCoordinator(params: {
       try {
         return await admitReplyTurn({
           sessionKey: dispatchOperationSessionKey,
+          resolveGatewayContext:
+            readChannelContextGatewayContextResolver(params.ctx) ??
+            getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
           sessionId: operationSessionId,
           expectedSessionId: params.resolveOperationExpectedSessionId(),
           expectedActiveOperation: params.initialDispatchReplyOperation,

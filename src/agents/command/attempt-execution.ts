@@ -908,7 +908,7 @@ export function runAgentAttempt(params: {
             throw createAgentRunSupersededAbortError();
           }
         }
-        params.deferredLifecycle?.handoffToCli();
+        const diagnosticOwner = params.deferredLifecycle?.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
         const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
         const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -1032,6 +1032,7 @@ export function runAgentAttempt(params: {
               : undefined;
           return await runCliAgent({
             preparedRunAdmission: params.preparedRunAdmission,
+            diagnosticOwner,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionTarget: params.sessionTarget,
@@ -1154,6 +1155,7 @@ export function runAgentAttempt(params: {
               }),
             ),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
+            pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
@@ -1271,7 +1273,7 @@ export function runAgentAttempt(params: {
           !params.preserveCliSessionBinding &&
           (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
         ) {
-          await persistCliSessionBindingResult({
+          return await persistCliSessionBindingResult({
             provider: cliExecutionProvider,
             result,
             sessionKey: params.sessionKey,
@@ -1334,6 +1336,7 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
@@ -1386,6 +1389,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,

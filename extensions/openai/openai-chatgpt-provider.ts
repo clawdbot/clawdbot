@@ -13,6 +13,7 @@ import {
   buildOauthProviderAuthResult,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
@@ -40,7 +41,9 @@ import {
   OPENAI_GPT_55_MODEL_ID as OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
+  OPENAI_GPT_6_ASTRA_MODEL_ID,
 } from "./model-route-contract.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -53,6 +56,10 @@ import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
+const OPENAI_MANIFEST_MODELS = buildManifestModelProviderConfig({
+  providerId: PROVIDER_ID,
+  catalog: manifest.modelCatalog.providers.openai,
+}).models;
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP = {
   off: null,
@@ -218,6 +225,26 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
+
+  if (lower === OPENAI_GPT_6_ASTRA_MODEL_ID) {
+    // Discovery owns account-specific limits; the manifest supplies offline metadata.
+    const catalogModel = OPENAI_MANIFEST_MODELS.find((model) => model.id === lower);
+    if (!catalogModel || catalogModel.contextWindow === undefined) {
+      return undefined;
+    }
+    return normalizeModelCompat({
+      ...catalogModel,
+      contextWindow: catalogModel.contextWindow,
+      input: catalogModel.input.filter(
+        (item): item is "text" | "image" => item === "text" || item === "image",
+      ),
+      ...ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId),
+      id: trimmedModelId,
+      provider: PROVIDER_ID,
+      api: "openai-chatgpt-responses",
+      baseUrl: synthBaseUrl,
+    });
+  }
 
   if (OPENAI_CODEX_GPT_56_MODEL_IDS.some((modelId) => modelId === lower)) {
     const model = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId) as

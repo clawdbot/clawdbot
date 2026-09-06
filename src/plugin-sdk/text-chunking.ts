@@ -3,6 +3,7 @@ import { chunkTextByBreakResolver, splitLongTextLine } from "../shared/text-chun
 
 /** Offset-preserving text ranges for transports with native style metadata. */
 export {
+  avoidTrailingHighSurrogateBreak,
   chunkTextRanges,
   type ChunkTextRangesOptions,
   type TextChunkRange,

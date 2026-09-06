@@ -274,7 +274,6 @@ export function createPluginApprovalHandlers(
       await handlePendingApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,

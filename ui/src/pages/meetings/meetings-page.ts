@@ -144,9 +144,9 @@ class MeetingsPage extends OpenClawLightDomElement {
         )
       : null;
     return html`<button
-      class="meetings-row ${this.selector === session.selector ? "selected" : ""} ${silent
-        ? "meetings-row--silent"
-        : ""}"
+      class="meetings-row ${this.selector === session.selector ? "selected" : ""} ${
+        silent ? "meetings-row--silent" : ""
+      }"
       type="button"
       aria-current=${this.selector === session.selector ? "true" : nothing}
       @click=${() => this.selectMeeting(session.selector)}
@@ -160,25 +160,31 @@ class MeetingsPage extends OpenClawLightDomElement {
           hour: "2-digit",
           minute: "2-digit",
         })}
-        ${session.active
-          ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
-          : duration
-            ? html` · ${duration}`
-            : nothing}
+        ${
+          session.active
+            ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
+            : duration
+              ? html` · ${duration}`
+              : nothing
+        }
       </span>
-      ${participants
-        ? html`<span class="meetings-row__meta meetings-row__participants"
-            >${participants}${extra > 0 ? ` +${extra}` : ""}</span
-          >`
-        : nothing}
+      ${
+        participants
+          ? html`<span class="meetings-row__meta meetings-row__participants"
+              >${participants}${extra > 0 ? ` +${extra}` : ""}</span
+            >`
+          : nothing
+      }
       <span class="meetings-row__meta"
         >${t("meetings.utterances", { count: String(session.utteranceCount) })}</span
       >
-      ${silent || session.overview
-        ? html`<span class="meetings-row__overview"
-            >${silent ? t("meetings.noSpeech") : session.overview}</span
-          >`
-        : nothing}
+      ${
+        silent || session.overview
+          ? html`<span class="meetings-row__overview"
+              >${silent ? t("meetings.noSpeech") : session.overview}</span
+            >`
+          : nothing
+      }
     </button>`;
   }
 
@@ -207,42 +213,56 @@ class MeetingsPage extends OpenClawLightDomElement {
   private renderDetail() {
     const detail = this.detail;
     return html`<section class="meetings-detail" aria-busy=${this.detailLoading}>
-      ${this.detailError
-        ? html`<div class="callout danger" role="alert">${this.detailError}</div>`
-        : nothing}
-      ${!detail
-        ? html`<p class="muted">
-            ${t(this.detailLoading ? "meetings.loadingNotes" : "meetings.select")}
-          </p>`
-        : html`
-            <div class="meetings-detail__meta">
-              ${detail.session.summarySource
-                ? html`<span
-                    >${t("meetings.notesSource", { source: detail.session.summarySource })}</span
-                  >`
-                : nothing}
-              ${detail.session.active
-                ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
-                : nothing}
-            </div>
-            ${detail.summary?.participants.length
-              ? html`<p>
-                  <strong>${t("meetings.participants")}:</strong>
-                  ${detail.summary.participants.join(", ")}
-                </p>`
-              : nothing}
-            ${detail.summary
-              ? html`<div class="meetings-notes markdown">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(detail.summary.markdown))}
-                </div>`
-              : html`<h2>
-                    ${detail.session.title ||
-                    detail.session.providerName ||
-                    detail.session.providerId}
-                  </h2>
-                  <p>${t("meetings.noNotes")}</p>
-                  ${detail.session.active ? html`<p>${t("meetings.activeNotes")}</p>` : nothing}`}
-          `}
+      ${
+        this.detailError
+          ? html`<div class="callout danger" role="alert">${this.detailError}</div>`
+          : nothing
+      }
+      ${
+        !detail
+          ? html`<p class="muted">
+              ${t(this.detailLoading ? "meetings.loadingNotes" : "meetings.select")}
+            </p>`
+          : html`
+              <div class="meetings-detail__meta">
+                ${
+                  detail.session.summarySource
+                    ? html`<span
+                        >${t("meetings.notesSource", { source: detail.session.summarySource })}</span
+                      >`
+                    : nothing
+                }
+                ${
+                  detail.session.active
+                    ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
+                    : nothing
+                }
+              </div>
+              ${
+                detail.summary?.participants.length
+                  ? html`<p>
+                      <strong>${t("meetings.participants")}:</strong>
+                      ${detail.summary.participants.join(", ")}
+                    </p>`
+                  : nothing
+              }
+              ${
+                detail.summary
+                  ? html`<div class="meetings-notes markdown">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(detail.summary.markdown))}
+                    </div>`
+                  : html`<h2>
+                        ${
+                          detail.session.title ||
+                          detail.session.providerName ||
+                          detail.session.providerId
+                        }
+                      </h2>
+                      <p>${t("meetings.noNotes")}</p>
+                      ${detail.session.active ? html`<p>${t("meetings.activeNotes")}</p>` : nothing}`
+              }
+            `
+      }
     </section>`;
   }
 
@@ -261,25 +281,29 @@ class MeetingsPage extends OpenClawLightDomElement {
           ${t("meetings.refresh")}
         </button>
       </section>
-      ${this.listError
-        ? html`<div class="callout danger" role="alert">${this.listError}</div>`
-        : nothing}
-      ${this.sessions?.length || this.selector
-        ? html`<div class="meetings-layout">${this.renderList()}${this.renderDetail()}</div>`
-        : this.sessions && !this.listError
-          ? html`<section class="meetings-empty" role="status">
-              <h2>${t("meetings.emptyTitle")}</h2>
-              <p>${t("meetings.emptyBody")}</p>
-              <a
-                href="https://docs.openclaw.ai/cli/transcripts"
-                target="_blank"
-                rel="noopener noreferrer"
-                >${t("meetings.docs")}</a
-              >
-            </section>`
-          : this.listLoading
-            ? html`<p role="status">${t("meetings.loading")}</p>`
-            : nothing}`;
+      ${
+        this.listError
+          ? html`<div class="callout danger" role="alert">${this.listError}</div>`
+          : nothing
+      }
+      ${
+        this.sessions?.length || this.selector
+          ? html`<div class="meetings-layout">${this.renderList()}${this.renderDetail()}</div>`
+          : this.sessions && !this.listError
+            ? html`<section class="meetings-empty" role="status">
+                <h2>${t("meetings.emptyTitle")}</h2>
+                <p>${t("meetings.emptyBody")}</p>
+                <a
+                  href="https://docs.openclaw.ai/cli/transcripts"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >${t("meetings.docs")}</a
+                >
+              </section>`
+            : this.listLoading
+              ? html`<p role="status">${t("meetings.loading")}</p>`
+              : nothing
+      }`;
   }
 }
 

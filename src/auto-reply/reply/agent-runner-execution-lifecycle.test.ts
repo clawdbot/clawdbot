@@ -307,39 +307,55 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.6-sol";
-    followupRun.run.thinkLevel = "ultra";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-            "demo/basic": { agentRuntime: { id: "openclaw" } },
+  it.each([undefined, "default", "ultra"] as const)(
+    "revalidates original thinking for main-chat fallback with turn request=%s",
+    async (override) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "openai";
+      followupRun.run.model = "gpt-5.6-sol";
+      followupRun.run.thinkLevel = "ultra";
+      if (override !== undefined) {
+        followupRun.run = {
+          ...followupRun.run,
+          thinkLevel: override === "ultra" ? "off" : "ultra",
+          thinkLevelOverride: override,
+        };
+      }
+      followupRun.run.config = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              "demo/basic": { agentRuntime: { id: "openclaw" } },
+            },
           },
         },
-      },
-    };
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.6-sol", initialFallbackAttemptOptions(params));
-      const result = await params.run("demo", "basic", fallbackAttemptOptions(params, "unknown"));
-      return { result, provider: "demo", model: "basic", attempts: [] };
-    });
-    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+      };
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          await params.run("openai", "gpt-5.6-sol", initialFallbackAttemptOptions(params));
+          const result = await params.run(
+            "demo",
+            "basic",
+            fallbackAttemptOptions(params, "unknown"),
+          );
+          return { result, provider: "demo", model: "basic", attempts: [] };
+        },
+      );
+      state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-    });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+      });
 
-    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-      "ultra",
-      "high",
-    ]);
-    expect(followupRun.run.thinkLevel).toBe("ultra");
-  });
+      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+        "ultra",
+        "high",
+      ]);
+      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+    },
+  );
 
   it("preserves thinking for runtime-discovered Ollama fallback models", async () => {
     const followupRun = createFollowupRun();
@@ -973,24 +989,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     resolveImages?.();
     await runPromise;
-  });
-
-  it("clears run ownership when image preflight fails", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(
-      executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          opts: { runId: "preflight-failure" },
-        }),
-      ),
-    ).rejects.toThrow("invalid image metadata");
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {

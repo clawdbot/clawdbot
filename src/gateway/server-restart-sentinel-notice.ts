@@ -42,6 +42,7 @@ import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
@@ -103,7 +104,7 @@ export function resolveGatewayLifecycleNoticeRoute(params: {
   };
 }
 
-/** Await one durable attempt; recovery retains failed custody without delaying shutdown. */
+/** Return bounded delivery status while managed scopes retain the complete attempt. */
 export async function sendGatewayLifecycleNotice(
   params: GatewayLifecycleNotice & {
     deps: CliDeps;
@@ -113,7 +114,8 @@ export async function sendGatewayLifecycleNotice(
   let delivered = false;
   try {
     await withTimeout(
-      (async () => {
+      // The response deadline does not end transport or commit-hook ownership.
+      trackAsyncWork(async () => {
         const queued = await enqueueGatewayLifecycleNotice(params, params.deliveryIntentId);
         if (!queued.created) {
           return;
@@ -128,7 +130,7 @@ export async function sendGatewayLifecycleNotice(
             delivered = true;
           },
         );
-      })(),
+      }),
       10_000,
       "update.run notice",
     );
@@ -148,11 +150,12 @@ export async function enqueueRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
+    deliveryIntentId?: string;
   },
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   return await enqueueGatewayLifecycleNotice(
     params,
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
   );
 }
 
@@ -316,8 +319,11 @@ export async function deliverRestartSentinelNotice(
     summary: string;
     queueId: string;
   },
-): Promise<void> {
-  const claim = await deliverGatewayLifecycleNoticeAttempt(params);
+): Promise<boolean> {
+  let delivered = false;
+  const claim = await deliverGatewayLifecycleNoticeAttempt(params, () => {
+    delivered = true;
+  });
   if (claim.status === "claimed-by-other-owner") {
     log.info(`${params.summary}: durable restart notice claimed by recovery`, {
       sessionKey: params.sessionKey,
@@ -326,6 +332,8 @@ export async function deliverRestartSentinelNotice(
   if (claim.status === "claimed-by-other-owner" || !claim.value) {
     await drainFailedRestartSentinelNotice(params);
   }
+  // Only the observed platform send proves delivery; recovery owns its own receipts.
+  return delivered;
 }
 
 async function deliverGatewayLifecycleNoticeAttempt(

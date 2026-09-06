@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
@@ -10,6 +11,7 @@ import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
 import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
+import { createAgentsSpawnProductionBoundaryVitestConfig } from "./vitest/vitest.agents-spawn-production-boundary.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -64,7 +66,7 @@ import { createPluginSdkVitestConfig } from "./vitest/vitest.plugin-sdk.config.t
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createProcessVitestConfig } from "./vitest/vitest.process.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
-import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
+import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
@@ -159,7 +161,7 @@ function expectForkedIsolatedRunner(config: {
   expect(testConfig.runner).toBeUndefined();
 }
 
-describe("resolveVitestIsolation", () => {
+describe("scoped Vitest configuration", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     for (const subpath of PRIVATE_PLUGIN_SDK_SUBPATHS) {
       expect(findAlias(sharedVitestConfig.resolve.alias, `openclaw/plugin-sdk/${subpath}`)).toEqual(
@@ -204,9 +206,13 @@ describe("resolveVitestIsolation", () => {
   });
 
   it("ignores the legacy isolation escape hatches", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
+    for (const env of [
+      { OPENCLAW_TEST_ISOLATE: "1" },
+      { OPENCLAW_TEST_NO_ISOLATE: "0" },
+      { OPENCLAW_TEST_NO_ISOLATE: "false" },
+    ]) {
+      expect(requireTestConfig(createScopedVitestConfig([], { env })).isolate).toBe(false);
+    }
   });
 
   it("resolves scoped discovery dirs from the repo root after config relocation", () => {
@@ -282,6 +288,12 @@ describe("createScopedVitestConfig", () => {
       includePattern: "extensions/**/*.test.ts",
       target: "extensions/browser/index.test.ts",
       expectedInclude: "browser/index.test.ts",
+    },
+    {
+      title: "keeps explicitly selected files owned by negative extglobs",
+      includePattern: "extensions/*/browser/**/!(*.browser).test.ts",
+      target: "extensions/example/browser/view.test.ts",
+      expectedInclude: "example/browser/view.test.ts",
     },
     {
       title: "narrows scoped includes to matching dot-prefixed CLI file filters",
@@ -569,6 +581,8 @@ describe("scoped vitest configs", () => {
   const defaultAgentsConfig = createAgentsVitestConfig({});
   const defaultAgentsCoreConfig = createAgentsCoreVitestConfig({});
   const defaultAgentsCoreIsolatedConfig = createAgentsCoreIsolatedVitestConfig({});
+  const defaultAgentsSpawnProductionBoundaryConfig =
+    createAgentsSpawnProductionBoundaryVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultProcessConfig = createProcessVitestConfig({});
   const defaultToolingDockerConfig = createToolingDockerVitestConfig({});
@@ -664,6 +678,7 @@ describe("scoped vitest configs", () => {
   it("isolates agent suites with conflicting shared-module mocks", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
+    const productionBoundaryConfig = requireTestConfig(defaultAgentsSpawnProductionBoundaryConfig);
 
     const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
@@ -672,6 +687,14 @@ describe("scoped vitest configs", () => {
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
+    expect(productionBoundaryConfig.include).toEqual(
+      agentVitestProjectOwners.spawnProductionBoundary.include.map((file) =>
+        file.replace("src/agents/", ""),
+      ),
+    );
+    expect(productionBoundaryConfig.fileParallelism).toBe(false);
+    expect(productionBoundaryConfig.isolate).toBe(true);
+    expect(productionBoundaryConfig.runner).toBeUndefined();
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
@@ -1138,18 +1161,20 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include?.every((pattern) => pattern.startsWith("ui/src/"))).toBe(true);
     for (const [file, included] of [
       ["ui/src/pages/chat/chat-view.test.ts", true],
       ["ui/src/components/form-controls.browser.test.ts", true],
       ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+      ["extensions/workboard/browser/catalog.test.ts", true],
+      ["extensions/workboard/browser/native.browser.test.ts", false],
     ] as const) {
       expect(
-        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        testConfig.include?.some((pattern) => minimatch(file, pattern)),
         file,
       ).toBe(included);
     }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
+    expect(testConfig.exclude).toContain("extensions/*/browser/**/*.e2e.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

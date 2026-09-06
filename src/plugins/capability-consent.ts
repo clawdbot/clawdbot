@@ -32,7 +32,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
-import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -160,7 +160,9 @@ export async function resolvePluginCapabilityConsent(params: {
     ) {
       return;
     }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, pluginId, env);
+    const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolvePackage(
+      pluginId,
+    );
     if (!ownership.ok) {
       throw new ManagedPluginLifecycleError(ownership.error);
     }

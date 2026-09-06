@@ -585,15 +585,13 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
 
 const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
   WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
-    subpaths.map(
-      (subpath): WorkspacePackageAliasEntry => ({
-        packageName: `@openclaw/${packageDir}`,
-        packageDir,
-        subpath,
-        srcFile: `${subpath || "index"}.ts`,
-        distFile: `${subpath || "index"}.mjs`,
-      }),
-    ),
+    subpaths.map((subpath): WorkspacePackageAliasEntry => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
+      subpath,
+      srcFile: `${subpath || "index"}.ts`,
+      distFile: `${subpath || "index"}.mjs`,
+    })),
   );
 const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
   ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),

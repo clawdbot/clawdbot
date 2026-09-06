@@ -3,21 +3,22 @@ import { DAVESession } from "@discordjs/voice";
 import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
 import {
   createDefaultVoiceStates,
   createDiscordVoiceTestHelpers,
+  createRealtimeBridgeTestHelpers,
   createVoiceTestRuntime,
   lastMockCall,
   mockCall,
   type MockCallSource,
   requireRecord,
-  type TestRealtimeBridgeParams,
 } from "./manager.e2e.test-support.js";
 import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
+import { createDiscordVoiceTranscriptFixture } from "./transcripts.test-support.js";
 import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 const {
@@ -32,6 +33,7 @@ const {
   resolveRealtimeBootstrapContextInstructionsMock,
   resolveVoiceIngressWithParticipantsMock,
   transcribeAudioFileMock,
+  resolveAudioInputBudgetMock,
   prepareTtsRequestMock,
   textToSpeechStreamMock,
   textToSpeechMock,
@@ -41,8 +43,8 @@ const {
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
+  createRealtimeSessionMock,
   realtimeSessionMock,
-  decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
@@ -50,10 +52,9 @@ const {
   isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 } = voiceTestMocks;
-const [managerModule, realtimeModule, segmentModule] = await Promise.all([
+const [managerModule, realtimeModule] = await Promise.all([
   import("./voice-runtime.js"),
   import("./realtime-session.runtime.js"),
-  import("./segment.js"),
 ]);
 
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
@@ -61,6 +62,12 @@ const { configureVoiceStateGateway, createClient, createClientWithMember } =
 const createRuntime = createVoiceTestRuntime;
 
 function buildVoiceTestHarness() {
+  const { startTranscripts, stopTranscripts } = createDiscordVoiceTranscriptFixture();
+  const managers = new Set<InstanceType<typeof managerModule.DiscordVoiceManager>>();
+  afterEach(async () => {
+    await Promise.all([...managers].map((manager) => manager.destroy()));
+    managers.clear();
+  });
   beforeEach(() => {
     getVoiceConnectionMock.mockReset();
     getVoiceConnectionMock.mockReturnValue(undefined);
@@ -122,15 +129,20 @@ function buildVoiceTestHarness() {
     );
     createAudioResourceMock.mockClear();
     realtimeSessionMock.close.mockClear();
-    realtimeSessionMock.connect.mockClear();
+    realtimeSessionMock.connect.mockReset();
+    realtimeSessionMock.connect.mockResolvedValue(undefined);
     realtimeSessionMock.sendAudio.mockClear();
     realtimeSessionMock.sendUserMessage.mockClear();
     realtimeSessionMock.handleBargeIn.mockClear();
     realtimeSessionMock.setMediaTimestamp.mockClear();
     realtimeSessionMock.submitToolResult.mockClear();
     realtimeSessionMock.bridge.supportsToolResultSuppression = true;
-    createRealtimeVoiceBridgeSessionMock.mockClear();
-    createRealtimeVoiceBridgeSessionMock.mockReturnValue(realtimeSessionMock);
+    createRealtimeVoiceBridgeSessionMock.mockReset();
+    createRealtimeVoiceBridgeSessionMock.mockImplementation(() =>
+      createRealtimeVoiceBridgeSessionMock.mock.calls.length === 1
+        ? realtimeSessionMock
+        : createRealtimeSessionMock(),
+    );
     controlRealtimeVoiceAgentRunMock.mockReset();
     controlRealtimeVoiceAgentRunMock.mockResolvedValue({
       ok: false,
@@ -149,9 +161,14 @@ function buildVoiceTestHarness() {
       provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
-    decodeOpusStreamMock.mockReset();
     decodeOpusStreamChunksMock.mockReset();
     decodeOpusStreamChunksMock.mockResolvedValue(undefined);
+    resolveAudioInputBudgetMock.mockReset();
+    resolveAudioInputBudgetMock.mockImplementation(async ({ cfg }) =>
+      cfg.tools?.media?.audio?.enabled === false
+        ? { enabled: false }
+        : { enabled: true, maxBytes: cfg.tools?.media?.audio?.maxBytes ?? 20 * 1024 * 1024 },
+    );
   });
 
   const createManager = (
@@ -162,8 +179,8 @@ function buildVoiceTestHarness() {
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
     accountId = "default",
     botUserId?: string,
-  ) =>
-    new managerModule.DiscordVoiceManager({
+  ) => {
+    const manager = new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
       cfg: cfgOverride,
       discordConfig,
@@ -171,6 +188,9 @@ function buildVoiceTestHarness() {
       runtime: createRuntime(),
       botUserId,
     });
+    managers.add(manager);
+    return manager;
+  };
 
   type DiscordConfig = ConstructorParameters<
     typeof managerModule.DiscordVoiceManager
@@ -274,12 +294,6 @@ function buildVoiceTestHarness() {
           daveRecoveryAttempts: Map<string, number>;
           handleReceiveError: (entry: unknown, error: unknown) => void;
           handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-          processSegment: (params: {
-            entry: unknown;
-            wavPath: string;
-            userId: string;
-            durationSeconds: number;
-          }) => Promise<void>;
           scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
         };
       }
@@ -382,14 +396,8 @@ function buildVoiceTestHarness() {
       `agent command args ${index}`,
     );
 
-  const lastRealtimeBridgeParams = (): TestRealtimeBridgeParams =>
-    requireRecord(
-      lastMockCall(
-        createRealtimeVoiceBridgeSessionMock as unknown as MockCallSource,
-        "realtime bridge",
-      )[0],
-      "realtime bridge params",
-    ) as TestRealtimeBridgeParams;
+  const { realtimeBridgeAt, lastRealtimeBridge, lastRealtimeBridgeParams, sentUserMessages } =
+    createRealtimeBridgeTestHelpers(createRealtimeVoiceBridgeSessionMock);
 
   const joinManagerFixture = async (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
@@ -429,9 +437,6 @@ function buildVoiceTestHarness() {
       lastMockCall(textToSpeechStreamMock as unknown as MockCallSource, "tts stream call")[0],
       "tts stream args",
     );
-
-  const sentUserMessages = () =>
-    Array.from(realtimeSessionMock.sendUserMessage.mock.calls).map(([message]) => String(message));
 
   const emitFinalRealtimeUserTranscript = async (
     bridgeParams:
@@ -543,31 +548,13 @@ function buildVoiceTestHarness() {
     return { firstConnection, secondConnection };
   };
 
-  const processVoiceSegment = async (
+  const receiveVoiceUtterance = async (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
     userId: string,
-  ) =>
-    await getVoiceReceive(manager).processSegment({
-      entry: {
-        guildId: "g1",
-        channelId: "1001",
-        sessionChannelId: "1001",
-        voiceSessionKey: "discord:g1:1001",
-        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
-        connection: createConnectionMock(),
-        player: createAudioPlayerMock(),
-        sessionLifecycle: { status: "active" },
-        playbackQueue: Promise.resolve(),
-        processingQueue: Promise.resolve(),
-        audioInputBudget: { enabled: true, maxBytes: 20 * 1024 * 1024 },
-        ttsStreamFallbackWarned: false,
-        capture: createVoiceCaptureState(),
-        receiveRecovery: createVoiceReceiveRecoveryState(),
-      },
-      wavPath: "/tmp/test.wav",
-      userId,
-      durationSeconds: 1.2,
-    });
+  ) => {
+    expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
+    await receiveRecordedSpeech(manager, undefined, getSessionEntry(manager), userId);
+  };
 
   const updateVoiceState = async (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
@@ -589,7 +576,51 @@ function buildVoiceTestHarness() {
     userId: string,
   ) => await getVoiceReceive(manager).handleSpeakingStart(entry, userId);
 
+  const getSessionConnection = (entry: VoiceSessionEntry) =>
+    expectDefined(
+      joinVoiceChannelMock.mock.results.find(({ value }) => Object.is(value, entry.connection))
+        ?.value,
+      "voice session connection",
+    );
+
+  const receiveRecordedSpeech = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    text?: string,
+    entry = getSessionEntry(manager),
+    userId = "u-owner",
+  ) => {
+    const conversations = vi.spyOn(entry.conversations, "enqueue");
+    const stream = new PassThrough({ objectMode: true });
+    getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(stream);
+    // Mock the codec and provider response, retaining receive ownership and WAV/STT dispatch.
+    decodeOpusStreamChunksMock.mockImplementation(
+      async (
+        input: import("node:stream").Readable,
+        callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
+      ) => {
+        for await (const pcm of input) {
+          await callbacks.onChunk(pcm, pcm);
+        }
+      },
+    );
+    if (text !== undefined) {
+      transcribeAudioFileMock.mockResolvedValue({ text });
+    }
+    try {
+      const receiving = handleSpeakingStart(manager, entry, userId);
+      stream.end(Buffer.alloc(96_000));
+      await receiving;
+      await entry.processingQueue;
+      await Promise.all(conversations.mock.results.map((result) => result.value));
+    } finally {
+      stream.destroy();
+      conversations.mockRestore();
+    }
+  };
+
   return {
+    startTranscripts,
+    stopTranscripts,
     PassThrough,
     DAVESession,
     expectDefined,
@@ -617,6 +648,7 @@ function buildVoiceTestHarness() {
     resolveRealtimeBootstrapContextInstructionsMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
+    resolveAudioInputBudgetMock,
     prepareTtsRequestMock,
     textToSpeechStreamMock,
     textToSpeechMock,
@@ -626,8 +658,8 @@ function buildVoiceTestHarness() {
     resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
+    createRealtimeSessionMock,
     realtimeSessionMock,
-    decodeOpusStreamMock,
     decodeOpusStreamChunksMock,
     updateVoiceStateMock,
     enqueueSystemEventMock,
@@ -636,7 +668,6 @@ function buildVoiceTestHarness() {
     canonicalizeRealtimeVoiceProviderIdMock,
     managerModule,
     realtimeModule,
-    segmentModule,
     configureVoiceStateGateway,
     createClient,
     createClientWithMember,
@@ -649,6 +680,7 @@ function buildVoiceTestHarness() {
     createFollowManager,
     expectConnectedStatus,
     getSessionEntry,
+    getSessionConnection,
     getVoiceReceive,
     getVoiceFollowing,
     beginSpeakerTurn,
@@ -658,6 +690,8 @@ function buildVoiceTestHarness() {
     lastAgentCommandArgs,
     lastAgentCommandToolNames,
     agentCommandArgsAt,
+    realtimeBridgeAt,
+    lastRealtimeBridge,
     lastRealtimeBridgeParams,
     joinManagerFixture,
     createJoinedAgentProxyFixture,
@@ -673,13 +707,14 @@ function buildVoiceTestHarness() {
     emitDecryptFailure,
     installFailingDaveSession,
     makePoisonedDaveConnections,
-    processVoiceSegment,
+    receiveVoiceUtterance,
     updateVoiceState,
     handleSpeakingStart,
+    receiveRecordedSpeech,
   };
 }
 
-type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
+export type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
 
 export function defineDiscordVoiceTests(
   register: (harness: DiscordVoiceTestHarness) => void,

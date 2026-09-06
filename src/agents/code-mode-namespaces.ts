@@ -18,7 +18,6 @@ import {
   type CodeModeApiVirtualFile,
   type McpApiServerDoc,
 } from "./code-mode-mcp-api.js";
-import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
 
 export type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 
@@ -452,6 +451,7 @@ interface AgentRunOptions {
 }
 
 interface AgentsApi {
+  /** Child failures have name "SwarmAgentError", runId, status, and message; SwarmAgentError is not a global constructor. */
   run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
@@ -463,8 +463,10 @@ declare function phase(title: string): void;
 /** Publish a progress note for this swarm. */
 declare function log(message: string): void;
 
-// Fan-out: const reports = await Promise.all(prompts.map((prompt) => agents.run(prompt)));
-// Gate: while (!ready) { ready = await agents.run("Check readiness") === "ready"; }
+// Fan-out: const settled = await Promise.allSettled(prompts.map((prompt) => agents.run(prompt)));
+// Drain every accepted child before synthesis: fulfilled entries hold values, rejected entries hold reasons.
+// Keep successful results and report failed lanes. Do not respawn completed work after a partial failure.
+// Gate: for (let pass = 0; !ready && pass < 4; pass++) ready = await agents.run("Check readiness") === "ready";
 // Cycle: for (let pass = 0; pass < 3; pass++) draft = await agents.run("Improve: " + draft);
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
@@ -627,17 +629,9 @@ export function createCodeModeNamespaceRuntime(
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      let input: unknown;
-      try {
-        input = target.input ? await target.input(args) : (args[0] ?? {});
-      } catch (error) {
-        if (target.local) {
-          throw registerToolEffectReceipt(error, { state: "failed_no_effect" });
-        }
-        throw error;
-      }
+      const input = target.input ? await target.input(args) : (args[0] ?? {});
       if (target.local) {
-        return registerToolEffectReceipt(toCodeModeJsonSafe(input), { state: "read_completed" });
+        return toCodeModeJsonSafe(input);
       }
       if (!target.catalogId) {
         throw new Error(`Code mode namespace path has no catalog tool: ${path.join(".")}`);

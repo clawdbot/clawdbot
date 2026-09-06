@@ -174,6 +174,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
   "application/vnd.ms-excel",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -905,7 +906,6 @@ function logOptimizedImage(params: { originalSize: number; optimized: OptimizedI
 async function optimizeImageWithFallback(params: {
   buffer: Buffer;
   cap: number;
-  meta?: { contentType?: string; fileName?: string };
   imageCompression?: ImageCompressionPolicy;
 }): Promise<OptimizedImage> {
   const { buffer, cap } = params;
@@ -959,7 +959,6 @@ export async function optimizeImageBufferForWebMedia(params: {
       fileName: params.fileName,
     };
   }
-  const meta = { contentType: params.contentType, fileName: params.fileName };
   const originalContentType = resolvePreservableOriginalImageContentType({
     buffer: params.buffer,
     cap,
@@ -978,7 +977,6 @@ export async function optimizeImageBufferForWebMedia(params: {
   const optimized = await optimizeImageWithFallback({
     buffer: params.buffer,
     cap,
-    meta,
     imageCompression: params.imageCompression,
   });
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
@@ -1031,34 +1029,6 @@ async function loadWebMediaInternal(
     mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
-  const optimizeAndClampImage = async (
-    buffer: Buffer,
-    cap: number,
-    meta?: { contentType?: string; fileName?: string },
-  ) => {
-    const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({
-      buffer,
-      cap,
-      meta,
-      ...(imageCompression ? { imageCompression } : {}),
-    });
-    logOptimizedImage({ originalSize, optimized });
-
-    if (optimized.buffer.length > cap) {
-      throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
-    }
-
-    const fileName = toImageFileName(meta?.fileName, optimized.mimeType);
-
-    return {
-      buffer: optimized.buffer,
-      contentType: optimized.mimeType,
-      kind: "image" as const,
-      fileName,
-    };
-  };
-
   const clampAndFinalize = async (params: {
     buffer: Buffer;
     contentType?: string;
@@ -1070,40 +1040,26 @@ async function loadWebMediaInternal(
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
+      if (optimizeImages) {
+        return await optimizeImageBufferForWebMedia({
+          buffer: params.buffer,
+          contentType: params.contentType,
+          fileName: params.fileName,
+          maxBytes: cap,
+          imageCompression,
+        });
+      }
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
-        if (params.buffer.length > imageCap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
-        }
-        assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
-        return {
-          buffer: params.buffer,
-          contentType: params.contentType,
-          kind: params.kind,
-          fileName: params.fileName,
-        };
+      if (params.buffer.length > imageCap) {
+        throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
       }
-      const originalContentType = resolvePreservableOriginalImageContentType({
-        buffer: params.buffer,
-        cap: imageCap,
-        contentType: params.contentType,
-        fileName: params.fileName,
-        policy: imageCompression,
-      });
-      if (originalContentType) {
-        return {
-          buffer: params.buffer,
-          contentType: originalContentType,
-          kind: params.kind,
-          fileName: params.fileName,
-        };
-      }
+      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
       return {
-        ...(await optimizeAndClampImage(params.buffer, imageCap, {
-          contentType: params.contentType,
-          fileName: params.fileName,
-        })),
+        buffer: params.buffer,
+        contentType: params.contentType,
+        kind: params.kind,
+        fileName: params.fileName,
       };
     }
     if (params.buffer.length > cap) {

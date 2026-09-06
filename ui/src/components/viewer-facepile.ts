@@ -137,13 +137,15 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           </span>
         </openclaw-tooltip>`,
       )}
-      ${overflowCount > 0
-        ? html`<openclaw-tooltip .content=${overflowLabel}>
-            <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
-              >+${overflowCount}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
+      ${
+        overflowCount > 0
+          ? html`<openclaw-tooltip .content=${overflowLabel}>
+              <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
+                >+${overflowCount}</span
+              >
+            </openclaw-tooltip>`
+          : nothing
+      }
     </span>`;
   }
 }

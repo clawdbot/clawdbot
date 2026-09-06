@@ -9,6 +9,7 @@ import {
 import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "../transports/openai-responses-contracts.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, Context, Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -64,14 +65,7 @@ function createReplayContext(kind: "compaction" | "mixed"): Context {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 1,
   };
@@ -393,7 +387,11 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     };
 
     const failed = await streamOpenAICodexResponses(model, context, options).result();
-    expect(failed).toMatchObject({ stopReason: "error", errorMessage: "unsupported_parameter" });
+    expect(failed).toMatchObject({
+      stopReason: "error",
+      errorMessage: "400: unsupported_parameter",
+      errorCode: "unsupported_parameter",
+    });
     expect(failed.providerReplay).toBeUndefined();
     expect(onCompactionRejected).not.toHaveBeenCalled();
     await streamOpenAICodexResponses(model, nextTurn(context, failed), options).result();

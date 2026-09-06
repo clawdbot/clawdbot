@@ -126,7 +126,7 @@ describe("Codex process registration", () => {
     },
   );
 
-  it.for(["live", "unknown"])(
+  it.for(["live", "unknown", "threaded zombie"])(
     "retains an unreadable-command registration when the child is %s",
     async (mode) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
@@ -138,10 +138,15 @@ describe("Codex process registration", () => {
         vi.mocked(readCodexAppServerProcessSnapshot)
           .mockResolvedValueOnce([observer, liveChild])
           .mockRejectedValue(new ProcessInspectionError("unavailable"));
+      } else if (mode === "threaded zombie") {
+        vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
+          observer,
+          { ...liveChild, state: "Zl" },
+        ]);
       }
 
       await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
-        reason: mode === "live" ? "permission" : "unavailable",
+        reason: mode === "unknown" ? "unavailable" : "permission",
       });
 
       expect(store.lookup("orphan")).toEqual(registration);

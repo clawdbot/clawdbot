@@ -32,8 +32,12 @@ import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
-import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import {
+  ProviderAuthError,
+  resolveDirectProviderCredentialMode,
+  type ResolvedProviderAuth,
+} from "./model-auth-runtime-shared.js";
+import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -166,7 +170,7 @@ export async function resolveApiKeyForProviderCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
-   *  silently overridden by env/config credentials. */
+   *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
@@ -226,6 +230,7 @@ export async function resolveApiKeyForProviderCore(params: {
       profileId,
       agentDir,
       forceRefresh: params.forceRefresh,
+      allowProfileFallback: !params.lockedProfile,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -312,7 +317,7 @@ export async function resolveApiKeyForProviderCore(params: {
       params.skipSetupProviderFallback,
     );
     if (envResolved) {
-      const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+      const resolvedMode = resolveDirectProviderCredentialMode({
         cfg,
         provider,
         inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -538,7 +543,7 @@ export async function resolveApiKeyForProviderCore(params: {
     params.skipSetupProviderFallback,
   );
   if (envResolved) {
-    const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+    const resolvedMode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -611,7 +616,7 @@ export async function resolveApiKeyForProviderCore(params: {
     secretSentinels: params.secretSentinels,
   });
   if (customKey) {
-    const mode = authConfig.resolveDirectProviderCredentialMode({
+    const mode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: "api-key",
@@ -626,10 +631,11 @@ export async function resolveApiKeyForProviderCore(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+  const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({
     cfg,
     provider,
     modelApi: params.modelApi,
+    workspaceDir: params.workspaceDir,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });

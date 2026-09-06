@@ -34,19 +34,20 @@ import {
   setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { tasksHandlers } from "./tasks.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import {
+  createContext,
+  createSnapshotTask,
+  identifiedClient,
+  runTaskHandler,
+} from "./tasks.test-helpers.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
-type TaskResponsePayload = {
-  tasks?: Array<Record<string, unknown>>;
-  task?: Record<string, unknown>;
-  found?: boolean;
-  cancelled?: boolean;
-  nextCursor?: string;
-  results?: Array<{ taskId?: string; ok?: boolean; reason?: string }>;
-};
+const mainSessionTaskScope = {
+  requesterSessionKey: "agent:main:main",
+  ownerKey: "agent:main:main",
+  scopeKind: "session",
+} as const;
 
 let stateDir: string;
 
@@ -82,84 +83,6 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
-
-function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
-  return {
-    connId: `conn-${profileId}-${scopes.join("-")}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes,
-    },
-    authenticatedUserId: "viewer@example.com",
-    authenticatedUserProfile: {
-      profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
-}
-
-function captureRespond() {
-  const calls: Parameters<RespondFn>[] = [];
-  const respond: RespondFn = (...args) => {
-    calls.push(args);
-  };
-  return { calls, respond };
-}
-
-function createContext(config: Record<string, unknown> = {}) {
-  return {
-    getRuntimeConfig: () => config,
-  } as never;
-}
-
-function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
-  return {
-    taskId: "task-snapshot",
-    runtime: "cli",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    runId: "run-snapshot",
-    task: "Snapshot task",
-    status: "running",
-    deliveryStatus: "pending",
-    notifyPolicy: "done_only",
-    createdAt: 1_000,
-    startedAt: 1_010,
-    lastEventAt: 1_010,
-    ...overrides,
-  };
-}
-
-async function runTaskHandler(
-  method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
-  params: Record<string, unknown>,
-  config: Record<string, unknown> = {},
-  client: GatewayClient | null = null,
-  context = createContext(config),
-) {
-  const { calls, respond } = captureRespond();
-  await expectDefined(
-    tasksHandlers[method],
-    "tasksHandlers[method] test invariant",
-  )({
-    req: { type: "req", id: `req-${method}`, method },
-    params,
-    respond,
-    context,
-    client,
-    isWebchatConnect: () => false,
-  });
-  return {
-    calls,
-    payload: calls[0]?.[1] as TaskResponsePayload | undefined,
-  };
-}
 
 async function getTaskPayload(taskId: string) {
   const { calls, payload } = await runTaskHandler("tasks.get", { taskId });
@@ -642,9 +565,7 @@ describe("tasks gateway handlers", () => {
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-completed",
       task: "Done task",
       status: "succeeded",
@@ -657,6 +578,8 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Done task");
     expect(payload?.task?.prompt).toBe("Done task");
   });
+
+  const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
 
   it.each([
     {
@@ -682,17 +605,21 @@ describe("tasks gateway handlers", () => {
     },
     {
       label: "CLI completion",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "CLI canonical result",
       expected: "CLI canonical result",
     },
     {
       label: "CLI sanitized terminal result",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
       expected: "Command did not run: approval timed out.",
+    },
+    {
+      label: "CLI blocked media references",
+      ...cliStaleResult,
+      terminalSummary: 'Delivery failed.\nRetained media: path="/tmp/proof.png"',
+      expected: 'Delivery failed. Retained media: path="/tmp/proof.png"',
     },
     {
       label: "cron progress fallback",
@@ -749,9 +676,7 @@ describe("tasks gateway handlers", () => {
   it("keeps bounded prompts lookup-only", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `Inspect the task prompt ${"x".repeat(5_000)}`,
       status: "running",
       deliveryStatus: "pending",
@@ -777,9 +702,7 @@ describe("tasks gateway handlers", () => {
     ].join("\n");
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
       status: "running",
       deliveryStatus: "pending",
@@ -793,9 +716,7 @@ describe("tasks gateway handlers", () => {
   it("sanitizes task text before exposing SDK summaries", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
         "Compile artifact\nOpenClaw runtime context (internal): Keep internal details private.",
@@ -978,7 +899,7 @@ describe("tasks gateway handlers", () => {
     expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("does not report cancellation for an ordinary task without a live owner", async () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
@@ -997,10 +918,10 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.cancelled).toBe(true);
+    expect(payload?.cancelled).toBe(false);
     expect(payload?.task?.id).toBe(task.taskId);
-    expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(payload?.task?.status).toBe("running");
+    expect(payload?.task?.error).toBeUndefined();
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {

@@ -20,9 +20,12 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { renderModelAccountsSection } from "./model-accounts-section.ts";
+
+registerModelAccountsEnglish();
 
 type AccountTarget = {
   client: GatewayBrowserClient;

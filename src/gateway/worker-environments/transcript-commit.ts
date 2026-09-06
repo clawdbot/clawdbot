@@ -29,6 +29,12 @@ import {
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-store.js";
 
+export type WorkerTranscriptCommitApplication = (params: {
+  identity: WorkerConnectionIdentity;
+  request: WorkerTranscriptCommitParams;
+  assertCurrent: () => undefined;
+}) => Promise<WorkerTranscriptCommitOutcome>;
+
 type WorkerTranscriptCommitterOptions = {
   getConfig: () => OpenClawConfig;
   store?: WorkerTranscriptCommitStore;
@@ -317,6 +323,7 @@ function resolvePersistedCommitAcrossDag(params: {
 }
 
 async function applyWorkerTranscriptCommit(params: {
+  assertCurrent: () => undefined;
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
@@ -339,6 +346,7 @@ async function applyWorkerTranscriptCommit(params: {
   let applied: ApplyTranscriptCommitResult;
   try {
     applied = await withTranscriptWriteTransaction(params.target, (transcriptTarget) => {
+      params.assertCurrent();
       const currentEntry = loadSessionEntry(params.target);
       if (!currentEntry || currentEntry.sessionId !== expectedState.sessionId) {
         return { ok: false as const, reason: "session-not-attached" as const };
@@ -409,6 +417,8 @@ async function applyWorkerTranscriptCommit(params: {
           : {}),
       };
       replaceSessionEntrySync(params.target, nextEntry);
+      // Synchronous assistant preparation can close the owner after earlier rows were appended.
+      params.assertCurrent();
       return { ok: true as const, messages };
     });
   } catch (error) {
@@ -441,10 +451,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
   const store = options.store ?? createWorkerTranscriptCommitStore();
   const sessionOperations = new KeyedAsyncQueue();
 
-  const commit = async (params: {
-    identity: WorkerConnectionIdentity;
-    request: WorkerTranscriptCommitParams;
-  }): Promise<WorkerTranscriptCommitOutcome> => {
+  const commit: WorkerTranscriptCommitApplication = async (params) => {
     const sessionId = params.identity.sessionId;
     if (!sessionId) {
       return { ok: false, reason: "session-not-attached" };
@@ -460,6 +467,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
         seq: params.request.seq,
         requestHash: requestHash(params.request),
       };
+      params.assertCurrent();
       const started = store.begin(input);
       if (started.kind === "replay") {
         return started.outcome;
@@ -487,16 +495,35 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
           }),
         ),
       );
-      const applied = await applyWorkerTranscriptCommit({
-        config,
-        identity: params.identity,
-        messages,
-        recoverPersistedBatch: started.kind === "recover",
-        requestedBaseLeafId: params.request.baseLeafId,
-        runId: params.identity.runId,
-        sessionId,
-        target,
-      });
+      let authorityFailure: { error: unknown } | undefined;
+      let applied: ApplyTranscriptCommitResult;
+      try {
+        applied = await applyWorkerTranscriptCommit({
+          assertCurrent: () => {
+            try {
+              params.assertCurrent();
+            } catch (error) {
+              authorityFailure = { error };
+              throw error;
+            }
+          },
+          config,
+          identity: params.identity,
+          messages,
+          recoverPersistedBatch: started.kind === "recover",
+          requestedBaseLeafId: params.request.baseLeafId,
+          runId: params.identity.runId,
+          sessionId,
+          target,
+        });
+      } catch (error) {
+        // A callback refusal has rolled back the agent transaction. Free only
+        // this invocation's fresh reservation; unknown commit outcomes must recover.
+        if (started.kind === "claimed" && authorityFailure && authorityFailure.error === error) {
+          store.discardUncommitted(input);
+        }
+        throw error;
+      }
       if (!applied.ok) {
         return store.complete({ ...input, outcome: { ok: false, reason: applied.reason } });
       }

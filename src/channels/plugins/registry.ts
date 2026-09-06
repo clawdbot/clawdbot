@@ -11,20 +11,13 @@ import {
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-export const listChannelPlugins = () => listLoadedChannelPlugins() as ChannelPlugin[];
+export const listChannelPlugins = (): ChannelPlugin[] => listLoadedChannelPlugins();
 
 /**
  * Returns a loaded channel plugin without falling back to bundled metadata.
  */
 export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
-}
-
-/**
- * Returns the package/install origin for a loaded channel plugin.
- */
-export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined {
-  return normalizeOptionalString(getLoadedChannelPluginEntryById(id)?.origin);
+  return getLoadedChannelPluginById(id);
 }
 
 /**

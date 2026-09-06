@@ -206,7 +206,7 @@ Notable entry types:
 
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 
-Model-only callers can use `SessionManager.openModelContext()` to create a detached, non-persisting view. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
+Model-only callers should await `SessionManager.openModelContextAsync(target, { admission?, signal? })` to create a detached, non-persisting view without blocking the Gateway event loop on durable history scans. `openModelContext()` provides the same view for synchronous consumers. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
 
 `SessionManager.readSessionContext(target, read, { admission? })` lets a synchronous
 consumer process full-fidelity context messages inside one read-only snapshot.
@@ -219,6 +219,8 @@ This lets replay consumers enforce their existing limits during acquisition
 without silently dropping earlier history. Navigation still scales with the
 transcript, and individual selected rows are decoded whole; this is not a fixed
 process-memory ceiling.
+
+Durable model-context reads run in a worker. Codex native replay and settled-turn verification keep that lazy read and its consumer together in a worker. Worker reads are serialized per reader and reuse an idle worker. Admission receipts are validated inside the read snapshot and again before the result is accepted; reads without an admission instead check the session’s rewrite generation and last event sequence. Admitted reads retain their turn boundary, so later appends alone do not invalidate them. An invalidated read or canceled signal rejects the result. Callers carry their original cancellation signal through context acquisition and check that their owner remains active before invoking hooks, starting a model run, or applying a proposal. Incognito sessions use the same operation in the Gateway process because their SQLite database is held in memory.
 
 OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 
@@ -237,7 +239,9 @@ More on limits: [/reference/token-use](/reference/token-use).
 
 Compaction summarizes older conversation into a persisted `compaction` entry in the transcript and keeps recent messages intact. After compaction, future turns see the compaction summary plus messages after `firstKeptEntryId`. Compaction is **persistent**, unlike session pruning - see [/concepts/session-pruning](/concepts/session-pruning).
 
-Embedded OpenClaw compaction uses `low` thinking by default. Set `agents.defaults.compaction.thinkingLevel: "inherit"` to reuse the session level, or choose another explicit level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
+Embedded OpenClaw compaction uses the provider's compaction thinking preference, falling back to `low`. Native local Ollama prefers `off` to keep summarization within its request budget. Set `agents.defaults.compaction.thinkingLevel: "inherit"` to reuse the session level, or choose an explicit level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
+
+Each summarization request uses one primary format. Safeguard history summaries use its structured checkpoint format, while split-turn prefixes use the prefix format. Operator focus and identifier-preservation guidance remain additional instructions; they do not add a competing set of required headings.
 
 AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
@@ -282,7 +286,13 @@ Two additional guards run outside these paths:
 }
 ```
 
-OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
+OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
+
+Direct-command post-turn maintenance shares the command's remaining timeout
+allowance across memory flushing and compaction. Expiry cancels maintenance
+without discarding an already completed reply; accepted compaction commits remain
+accounted for. Explicit caller cancellation and session ownership checks still
+apply, and an unlimited command timeout remains unlimited.
 
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
@@ -325,20 +335,24 @@ Before auto-compaction happens, OpenClaw can run a silent agentic turn that writ
 
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
 
-| Key                         | Default          | Notes                                                                                                                                                  |
-| --------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                   | `true`           |                                                                                                                                                        |
-| `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
-| `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                                               |
-| `forceFlushTranscriptBytes` | unset (disabled) | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
+| Key                         | Default | Notes                                                                                                                                                  |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`                   | `true`  |                                                                                                                                                        |
+| `model`                     | unset   | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
+| `softThresholdTokens`       | `4000`  | gap below the compaction threshold that triggers a flush                                                                                               |
+| `forceFlushTranscriptBytes` | `"2mb"` | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
 
-For a 32,768-token window, a 20,000-token reserve and a 4,000-token soft margin,
-early flushing starts at 8,768 projected tokens. Blocking token compaction starts
-at 12,768, or later if an applicable server threshold is higher. Between those
-thresholds, flushing can run without blocking the next user turn on compaction.
+For a 32,768-token window, the built-in plan uses an 8,192-token reserve and a
+4,000-token soft margin. Early flushing starts at 20,576 projected tokens. Blocking
+token compaction starts at 24,576, or later if an applicable server threshold is higher. Between those
+thresholds, memory flushing can run without requiring compaction.
 The selected memory provider owns the reserve and flush margin; without a flush
 plan, maintenance still uses the effective compaction reserve. Nonpositive
 thresholds suppress token triggers. Transcript byte guards remain independent.
+
+When memory flush refreshes stale usage, it includes projected messages appended
+after the latest valid provider usage report before saving the total as fresh.
+The following compaction check therefore accounts for that later transcript growth.
 
 Notes:
 

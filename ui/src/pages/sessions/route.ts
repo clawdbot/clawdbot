@@ -22,6 +22,7 @@ type SessionsPageListFilters = {
   includeUnknown: boolean;
   statusFilter: SessionArchivedFilter;
   deepLinkSessionKey?: string | null;
+  search?: string;
 };
 
 function routeOptions(location: RouteLocation) {
@@ -48,7 +49,9 @@ export function sessionsPageListQuery(
   return {
     limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
     ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey ? { search: deepLinkSessionKey } : {}),
+    ...(deepLinkSessionKey || filters.search?.trim()
+      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
+      : {}),
     includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
     includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
     includeDerivedTitles: false,
@@ -62,25 +65,10 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const sessions = context.sessions;
-  const options = routeOptions(location);
-  const query = sessionsPageListQuery(context, {
-    limit: SESSIONS_PAGE_DEFAULT_LIMIT,
-    includeGlobal: true,
-    includeUnknown: false,
-    statusFilter: options.statusFilter,
-    deepLinkSessionKey: options.expandedSessionKey,
-  });
-  const snapshot = sessions.listSnapshot(query);
-  await Promise.all([
-    !snapshot.result && !snapshot.loading
-      ? sessions.refreshList({ ...query, force: true })
-      : undefined,
-    context.runtimeConfig.ensureLoaded().catch(() => undefined),
-  ]);
-  // Prefetch into the managed query owner. The page may already be subscribed
-  // when this loader finishes, so route data must not republish a list snapshot.
-  return options;
+  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+  // The mounted page owns list issuance, including scope/status navigation
+  // during a search. Prefetching here bypasses its single in-flight request.
+  return routeOptions(location);
 }
 
 export const page = definePage({

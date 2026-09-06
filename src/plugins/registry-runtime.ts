@@ -6,16 +6,14 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
-  type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
-  type PluginStateKeyedStore,
-  type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { formatPluginTrustRefusal } from "./plugin-trust.js";
 import {
   activatePluginRecordLifecycleEpoch,
   isPluginRecordLifecycleEpochActive,
@@ -179,9 +177,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         pluginRuntimeRecordById.get(pluginId) ??
         registry.plugins.find((entry) => entry.id === pluginId);
       if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-        // Name the denied plugin and its origin so operators can replace the untrusted install.
         throw new Error(
-          `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
+          formatPluginTrustRefusal({
+            methodName,
+            pluginId,
+            origin: record?.origin,
+            trust: record?.trust,
+          }),
         );
       }
     };
@@ -214,19 +216,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const baseState = getRuntimeProperty();
           return {
             ...baseState,
-            openBlobStore: <TMetadata>(
-              options: OpenBlobStoreOptions,
-            ): PluginBlobStore<TMetadata> => {
+            openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => {
               assertTrustedPluginRuntime("openBlobStore");
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
-            openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+            openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
               assertTrustedPluginRuntime("openKeyedStore");
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
-            openSyncKeyedStore: <T>(
-              options: OpenKeyedStoreOptions,
-            ): PluginStateSyncKeyedStore<T> => {
+            openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
               assertTrustedPluginRuntime("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
@@ -507,7 +505,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             },
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
-            const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
+            const runParams = { ...params };
             const { prepareRunSessionExecution } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {
               const { ownerPluginId, agentHarnessRuntimeOverride } =

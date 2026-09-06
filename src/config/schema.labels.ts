@@ -3,7 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
@@ -32,7 +32,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.lastRunCommit": "Wizard Last Run Commit",
   "wizard.lastRunCommand": "Wizard Last Run Command",
   "wizard.lastRunMode": "Wizard Last Run Mode",
-  "wizard.localModelLeanAutoModel": "Wizard Auto-Set Lean Model",
   "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   "logging.audit": "Audit Ledger",
   "logging.audit.enabled": "Audit Ledger Enabled",
@@ -52,7 +51,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
   telemetry: "Telemetry",
-  ...projectTelemetryFieldMetadata("label"),
+  ...TELEMETRY_FIELD_LABELS,
   surfaces: "Surface Policies",
   "surfaces.*.silentReply": "Surface Silent Reply Policy",
   "diagnostics.enabled": "Diagnostics Enabled",
@@ -376,11 +375,12 @@ export const FIELD_LABELS: Record<string, string> = {
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.controlUi.experimental": "Experimental Control UI Features",
+  "gateway.controlUi.experimental.customPlugins": "Custom Plugin UI",
   "gateway.controlUi.environment": "Control UI Environment",
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",
   "gateway.controlUi.communityInvite": "Control UI Community Invitation",
-  "gateway.controlUi.toolTitles": "Control UI Tool Call Titles",
   "gateway.controlUi.github.token": "Control UI GitHub Service Credential",
   "gateway.controlUi.sessionObserver": "Control UI Session Observer",
   "gateway.controlUi.root": "Control UI Assets Root",
@@ -467,7 +467,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",
   "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
-  "skills.workshop.allowSymlinkTargetWrites": "Allow Skill Workshop Symlink Writes",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
@@ -910,7 +909,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.queue.cap": "Queue Capacity",
   "messages.queue.drop": "Queue Drop Strategy",
   "messages.inbound": "Inbound Debounce",
-  "messages.suppressToolErrors": "Suppress Tool Error Warnings",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.statusReactions": "Status Reactions",

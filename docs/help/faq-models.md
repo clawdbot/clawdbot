@@ -55,8 +55,8 @@ troubleshooting, see the main [FAQ](/help/faq).
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
 
-    Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    Bare `/model <model>` changes only the current session, including for owners/admins,
+    unless you explicitly choose a broader [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
     For RPC edits, inspect with `config.schema.lookup` first (normalized
     path, shallow schema docs, child summaries), then prefer `config.patch`
@@ -93,10 +93,10 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I switch models on the fly (without restarting)?">
     Send `/model <name> -s` as a standalone message to switch only this session.
     Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
-    applies; leaving it unset preserves owner/admin configured-default persistence. See
+    applies; leaving it unset keeps the change in the current session, including for owners/admins. See
     [Slash commands](/tools/slash-commands) for the
-    full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default -s` to clear only a session model override, and
+    full command list, including model browsing (`/model`, `/models`, `/model
+    list`), `/model default -s` to clear only a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:

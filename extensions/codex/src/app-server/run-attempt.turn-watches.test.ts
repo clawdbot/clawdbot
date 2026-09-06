@@ -181,7 +181,7 @@ async function expectTurnInterrupted(
       expect(harness.request).toHaveBeenCalledWith(
         "turn/interrupt",
         { threadId: "thread-1", turnId: "turn-1" },
-        { timeoutMs: 5_000 },
+        { timeoutMs: 5_000, signal: expect.any(AbortSignal) },
       ),
     { interval: 1 },
   );
@@ -817,6 +817,12 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     vi.useFakeTimers();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
@@ -992,6 +998,61 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       timedOut: false,
     });
   });
+
+  it.each(["caller cancellation", "settlement deadline"] as const)(
+    "bounds pre-bind terminal projection after client closure with %s",
+    async (termination) => {
+      const projection = createDeferred<void>();
+      const onReasoningStream = vi.fn(() => projection.promise);
+      const controller = new AbortController();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          vi.useFakeTimers();
+          await harness.notify({
+            method: "item/reasoning/textDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "reasoning-1",
+              delta: "thinking",
+            },
+          });
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          return turnStartResult("turn-1", "inProgress");
+        }
+        return undefined;
+      });
+      const params = makeTestParams({
+        timeoutMs: 60 * 60_000,
+        abortSignal: controller.signal,
+        onReasoningStream,
+      });
+      const settled = vi.fn();
+      const run = runCodexAppServerAttempt(params);
+      void run.then(settled, settled);
+      try {
+        await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
+        harness.close();
+        if (termination === "caller cancellation") {
+          controller.abort("caller stopped while draining");
+        } else {
+          await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+        }
+        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
+        vi.useRealTimers();
+        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        // A closed transport cannot confirm background-terminal cleanup. That
+        // explicit failure must escape even while projection remains blocked.
+        await expect(run).rejects.toThrow("Codex cancellation could not confirm the turn stopped");
+        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
+      } finally {
+        projection.resolve();
+        vi.useRealTimers();
+        controller.abort("test cleanup");
+        await run.catch(() => {});
+      }
+    },
+  );
 
   it("lets queued terminal projection finish within its settlement window", async () => {
     vi.useFakeTimers();
@@ -1605,6 +1666,12 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }

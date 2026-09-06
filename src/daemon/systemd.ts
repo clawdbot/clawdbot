@@ -1,7 +1,6 @@
 /** Linux systemd user service installer, parser, and lifecycle controls. */
 export {
   isNonFatalSystemdInstallProbeError,
-  hasSudoToRootSystemdUserManagerMismatch,
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   resolveSystemdUserServiceAccount,

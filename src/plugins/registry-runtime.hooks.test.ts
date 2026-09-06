@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -13,6 +13,15 @@ const hookTurn = {
   externalContentSource: "email",
   deliver: false,
 } satisfies Parameters<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>[0];
+
+function createHookRuntime(hooks: PluginRuntime["hooks"]): PluginRuntime {
+  return createLazyPluginRuntime({
+    runtimeOptions: { hooks },
+    loadPluginModule: () => {
+      throw new Error("Prepared hooks must not load the broad runtime");
+    },
+  });
+}
 
 describe("plugin runtime hook dispatch ownership", () => {
   it.each([
@@ -26,7 +35,7 @@ describe("plugin runtime hook dispatch ownership", () => {
     });
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: createPluginRuntime({ hooks: { dispatchHookAgentTurn } }),
+      runtime: createHookRuntime({ dispatchHookAgentTurn }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({ id: "trusted-mail", ...ownership });
@@ -48,7 +57,7 @@ describe("plugin runtime hook dispatch ownership", () => {
     }));
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: createPluginRuntime({ hooks: { dispatchHookAgentTurn } }),
+      runtime: createHookRuntime({ dispatchHookAgentTurn }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({ id: "untrusted-mail", origin: "workspace" });
@@ -56,7 +65,7 @@ describe("plugin runtime hook dispatch ownership", () => {
     builder.registry.plugins.push(record);
 
     await expect(api.runtime.hooks.dispatchHookAgentTurn(hookTurn)).rejects.toThrow(
-      'dispatchHookAgentTurn is only available for trusted plugins in this release. Plugin "untrusted-mail" loaded with origin "workspace"',
+      'reason=record-missing; registryPath=null; origin="workspace"',
     );
     expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
   });

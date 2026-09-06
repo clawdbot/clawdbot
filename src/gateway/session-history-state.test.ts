@@ -384,6 +384,28 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("closes interleaved pages across unsequenced rows without admitting older duplicate groups", () => {
+    const messages = [1, 2, 2, 3, undefined, 4, 3, 4].map((seq, index) => ({
+      role: "assistant" as const,
+      content: textContent(`Projected row ${index}`),
+      __openclaw: seq === undefined ? undefined : { seq },
+    }));
+    const { history } = buildSessionHistorySnapshot({
+      rawMessages: [],
+      projection: {
+        messages,
+        turnBoundaryPending: false,
+        assistantErrorPending: false,
+        assistantErrorRecoveryObserved: false,
+      },
+      limit: 1,
+    });
+
+    expect(history.messages).toEqual(messages.slice(3));
+    expect(history.nextCursor).toBe("3");
+    expect(history.hasMore).toBe(true);
+  });
+
   test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
     const rawMessages = [
       userTextMessage("check the workspace", 1),
@@ -754,7 +776,7 @@ describe("SessionHistorySseState", () => {
             {
               type: "text",
               text: [
-                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce isUser=false",
                 "This content was routed by OpenClaw from another session or internal tool.",
                 "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
                 "subagent completion payload",
@@ -804,7 +826,7 @@ describe("SessionHistorySseState", () => {
           ],
           provenance: {
             kind: "inter_session",
-            sourceChannel: "webchat",
+            sourceChannel: "internal",
             sourceSessionKey: "image_generate:task-123",
             sourceTool: "image_generate",
           },

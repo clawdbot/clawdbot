@@ -19,7 +19,8 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/unknown model/i.test(msg)) {
     return true;
   }
-  if (/model(?:[_\-\s])?not(?:[_\-\s])?found/i.test(msg)) {
+  // "Not available" alone also describes outages; require missing-model evidence.
+  if (/model(?:[_\-\s])?not(?:[_\-\s])?found|\bmodel\b.{0,60}?\bnot found\b/i.test(msg)) {
     return true;
   }
   if (/\b404\b/.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {

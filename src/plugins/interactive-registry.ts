@@ -9,7 +9,6 @@ import {
 import { clearPluginInteractiveHandlersState } from "./interactive-state.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
-  getActivePluginChannelRegistry,
   getPluginRegistrationContext,
   requireActivePluginChannelRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -22,8 +21,6 @@ export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration 
   pluginName?: string;
   pluginRoot?: string;
 };
-
-const getInteractiveHandlers = () => getActivePluginChannelRegistry()?.interactiveHandlers ?? [];
 
 /** Registration result for plugin interactive namespace handlers. */
 type InteractiveRegistrationResult = {
@@ -42,18 +39,6 @@ function asInteractiveHandlerLookup(registrations: readonly RegisteredInteractiv
         (entry) => toPluginInteractiveRegistryKey(entry.channel, entry.namespace) === key,
       ),
   };
-}
-
-/** Resolves a channel payload to a registered plugin interactive namespace handler. */
-export function resolvePluginInteractiveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  return resolvePluginInteractiveMatch({
-    interactiveHandlers: asInteractiveHandlerLookup(getInteractiveHandlers()),
-    channel,
-    data,
-  });
 }
 
 /** Resolves a handler from registry-owned registrations without changing global state. */
@@ -126,20 +111,6 @@ export function registerPluginInteractiveHandlerInRegistry(
   return registerPluginInteractiveHandlerWithOptions(
     registry.interactiveHandlers,
     pluginId,
-    registration,
-    opts,
-  );
-}
-
-/** Registers one compatibility handler in the currently selected channel registry. */
-export function registerRegistryPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  return registerPluginInteractiveHandlerWithOptions(
-    requireInteractiveRegistrationRegistry().interactiveHandlers,
-    resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId,
     registration,
     opts,
   );

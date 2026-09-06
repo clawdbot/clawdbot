@@ -1,6 +1,7 @@
 /**
  * Shared result and attempt types for embedded-agent run internals.
  */
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -26,7 +27,6 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
@@ -36,9 +36,39 @@ import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
-import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
+import type {
+  DeferredEmbeddedRunLifecycleOwner,
+  EmbeddedAttemptDeferredLifecycleOwner,
+} from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
+
+export type EmbeddedAttemptExecutionState = {
+  beforeAgentRunBlockedBy: string | undefined;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
+  terminal: AgentRunAttemptTerminal;
+  trajectoryEndRecorded: boolean;
+};
+
+export type EmbeddedAttemptExternalAbortController = {
+  arm: () => void;
+  dispose: () => void;
+  setActiveSessionAbort: (abort: (reason?: unknown) => Promise<void>) => void;
+  setCompactionState: (state: {
+    isInFlight: () => boolean;
+    isPendingOrRetrying: () => boolean;
+  }) => void;
+  setRunAbort: (abort: (isTimeout?: boolean, reason?: unknown) => void) => void;
+  throwIfFired: () => void;
+  throwIfFiredAfterPrepCleanup: () => Promise<void>;
+};
+
+export type EmbeddedAttemptClientToolCallSlot = {
+  toolCallId: string;
+  name: string;
+  params?: Record<string, unknown>;
+  completed: boolean;
+};
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
@@ -69,6 +99,8 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   toolCallId?: string;
   toolName: string;
   arguments?: unknown;
+  /** Original host result or error; public fields cannot supply effect provenance. */
+  result?: unknown;
   meta?: string;
   executionStarted?: boolean;
   /** Exact-instance replay classification resolved by the host tool catalog. */
@@ -106,11 +138,6 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
-  /** Host-private bounded recovery state for this exact attempt. */
-  codeModeRecovery?: Exclude<
-    import("./terminal-retry-state.js").CodeModeRecoveryState,
-    { kind: "idle" }
-  >;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -352,6 +379,7 @@ export type EmbeddedRunAttemptResult = {
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
@@ -396,8 +424,6 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
-  /** Host-authenticated facts for bounded post-mutation inspection and recovery. */
-  codeModeRecoveryCandidate?: import("./terminal-retry-state.js").CodeModeRecoveryCandidate;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

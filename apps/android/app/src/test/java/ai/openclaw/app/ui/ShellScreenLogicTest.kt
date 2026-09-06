@@ -786,41 +786,33 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
-  }
-
-  @Test
   fun settingsSectionsPreserveMeaningfulOrder() {
     val sections =
       settingsSections(
         listOf(
           settingsRow(SettingsRoute.Voice),
-          settingsRow(SettingsRoute.Agents),
+          settingsRow(SettingsRoute.SystemAgent),
           settingsRow(SettingsRoute.Gateway),
           settingsRow(SettingsRoute.Appearance),
+          settingsRow(SettingsRoute.ProvidersModels),
+          settingsRow(SettingsRoute.Approvals),
+          settingsRow(SettingsRoute.NodesDevices),
+          settingsRow(SettingsRoute.CronJobs),
+          settingsRow(SettingsRoute.PhoneCapabilities),
+          settingsRow(SettingsRoute.Notifications),
           settingsRow(SettingsRoute.Health),
         ),
       )
 
     assertEquals(
       listOf(
-        "Connection",
-        "Agents & automation",
-        "Phone context & privacy",
-        "Profile & device",
-        "Diagnostics",
+        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
+        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Profile & device" to listOf(SettingsRoute.Appearance),
+        "Diagnostics" to listOf(SettingsRoute.Health),
       ),
-      sections.map { it.title.resolveNativeText() },
+      sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )
   }
 
@@ -890,7 +882,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route, verbatimText("Value"))
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(

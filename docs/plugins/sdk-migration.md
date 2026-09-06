@@ -96,6 +96,11 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`text-chunking` retains positional `CodeRegion` inputs with `start` and `end`
+offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
+include parser-owned `block` metadata; callers supplying their own ranges do not
+need to provide it.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

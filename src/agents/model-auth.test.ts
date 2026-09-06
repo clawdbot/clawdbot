@@ -1,8 +1,9 @@
 // Verifies provider auth resolution, synthetic auth, and auth header behavior.
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../config/config.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import type { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -86,9 +87,16 @@ vi.mock("../plugins/provider-external-auth.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => {
-  return {
+  const nativeAuth = {
+    apiKey: "native-cli-access-token",
+    source: "Native CLI auth",
+    mode: "oauth" as const,
+  };
+  const providerRuntime = {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveProviderDeprecatedAuthProfileIds: () => [],
+    prepareProviderExternalAuthWithPlugin: async (params: { provider: string }) =>
+      params.provider === "native-cli" ? nativeAuth : undefined,
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",
@@ -149,13 +157,6 @@ vi.mock("../plugins/provider-runtime.js", () => {
         }
         return undefined;
       }
-      if (params.provider === "native-cli") {
-        return {
-          apiKey: "native-cli-access-token",
-          source: "Native CLI auth",
-          mode: "oauth" as const,
-        };
-      }
       const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
       if (
         effectiveApi === "ollama" &&
@@ -171,8 +172,19 @@ vi.mock("../plugins/provider-runtime.js", () => {
       return undefined;
     },
   };
+  return {
+    ...providerRuntime,
+    prepareProviderSyntheticAuthWithPlugin: async (
+      params: Parameters<typeof providerRuntime.resolveProviderSyntheticAuthWithPlugin>[0],
+    ) =>
+      (await providerRuntime.prepareProviderExternalAuthWithPlugin(params)) ??
+      providerRuntime.resolveProviderSyntheticAuthWithPlugin(params),
+  };
 });
 
+let getCustomProviderApiKey: typeof import("./model-auth.js").getCustomProviderApiKey;
+let resolveProviderConfigSecretInput: typeof import("./model-auth-provider-config.js").resolveProviderConfigSecretInput;
+let providerConfigMatchesRuntimeSnapshot: typeof import("./model-auth-provider-config.js").providerConfigMatchesRuntimeSnapshot;
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
 let applySecretRefHeaderSentinels: typeof import("./model-auth.js").applySecretRefHeaderSentinels;
@@ -206,6 +218,8 @@ beforeAll(async () => {
   ({ clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
     await import("./auth-profiles/runtime-snapshots.js"));
   cliCredentials = await import("./cli-credentials.js");
+  ({ resolveProviderConfigSecretInput, providerConfigMatchesRuntimeSnapshot } =
+    await import("./model-auth-provider-config.js"));
   ({ resolveProviderEntryApiKeyAuth } = await import("./model-auth-provider.js"));
   ({
     applyAuthHeaderOverride,
@@ -217,6 +231,7 @@ beforeAll(async () => {
     hasRuntimeAvailableProviderAuth,
     hasSyntheticLocalProviderAuthConfig,
     getApiKeyForModelCore,
+    getCustomProviderApiKey,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProviderCore,
@@ -236,6 +251,133 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
+});
+
+function createProviderConfig() {
+  const provider: ModelProviderConfig = {
+    baseUrl: "https://provider.example/v1",
+    apiKey: "synthetic-resolved-value",
+    models: [],
+  };
+  const config = { models: { providers: { synthetic: provider } } } satisfies OpenClawConfig;
+  return { config, provider };
+}
+
+function publishProvider(config: ReturnType<typeof createProviderConfig>["config"]) {
+  const source = structuredClone(config);
+  source.models.providers.synthetic.apiKey = {
+    source: "store",
+    provider: "default",
+    id: "SYNTHETIC_PROVIDER_KEY",
+  };
+  setRuntimeConfigSnapshot(config, source);
+}
+
+describe("provider auth snapshot comparison", () => {
+  it("does not traverse a shared runtime model catalog during repeated auth lookups", () => {
+    const { config, provider } = createProviderConfig();
+    let catalogReads = 0;
+    provider.models = Array.from({ length: 400 }, (_, index) => ({
+      id: `synthetic-${index}`,
+      get name() {
+        catalogReads += 1;
+        return `Synthetic ${index}`;
+      },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 4096,
+    }));
+    publishProvider(config);
+    catalogReads = 0;
+    const started = performance.now();
+    for (let agent = 0; agent < 11; agent += 1) {
+      for (let model = 0; model < 400; model += 1) {
+        expect(getCustomProviderApiKey(config, "synthetic")).toBe("secretref-managed");
+      }
+    }
+    console.info(
+      JSON.stringify({
+        providerAuthCalls: 4400,
+        catalogRows: 400,
+        catalogReads,
+        elapsedMs: performance.now() - started,
+        rssBytes: process.memoryUsage().rss,
+      }),
+    );
+    expect(catalogReads).toBe(0);
+  });
+
+  it("stops using runtime SecretRef provenance after a warmed input is mutated", () => {
+    const { config } = createProviderConfig();
+    publishProvider(config);
+    const input = structuredClone(config);
+    expect(resolveProviderConfigSecretInput(input, "synthetic").ref).toMatchObject({
+      source: "store",
+    });
+    input.models.providers.synthetic.baseUrl = "https://another.example/v1";
+    expect(resolveProviderConfigSecretInput(input, "synthetic").ref).toBeNull();
+    expect(getCustomProviderApiKey(input, "synthetic")).toBe("synthetic-resolved-value");
+  });
+});
+
+describe("provider config structural comparison", () => {
+  it.each(["same object", "shared provider", "equivalent clone"] as const)(
+    "matches a %s without changing missing-provider behavior",
+    (kind) => {
+      const runtime = createProviderConfig().config;
+      const input =
+        kind === "same object"
+          ? runtime
+          : kind === "shared provider"
+            ? { ...runtime, agents: { defaults: { workspace: "/tmp/synthetic-agent" } } }
+            : structuredClone(runtime);
+      expect(
+        providerConfigMatchesRuntimeSnapshot({
+          inputConfig: input,
+          runtimeConfig: runtime,
+          provider: " SYNTHETIC ",
+        }),
+      ).toBe(true);
+      expect(
+        providerConfigMatchesRuntimeSnapshot({
+          inputConfig: input,
+          runtimeConfig: runtime,
+          provider: "missing",
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("keeps distinct configurations current after runtime mutation and replacement", () => {
+    const input = createProviderConfig().config;
+    const runtime = createProviderConfig().config;
+    const compare = () =>
+      providerConfigMatchesRuntimeSnapshot({
+        inputConfig: input,
+        runtimeConfig: runtime,
+        provider: "synthetic",
+      });
+    expect(compare()).toBe(true);
+    runtime.models.providers.synthetic.headers = { "X-Synthetic": "changed" };
+    expect(compare()).toBe(false);
+    runtime.models.providers.synthetic = structuredClone(input.models.providers.synthetic);
+    expect(compare()).toBe(true);
+    expect(
+      providerConfigMatchesRuntimeSnapshot({
+        inputConfig: undefined,
+        runtimeConfig: runtime,
+        provider: "synthetic",
+      }),
+    ).toBe(false);
+    expect(
+      providerConfigMatchesRuntimeSnapshot({
+        inputConfig: runtime,
+        runtimeConfig: null,
+        provider: "synthetic",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
@@ -1578,9 +1720,9 @@ describe("resolveApiKeyForProviderCore", () => {
     ).rejects.toThrow('No API key found for provider "plugin-web"');
   });
 
-  it("reuses plugin-owned native CLI auth", async () => {
-    const resolved = await resolveApiKeyForProviderCore({
-      provider: "native-cli",
+  it.each([
+    {
+      name: "with config",
       cfg: {
         agents: {
           defaults: {
@@ -1590,6 +1732,12 @@ describe("resolveApiKeyForProviderCore", () => {
           },
         },
       },
+    },
+    { name: "without config", cfg: undefined },
+  ])("returns prepared native CLI auth $name", async ({ cfg }) => {
+    const resolved = await resolveApiKeyForProviderCore({
+      provider: "native-cli",
+      ...(cfg ? { cfg } : {}),
       store: { version: 1, profiles: {} },
     });
 

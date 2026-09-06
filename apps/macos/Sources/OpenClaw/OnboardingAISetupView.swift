@@ -96,7 +96,7 @@ struct GatewayAuthCard: Equatable {
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var returnToGatewayAuthentication: () -> Void
-    var retryConfiguredGatewayProbe: () -> Void
+    var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
     @State private var manualEntryRequest = 0
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
@@ -150,24 +150,42 @@ struct OnboardingAISetupView: View {
     }
 
     private var detectingView: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(self.model.waitingForPendingActivationDeadline
-                    ? "Waiting for the previous AI test to finish…"
-                    : "Looking for AI you already use…")
-                    .font(.callout.weight(.semibold))
-                Text(self.model.waitingForPendingActivationDeadline
-                    ? "OpenClaw will check again before changing any inference settings."
-                    : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.model.waitingForPendingActivationDeadline
+                        ? "Waiting for the previous AI test to finish…"
+                        : "Looking for AI you already use…")
+                        .font(.callout.weight(.semibold))
+                    Text(self.model.waitingForPendingActivationDeadline
+                        ? "OpenClaw will check again before changing any inference settings."
+                        : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity)
+
+            if self.model.waitingForPendingActivationDeadline {
+                if let failure = self.model.detectError {
+                    OnboardingErrorCard(
+                        title: "AI setup needs verification",
+                        message: failure.summary,
+                        details: failure.detail,
+                        docsSlug: "start/onboarding",
+                        retryTitle: "Check again",
+                        retry: { self.retryConfiguredGatewayProbe(.inspectOnly) })
+                } else {
+                    Button("Check again") { self.retryConfiguredGatewayProbe(.inspectOnly) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
         }
-        .padding(.vertical, 18)
-        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -198,7 +216,7 @@ struct OnboardingAISetupView: View {
                 docsSlug: "start/onboarding",
                 retryTitle: card.primaryTitle,
                 secondaryTitle: card.secondaryTitle,
-                secondary: self.retryConfiguredGatewayProbe,
+                secondary: { self.retryConfiguredGatewayProbe(.startSetup) },
                 retry: self.returnToGatewayAuthentication)
         } else if let detectError = model.detectError {
             OnboardingErrorCard(
@@ -211,7 +229,7 @@ struct OnboardingAISetupView: View {
                 retryTitle: "Try again")
             {
                 if self.model.configuredGatewayProbeUnavailable {
-                    self.retryConfiguredGatewayProbe()
+                    self.retryConfiguredGatewayProbe(.startSetup)
                 } else {
                     self.model.retryFromScratch()
                 }

@@ -270,6 +270,7 @@ class ChatControllerBranchCoordinationTest {
       assertTrue(controller.sendMessageAwaitAcceptance("queued after rewind", "off", emptyList()))
       // A past failure cannot fence dispatch; keep its successful retry pending while checking.
       retryListStarted.await()
+      assertTrue(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
       assertEquals(0, gateway.callCount("chat.send"))
       releaseRetryList.complete(Unit)
 
@@ -281,6 +282,7 @@ class ChatControllerBranchCoordinationTest {
 
       assertTrue(listCalls.get() >= 2)
       assertFalse(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
+      assertEquals(1, gateway.callCount("chat.send"))
     }
 
   @Test
@@ -665,6 +667,11 @@ class ChatControllerBranchCoordinationTest {
     val releaseRefresh = CompletableDeferred<Unit>()
     val branchesStarted = CompletableDeferred<Job>()
     val releaseBranches = CompletableDeferred<Unit>()
+    val earlierBranchesStarted = CompletableDeferred<Job>()
+    val releaseEarlierBranches = CompletableDeferred<Unit>()
+    val holdEarlierBranches = AtomicBoolean(false)
+    val takeoverHistoryStarted = CompletableDeferred<Job>()
+    val releaseTakeoverHistory = CompletableDeferred<Unit>()
     val sent = AtomicReference<JsonObject?>(null)
     gateway.respond("health") {
       check(healthy.get()) { "health unavailable; history transport remains connected" }
@@ -684,9 +691,18 @@ class ChatControllerBranchCoordinationTest {
         refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
         releaseRefresh.await()
       }
+      if (request == 3) {
+        takeoverHistoryStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseTakeoverHistory.await()
+      }
       response
     }
     gateway.respond("sessions.branches.list") {
+      if (holdEarlierBranches.compareAndSet(true, false)) {
+        earlierBranchesStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseEarlierBranches.await()
+        return@respond """{"branches":[{"leafEntryId":"A","headline":"Current","messageCount":1,"active":true}]}"""
+      }
       if (historyRequests.get() > 1) {
         branchesStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
         releaseBranches.await()
@@ -717,56 +733,74 @@ class ChatControllerBranchCoordinationTest {
         ?.leafEntryId == "A"
     }
     val healthRequestsBeforeRefresh = gateway.callCount("health")
-    healthy.set(healthAvailable)
-    controller.refresh()
-    awaitBranchProgress { refreshStarted.isCompleted }
+    try {
+      holdEarlierBranches.set(true)
+      val earlierBranches = async { controller.refreshSessionBranches() }
+      awaitBranchProgress { earlierBranchesStarted.isCompleted }
+      healthy.set(healthAvailable)
+      controller.refresh()
+      awaitBranchProgress { refreshStarted.isCompleted }
 
-    val attachment = OutgoingAttachment("image", "image/png", "proof.png", "AQIDBA==")
-    assertTrue(controller.sendMessageAwaitAcceptance("during refresh", "off", listOf(attachment)))
-    awaitBranchProgress { branchesStarted.isCompleted }
-    val admitted = outbox.load("gateway-a").single()
-    assertEquals(ChatOutboxStatus.Queued, admitted.status)
-    assertEquals(listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
+      val attachment = OutgoingAttachment("image", "image/png", "proof.png", "AQIDBA==")
+      assertTrue(controller.sendMessageAwaitAcceptance("during refresh", "off", listOf(attachment)))
+      awaitBranchProgress { takeoverHistoryStarted.isCompleted }
+      val takeoverHistory = takeoverHistoryStarted.await()
+      // The earlier listing commits after the takeover captured its Room revision.
+      releaseEarlierBranches.complete(Unit)
+      assertTrue("The earlier branch listing remains authoritative until newer history publishes", earlierBranches.await())
+      releaseTakeoverHistory.complete(Unit)
+      awaitBranchProgress { branchesStarted.isCompleted || takeoverHistory.isCompleted }
+      assertTrue("The current history owner must retry after the older listing fences its response", branchesStarted.isCompleted)
+      assertTrue("Rejected history must be replaced by a fresh Gateway request", historyRequests.get() >= 4)
+      val admitted = outbox.load("gateway-a").single()
+      assertEquals(ChatOutboxStatus.Queued, admitted.status)
+      assertEquals(listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
 
-    releaseRefresh.complete(Unit)
-    runCurrent()
-    assertEquals("Newer history must survive the late explicit refresh", listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
-    assertEquals("No dispatch before authoritative branch evidence", 0, gateway.callCount("chat.send"))
-    assertEquals(admitted, outbox.load("gateway-a").single())
-    assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(outbox.loadAttachments(admitted.id).single().bytes))
-
-    releaseBranches.complete(Unit)
-    refreshStarted.await().join()
-    branchesStarted.await().join()
-    runCurrent()
-    assertEquals("Refresh must force health even when outbox reconciliation supplied history", healthRequestsBeforeRefresh + 1, gateway.callCount("health"))
-    assertEquals(healthAvailable, controller.healthOk.value)
-    if (healthAvailable) {
-      awaitBranchProgress {
-        outbox.load("gateway-a").isEmpty() && controller.messages.value
-          .lastOrNull()
-          ?.content
-          ?.singleOrNull()
-          ?.text == "delivered"
-      }
-      assertEquals(1, gateway.callCount("chat.send"))
-      val params = requireNotNull(sent.get())
-      assertEquals(admitted.id, params.getValue("idempotencyKey").jsonPrimitive.content)
-      assertEquals(key, params.getValue("sessionKey").jsonPrimitive.content)
-      assertEquals("during refresh", params.getValue("message").jsonPrimitive.content)
-      assertEquals(
-        attachment.base64,
-        params
-          .getValue("attachments")
-          .jsonArray
-          .single()
-          .jsonObject
-          .getValue("content")
-          .jsonPrimitive.content,
-      )
-    } else {
-      assertEquals("Failed health refresh must not dispatch after branch reconciliation completes", 0, gateway.callCount("chat.send"))
+      releaseRefresh.complete(Unit)
+      runCurrent()
+      assertEquals("Newer history must survive the late explicit refresh", listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
+      assertEquals("No dispatch before authoritative branch evidence", 0, gateway.callCount("chat.send"))
       assertEquals(admitted, outbox.load("gateway-a").single())
+      assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(outbox.loadAttachments(admitted.id).single().bytes))
+
+      releaseBranches.complete(Unit)
+      refreshStarted.await().join()
+      branchesStarted.await().join()
+      runCurrent()
+      assertEquals("Refresh must force health even when outbox reconciliation supplied history", healthRequestsBeforeRefresh + 1, gateway.callCount("health"))
+      assertEquals(healthAvailable, controller.healthOk.value)
+      if (healthAvailable) {
+        awaitBranchProgress {
+          outbox.load("gateway-a").isEmpty() && controller.messages.value
+            .lastOrNull()
+            ?.content
+            ?.singleOrNull()
+            ?.text == "delivered"
+        }
+        assertEquals(1, gateway.callCount("chat.send"))
+        val params = requireNotNull(sent.get())
+        assertEquals(admitted.id, params.getValue("idempotencyKey").jsonPrimitive.content)
+        assertEquals(key, params.getValue("sessionKey").jsonPrimitive.content)
+        assertEquals("during refresh", params.getValue("message").jsonPrimitive.content)
+        assertEquals(
+          attachment.base64,
+          params
+            .getValue("attachments")
+            .jsonArray
+            .single()
+            .jsonObject
+            .getValue("content")
+            .jsonPrimitive.content,
+        )
+      } else {
+        assertEquals("Failed health refresh must not dispatch after branch reconciliation completes", 0, gateway.callCount("chat.send"))
+        assertEquals(admitted, outbox.load("gateway-a").single())
+      }
+    } finally {
+      releaseEarlierBranches.complete(Unit)
+      releaseTakeoverHistory.complete(Unit)
+      releaseRefresh.complete(Unit)
+      releaseBranches.complete(Unit)
     }
   }
 
@@ -897,21 +931,26 @@ class ChatControllerBranchCoordinationTest {
     val key = "agent:main:overlap"
     val branchScope = ChatOutboxScope(key, "main")
     val gateway = ScriptedGateway(json)
-    val entered = List(3) { CompletableDeferred<Unit>() }
-    val release = List(3) { CompletableDeferred<Unit>() }
+    val entered = List(4) { CompletableDeferred<Unit>() }
+    val release = List(4) { CompletableDeferred<Unit>() }
     val requests = AtomicInteger()
     gateway.respond("health") { throw IllegalStateException("health unavailable") }
     gateway.respondWith("sessions.branches.list", """{"branches":[{"leafEntryId":"A1","headline":"Current","messageCount":1,"active":true}]}""")
     gateway.respond("chat.history") {
       val index = requests.getAndIncrement()
-      check(index < 3) { "Unexpected history retry" }
+      check(index < 3 || (independentListing && index == 3)) { "Unexpected history retry" }
       if (index > 0) {
         entered[index].complete(Unit)
         release[index].await()
       }
-      val entries = if (index == 2 && branchSwitch) listOf("B") else (1..index + 1).map { "A$it" }
+      val entries =
+        when {
+          independentListing && index == 3 -> listOf("listed-B")
+          index == 2 && branchSwitch -> listOf("B")
+          else -> (1..index + 1).map { "A$it" }
+        }
       historyResponse(
-        sessionId = if (index == 2 && branchSwitch) "session-B" else "session-A",
+        sessionId = if ((independentListing && index == 3) || (index == 2 && branchSwitch)) "session-B" else "session-A",
         messages = entries.mapIndexed { i, entry -> ReplayHistoryMessage("assistant", entry, i.toLong(), entryId = entry) },
       )
     }
@@ -931,63 +970,77 @@ class ChatControllerBranchCoordinationTest {
         .toList()
         .also { assertTrue(it.isNotEmpty()) }
     }
-    val older = requestHistory("external-older")
-    awaitBranchProgress { entered[1].isCompleted }
-    val newer = requestHistory("external-newer")
-    awaitBranchProgress { entered[2].isCompleted }
-    assertEquals(initial, outbox.branchState("gateway-a", branchScope))
+    try {
+      val older = requestHistory("external-older")
+      awaitBranchProgress { entered[1].isCompleted }
+      val newer = requestHistory("external-newer")
+      awaitBranchProgress { entered[2].isCompleted }
+      assertEquals(initial, outbox.branchState("gateway-a", branchScope))
 
-    release[if (olderFirst) 1 else 2].complete(Unit)
-    awaitBranchProgress { (if (olderFirst) older else newer).all { it.isCompleted } }
-    assertEquals(
-      if (olderFirst) {
-        "A2"
-      } else if (branchSwitch) {
-        "B"
-      } else {
-        "A3"
-      },
-      controller.messages.value
-        .last()
-        .entryId,
-    )
-    assertTrue(controller.sendMessageAwaitAcceptance("between responses", "off", emptyList()))
-    val admitted = outbox.load("gateway-a").single()
-    if (independentListing) {
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[
-          {"leafEntryId":"A2","headline":"Earlier","messageCount":2,"active":false},
-          {"leafEntryId":"listed-B","headline":"Current","messageCount":1,"active":true}
-        ]}""",
+      release[if (olderFirst) 1 else 2].complete(Unit)
+      awaitBranchProgress { (if (olderFirst) older else newer).all { it.isCompleted } }
+      assertEquals(
+        if (olderFirst) {
+          "A2"
+        } else if (branchSwitch) {
+          "B"
+        } else {
+          "A3"
+        },
+        controller.messages.value
+          .last()
+          .entryId,
       )
-      assertTrue(controller.refreshSessionBranches())
-    }
-    val beforeLastResponse = requireNotNull(outbox.branchState("gateway-a", branchScope))
-
-    release[if (olderFirst) 2 else 1].complete(Unit)
-    awaitBranchProgress { (older + newer).all { it.isCompleted } }
-    val expectedEntries =
+      assertTrue(controller.sendMessageAwaitAcceptance("between responses", "off", emptyList()))
+      val admitted = outbox.load("gateway-a").single()
       if (independentListing) {
-        listOf("A1", "A2")
-      } else if (branchSwitch) {
-        listOf("B")
-      } else {
-        listOf("A1", "A2", "A3")
+        gateway.respondWith(
+          "sessions.branches.list",
+          """{"branches":[
+            {"leafEntryId":"A2","headline":"Earlier","messageCount":2,"active":false},
+            {"leafEntryId":"listed-B","headline":"Current","messageCount":1,"active":true}
+          ]}""",
+        )
+        assertTrue(controller.refreshSessionBranches())
       }
-    assertEquals("Newest authoritative history must render without a follow-up refresh", expectedEntries, controller.messages.value.map { it.entryId })
-    assertEquals(if (branchSwitch) "session-B" else "session-A", controller.sessionId.value)
-    val finalState = requireNotNull(outbox.branchState("gateway-a", branchScope))
-    assertEquals(if (independentListing) "listed-B" else expectedEntries.last(), finalState.lastActiveLeafEntryId)
-    assertFalse(finalState.needsReconciliation)
-    if (!olderFirst || independentListing) assertEquals(beforeLastResponse, finalState)
-    val retained = outbox.load("gateway-a").single()
-    assertEquals(admitted.id, retained.id)
-    assertEquals(admitted.branchEpoch, retained.branchEpoch)
-    assertEquals(admitted.attemptVersion, retained.attemptVersion)
-    assertEquals(if (independentListing || (olderFirst && branchSwitch)) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
-    assertEquals(3, gateway.callCount("chat.history"))
-    assertEquals(0, gateway.callCount("chat.send"))
+      val beforeLastResponse = requireNotNull(outbox.branchState("gateway-a", branchScope))
+
+      release[if (olderFirst) 2 else 1].complete(Unit)
+      if (independentListing) {
+        awaitBranchProgress { entered[3].isCompleted }
+        assertEquals("Rejected history must not publish while its fresh replacement waits", listOf("A1", "A2"), controller.messages.value.map { it.entryId })
+        assertEquals(beforeLastResponse, outbox.branchState("gateway-a", branchScope))
+        release[3].complete(Unit)
+      }
+      awaitBranchProgress { (older + newer).all { it.isCompleted } }
+      val expectedEntries =
+        if (independentListing) {
+          listOf("listed-B")
+        } else if (branchSwitch) {
+          listOf("B")
+        } else {
+          listOf("A1", "A2", "A3")
+        }
+      assertEquals("Newest authoritative history must render without a follow-up refresh", expectedEntries, controller.messages.value.map { it.entryId })
+      assertEquals(if (branchSwitch || independentListing) "session-B" else "session-A", controller.sessionId.value)
+      val finalState = requireNotNull(outbox.branchState("gateway-a", branchScope))
+      assertEquals(if (independentListing) "listed-B" else expectedEntries.last(), finalState.lastActiveLeafEntryId)
+      assertFalse(finalState.needsReconciliation)
+      if (!olderFirst) assertEquals(beforeLastResponse, finalState)
+      if (independentListing) {
+        assertTrue(finalState.revision > beforeLastResponse.revision)
+        assertEquals(beforeLastResponse.copy(revision = finalState.revision), finalState)
+      }
+      val retained = outbox.load("gateway-a").single()
+      assertEquals(admitted.id, retained.id)
+      assertEquals(admitted.branchEpoch, retained.branchEpoch)
+      assertEquals(admitted.attemptVersion, retained.attemptVersion)
+      assertEquals(if (independentListing || (olderFirst && branchSwitch)) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
+      assertEquals(if (independentListing) 4 else 3, gateway.callCount("chat.history"))
+      assertEquals(0, gateway.callCount("chat.send"))
+    } finally {
+      release.forEach { it.complete(Unit) }
+    }
   }
 
   @Test

@@ -6,12 +6,12 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
-import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import {
-  isToolWrappedWithBeforeToolCallHook,
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "../../agent-tools.before-tool-call.js";
+  copyAgentToolAvailability,
+  finalizeAgentToolAvailability,
+  markAgentToolExecutionUnavailable,
+} from "../../agent-tool-availability.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -21,7 +21,10 @@ import {
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import {
+  createToolExecutionMatcher,
+  TOOL_EXECUTION_GATED_MESSAGE,
+} from "../../tool-policy-shared.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
@@ -35,30 +38,24 @@ import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
-import { applyCodeModeRecoveryToolSurface } from "./code-mode-reconciliation.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
-type ProviderRuntimeHandle = Parameters<typeof logAgentRuntimeToolDiagnostics>[0]["runtimeHandle"];
 
 export function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
+  setup: EmbeddedAttemptSetup;
   preparedToolBase: PreparedToolBase;
   bundleTools: Pick<PreparedBundleTools, "clientTools" | "uncompactedEffectiveTools">;
-  effectiveCwd: string;
-  effectiveWorkspace: string;
-  sessionAgentId: string;
-  sandboxSessionKey: string;
   runTrace: DiagnosticTraceContext;
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
-  getProviderRuntimeHandle: () => ProviderRuntimeHandle;
-  markStage: (name: string) => void;
 }) {
   const buildCatalog = () => {
     const { attempt, preparedToolBase } = input;
@@ -82,10 +79,10 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
       : uncompactedEffectiveTools;
     const catalogToolHookContext = {
-      agentId: input.sessionAgentId,
+      agentId: input.setup.sessionAgentId,
       config: attempt.config,
-      cwd: input.effectiveCwd,
-      sessionKey: input.sandboxSessionKey,
+      cwd: input.setup.effectiveCwd,
+      sessionKey: input.setup.sandboxSessionKey,
       sessionId: attempt.sessionId,
       runId: attempt.runId,
       approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
@@ -93,41 +90,18 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       trace: input.runTrace,
       loopDetection: resolveToolLoopDetectionConfig({
         cfg: attempt.config,
-        agentId: input.sessionAgentId,
+        agentId: input.setup.sessionAgentId,
       }),
       onToolOutcome: attempt.onToolOutcome,
       allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
     };
-    if (attempt.codeModeRecovery?.kind === "resume") {
-      if (toolSearchControlsEnabledForRun) {
-        effectiveTools = effectiveTools.map((tool) => {
-          const prepareInput = typeof tool.prepareBeforeToolCallParams === "function";
-          if (!isToolWrappedWithBeforeToolCallHook(tool)) {
-            return wrapToolWithBeforeToolCallHook(
-              tool,
-              catalogToolHookContext,
-              prepareInput ? { protectNetworkErrors: false } : undefined,
-            );
-          }
-          return prepareInput
-            ? rewrapToolWithBeforeToolCallHook(tool, catalogToolHookContext, {
-                protectNetworkErrors: false,
-              })
-            : tool;
-        });
-      }
-      effectiveTools = applyCodeModeRecoveryToolSurface({
-        tools: effectiveTools,
-        state: attempt.codeModeRecovery,
-      });
-    }
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
           config: attempt.config,
           runtimeConfig: attempt.config,
           modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
-          agentId: input.sessionAgentId,
-          sessionKey: input.sandboxSessionKey,
+          agentId: input.setup.sessionAgentId,
+          sessionKey: input.setup.sandboxSessionKey,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
           catalogRef: preparedToolBase.toolSearchCatalogRef,
@@ -148,17 +122,18 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchConfig,
       forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
       sessionId: attempt.sessionId,
-      sessionKey: input.sandboxSessionKey,
-      agentId: input.sessionAgentId,
+      sessionKey: input.setup.sandboxSessionKey,
+      agentId: input.setup.sessionAgentId,
       runId: attempt.runId,
       catalogRef: preparedToolBase.toolSearchCatalogRef,
       toolHookContext: catalogToolHookContext,
+      toolExecutionAllow: attempt.toolExecutionAllow,
       codeModeSkills,
     });
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: attempt.config,
-      agentId: input.sessionAgentId,
+      agentId: input.setup.sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
     });
     const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
@@ -166,22 +141,21 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       diagnostics: toolSearchSchemaProjection.diagnostics,
       tools: projectedToolSearchTools,
       runId: attempt.runId,
-      agentId: input.sessionAgentId,
+      agentId: input.setup.sessionAgentId,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
+    if (!toolSearch.catalogRegistered) {
+      finalizeAgentToolAvailability(toolSearchSchemaProjection.tools, {
+        toolExecutionAllow: attempt.toolExecutionAllow,
+      });
+    }
     effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,
       ),
     );
-    if (attempt.codeModeRecovery?.kind === "inspect") {
-      effectiveTools = applyCodeModeRecoveryToolSurface({
-        tools: effectiveTools,
-        state: attempt.codeModeRecovery,
-      });
-    }
     if (codeModeControlsEnabledForRun && isCodeModeDiagnosticEnabled()) {
       logCodeModeDiagnostic(log, "final-surface", {
         runId: attempt.runId,
@@ -191,7 +165,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       });
     }
     if (toolSearch.compacted && !toolSearch.catalogReused) {
-      input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
+      input.setup.prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
         codeModeControlsEnabledForRun
           ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
@@ -204,7 +178,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchControlsEnabledForRun &&
       toolSearchConfig.mode === "directory" &&
       toolSearch.catalogRegistered;
-    input.markStage("bundle-tools");
+    input.setup.prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       capabilityProfile: runtimeCapabilityProfile,
       toolsAllow: attempt.toolsAllow,
@@ -230,7 +204,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       ? null
       : buildEmptyExplicitToolAllowlistError({
           sources: explicitToolAllowlistSources,
-          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          hasCallableTools: toolSearchRunPlan.hasCallableTools,
           toolsEnabled,
           disableTools: attempt.disableTools,
           toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
@@ -240,12 +214,12 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       tools: effectiveTools,
       provider: attempt.provider,
       config: attempt.config,
-      workspaceDir: input.effectiveWorkspace,
+      workspaceDir: input.setup.effectiveWorkspace,
       env: process.env,
       modelId: attempt.modelId,
       modelApi: attempt.model.api,
       model: attempt.model,
-      runtimeHandle: input.getProviderRuntimeHandle(),
+      runtimeHandle: input.setup.getProviderRuntimeHandle(),
     });
 
     return {
@@ -270,6 +244,11 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   };
   return Object.assign(current, {
     applyPromptToolPolicy: (allowedNames: ReadonlySet<string>) => {
+      if (!current.toolSearch.catalogRegistered) {
+        finalizeAgentToolAvailability(current.effectiveTools, {
+          toolExecutionAllow: [...allowedNames],
+        });
+      }
       for (const key of promptPlanKeys) {
         const names = current.toolSearchRunPlan[key];
         names.clear();
@@ -303,11 +282,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
       }
       current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
-      current.toolSearchRunPlan.emptyAllowlistCallableNames.splice(
-        0,
-        current.toolSearchRunPlan.emptyAllowlistCallableNames.length,
-        ...next.toolSearchRunPlan.emptyAllowlistCallableNames,
-      );
+      current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
     },
   });
 }
@@ -316,14 +291,21 @@ function gateToolExecution(
   tools: readonly AnyAgentTool[],
   allowNames: readonly string[],
 ): AnyAgentTool[] {
+  const executionAllowed = createToolExecutionMatcher(allowNames);
   return tools.map((tool) =>
-    isToolExecutionAllowed(allowNames, tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
+    executionAllowed(tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
-      : {
-          ...tool,
-          execute: async () => {
-            throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
-          },
-        },
+      : markAgentToolExecutionUnavailable(
+          copyAgentToolAvailability(tool, {
+            ...tool,
+            // Preparation can perform work too; a denied call must not enter the source path.
+            prepareArguments: undefined,
+            prepareBeforeToolCallParams: undefined,
+            finalizeBeforeToolCallParams: undefined,
+            execute: async () => {
+              throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
+            },
+          }),
+        ),
   );
 }

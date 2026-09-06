@@ -7,6 +7,10 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub", "tencent-tokenplan"],
   "modelCatalog": {
+    "modelsDev": {
+      "tencent-tokenhub": "tencent-tokenhub",
+      "tencent-tokenplan": "tencent-token-plan"
+    },
     "providers": {
       "tencent-tokenhub": {
         "baseUrl": "https://tokenhub.tencentmaas.com/v1",

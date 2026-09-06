@@ -71,6 +71,24 @@ openclaw-activity-page {
   padding: var(--space-3) var(--space-4);
 }
 
+/* Reserve feedback outside the scroll content so errors and retries never shift results. */
+.activity-feed__feedback {
+  display: flex;
+  flex: 0 0 var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-4);
+}
+
+.activity-feed__feedback > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .activity-feed__search {
   position: relative;
   flex: 1 1 240px;
@@ -215,18 +233,13 @@ openclaw-activity-page {
   gap: 4px;
 }
 
-.activity-feed__people-name,
-.activity-feed__last-active {
+.activity-feed__people-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.activity-feed__people-name {
   color: var(--text-strong);
 }
 
-.activity-feed__last-active,
 .activity-feed__people-count,
 .activity-feed__people-group-label {
   color: var(--muted);

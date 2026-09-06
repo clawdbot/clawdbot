@@ -108,15 +108,20 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
   const deadlineMs = Date.now() + timeoutMs;
-  const boundedRequest: CodexPluginRuntimeRequest = (method, requestParams) => {
+  let requestTimedOut = false;
+  const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
     const remainingTimeoutMs = deadlineMs - Date.now();
-    if (remainingTimeoutMs <= 0) {
+    if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
-    return request(method, requestParams, {
-      timeoutMs: remainingTimeoutMs,
-      signal,
-    });
+    try {
+      return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
+    } catch (error) {
+      // Inventory readers absorb failures. Preserve timeout evidence before they
+      // turn it into missing apps, even if the wall clock trails the request timer.
+      requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
+      throw error;
+    }
   };
   try {
     return await withAbortableTimeout({
@@ -129,7 +134,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
         });
         const result = transform ? await transform(config, boundedRequest) : config;
         // Inventory readers can absorb an RPC timeout into an unavailable result.
-        if (Date.now() >= deadlineMs) {
+        if (requestTimedOut || Date.now() >= deadlineMs) {
           throw new CodexPluginThreadConfigDeadlineError();
         }
         return result;
@@ -140,7 +145,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   } catch (error) {
     if (
       signal.aborted ||
-      (!isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
     ) {
       throw error;
     }
@@ -182,14 +187,6 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
     ...buildParams
   } = params;
   const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
-  const failClosedOnTimeout = Boolean(
-    params.scheduledRuntimeAuthority ||
-    (policy?.enabled &&
-      ((policy.allowAllPlugins && policy.destructiveApprovalMode === "ask") ||
-        policy.pluginPolicies.some(
-          (plugin) => plugin.enabled && plugin.destructiveApprovalMode === "ask",
-        ))),
-  );
   return {
     enabled: true,
     // The bound context stores admitted apps only; native config owns excluded
@@ -212,7 +209,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
         threadId: buildOptions?.threadId,
         appCache: appCache ?? defaultCodexAppInventoryCache,
         metadataCache,
-        failClosedOnTimeout,
+        failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
         transform: params.scheduledRuntimeAuthority
           ? async (builtConfig, request) =>
               intersectCodexPluginThreadConfigWithScheduledAuthority(

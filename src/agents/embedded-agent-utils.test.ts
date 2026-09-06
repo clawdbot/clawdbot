@@ -5,6 +5,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
+  createAssistantVisibleStreamText,
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
@@ -15,6 +16,7 @@ import {
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
@@ -73,18 +75,26 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     ...message,
   } as unknown as AssistantMessage;
 }
+
+describe("createAssistantVisibleStreamText", () => {
+  it("keeps interleaved streams independent when one is replaced", () => {
+    const first = createAssistantVisibleStreamText();
+    const second = createAssistantVisibleStreamText();
+
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "Alpha" });
+    expect(second.append("\n\nBravo")).toEqual({ text: "Bravo", delta: "Bravo" });
+    expect(first.append("\n\nAlpha")).toEqual({ text: "Alpha", delta: "" });
+    expect(second.append(" is here")).toEqual({ text: "Bravo is here", delta: " is here" });
+    expect(first.replace("Reset")).toEqual({ text: "Reset", delta: null });
+    expect(second.append("\n\nBravo is here")).toEqual({ text: "Bravo is here", delta: "" });
+    expect(first.append("!")).toEqual({ text: "Reset!", delta: "!" });
+  });
+});
 
 describe("extractThinkingFromTaggedStream", () => {
   it("matches full-buffer extraction at every randomized chunk boundary", () => {

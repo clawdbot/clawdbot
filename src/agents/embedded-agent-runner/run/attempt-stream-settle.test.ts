@@ -2,13 +2,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
 } from "../../../../packages/ai/src/provider-types.js";
+import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
+import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
+import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import type { StreamFn } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { testing as extraParamsTesting } from "../extra-params.test-support.js";
@@ -135,17 +141,10 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     const state = getEmbeddedSessionPromptState(sessionId).toolResults;
     const key = "tool:old-read:42";
     state.replacements.set(key, {
-      message: {
-        role: "toolResult",
-        toolCallId: "old-read",
-        toolName: "read",
-        content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
-        isError: false,
-        timestamp: 42,
-      },
+      content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
       cacheTtl: "soft",
     });
-    state.sourceTextByKey.set(key, ["original full output"]);
+    state.sourceHashByKey.set(key, "original-source-hash");
     state.frozen.add(key);
     const input = {
       ...createSettleFixture(),
@@ -165,7 +164,14 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       }
       expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
 
-      await settleEmbeddedAttemptStream(input);
+      // Production supplies this generation before entering the attempt runner.
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config: input.attempt.config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+        settleEmbeddedAttemptStream(input),
+      );
 
       expect(input.sessionManager.getEntries()).toContainEqual(
         expect.objectContaining({
@@ -181,6 +187,78 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     }
   });
 });
+
+function createTransportFixture(testCase: {
+  compaction: boolean;
+  pruning: boolean;
+  apiKey: string;
+  baseUrl?: string;
+}) {
+  const streamFn = vi.fn<StreamFn>();
+  bindStreamLlmRuntime(streamFn, {
+    streamSimple: streamFn,
+    registry: { getApiProvider: () => undefined },
+  } as never);
+  const session = {
+    agent: {
+      streamFn,
+      transport: "auto",
+    },
+  };
+  const input = {
+    attempt: {
+      config: {
+        agents: {
+          defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
+      },
+      modelId: "claude-sonnet-4-6",
+      provider: "anthropic",
+      promptCacheKey: undefined,
+      resolvedApiKey: undefined,
+      authStorage: { getApiKey: async () => testCase.apiKey },
+      runId: "run-transport-1",
+      runtimePlan: {
+        auth: { forwardedAuthProfileId: undefined },
+        transport: {
+          resolveExtraParams: () => ({
+            transport: "sse",
+            anthropicServerCompaction: testCase.compaction,
+          }),
+        },
+      },
+      sessionId: "sess-transport-1",
+    },
+    session,
+    settingsManager: {
+      getGlobalSettings: () => ({}),
+      getProjectSettings: () => ({}),
+    },
+    providerThinkingLevel: undefined,
+    sessionAgentId: "main",
+    workspaceDir: "/workspace",
+    workspaceOnly: false,
+    agentDir: "/agent",
+    abortSignal: new AbortController().signal,
+    getProviderRuntimeHandle: () => ({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    }),
+    sandboxSessionKey: "agent:main:test",
+    codeModeControlsEnabled: false,
+    providerPromptState: {
+      state: {},
+      effectiveContextTokenBudget: 128_000,
+    },
+  } as unknown as PrepareTransportInput;
+  return { input, session, streamFn };
+}
 
 describe("prepareEmbeddedAttemptTransport", () => {
   beforeEach(() => {
@@ -230,69 +308,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
       baseUrl: "https://proxy.example.test/anthropic",
     },
   ])("prepares transport and replay from resolved auth/config: %j", async (testCase) => {
-    const streamFn = vi.fn();
-    bindStreamLlmRuntime(streamFn, {
-      streamSimple: streamFn,
-      registry: { getApiProvider: () => undefined },
-    } as never);
-    const session = {
-      agent: {
-        streamFn,
-        transport: "auto",
-      },
-    };
-    const input = {
-      attempt: {
-        config: {
-          agents: {
-            defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
-          },
-        },
-        model: {
-          api: "anthropic-messages",
-          provider: "anthropic",
-          id: "claude-sonnet-4-6",
-          baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
-        },
-        modelId: "claude-sonnet-4-6",
-        provider: "anthropic",
-        promptCacheKey: undefined,
-        resolvedApiKey: undefined,
-        authStorage: { getApiKey: async () => testCase.apiKey },
-        runId: "run-transport-1",
-        runtimePlan: {
-          auth: { forwardedAuthProfileId: undefined },
-          transport: {
-            resolveExtraParams: () => ({
-              transport: "sse",
-              anthropicServerCompaction: testCase.compaction,
-            }),
-          },
-        },
-        sessionId: "sess-transport-1",
-      },
-      session,
-      settingsManager: {
-        getGlobalSettings: () => ({}),
-        getProjectSettings: () => ({}),
-      },
-      providerThinkingLevel: undefined,
-      sessionAgentId: "main",
-      workspaceDir: "/workspace",
-      workspaceOnly: false,
-      agentDir: "/agent",
-      abortSignal: new AbortController().signal,
-      getProviderRuntimeHandle: () => ({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-      }),
-      sandboxSessionKey: "agent:main:test",
-      codeModeControlsEnabled: false,
-      providerPromptState: {
-        state: {},
-        effectiveContextTokenBudget: 128_000,
-      },
-    } as unknown as PrepareTransportInput;
+    const { input, session } = createTransportFixture(testCase);
 
     const result = await prepareEmbeddedAttemptTransport(input);
 
@@ -300,6 +316,68 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(session.agent.transport).toBe("sse");
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
+  });
+
+  describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {
+    it.each([
+      { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true },
+      { label: "skill review", toolExecutionAllow: ["skill_workshop"], expectedSearch: false },
+      { label: "explicit search", toolExecutionAllow: ["web_search"], expectedSearch: true },
+      { label: "no execution", toolExecutionAllow: [], expectedSearch: false },
+    ])("keeps $label authority on the provider payload", async (testCase) => {
+      const { input, streamFn } = createTransportFixture({
+        compaction: false,
+        pruning: false,
+        apiKey: "test-api-key",
+      });
+      input.attempt.model = {
+        ...input.attempt.model,
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      };
+      input.attempt.modelId = input.attempt.model.id;
+      input.attempt.provider = input.attempt.model.provider;
+      input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
+      input.attempt.config = {
+        auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
+        tools: { web: { search: { openaiCodex: { enabled: true } } } },
+      };
+      input.codeModeControlsEnabled = codeModeControlsEnabled;
+      extraParamsTesting.setProviderRuntimeDepsForTest({
+        wrapProviderStreamFn: ({ context }) =>
+          createCodexNativeWebSearchWrapper(context.streamFn, context),
+      });
+      const functionTools = (
+        codeModeControlsEnabled ? ["exec", "wait"] : ["read", "skill_workshop"]
+      ).map((name) => ({
+        type: "function",
+        name,
+        description: name,
+        parameters: Type.Object({}),
+      }));
+      const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
+      const foregroundFunctionSchemas = JSON.stringify(functionTools);
+      streamFn.mockImplementation(async (model, _context, options) => {
+        await options?.onPayload?.(payload, model);
+        return createAssistantMessageEventStream();
+      });
+
+      await prepareEmbeddedAttemptTransport(input);
+      await input.session.agent.streamFn?.(
+        input.attempt.model,
+        { messages: [], tools: functionTools },
+        {},
+      );
+
+      expect(JSON.stringify(payload.tools.filter((tool) => tool.type === "function"))).toBe(
+        foregroundFunctionSchemas,
+      );
+      expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(
+        testCase.expectedSearch,
+      );
+    });
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {

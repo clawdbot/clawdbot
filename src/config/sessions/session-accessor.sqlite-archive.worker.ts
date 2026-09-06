@@ -2,11 +2,16 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parentPort, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -30,6 +35,10 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import {
+  markSqliteReclamationSettled,
+  waitForSqliteReclamationCommit,
+} from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   reclaimSqliteSessionInTransaction,
   type SqliteSessionReclamationWorkerData,
@@ -171,18 +180,22 @@ function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undef
 }
 
 function stageTranscriptArchiveContent(
-  database: import("node:sqlite").DatabaseSync,
+  database: DatabaseSync,
   sessionId: string,
   stagedPath: string,
 ): number {
   const fd = fs.openSync(stagedPath, "wx", 0o600);
   let rowCount = 0;
   try {
-    const query = "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq ASC";
-    const rows = database /* sqlite-allow-raw: the iterator keeps one row in memory at a time. */
-      .prepare(query)
-      .iterate(sessionId);
-    for (const row of rows) {
+    const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
+    for (const row of iterateSqliteQuerySync(
+      database,
+      db
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    )) {
       if (typeof row.event_json !== "string") {
         throw new Error(`Invalid transcript event row for ${sessionId}`);
       }
@@ -411,11 +424,33 @@ async function runReclamationWorkerPort(
   data: SqliteSessionReclamationWorkerData,
 ): Promise<void> {
   let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
+  const commitGate = data.commitGate;
   try {
-    result = reclaimSqliteSessionInTransaction(data.plan);
+    let transactionDatabase: DatabaseSync | undefined;
+    try {
+      result = reclaimSqliteSessionInTransaction(data.plan, {
+        onCommit: commitGate
+          ? (database) => {
+              transactionDatabase = database.db;
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request" }),
+              );
+            }
+          : undefined,
+      });
+    } finally {
+      if (
+        transactionDatabase &&
+        (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+      ) {
+        markSqliteReclamationSettled(commitGate);
+      }
+    }
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-    if (!cleanup.settled) {
+    if (cleanup.settled) {
+      markSqliteReclamationSettled(commitGate);
+    } else {
       throw new AggregateError(
         [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
         "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",

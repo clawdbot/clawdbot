@@ -45,6 +45,20 @@ Look for:
 - `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
 - Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
+## Prepared model runtime publication timeout
+
+If startup reports `prepared model runtime publication (...) timed out`, the
+parenthesized detail identifies the pending stage and, during workspace
+preparation, its agent. Collect that error together with
+`openclaw gateway status --deep` and the startup logs.
+
+An `ambient credentials` stage can be waiting for a plugin's external login
+check even when the Gateway process uses little CPU. For Claude CLI, run
+`claude auth status --json` as the Gateway user with the same environment.
+Startup shares this check across workspaces; a large roster should not launch
+one native-login subprocess per agent. A successful `/health` response alone
+does not establish that model runtime publication completed.
+
 ## Split brain installs and newer config guard
 
 Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -141,7 +155,8 @@ Then start a new session or wait for the skills watcher to refresh. Restart the 
 
 Do not use broad targets such as `~`, `/`, or a whole synced project folder. Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted `SKILL.md` directories.
 
-If Skill Workshop apply should also write through those trusted symlinked workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep it disabled for read-only shared skill roots.
+Skill Workshop does not use these trusted discovery targets. It writes only
+inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 Related:
 
@@ -247,7 +262,7 @@ Look for:
     - `messages[...].content: invalid type: sequence, expected a string`: backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
     - `validation.keys` or allowed message keys like `["role","content"]`: backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
     - `incomplete turn detected ... stopReason=stop payloads=0`: the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
-    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
+    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `llama-server` builds behind `llmman`): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
     - Failures shrink after disabling tools but do not disappear: tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
 
   </Accordion>
@@ -265,6 +280,21 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+
+## Agent run failed with a storage error
+
+An error naming the **Gateway state database** identifies a storage failure observed during the run. The chat banner, recorded assistant error, and `embedded_run_agent_end` log show the same diagnosis. Provider response bodies remain redacted.
+
+| SQLite message                                     | Next step                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `database is locked` or `database table is locked` | Retry. If it repeats, check Gateway logs and concurrent storage maintenance.                                   |
+| `database or disk is full`                         | Free disk space on the Gateway host, then retry.                                                               |
+| `attempt to write a readonly database`             | Check the Gateway service user's storage permissions and filesystem mount mode.                                |
+| `disk I/O error`                                   | Check storage health and filesystem access before retrying. This message alone does not prove disk exhaustion. |
+
+A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
+
+Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## No replies
 
@@ -766,9 +796,9 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 ```

@@ -1,124 +1,46 @@
 // OpenClaw gateway tests cover activation serialization and chat sessions.
-
+import "./system-agent.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
-  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
 } from "../../config/runtime-snapshot.js";
 import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  resetAgentRunRegistryForTest,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
-import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
-import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
-import {
-  createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
-  readLastSystemAgentAuditEntry,
-  type SystemAgentPluginMetadataTestSnapshot,
-} from "../../system-agent/system-agent.test-helpers.js";
-import type {
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "../../system-agent/verified-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { handleGatewayRequest } from "../server-methods.js";
 import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
-import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { SystemAgentChatSession } from "./system-agent.js";
+import {
+  callChat,
+  inferenceFallbackMocks,
+  makeContext,
+  makeRespond,
+  setupInferenceDetectionMocks,
+  setupInferenceMocks,
+  systemAgentHandler,
+  systemAgentLane,
+  transcriptStoreMocks,
+  useSystemAgentGatewayTestFixture,
+  verifiedConfig,
+} from "./system-agent.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
-const setupInferenceMocks = vi.hoisted(() => ({
-  activateSetupInference: vi.fn(),
-  resolvePersistentApplyInference: vi.fn(),
-  verifySetupInference: vi.fn(),
-}));
-const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
-const setupInferenceDetectionMocks = vi.hoisted(() => ({
-  detectSetupInferenceIsolated: vi.fn(),
-}));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn<
-    (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
-  >(() => []),
-}));
-const greetingMocks = vi.hoisted(() => ({
-  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
-  loadSystemAgentGreetingFacts: vi.fn(),
-  resolveSystemAgentGreeting: vi.fn(),
-}));
-const onboardingWelcomeMocks = vi.hoisted(() => ({
-  buildOnboardingWelcome: vi.fn(),
-}));
-
-vi.mock("../../system-agent/setup-inference.js", () => ({
-  activateSetupInference: setupInferenceMocks.activateSetupInference,
-  resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
-  verifySetupInference: setupInferenceMocks.verifySetupInference,
-}));
-vi.mock("../../system-agent/inference-fallback.js", () => ({
-  verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
-}));
-vi.mock("../../system-agent/setup-inference-detection.js", () => ({
-  detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
-}));
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
-  appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
-  readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
-}));
-vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
-  return {
-    ...actual,
-    acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
-    loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
-    resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,
-  };
-});
-vi.mock("../../system-agent/onboarding-welcome.js", () => ({
-  buildOnboardingWelcome: onboardingWelcomeMocks.buildOnboardingWelcome,
-}));
-
-type RespondCall = {
-  ok: boolean;
-  payload?: unknown;
-  error?: unknown;
-};
-
-function makeRespond() {
-  const calls: RespondCall[] = [];
-  const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
-    calls.push({ ok, payload, error });
-  };
-  return { calls, respond };
-}
-
-function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
-  return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
-}
+const {
+  systemAgentTempDirs,
+  requireVerifiedInferenceFixture,
+  requireVerifiedInferenceDeps,
+  makeVerifiedEngine,
+  seededSession,
+} = useSystemAgentGatewayTestFixture();
 
 function makeWizardContext() {
   const wizardSessions = new Map<string, WizardSession>();
@@ -132,33 +54,10 @@ function makeWizardContext() {
   };
 }
 
-function systemAgentHandler(method: keyof typeof systemAgentHandlers) {
-  return expectDefined(systemAgentHandlers[method], `systemAgentHandlers["${method}"] invariant`);
-}
-
-function systemAgentLane() {
-  return getCommandLaneSnapshot(CommandLane.SystemAgent);
-}
-
 const waitOneTask = () =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
-
-const defaultClient = {
-  connId: "conn-test",
-  connect: { device: { id: "device-test" } },
-} as GatewayClient;
-
-const verifiedConfig: OpenClawConfig = {
-  agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
-  auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
-};
-let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
-let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
-let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
-const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
-let previousAppliedHash: string | null = null;
 
 async function makeVerificationContext() {
   const stateDir = systemAgentTempDirs.make("openclaw-setup-verification-");
@@ -173,34 +72,6 @@ async function makeVerificationContext() {
     getRuntimeConfig: vi.fn(() => snapshot.runtimeConfig ?? snapshot.config),
     isConfigReloadSettled: vi.fn(() => true),
   };
-}
-
-function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
-  return expectDefined(verifiedInference, "verified inference fixture was not initialized");
-}
-
-function requireVerifiedInferenceDeps(): SystemAgentVerifiedInferenceDeps {
-  return {
-    ...expectDefined(verifiedInferenceDeps, "verified inference dependencies were not initialized"),
-    readConfigFileSnapshot: async () =>
-      ({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: "verified-config",
-        config: verifiedConfig,
-        runtimeConfig: verifiedConfig,
-        sourceConfig: verifiedConfig,
-        issues: [],
-      }) as never,
-  };
-}
-
-function makeVerifiedEngine(): SystemAgentChatEngine {
-  return new SystemAgentChatEngine({
-    verifiedInference: requireVerifiedInferenceFixture(),
-    deps: requireVerifiedInferenceDeps(),
-  });
 }
 
 async function runSensitiveChannelSetup(_channel: string, prompter: WizardPrompter) {
@@ -225,95 +96,6 @@ function stubEngineOverview() {
       sourceUrl: "https://github.com/openclaw/openclaw",
     },
   } as never);
-}
-
-function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgentChatSession {
-  return {
-    engine: makeVerifiedEngine(),
-    welcome: "welcome text",
-    lastUsedAt: 1,
-    ownerKey: "device:device-test",
-    ...overrides,
-  };
-}
-
-beforeAll(async () => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
-  verifiedInference = fixture.binding;
-  verifiedInferenceDeps = fixture.deps;
-});
-
-afterAll(() => {
-  pluginMetadataSnapshot?.restore();
-  verifiedInference = undefined;
-  verifiedInferenceDeps = undefined;
-});
-
-beforeEach(() => {
-  previousAppliedHash = getRuntimeConfigAppliedHash();
-  setupInferenceMocks.verifySetupInference.mockResolvedValue({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 10,
-    binding: verifiedInference,
-  });
-  inferenceFallbackMocks.verify.mockResolvedValue({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 10,
-    binding: verifiedInference,
-  });
-  setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
-    requireVerifiedInferenceFixture().configuredRoute,
-  );
-  transcriptStoreMocks.appendTranscriptTurn.mockReset();
-  transcriptStoreMocks.appendTranscriptReset.mockReset();
-  transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
-  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
-  greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
-    updateAvailable: null,
-    channelHealth: { available: true, degraded: [] },
-    recentExternalEdit: false,
-    auditSequence: 0,
-  });
-  greetingMocks.resolveSystemAgentGreeting.mockReset().mockResolvedValue({
-    text: "I'm OpenClaw. All systems nominal.",
-    source: "model",
-  });
-  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset().mockResolvedValue({
-    text: "Inference is ready. Let's finish setup.",
-  });
-});
-
-afterEach(() => {
-  resetAgentRunRegistryForTest();
-  setRuntimeConfigAppliedHash(previousAppliedHash);
-  vi.restoreAllMocks();
-  vi.resetAllMocks();
-  resetPluginStateStoreForTests();
-  resetCommandQueueStateForTest();
-  vi.unstubAllEnvs();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
-});
-
-async function callChat(
-  context: GatewayRequestContext,
-  params: Record<string, unknown>,
-  client: GatewayClient | null = defaultClient,
-): Promise<RespondCall> {
-  const { calls, respond } = makeRespond();
-  await systemAgentHandler("openclaw.chat")({
-    params,
-    respond,
-    context,
-    client,
-  } as never);
-  const call = calls[0];
-  if (!call) {
-    throw new Error("expected a respond call");
-  }
-  return call;
 }
 
 describe("openclaw.setup", () => {
@@ -792,7 +574,6 @@ describe("openclaw.chat", () => {
       verifiedInference: requireVerifiedInferenceFixture(),
       deps: requireVerifiedInferenceDeps(),
       runAgentTurn: async () => ({ text: "Everything is healthy." }),
-      planWithAssistant: async () => null,
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
@@ -845,7 +626,6 @@ describe("openclaw.chat", () => {
         verifiedInference: requireVerifiedInferenceFixture(),
         deps: requireVerifiedInferenceDeps(),
         runAgentTurn: async () => null,
-        planWithAssistant: async () => null,
       },
       { wizardDependencies: { runChannelSetupWizard: runSensitiveChannelSetup } },
     );
@@ -889,158 +669,15 @@ describe("openclaw.chat", () => {
     expect((await invoke({ limit: 501 }))?.ok).toBe(false);
   });
 
-  it("tracks approved delegated Gateway restarts until their completion drains", async () => {
-    const approvalStarted = createDeferred();
-    const releaseApproval = createDeferred();
-    const stateDir = systemAgentTempDirs.make("openclaw-approved-gateway-restart-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
-    const runGatewayRestart = vi.fn(async () => {
-      approvalStarted.resolve();
-      await releaseApproval.promise;
-      return true;
-    });
-    const engine = new SystemAgentChatEngine({
-      operatorApprovalOnly: true,
-      surface: "gateway",
-      verifiedInference: requireVerifiedInferenceFixture(),
-      deps: { ...requireVerifiedInferenceDeps(), runGatewayRestart },
-    });
-    engine.propose({ kind: "gateway-restart" });
-    const proposalHash = expectDefined(
-      engine.getPendingOperatorProposal(),
-      "restart proposal",
-    ).hash;
-    const handle = vi
-      .spyOn(engine, "handle")
-      .mockResolvedValue({ text: "Approval pending.", action: "none" });
-    const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
-    const delegatedSession = seededSession({
-      engine,
-      ownerKey: JSON.stringify(["main", "agent:main:main"]),
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["delegate-1", delegatedSession]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-    });
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-gateway-restart-run");
-    claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const broadcast = vi.fn();
-    const context = {
-      ...makeContext(sessions),
-      systemAgentApprovalManager: manager,
-      broadcast,
-      broadcastToConnIds: vi.fn(),
-      hasExecApprovalClients: () => true,
-    } as unknown as GatewayRequestContext;
-
-    const requestResponses = makeRespond();
-    const pendingChat = withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-      },
-      () =>
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "delegated-gateway-restart",
-            method: "openclaw.chat",
-            params: {
-              sessionId: "delegate-1",
-              message: "Restart Gateway.",
-              context: { page: "channels" },
-              delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            },
-          },
-          respond: requestResponses.respond,
-          client: {
-            ...defaultClient,
-            connect: { ...defaultClient.connect, role: "operator", scopes: ["operator.admin"] },
-          } as GatewayClient,
-          isWebchatConnect: () => false,
-          context,
-          extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
-        }),
-    );
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    expect(requestResponses.calls).toHaveLength(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
-    const proposalId = expectDefined(
-      manager.listPendingRecords()[0],
-      "pending restart approval",
-    ).id;
-    expect(manager.getSnapshot(proposalId!)).toMatchObject({
-      request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
-    });
-    expect(manager.getSnapshot(proposalId!)?.decision).toBeUndefined();
-    expect(broadcast).toHaveBeenCalledWith(
-      "openclaw.approval.requested",
-      expect.objectContaining({ id: proposalId }),
-      { dropIfSlow: true },
-    );
-    expect(resolveOperatorApproval).not.toHaveBeenCalled();
-    expect(handle).toHaveBeenNthCalledWith(1, "Restart Gateway.");
-
-    // The follow-up chat rides the same live run authority the delegate tool carries.
-    const sameOwnerChat = withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
-      () =>
-        callChat(context, {
-          sessionId: "delegate-1",
-          message: "yes",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-        }),
-    );
-    expect(resolveOperatorApproval).not.toHaveBeenCalled();
-
-    manager.resolve(proposalId!, "allow-once", "operator-ui");
-    await approvalStarted.promise;
-    try {
-      expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
-    } finally {
-      releaseApproval.resolve();
-    }
-    expect(resolveOperatorApproval).toHaveBeenCalledWith(
-      "allow-once",
-      proposalHash,
-      expect.any(Function),
-      undefined,
-    );
-    expect(runGatewayRestart).toHaveBeenCalledOnce();
-    await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
-      text: expect.stringContaining("[openclaw] done: gateway.restart"),
-    });
-    await vi.waitFor(() => expect(systemAgentLane().activeCount).toBe(0));
-    expect(readLastSystemAgentAuditEntry()).toMatchObject({
-      operation: "gateway.restart",
-      summary: "Scheduled Gateway restart",
-    });
-    await pendingChat;
-    const sameOwnerResult = await sameOwnerChat;
-    expect(requestResponses.calls).toHaveLength(1);
-    expect(requestResponses.calls[0]?.payload).toMatchObject({
-      reply: expect.stringContaining("[openclaw] done: gateway.restart"),
-    });
-    expect(sameOwnerResult.payload).toMatchObject({
-      reply: expect.stringContaining("[openclaw] done: gateway.restart"),
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
       runAgentTurn: async () => {
-        throw new Error("workspace owner openclaw is missing from the roster");
+        throw new SystemAgentInferenceUnavailableError("agent-turn", [
+          new Error("workspace owner openclaw is missing from the roster"),
+        ]);
       },
-      planWithAssistant: async () => null,
       deps: requireVerifiedInferenceDeps(),
     });
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();

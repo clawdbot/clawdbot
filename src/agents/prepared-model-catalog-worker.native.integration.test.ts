@@ -5,7 +5,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 describe("prepared native model catalog worker boundary", () => {
-  it("publishes native harness models through prepared list and chat metadata", async () => {
+  it("retains configured dynamic models alongside native harness models after full refresh", async () => {
     await expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest });
   });
 });

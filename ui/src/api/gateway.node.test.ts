@@ -69,13 +69,11 @@ const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.write",
 ] as const;
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<DeviceIdentity> => ({
-      deviceId: "device-1",
-      privateKey: "private-key", // pragma: allowlist secret
-      publicKey: "public-key", // pragma: allowlist secret
-    }),
-  ),
+  vi.fn(async (): Promise<DeviceIdentity> => ({
+    deviceId: "device-1",
+    privateKey: "private-key", // pragma: allowlist secret
+    publicKey: "public-key", // pragma: allowlist secret
+  })),
 );
 const signDevicePayloadMock = vi.hoisted(() =>
   vi.fn(async (_privateKeyBase64Url: string, _payload: string) => "signature"),
@@ -2096,57 +2094,101 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("reports startup-unavailable while retaining automatic reconnect", async () => {
-    useNodeFakeTimers();
-    const onClose = vi.fn();
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
-      onClose,
-    });
-    try {
-      const { ws, connectFrame } = await startConnect(client);
-
-      ws.emitMessage({
-        type: "res",
-        id: connectFrame.id,
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "gateway starting; retry shortly",
-          details: { reason: "startup-sidecars" },
-          retryable: true,
-          retryAfterMs: 250,
-        },
+  it.each([
+    {
+      name: "startup",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryAfterMs: 250,
+      delayMs: 250,
+      closeCode: 4013,
+      closeReason: "gateway starting",
+      willRetry: true,
+    },
+    {
+      name: "bounded startup",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryAfterMs: 90_000,
+      delayMs: 2_000,
+      closeCode: 4013,
+      closeReason: "gateway starting",
+      willRetry: true,
+    },
+    {
+      name: "profile verification",
+      message: "profile verification unavailable",
+      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      retryAfterMs: 90_000,
+      delayMs: 90_000,
+      closeCode: 4008,
+      closeReason: "connect failed",
+      willRetry: true,
+    },
+    {
+      name: "terminal authentication",
+      message: "password mismatch",
+      details: { code: "AUTH_PASSWORD_MISMATCH" },
+      retryAfterMs: 90_000,
+      delayMs: 90_000,
+      closeCode: 4008,
+      closeReason: "connect failed",
+      willRetry: false,
+    },
+  ])(
+    "respects retry timing and terminal policy for $name",
+    async ({ message, details, retryAfterMs, delayMs, closeCode, closeReason, willRetry }) => {
+      useNodeFakeTimers();
+      const onClose = vi.fn();
+      const client = new GatewayBrowserClient({
+        url: "ws://127.0.0.1:18789",
+        token: "shared-auth-token",
+        onClose,
       });
-      await vi.advanceTimersByTimeAsync(0);
+      try {
+        const { ws, connectFrame } = await startConnect(client);
 
-      await expectSocketClosed(ws);
-      expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
-      ws.emitClose(4013, "gateway starting");
-      expect(onClose).toHaveBeenCalledWith({
-        code: 4013,
-        reason: "gateway starting",
-        error: {
-          code: "UNAVAILABLE",
-          message: "gateway starting; retry shortly",
-          details: { reason: "startup-sidecars" },
-          retryable: true,
-          retryAfterMs: 250,
-        },
-        willRetry: true,
-      });
-      expect(wsInstances).toHaveLength(1);
+        ws.emitMessage({
+          type: "res",
+          id: connectFrame.id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message,
+            details,
+            retryable: true,
+            retryAfterMs,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
 
-      await vi.advanceTimersByTimeAsync(249);
-      expect(wsInstances).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(wsInstances).toHaveLength(2);
-    } finally {
-      client.stop();
-      vi.useRealTimers();
-    }
-  });
+        await expectSocketClosed(ws);
+        expect(ws.lastClose).toEqual({ code: closeCode, reason: closeReason });
+        ws.emitClose(closeCode, closeReason);
+        expect(onClose).toHaveBeenCalledWith({
+          code: closeCode,
+          reason: closeReason,
+          error: {
+            code: "UNAVAILABLE",
+            message,
+            details,
+            retryable: true,
+            retryAfterMs,
+          },
+          willRetry,
+        });
+        expect(wsInstances).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(delayMs - 1);
+        expect(wsInstances).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(wsInstances).toHaveLength(willRetry ? 2 : 1);
+      } finally {
+        client.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("preserves structured connect errors for pending requests", async () => {
     useNodeFakeTimers();

@@ -22,43 +22,9 @@ import {
 } from "./hook-policy-decisions.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index-types.js";
 import type { InstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
+import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-
-const MANIFEST_CONTRACT_FAMILIES = [
-  "embeddedExtensionFactories",
-  "agentToolResultMiddleware",
-  "trustedToolPolicies",
-  "externalAuthProviders",
-  "embeddingProviders",
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "transcriptSourceProviders",
-  "documentExtractors",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "webContentExtractors",
-  "webFetchProviders",
-  "webSearchProviders",
-  "workerProviders",
-  "usageProviders",
-  "migrationProviders",
-  "gatewayMethodDispatch",
-  "tools",
-] as const satisfies readonly (keyof PluginManifestContracts)[];
-
-type MissingManifestContractFamilies = Exclude<
-  keyof PluginManifestContracts,
-  (typeof MANIFEST_CONTRACT_FAMILIES)[number]
->;
-
-const REVIEWED_MANIFEST_CONTRACT_FAMILIES: MissingManifestContractFamilies extends never
-  ? typeof MANIFEST_CONTRACT_FAMILIES
-  : never = MANIFEST_CONTRACT_FAMILIES;
 
 type PluginCapabilityManifest = {
   channels?: readonly string[];
@@ -206,7 +172,7 @@ export function buildPluginCapabilitySummary(params: {
       ].toSorted(),
       contracts: [
         ...new Set(
-          REVIEWED_MANIFEST_CONTRACT_FAMILIES.flatMap((family) =>
+          PLUGIN_MANIFEST_CONTRACT_KEYS.flatMap((family) =>
             (manifest.contracts?.[family] ?? []).map((id) => `${family}: ${id}`),
           ),
         ),

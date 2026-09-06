@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   catalogPage,
@@ -11,20 +11,13 @@ import {
 } from "../app-sidebar.ts";
 
 describe("AppSidebar catalog reconnect", () => {
-  it("keeps progressive catalogs after a stale fallback and same-client reconnect", async () => {
+  it("keeps progressive catalogs after a stale response and same-client reconnect", async () => {
     vi.useFakeTimers();
     try {
-      const legacyFallback = deferred<SessionsCatalogListResult>();
+      const staleResponse = deferred<SessionsCatalogListResult>();
       const request = vi
         .fn()
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message:
-              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
-          }),
-        )
-        .mockReturnValueOnce(legacyFallback.promise)
+        .mockReturnValueOnce(staleResponse.promise)
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
@@ -38,7 +31,7 @@ describe("AppSidebar catalog reconnect", () => {
       sidebar.connected = true;
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledTimes(1);
 
       gateway.publish({ phase: "reconnecting", hello: null });
       await sidebar.updateComplete;
@@ -46,8 +39,10 @@ describe("AppSidebar catalog reconnect", () => {
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(50);
 
-      legacyFallback.resolve(catalogPage([]));
+      staleResponse.resolve(catalogPage([{ threadId: "thread-stale", name: "Stale session" }]));
       await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).not.toContain("Stale session");
       await vi.advanceTimersByTimeAsync(30_000);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {

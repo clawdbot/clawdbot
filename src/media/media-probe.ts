@@ -9,20 +9,21 @@ import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
 
-/** Best-effort metadata reported by one bounded ffprobe invocation. */
+/** Best-effort duration and display dimensions from one bounded ffprobe invocation. */
 export type MediaProbeResult = {
   durationMs?: number;
   width?: number;
   height?: number;
 };
 
-/** Codec and duration facts used to decide and validate portable playback renditions. */
+/** Encoded stream dimensions and codec facts used to validate playback renditions. */
 export type PlaybackMediaProbeResult = MediaProbeResult & {
   audioCodec?: string;
   audioStreamIndex?: number;
   videoCodec?: string;
   videoPixelFormat?: string;
   videoProfile?: string;
+  videoRotation?: number;
   videoStreamIndex?: number;
 };
 
@@ -110,6 +111,11 @@ function parseFfprobeMediaMetadata(
     parseDurationMs(format?.duration);
   const width = parsePositiveInteger(videoStream?.width);
   const height = parsePositiveInteger(videoStream?.height);
+  const videoRotation = (
+    Array.isArray(videoStream?.side_data_list) ? videoStream.side_data_list : []
+  )
+    .map((sideData) => asSafeIntegerInRange(readRecord(sideData)?.rotation, {}))
+    .find((rotation) => rotation !== undefined);
   const audioCodec = normalizeCodecName(audioStream?.codec_name);
   const videoCodec = normalizeCodecName(videoStream?.codec_name);
   const videoPixelFormat = normalizeCodecName(videoStream?.pix_fmt);
@@ -119,6 +125,7 @@ function parseFfprobeMediaMetadata(
   return {
     ...(durationMs ? { durationMs } : {}),
     ...(kind === "video" && width && height ? { width, height } : {}),
+    ...(videoRotation !== undefined ? { videoRotation } : {}),
     ...(audioCodec ? { audioCodec } : {}),
     ...(audioStreamIndex !== undefined ? { audioStreamIndex } : {}),
     ...(videoCodec ? { videoCodec } : {}),
@@ -136,7 +143,7 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
     "-protocol_whitelist",
     protocol,
     "-show_entries",
-    "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
+    "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic:stream_side_data=rotation",
     "-of",
     "json",
     ...(isFileDescriptor ? ["-fd", "0"] : []),
@@ -145,12 +152,11 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
 }
 
 function isMissingFdProtocolError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const stderr = (error as { stderr?: unknown }).stderr;
+  const stderr = readRecord(error)?.stderr;
   const message = typeof stderr === "string" ? stderr : error instanceof Error ? error.message : "";
-  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option fd not found)/is.test(
+  // ffprobe < 6.0 (no fd: protocol, e.g. 4.4 and 5.1) rejects `-fd` with
+  // "Failed to set value '0' for option 'fd': Option not found".
+  return /(?:fd:.*protocol not found|protocol not found.*fd|unrecognized option ['"]?fd|option ['"]?fd\b.*not found)/is.test(
     message,
   );
 }
@@ -182,17 +188,19 @@ async function probeMediaSource(
   }
 }
 
-function toMediaProbeResult(
-  result: PlaybackMediaProbeResult | null,
-  kind: MediaProbeKind,
-): MediaProbeResult {
+/** Keep encoded playback facts separate from attachment display dimensions. */
+export function toMediaProbeResult(result: PlaybackMediaProbeResult | null): MediaProbeResult {
   if (!result) {
     return {};
   }
+  const swapsAxes = Math.abs(result.videoRotation ?? 0) % 180 === 90;
   return {
     ...(result.durationMs ? { durationMs: result.durationMs } : {}),
-    ...(kind === "video" && result.width && result.height
-      ? { width: result.width, height: result.height }
+    ...(result.width && result.height
+      ? {
+          width: swapsAxes ? result.height : result.width,
+          height: swapsAxes ? result.width : result.height,
+        }
       : {}),
   };
 }
@@ -208,7 +216,6 @@ async function probeMediaFile(
     try {
       return toMediaProbeResult(
         await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, kind, options),
-        kind,
       );
     } finally {
       await handle.close().catch(() => {});
@@ -218,16 +225,16 @@ async function probeMediaFile(
   }
 }
 
-/** Probes a bounded local-file batch under one shared wall-clock budget. */
+/** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
   options: MediaProbeBatchOptions,
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
-  const deadlineMs = Date.now() + options.budgetMs;
+  const deadlineMs = performance.now() + options.budgetMs;
   const probeCount = Math.min(inputs.length, options.maxProbes);
   for (let offset = 0; offset < probeCount; offset += options.concurrency) {
-    const timeoutMs = deadlineMs - Date.now();
+    const timeoutMs = deadlineMs - performance.now();
     if (timeoutMs <= 0) {
       break;
     }
@@ -252,7 +259,7 @@ export async function probePlaybackMediaFileDescriptor(
   return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
 }
 
-/** Positive video dimensions reported by ffprobe for the first video stream. */
+/** Positive display dimensions of the selected video stream. */
 type VideoDimensions = {
   width: number;
   height: number;
@@ -260,6 +267,8 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = (await probeMediaSource({ kind: "buffer", buffer }, "video")) ?? {};
+  const { width, height } = toMediaProbeResult(
+    await probeMediaSource({ kind: "buffer", buffer }, "video"),
+  );
   return width && height ? { width, height } : undefined;
 }

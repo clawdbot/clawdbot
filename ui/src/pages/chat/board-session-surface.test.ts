@@ -1,14 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { boardProviderForSession } from "../../lib/board/provider.ts";
-import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { renderBoardSessionSurface } from "./board-session-surface.ts";
 
 const containers: HTMLElement[] = [];
-
-installBrowserHistoryIsolation();
 
 function createContainer() {
   const container = document.createElement("div");
@@ -23,61 +20,13 @@ afterEach(() => {
   }
 });
 
-beforeEach(() => {
-  window.history.replaceState({}, "", "/?mockBoard=1");
-});
-
 describe("board session shell", () => {
-  it("delegates the optional Workboard chip to its lazy element", () => {
-    const linked = createContainer();
-    const unlinked = createContainer();
-    const provider = boardProviderForSession({ sessionKey: "agent:main:workboard-link" });
-    const client = {
-      request: vi.fn(async () => ({ cards: [] })),
-      addEventListener: vi.fn(() => () => {}),
-    } as never;
-    const props = {
-      active: true,
-      snapshot: provider.snapshot$.value,
-      activeTabId: "main",
-      canMutate: true,
-      canGrant: true,
-      callbacks: {
-        applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
-        grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),
-        selectTab: () => {},
-      },
-      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
-    };
-
-    render(
-      renderBoardSessionSurface({
-        ...props,
-        workboardCardChip: {
-          active: true,
-          basePath: "",
-          client,
-          sessionKey: "agent:main:workboard-link",
-        },
-      }),
-      linked,
-    );
-    render(renderBoardSessionSurface(props), unlinked);
-
-    const chip = linked.querySelector<HTMLElementTagNameMap["openclaw-workboard-card-chip"]>(
-      "openclaw-workboard-card-chip",
-    );
-    expect(chip?.sessionKey).toBe("agent:main:workboard-link");
-    expect(chip?.client).toBe(client);
-    expect(chip?.active).toBe(true);
-    expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
-  });
-
   it("preserves the board element while the dashboard panel activates and parks", () => {
     const container = createContainer();
-    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
+    const provider = createMockBoardProvider("agent:main:main");
     const props = {
       active: true,
+      session: { sessionKey: "agent:main:main" },
       snapshot: provider.snapshot$.value,
       activeTabId: "main",
       canMutate: true,

@@ -68,10 +68,8 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `harden parent accepts current directory components`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-socket-dot-\(UUID().uuidString)", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
 
         try ExecApprovalsSocketPathGuard.hardenParentDirectory(
             for: "\(root.path)/./approvals.sock")
@@ -79,14 +77,16 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `harden parent validates directories hidden behind nested symlinks`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-socket-nested-link-\(UUID().uuidString)", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let victim = root.appendingPathComponent("victim", isDirectory: true)
         let unsafe = root.appendingPathComponent("unsafe", isDirectory: true)
         let redirect = unsafe.appendingPathComponent("redirect", isDirectory: true)
         let outer = root.appendingPathComponent("outer", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(at: victim, withIntermediateDirectories: true)
+        try FileManager().createDirectory(
+            at: victim,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
         try FileManager().createDirectory(at: unsafe, withIntermediateDirectories: true)
         try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafe.path)
         try FileManager().createSymbolicLink(at: redirect, withDestinationURL: victim)

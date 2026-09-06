@@ -113,6 +113,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 {
                   agentId: params.agentId,
                   catalogId: catalog.id,
+                  hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
                 },
               );

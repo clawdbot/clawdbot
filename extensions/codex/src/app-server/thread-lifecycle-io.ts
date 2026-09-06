@@ -1,3 +1,4 @@
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -25,6 +26,7 @@ import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
+import type { CodexThread } from "./protocol.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
@@ -36,10 +38,6 @@ import {
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
 import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
-import {
-  buildStartedCodexThreadBinding,
-  resolveCodexThreadRolloutPath,
-} from "./thread-lifecycle-result.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -51,6 +49,19 @@ import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js"
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+
+function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -465,9 +476,18 @@ export async function startFreshCodexThread(
     typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
       ? startParams.modelProvider
       : undefined;
+  const assertCurrent = () => {
+    throwIfAborted();
+    params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
+  };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
-      return await params.client.request("thread/start", startParams, { signal: params.signal });
+      assertCurrent();
+      return await params.client.request("thread/start", startParams, {
+        signal: params.signal,
+        assertCurrent,
+      });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
         throw new CodexThreadStartRequestError(error);
@@ -477,10 +497,6 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
-  const assertCurrent = () => {
-    throwIfAborted();
-    params.params.hostCapabilities.assertActive();
-  };
   const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
       client: params.client,
@@ -526,35 +542,38 @@ export async function startFreshCodexThread(
   );
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
+  const startedBinding: CodexAppServerThreadBinding = {
+    threadId: response.thread.id,
+    ...(clientId ? { clientId } : {}),
+    cwd: params.cwd,
+    ...(rolloutPath ? { rolloutPath } : {}),
+    authProfileId: params.params.authProfileId,
+    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+    model: response.model ?? startParams.model ?? params.params.modelId,
+    modelProvider: bindingModelProvider,
+    dynamicToolsFingerprint,
+    dynamicToolsContainDeferred,
+    nativeSkillIsolationFingerprint,
+    userMcpServersFingerprint,
+    mcpServersFingerprint: nextMcpServersFingerprint,
+    configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
+    ringZeroConfigFingerprint,
+    ringZeroClientInstanceId,
+    networkProxyProfileName: params.appServer.networkProxy?.profileName,
+    networkProxyConfigFingerprint,
+    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+    appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+    pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+    pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+    pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+    contextEngine: contextEngineBinding,
+    environmentSelectionFingerprint,
+  };
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {
-      threadId: response.thread.id,
-      ...(clientId ? { clientId } : {}),
-      cwd: params.cwd,
-      ...(rolloutPath ? { rolloutPath } : {}),
-      authProfileId: params.params.authProfileId,
-      agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
-      model: response.model ?? startParams.model ?? params.params.modelId,
-      modelProvider: bindingModelProvider,
-      dynamicToolsFingerprint,
-      dynamicToolsContainDeferred,
+      ...startedBinding,
       webSearchThreadConfigFingerprint,
-      nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint,
-      mcpServersFingerprint: nextMcpServersFingerprint,
-      configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
-      ringZeroConfigFingerprint,
-      ringZeroClientInstanceId,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
-      networkProxyProfileName: params.appServer.networkProxy?.profileName,
-      networkProxyConfigFingerprint,
-      nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
-      appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
-      pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
-      pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
-      pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-      contextEngine: contextEngineBinding,
-      environmentSelectionFingerprint,
     };
     const managedSourceHomeId = codexCatalogHomeId(
       resolveCodexAppServerLocalHomeDir(params.appServer.start, resolveCodexThreadAgentDir(params)),
@@ -612,18 +631,36 @@ export async function startFreshCodexThread(
     threadId: response.thread.id,
     action: rotatedContextEngineBinding ? "rotated" : "started",
   });
-  return buildStartedCodexThreadBinding({
-    bindingModelProvider,
-    clientId,
-    context,
-    finalConfigPatch,
-    nextMcpServersFingerprint,
-    params,
-    pluginThreadConfig,
-    response,
-    rolloutPath,
-    startModelProvider: requestModelProvider ?? startModelProvider,
-    startParams,
-    modelProvider,
-  });
+  return {
+    ...startedBinding,
+    // Stored native-auth bindings omit redundant provider attribution; this
+    // turn still reports the provider selected by the native runtime.
+    modelProvider:
+      response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+    // Restricted ephemeral threads also need creation policy for fenced warm reuse.
+    ...(startParams.ephemeral
+      ? { liveThreadEphemeralPolicy: startParams.developerInstructions }
+      : {}),
+    // Transient starts do not own the persisted binding, so their native
+    // subscriptions must be released instead of entering the warm cache.
+    ...(!preserveExistingBinding
+      ? {
+          liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
+            {
+              ...startParams,
+              model: response.model ?? startParams.model ?? null,
+              requestedModel: startParams.model ?? null,
+              modelProvider: bindingModelProvider ?? null,
+              requestedModelProvider: startParams.modelProvider ?? bindingModelProvider ?? null,
+            },
+            params.params.authProfileId,
+            dynamicToolsFingerprint,
+          ),
+        }
+      : {}),
+    lifecycle: {
+      action: "started",
+      ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding: true } : {}),
+    },
+  };
 }

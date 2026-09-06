@@ -10,6 +10,19 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # GHSA-vp8m-p9jh-q5pm / GHSA-w293-vg96-wgc3 security fixes; remove after 2026-09-12.
+  - "undici@8.10.2"
+  - "undici@7.29.1"
+  # Authorized Vitest 5.0.0 migration; remove after 2026-09-10 12:24:37.187 UTC.
+  - "vitest@5.0.0"
+  - "@vitest/coverage-v8@5.0.0"
+  - "@vitest/browser@5.0.0"
+  - "@vitest/browser-playwright@5.0.0"
+  - "@vitest/mocker@5.0.0"
+  - "@vitest/pretty-format@5.0.0"
+  - "@vitest/spy@5.0.0"
+  - "@vitest/ui@5.0.0"
+  - "@vitest/utils@5.0.0"
   # GHSA-58mr-gqgx-xq4g / GHSA-qw65-cvwx-89v3 security fix; remove after 2026-09-09.
   - "fast-uri@4.1.4"
   # GHSA-2x7j-588g-ccc2 security fix; remove after 2026-09-08.
@@ -19,15 +32,15 @@ minimumReleaseAgeExclude:
   - "zod@4.5.2"
   - "@openai/codex"
   - "@openai/codex-*"
-  # fs-safe 0.7.0 validates original ZIP names; remove after 2026-09-07.
-  - "@openclaw/fs-safe@0.7.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.7.0"
-  - "@openclaw/fs-safe-darwin-x64@0.7.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.7.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.7.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.7.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.7.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.7.0"
+  # fs-safe 0.8.1 adds retainOnExit for fail-closed build locks; remove after 2026-09-11.
+  - "@openclaw/fs-safe@0.8.1"
+  - "@openclaw/fs-safe-darwin-arm64@0.8.1"
+  - "@openclaw/fs-safe-darwin-x64@0.8.1"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.8.1"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.8.1"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.8.1"
+  - "@openclaw/fs-safe-linux-x64-musl@0.8.1"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.8.1"
   # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
   - "@grammyjs/types@5.0.0"
   - "grammy@1.46.0"
@@ -42,7 +55,7 @@ overrides:
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
-  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.153.0
+  "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.153.4
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
   "@anthropic-ai/sdk": 0.120.0
   "@opentelemetry/core": 2.10.0
@@ -67,6 +80,8 @@ overrides:
   # Keep the cooled HTML converter security fix while Mailparser is rolled back.
   "mailparser@3.9.15>html-to-text": 10.0.1
   "mailauth@5.0.2>nodemailer": 9.1.1
+  # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
+  "mailauth@5.0.2>undici": 8.10.2
   "mailparser@3.9.15>nodemailer": 9.1.1
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
@@ -110,6 +125,6 @@ packageExtensions:
 
 patchedDependencies:
   "@awesome.me/webawesome@3.12.0": patches/@awesome.me__webawesome@3.12.0.patch
-  "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
-  "vitest@4.1.11": patches/vitest@4.1.11.patch
   "matrix-js-sdk@42.2.0": patches/matrix-js-sdk@42.2.0.patch
+  "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
+  vitest@5.0.0: patches/vitest@5.0.0.patch

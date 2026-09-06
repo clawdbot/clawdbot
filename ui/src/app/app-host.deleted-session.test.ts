@@ -10,9 +10,9 @@ import {
   storageTargetForGateway,
   storedChatOutboxScopeKey,
 } from "../lib/chat/outbox-store.ts";
-import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createGatewayHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createSessionDeletionHarness } from "../lib/sessions/session-deletion.test-support.ts";
@@ -107,7 +107,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const { gateway, publish } = createGatewayHarness({
         request,
       } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const { shell, replace } = createSessionRecoveryShell({
         activeSessionKey: deletedKey,
         sessionKeys: [deletedKey, mainKey],
@@ -181,7 +181,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
       );
       const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       await sessions.refresh({ force: true });
       if (previouslyDeleted) {
         sessions.reconcileChanged({

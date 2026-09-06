@@ -7,12 +7,12 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { listSessionFixture } from "../session-list.test-support.js";
 import {
   defaultPersistDigest,
   synthesizeSessionObserverTerminalDigest,
   type SessionObserverState,
 } from "../session-observer-model.js";
-import { listSessionsFromStoreAsync } from "../session-utils-list.js";
 import type { SessionsListResult } from "../session-utils.types.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 
@@ -69,7 +69,7 @@ it("invalidates a cached sessions.list result after an observer-digest persist",
           if (!entry) {
             throw new Error("session entry missing");
           }
-          return await listSessionsFromStoreAsync({
+          return await listSessionFixture({
             cfg: config,
             storePath: "",
             store: { [sessionKey]: entry },
@@ -147,7 +147,7 @@ it("invalidates the cache after terminal observer-digest synthesis", async () =>
           if (!entry) {
             throw new Error("session entry missing");
           }
-          return await listSessionsFromStoreAsync({
+          return await listSessionFixture({
             cfg: config,
             storePath: "",
             store: { [sessionKey]: entry },
