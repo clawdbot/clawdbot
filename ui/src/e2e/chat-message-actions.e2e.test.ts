@@ -6,6 +6,7 @@ import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -167,6 +168,103 @@ describeControlUiE2e("Control UI chat message actions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it.each([
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "mobile", width: 390, height: 844 },
+  ])("keeps view-only subagent reply actions absent on $name", async (viewport) => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: viewport.name === "mobile",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      recordVideo: captureUiProof ? { dir: artifactDir, size: viewport } : undefined,
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(server.baseUrl).origin,
+    });
+    const parent = { key: "agent:main:reply-parent", kind: "direct", label: "Workspace review" };
+    const child = {
+      key: "agent:main:subagent:reply-child",
+      kind: "direct",
+      label: "Check dependencies",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+      status: "done",
+      hasActiveRun: false,
+    };
+    const message = "The dependency review is complete.";
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        sessionKey: child.key,
+        sessions: [parent, child],
+        historyMessages: [
+          {
+            role: "user",
+            content: "Review the workspace dependencies.",
+            timestamp: Date.now() - 2_000,
+            __openclaw: { id: "review-request", seq: 1 },
+          },
+          {
+            role: "assistant",
+            content: message,
+            timestamp: Date.now() - 1_000,
+            __openclaw: { id: "review-result", seq: 2 },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(server.baseUrl, child.key));
+      await gateway.waitForRequest("chat.startup");
+      await page.getByText("View-only subagent", { exact: true }).waitFor();
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const bubble = activePane.locator('.chat-bubble[data-entry-id="review-result"]');
+      await bubble.waitFor({ state: "visible" });
+      if (viewport.name === "mobile") {
+        await bubble.tap();
+      } else {
+        await bubble.hover();
+      }
+      await screenshot(page, `${viewport.name}-subagent-actions.png`);
+      expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
+      expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
+      const copy = page.getByRole("button", { name: "Copy as markdown", exact: true });
+      await copy.click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(message);
+      await bubble.click({ button: "right" });
+      const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      await screenshot(page, `${viewport.name}-subagent-context-menu.png`);
+      expect.soft(await menu.getByRole("menuitem", { name: "Reply to message" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('.chat-bubble[data-entry-id="review-request"]').click({ button: "right" });
+      expect(
+        await menu.getByRole("menuitem", { name: "Fork from here", exact: true }).count(),
+      ).toBe(1);
+      await page.keyboard.press("Escape");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await page.getByRole("button", { name: "Open parent session", exact: true }).click();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      if (viewport.name === "mobile") {
+        await bubble.tap();
+      } else {
+        await bubble.hover();
+      }
+      await activePane
+        .locator(".chat-group.assistant")
+        .getByRole("button", { name: "Reply to message", exact: true })
+        .click();
+      await expect
+        .poll(() => activePane.locator(".chat-reply-preview__text").textContent())
+        .toBe(message);
+      await screenshot(page, `${viewport.name}-parent-reply.png`);
+    } finally {
+      await context.close();
+    }
   });
 
   it.each([
