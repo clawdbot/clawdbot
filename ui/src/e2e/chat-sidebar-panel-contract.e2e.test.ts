@@ -257,8 +257,8 @@ async function seedHiddenBoardSlot(page: Page) {
                 {
                   id: "side-panel-column",
                   side: "right",
-                  panels: [{ id: "chat", slot: "chat" }],
-                  activePanelId: "chat",
+                  panels: [{ id: "dashboard", slot: "dashboard" }],
+                  activePanelId: "dashboard",
                   height: 360,
                   width: 480,
                 },
@@ -427,14 +427,18 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-      await expect.poll(() => panel.count()).toBe(0);
+      const selector = panel.locator(".side-panel-empty--selector");
+      const toggle = page.locator(".chat-side-panel-toggle");
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
 
-      await page.locator(".chat-side-panel-toggle").click();
-      await panel.locator(".side-panel-empty--selector").waitFor();
+      await toggle.click();
+      await selector.waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
+      expect(await page.locator(".chat-panel-swap").isVisible()).toBe(false);
 
-      await panel.getByRole("button", { name: "Close", exact: true }).click();
-      await expect.poll(() => panel.count()).toBe(0);
+      await toggle.click();
+      await selector.waitFor({ state: "hidden" });
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -657,10 +661,13 @@ suite.define(() => {
     expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
     expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
     const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
-    for (const selector of [".side-panel__expand", ".side-panel__minimize"]) {
-      expect(
-        await page.locator(selector).evaluate((button) => getComputedStyle(button).color),
-      ).toBe(restingColor);
+    for (const action of [
+      page.locator(".chat-pane__header").getByRole("button", { name: "Focus", exact: true }),
+      page
+        .locator('[data-region-header="side"]')
+        .getByRole("button", { name: "Close", exact: true }),
+    ]) {
+      expect(await action.evaluate((button) => getComputedStyle(button).color)).toBe(restingColor);
     }
     const clearTooltip = clearAction.locator("..");
     await clearAction.hover();

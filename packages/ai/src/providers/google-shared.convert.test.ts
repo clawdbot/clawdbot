@@ -1,5 +1,3 @@
-// Google shared conversion tests cover runtime-to-Google payload conversion.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Tool } from "../types.js";
@@ -19,17 +17,6 @@ const convertMessagesForTest = convertMessages as unknown as (
   model: GoogleSharedTestModel,
   context: Context,
 ) => ReturnType<typeof convertMessages>;
-
-function requireRecordProperty(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const value = record[key];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected object property ${key}`);
-  }
-  return value as Record<string, unknown>;
-}
 
 describe("google-shared convertTools", () => {
   it("keeps Google tool declarations stable across discovery order", () => {
@@ -559,7 +546,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = assertRecord(toolResponsePart);
-    expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
+    expect(assertRecord(toolResponse.functionResponse).name).toBe("myTool");
     expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
 
@@ -589,7 +576,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = assertRecord(toolCallPart);
-    expect(requireRecordProperty(toolCall, "functionCall").name).toBe("myTool");
+    expect(assertRecord(toolCall.functionCall).name).toBe("myTool");
   });
 
   it("strips tool call and response ids for google-gemini-cli", () => {
@@ -676,7 +663,7 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = contents[0]?.parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    const toolResponse = requireRecordProperty(assertRecord(toolResponsePart), "functionResponse");
+    const toolResponse = assertRecord(assertRecord(toolResponsePart).functionResponse);
     expect(assertRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );

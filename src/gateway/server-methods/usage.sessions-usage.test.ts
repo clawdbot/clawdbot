@@ -4,7 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
@@ -25,7 +27,7 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -74,19 +76,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       return [];
     }),
     loadSessionCostSummariesFromCache: vi.fn(async (params: { sessions: unknown[] }) => ({
-      summaries: params.sessions.map(() => ({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      })),
+      summaries: params.sessions.map(() => createEmptyCostUsageTotals()),
       cacheStatus: {
         status: "fresh",
         cachedFiles: params.sessions.length,
@@ -185,10 +175,27 @@ function expectSuccessfulSessionsUsage(
 ): Array<{ key: string; agentId: string }> {
   expect(respond).toHaveBeenCalledTimes(1);
   expect(mockArg(respond, 0, 0)).toBe(true);
-  const result = mockArg(respond, 0, 1) as {
-    sessions: Array<{ key: string; agentId: string }>;
-  };
-  return result.sessions;
+  return (mockArg(respond, 0, 1) as { sessions: Array<{ key: string; agentId: string }> }).sessions;
+}
+
+function mockCombinedStore(
+  store: Record<string, SessionEntry>,
+  owners: ReadonlyArray<readonly [string, string]>,
+) {
+  vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+    durableTargets: [],
+    storePath: "(multiple)",
+    store,
+    targetsBySessionKey: new Map(
+      owners.map(([key, agentId]) => [
+        key,
+        {
+          agentId,
+          storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
+        },
+      ]),
+    ),
+  });
 }
 
 function mockStoredSession(
@@ -335,17 +342,11 @@ describe("sessions.usage", () => {
         }
         const tokens = session.sessionId === "s-a" ? 10 : 20;
         return {
+          ...createEmptyCostUsageTotals(),
           input: tokens,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
           totalTokens: tokens,
           totalCost: tokens / 1000,
           inputCost: tokens / 1000,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          missingCostEntries: 0,
         };
       }),
       cacheStatus: {
@@ -503,18 +504,13 @@ describe("sessions.usage", () => {
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(1);
-    expect(expectDefined(sessions[0], "sessions[0] test invariant").key).toBe(
-      "agent:codex:s-codex",
-    );
-    expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("codex");
+    expect(sessions[0]?.key).toBe("agent:codex:s-codex");
+    expect(sessions[0]?.agentId).toBe("codex");
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      agentIdBySessionKey: new Map([["agent:main:s-opus", "main"]]),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
+    mockCombinedStore(
+      {
         "agent:main:s-opus": {
           sessionId: "s-opus",
           sessionFile: "s-opus.jsonl",
@@ -522,7 +518,8 @@ describe("sessions.usage", () => {
           updatedAt: 999,
         },
       },
-    });
+      [["agent:main:s-opus", "main"]],
+    );
 
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" });
 
@@ -543,11 +540,8 @@ describe("sessions.usage", () => {
       writeSessionFile("main.jsonl");
       mockStoredSession("agent:opus:main", "main");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["agent:opus:main", "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           "agent:opus:main": {
             sessionId: "main",
             sessionFile: "main.jsonl",
@@ -555,7 +549,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [["agent:opus:main", "opus"]],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -593,20 +588,17 @@ describe("sessions.usage", () => {
       writeSessionFile("current.jsonl");
       mockStoredSession("global", "current");
 
-      const sessionEntry = {
-        sessionId: "current",
-        sessionFile: "current.jsonl",
-        label: "Opus global",
-        updatedAt: 999,
-      };
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["global", "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
-          global: sessionEntry,
+      mockCombinedStore(
+        {
+          global: {
+            sessionId: "current",
+            sessionFile: "current.jsonl",
+            label: "Opus global",
+            updatedAt: 999,
+          },
         },
-      });
+        [["global", "opus"]],
+      );
 
       const respond = await runSessionsUsage(
         {
@@ -639,11 +631,8 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([["agent:main:shared", "main"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           "agent:main:shared": {
             sessionId: "shared",
             sessionFile: "shared.jsonl",
@@ -651,7 +640,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [["agent:main:shared", "main"]],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -686,11 +676,8 @@ describe("sessions.usage", () => {
 
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [storeKey]: {
             sessionId: "s-opus",
             sessionFile: "s-opus.jsonl",
@@ -698,7 +685,8 @@ describe("sessions.usage", () => {
             updatedAt: 999,
           },
         },
-      });
+        [[storeKey, "opus"]],
+      );
 
       // Query via discovered key: agent:<id>:<sessionId>
       const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:s-opus" });
@@ -716,6 +704,7 @@ describe("sessions.usage", () => {
 
   it("rolls up known session family ids when historical usage is requested", async () => {
     const storeKey = "agent:opus:main";
+    const dailySources: Array<{ missingCostByModel: Record<string, number> }> = [];
 
     await withUsageState(async (writeSessionFile) => {
       const oldSessionFile = writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
@@ -724,11 +713,8 @@ describe("sessions.usage", () => {
         { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
       ]);
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [storeKey]: {
             sessionId: "current",
             updatedAt: 1_000,
@@ -736,27 +722,32 @@ describe("sessions.usage", () => {
             usageFamilySessionIds: ["old", "current"],
           },
         },
-      });
+        [[storeKey, "opus"]],
+      );
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
         summaries: sessions.map((session) => {
           const historical = session.sessionId === "old";
           const totalTokens = historical ? 10 : 20;
           const totalCost = historical ? 0.02 : 0.01;
           const totals = {
+            ...createEmptyCostUsageTotals(),
             input: totalTokens,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
             totalTokens,
             totalCost,
             inputCost: totalCost,
-            outputCost: 0,
-            cacheReadCost: 0,
-            cacheWriteCost: 0,
-            missingCostEntries: 0,
           };
+          const daily = {
+            ...totals,
+            date: "2026-02-01",
+            tokens: totalTokens,
+            cost: totalCost,
+            missingCostEntries: 1,
+            missingCostByModel: { "fixture/unpriced": 1 },
+          };
+          dailySources.push(daily);
           return {
             ...totals,
+            dailyBreakdown: [daily],
             messageCounts: {
               total: 1,
               user: 1,
@@ -815,6 +806,12 @@ describe("sessions.usage", () => {
           usage?: {
             totalTokens: number;
             totalCost: number;
+            dailyBreakdown?: Array<{
+              totalTokens: number;
+              totalCost: number;
+              missingCostEntries: number;
+              missingCostByModel?: Record<string, number>;
+            }>;
             messageCounts?: { total: number };
             modelUsage?: Array<{ provider?: string; model?: string }>;
             dailyModelUsage?: Array<{ provider?: string; model?: string }>;
@@ -833,6 +830,24 @@ describe("sessions.usage", () => {
       expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old"]);
       expect(result.sessions[0]?.usage?.totalTokens).toBe(30);
       expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.03);
+      expect(result.sessions[0]?.usage?.dailyBreakdown).toMatchObject([
+        {
+          date: "2026-02-01",
+          tokens: 30,
+          cost: 0.03,
+          totalTokens: 30,
+          totalCost: 0.03,
+          input: 30,
+          inputCost: 0.03,
+          missingCostEntries: 2,
+          missingCostByModel: { "fixture/unpriced": 2 },
+        },
+      ]);
+      expect(dailySources).toHaveLength(2);
+      expect(dailySources.map((day) => day.missingCostByModel)).toEqual([
+        { "fixture/unpriced": 1 },
+        { "fixture/unpriced": 1 },
+      ]);
       expect(result.sessions[0]?.usage?.messageCounts?.total).toBe(2);
       expect(result.sessions[0]?.usage?.toolUsage?.tools.map((tool) => tool.name)).toEqual([
         "z-first",
@@ -866,14 +881,8 @@ describe("sessions.usage", () => {
       writeSessionFile("run-dup.jsonl");
       mockStoredSession(preferredKey, "run-dup");
 
-      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-        agentIdBySessionKey: new Map([
-          [preferredKey, "opus"],
-          ["agent:other:main", "other"],
-        ]),
-        durableTargets: [],
-        storePath: "(multiple)",
-        store: {
+      mockCombinedStore(
+        {
           [preferredKey]: {
             sessionId: "run-dup",
             sessionFile: "run-dup.jsonl",
@@ -885,7 +894,11 @@ describe("sessions.usage", () => {
             updatedAt: 2_000,
           },
         },
-      });
+        [
+          [preferredKey, "opus"],
+          ["agent:other:main", "other"],
+        ],
+      );
 
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
@@ -1032,19 +1045,7 @@ describe("sessions.usage", () => {
       .mockResolvedValueOnce([]); // second agent (opus) — no extra sessions
 
     const buildUsage = (sessionId?: string) => {
-      const emptyUsage = {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      };
+      const emptyUsage = createEmptyCostUsageTotals();
       if (sessionId === "s-late") {
         // Range-filtered summary with no in-range entries: zero counts, no
         // first/last activity. Must not count as an active session.

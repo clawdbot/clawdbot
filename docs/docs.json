@@ -1167,6 +1167,10 @@
     {
       "source": "/gateway/bridge-protocol",
       "destination": "/gateway/protocol"
+    },
+    {
+      "source": "/providers/inferrs",
+      "destination": "/providers/llmman"
     }
   ],
   "navigation": {
@@ -1479,6 +1483,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
@@ -1677,10 +1682,10 @@
                   "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
-                  "providers/inferrs",
                   "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/llmman",
                   "providers/lmstudio",
                   "providers/longcat",
                   "providers/meta",
@@ -2160,6 +2165,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.2",
                   "releases/2026.9.1",
                   "releases/2026.8.2",
                   "releases/2026.8.1",

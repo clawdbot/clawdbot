@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
+  persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -86,6 +87,41 @@ describe("guardSessionManager transcript updates", () => {
     ]);
   });
 
+  it("reloads the session manager after atomic compaction persistence rolls back", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    const keptId = sessionManager.appendMessage({
+      role: "user",
+      content: "keep",
+      timestamp: 1,
+    });
+    const guarded = guardSessionManager(sessionManager, {
+      withCompactionPersistence: (append, validateAppend) =>
+        persistCompactionBoundaryWithSessionEntrySync(target, {
+          append,
+          transcriptByteCompactionLatch: {
+            activeBytes: 2048,
+            sessionId: target.sessionId,
+            maxBytes: 1024,
+          },
+          validateAppend: (entryId, appendedText) => {
+            expect(validateAppend(entryId, appendedText)).toBe(true);
+            return false;
+          },
+        }),
+    });
+
+    expect(() => guarded.appendCompaction("summary", keptId, 100)).toThrow(
+      "Compaction boundary validation failed",
+    );
+    expect(sessionManager.getLeafId()).toBe(keptId);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toEqual([]);
+    expect(
+      SessionManager.open(target, root)
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toEqual([]);
+  });
+
   it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
     const { root, target, sessionEntry } = await openPersistedSessionManager();
     const recorderTarget = { ...target, sessionEntry };
@@ -131,6 +167,9 @@ describe("guardSessionManager transcript updates", () => {
       const guarded = guardSessionManager(SessionManager.open(target, root), {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        preparedUserTurnMessage: await ambient.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: ambient,
+        suppressNextUserMessagePersistence: true,
       });
       const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
         { role: "user", content: "Rendered steering prompt", timestamp: 2 },

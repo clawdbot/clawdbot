@@ -165,7 +165,8 @@ async function runSkillHistoryScanCore(
     }
     const durableProgress = await getSkillProposalRunProgress({
       runId: stored.pending.runId,
-      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      config: params.config,
       ...(params.env ? { env: params.env } : {}),
     });
     resumedPending = {

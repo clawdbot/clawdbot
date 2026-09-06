@@ -533,14 +533,9 @@
 
 .chat-queue__overflow wa-dropdown-item {
   width: 100%;
-  font-size: 12px;
-}
-
-.chat-queue__overflow wa-dropdown-item::part(base) {
-  box-sizing: border-box;
-  width: 100%;
   min-height: 32px;
   padding: 5px 8px;
+  font-size: 12px;
 }
 
 .chat-queue__overflow wa-dropdown-item span[slot="icon"] {

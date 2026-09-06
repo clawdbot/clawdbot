@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
   controlUiSessionUrl,
@@ -17,6 +19,15 @@ beforeEach(() => {
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".custodian-surface"), [
+        page.locator(".custodian__messages"),
+      ]),
+    );
     return;
   }
   await page.screenshot({

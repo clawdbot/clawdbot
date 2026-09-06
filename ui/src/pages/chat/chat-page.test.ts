@@ -31,6 +31,7 @@ import {
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
@@ -75,7 +76,7 @@ function createSessionTitleSource() {
   } = { result: null };
   return {
     sessions: {
-      canonicalListRevision: 0,
+      ...createChatPageSessions(),
       state,
       subscribe(listener: () => void) {
         listeners.add(listener);
@@ -158,7 +159,7 @@ function setNavigationContext(page: ChatPage) {
   };
   const context = {
     basePath: "",
-    sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
+    sessions: { ...createChatPageSessions(), patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },
@@ -212,6 +213,9 @@ function setViewerPresenceContext(page: ChatPage) {
     subscribeEventLog: () => () => {},
     subscribeEvents: () => () => {},
   };
+  Object.assign(navigation.context, {
+    sessions: createChatPageSessions(navigation.context.gateway),
+  });
   return { ...navigation, request };
 }
 

@@ -8,7 +8,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
@@ -92,6 +95,7 @@ describe("gateway presence audience", () => {
     const sharedKey = "agent:main:presence-shared";
     const sharedSessionId = randomUUID();
     const draftKey = "agent:main:presence-draft";
+    const draftSessionId = randomUUID();
     const incognitoKey = "agent:main:dashboard:incognito-presence";
     const restrictedKey = "agent:main:presence-restricted-draft";
     const missingKey = "agent:main:presence-missing";
@@ -109,7 +113,12 @@ describe("gateway presence audience", () => {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
-            sessionId: sessionKey === sharedKey ? sharedSessionId : randomUUID(),
+            sessionId:
+              sessionKey === sharedKey
+                ? sharedSessionId
+                : sessionKey === draftKey
+                  ? draftSessionId
+                  : randomUUID(),
             updatedAt: Date.now(),
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: profileId },
@@ -118,6 +127,22 @@ describe("gateway presence audience", () => {
           },
         );
       }
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId: draftSessionId, sessionKey: draftKey },
+        {
+          updateMode: "none",
+          messages: [
+            {
+              message: {
+                role: "user",
+                content: "foreign draft transcript",
+                timestamp: 1,
+              },
+              now: Date.parse("2026-09-04T08:00:00.000Z"),
+            },
+          ],
+        },
+      );
       const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
       const observePresence = (ws: Awaited<ReturnType<typeof openWs>>) => {
         const events: SystemPresence[][] = [];
@@ -244,6 +269,36 @@ describe("gateway presence audience", () => {
                 .toSorted(),
               `${scenario.name} canonical sessions.list visibility`,
             ).toEqual(scenario.allowed.toSorted());
+            const canReadDraft = scenario.allowed.includes(draftKey);
+            const described = await rpcReq<{ session: { sessionId?: string } | null }>(
+              recipient.ws,
+              "sessions.describe",
+              { key: draftKey },
+            );
+            if (scenario.name === "restricted") {
+              expect(described.ok, `${scenario.name} sessions.describe scope`).toBe(false);
+            } else {
+              expect(described, `${scenario.name} sessions.describe visibility`).toMatchObject({
+                ok: true,
+                payload: {
+                  session: canReadDraft ? { sessionId: draftSessionId } : null,
+                },
+              });
+            }
+            const transcript = await rpcReq<{ messages: Array<{ content?: unknown }> }>(
+              recipient.ws,
+              "sessions.get",
+              { key: draftKey },
+            );
+            if (scenario.name === "restricted") {
+              expect(transcript.ok, `${scenario.name} sessions.get scope`).toBe(false);
+            } else {
+              expect(transcript.ok, `${scenario.name} sessions.get visibility`).toBe(true);
+              expect(
+                transcript.payload?.messages.map((message) => message.content),
+                `${scenario.name} sessions.get transcript`,
+              ).toEqual(canReadDraft ? ["foreign draft transcript"] : []);
+            }
           }
           const presence = await rpcReq(recipient.ws, "system-presence");
           expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);
@@ -254,20 +309,34 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
           onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
             ws,
-            (frame) => frame.type === "event" && frame.event === "presence",
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.some(
+                (entry) =>
+                  entry.instanceId === watcherInstanceId &&
+                  entry.lastActivityAt !== undefined &&
+                  entry.lastActivityAt >= typingStartedAt,
+              ),
           ),
         );
         // Own event rejections before the typing request can fail or time out.
         const [events] = await Promise.all([
           Promise.all(eventPromises),
-          rpcReq(watcher.ws, "session.typing", {
-            sessionKey: sharedKey,
-            sessionId: sharedSessionId,
-            typing: true,
-          }).then((response) => expect(response).toMatchObject({ ok: true })),
+          // A late connection publishes an older snapshot before the typing activity.
+          openRecipient("late-reader", ["operator.read"])
+            .then(() =>
+              rpcReq(watcher.ws, "session.typing", {
+                sessionKey: sharedKey,
+                sessionId: sharedSessionId,
+                typing: true,
+              }),
+            )
+            .then((response) => expect(response).toMatchObject({ ok: true })),
         ]);
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
@@ -335,10 +404,24 @@ describe("gateway presence audience", () => {
           [idle, 1],
           [overlap, 0],
         ] as const) {
+          const isLiveIdle = (entry: SystemPresence) =>
+            entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
+          // A different socket's response cannot join this connection's server close.
+          const disconnected = onceMessage<{
+            type: string;
+            event: string;
+            payload: { presence: SystemPresence[] };
+          }>(
+            watcher.ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.filter(isLiveIdle).length === remaining,
+          );
           const closed = once(connection.ws, "close");
           connection.ws.close();
-          await closed;
-          const rows = await liveIdleRows();
+          const [, event] = await Promise.all([closed, disconnected]);
+          const rows = event.payload.presence.filter(isLiveIdle);
           expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
           if (remaining) {
             expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);

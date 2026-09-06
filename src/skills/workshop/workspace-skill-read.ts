@@ -1,93 +1,101 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPathInside } from "../../infra/path-guards.js";
+import { resolveSkillStatusEntry } from "../discovery/status.js";
 import {
-  buildWorkspaceSkillStatus,
-  resolveSkillStatusEntry,
-  type SkillStatusEntry,
-} from "../discovery/status.js";
-import {
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
-import { tryRealpath } from "../loading/symlink-targets.js";
-import { listWorkshopOwnedSkillDirs } from "./ownership.js";
+import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
+import type { Skill } from "../loading/skill-contract.js";
+import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
-
-export function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {
-  if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-    throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
-  }
-  assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
-  assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
+function assertWritableSkillTarget(
+  skill: Pick<Skill, "baseDir" | "filePath" | "name">,
+  options: WorkshopSkillReadOptions,
+): void {
+  const skillsRoot = workshopSkillsDir(options);
+  assertInsideSkillsRoot(skillsRoot, skill.filePath, "skill file");
+  assertInsideSkillsRoot(skillsRoot, skill.baseDir, "skill directory");
   if (path.basename(skill.filePath) !== "SKILL.md") {
     throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
 }
 
-export function isWorkspaceOwnedSkillTarget(
-  workspaceDir: string,
-  skill: Pick<SkillStatusEntry, "baseDir">,
-): boolean {
-  const workspaceRealPath = tryRealpath(path.resolve(workspaceDir));
-  const skillRealPath = tryRealpath(path.resolve(skill.baseDir));
-  return Boolean(
-    workspaceRealPath && skillRealPath && isPathInside(workspaceRealPath, skillRealPath),
+export type WritableWorkshopSkillSummary = {
+  name: string;
+  skillKey: string;
+  description: string;
+  baseDir: string;
+  filePath: string;
+};
+
+export type WorkshopSkillReadOptions = {
+  config: OpenClawConfig;
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+function workshopSkillsDir(options: WorkshopSkillReadOptions): string {
+  if (!options.agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return resolveWorkshopSkillsDir(options.config, options.agentId, options.env);
+}
+
+export function listWritableWorkshopSkillSummaries(
+  options: WorkshopSkillReadOptions,
+): WritableWorkshopSkillSummary[] {
+  // The inventory is model-visible and reviewer-iterated, so it shares the loader's
+  // per-source count, file-size, symlink, and hardlink limits instead of an unbounded read.
+  const records = loadSkillRootRecords({
+    dir: workshopSkillsDir(options),
+    source: "openclaw-workshop",
+    config: options.config,
+  });
+  return records
+    .map(({ skill, frontmatter }) => ({
+      name: skill.name,
+      skillKey: resolveSkillManifestMetadata(frontmatter)?.skillKey ?? skill.name,
+      description: skill.description,
+      baseDir: skill.baseDir,
+      filePath: skill.filePath,
+    }))
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+function resolveWritableWorkshopSkillSummary(
+  skillName: string,
+  options: WorkshopSkillReadOptions,
+): WritableWorkshopSkillSummary | undefined {
+  return (
+    resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), skillName) ?? undefined
   );
 }
 
-type WritableWorkspaceSkillSummary = {
-  name: string;
-  description?: string;
-  filePath: string;
-  userAuthored: boolean;
-};
-
-/**
- * Lists the workspace skills the workshop can target with update proposals, using the same
- * status discovery as `proposeUpdateSkill` so callers that route learnings to existing
- * skills stay in lockstep with what an update can actually write.
- */
-export function listWritableWorkspaceSkillSummaries(
-  workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string; env?: NodeJS.ProcessEnv },
-): WritableWorkspaceSkillSummary[] {
-  const status = buildWorkspaceSkillStatus(workspaceDir, {
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
-  const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, opts?.env ? { env: opts.env } : {});
-  return status.skills
-    .filter((skill) => WRITABLE_WORKSPACE_SOURCES.has(skill.source))
-    .map((skill) => ({
-      name: skill.name,
-      description: skill.description,
-      filePath: skill.filePath,
-      userAuthored: !ownedDirs.has(path.resolve(skill.baseDir)),
-    }));
-}
-
-/** Reads the live SKILL.md of a writable workspace skill, resolved like an update target. */
-export async function readWritableWorkspaceSkill(
-  workspaceDir: string,
+export async function readWritableWorkshopSkill(
   skillName: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
-): Promise<{ skillName: string; skillKey: string; skillFile: string; content: string }> {
+  options: WorkshopSkillReadOptions,
+): Promise<{
+  skillName: string;
+  skillKey: string;
+  skillFile: string;
+  content: string;
+  baseDir: string;
+  description: string;
+}> {
   const name = normalizeOptionalString(skillName);
   if (!name) {
     throw new Error("Skill name is required.");
   }
-  const status = buildWorkspaceSkillStatus(workspaceDir, {
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
-  const targetSkill = resolveSkillStatusEntry(status.skills, name);
+  const targetSkill = resolveWritableWorkshopSkillSummary(name, options);
   if (!targetSkill) {
-    throw new Error(`Skill not found: ${name}`);
+    throw new Error(
+      `Skill Workshop can only update skills it generated. No Workshop-generated skill matched: ${name}. Create it as a new skill, or edit the file directly.`,
+    );
   }
-  assertWritableSkillTarget(workspaceDir, targetSkill);
+  assertWritableSkillTarget(targetSkill, options);
   const content = await readWorkspaceSkillFile(targetSkill.filePath);
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
@@ -97,5 +105,7 @@ export async function readWritableWorkspaceSkill(
     skillKey: targetSkill.skillKey,
     skillFile: targetSkill.filePath,
     content,
+    baseDir: targetSkill.baseDir,
+    description: targetSkill.description,
   };
 }

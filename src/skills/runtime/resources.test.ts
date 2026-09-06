@@ -152,6 +152,69 @@ describe("prepared workspace skill resources", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "omits a discovered skill whose root becomes a broken symlink between turns",
+    async () => {
+      const workspace = await fs.realpath(temps.make("skill-stale-root-"));
+      const healthyDir = await writeSkill(workspace, "healthy");
+      const staleDir = await writeSkill(workspace, "stale");
+      const snapshot = loadSnapshot(workspace);
+      expect((await prepareSkillResourceDelivery(snapshot, () => {}))?.skills).toHaveLength(2);
+
+      await fs.rm(staleDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-stale-target"), staleDir, "dir");
+
+      await expect(prepareSkillResourceDelivery(snapshot, () => {})).resolves.toMatchObject({
+        skills: [{ name: "healthy" }],
+      });
+      await fs.rm(healthyDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-healthy-target"), healthyDir, "dir");
+      await expect(prepareSkillResourceDelivery(snapshot, () => {})).resolves.toEqual({
+        version: 1,
+        skills: [],
+      });
+      await expect(
+        prepareSkillResourceDelivery(snapshot, () => {}, [
+          { name: "stale", path: path.join(staleDir, "SKILL.md") },
+        ]),
+      ).rejects.toMatchObject({
+        code: "INVALID_BUNDLE",
+        message: expect.stringMatching(/skill="stale".*root=.*stale.*ENOENT/s),
+      });
+    },
+  );
+
+  it("names an unavailable explicit skill and root", async () => {
+    const workspace = await fs.realpath(temps.make("skill-missing-explicit-"));
+    await writeSkill(workspace, "visible");
+    const missingPath = path.join(workspace, "skills", "missing", "SKILL.md");
+
+    await expect(
+      prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}, [
+        { name: "missing", path: missingPath },
+      ]),
+    ).rejects.toMatchObject({
+      code: "INVALID_BUNDLE",
+      message: expect.stringMatching(/skill="missing".*root=.*missing.*ENOENT/s),
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps nested links fail-closed with selected skill diagnostics",
+    async () => {
+      const workspace = await fs.realpath(temps.make("skill-nested-link-"));
+      const directory = await writeSkill(workspace, "linked");
+      await fs.symlink("SKILL.md", path.join(directory, "linked-skill"));
+
+      await expect(
+        prepareSkillResourceDelivery(loadSnapshot(workspace), () => {}),
+      ).rejects.toMatchObject({
+        code: "INVALID_BUNDLE",
+        message: expect.stringMatching(/skill="linked".*root=.*linked.*path=.*linked-skill/s),
+      });
+    },
+  );
+
   it("preserves a loaded directory-name fallback and exact instruction and executable bytes", async () => {
     const workspace = await fs.realpath(temps.make("skill-resources-"));
     const directory = await writeSkill(workspace, "directory-name");

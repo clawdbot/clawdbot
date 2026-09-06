@@ -5,7 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
-import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
+import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
@@ -17,6 +17,7 @@ import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./active-run-cancellation.js";
 import { stop } from "./ops-lifecycle.js";
+import { executeJobCore } from "./timer-execution.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -317,7 +318,7 @@ describe("cron service timer seam coverage", () => {
     });
   });
 
-  it.each(["command", "script", "systemEvent", "heartbeat", "skillCollectionReview"] as const)(
+  it.each(["command", "script", "systemEvent", "heartbeat"] as const)(
     "does not run a %s payload when trigger evaluation resolves after cancellation",
     async (kind) => {
       const { storePath } = await makeStorePath();
@@ -332,9 +333,6 @@ describe("cron service timer seam coverage", () => {
       const requestHeartbeat = vi.fn();
       const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-      const runSkillCollectionReview = vi.fn(() =>
-        Promise.resolve({ status: "ok" as const, summary: "Review complete" }),
-      );
       const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
@@ -347,7 +345,6 @@ describe("cron service timer seam coverage", () => {
         evaluateCronTrigger,
         runCommandJob,
         runScriptJob,
-        runSkillCollectionReview,
         runIsolatedAgentJob,
       });
       const baseJob =
@@ -355,7 +352,7 @@ describe("cron service timer seam coverage", () => {
           ? createDueCommandJob({ now })
           : kind === "script"
             ? createDueScriptJob({ now })
-            : kind === "heartbeat" || kind === "skillCollectionReview"
+            : kind === "heartbeat"
               ? {
                   ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
                   payload: { kind },
@@ -378,7 +375,6 @@ describe("cron service timer seam coverage", () => {
         expect(requestHeartbeat).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(runScriptJob).not.toHaveBeenCalled();
-        expect(runSkillCollectionReview).not.toHaveBeenCalled();
         expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       } finally {
         // Abort before releasing evaluation so failed assertions cannot start payload work.
@@ -388,37 +384,6 @@ describe("cron service timer seam coverage", () => {
       }
     },
   );
-
-  it("runs skill collection review payloads through the injected runner", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-07-27T12:00:00.000Z");
-    const runSkillCollectionReview = vi.fn(async ({ agentId }: { agentId: string }) => ({
-      status: "ok" as const,
-      summary: `reviewed ${agentId}`,
-    }));
-    const state = createCronServiceState({
-      storePath,
-      cronEnabled: true,
-      cronConfig: { triggers: { enabled: true } },
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runSkillCollectionReview,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job: CronJob = {
-      ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
-      agentId: "ops",
-      payload: { kind: "skillCollectionReview" },
-    };
-
-    await expect(executeJobCore(state, job)).resolves.toMatchObject({
-      status: "ok",
-      summary: "reviewed ops",
-    });
-    expect(runSkillCollectionReview).toHaveBeenCalledWith({ agentId: "ops" });
-  });
 
   it("runs command cron jobs without isolated agent setup", async () => {
     const { storePath } = await makeStorePath();

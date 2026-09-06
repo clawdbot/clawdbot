@@ -165,10 +165,10 @@ describe("dashboardCommand", () => {
       },
     });
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
@@ -186,10 +186,10 @@ describe("dashboardCommand", () => {
 
     // Clipboard and browser receive only the short-lived browser bootstrap.
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
 
     // The logged output must never contain the token — it flows into
@@ -381,7 +381,7 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("missing env var");
@@ -402,10 +402,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
     expectNoLogWith("Token auto-auth unavailable");
@@ -420,10 +420,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");

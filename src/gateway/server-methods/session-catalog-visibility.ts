@@ -1,6 +1,7 @@
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,7 +37,8 @@ export function resolveSessionCatalogVisibility(
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
   const multipleIdentities = hasMultipleSessionSharingIdentities();
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const attachedProfileId = client?.authenticatedUserProfile?.profileId;
+  const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
   const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({

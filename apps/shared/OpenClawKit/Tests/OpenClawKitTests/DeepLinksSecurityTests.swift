@@ -43,6 +43,82 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         #expect(DeepLinkParser.parse(url) == .dashboard)
     }
 
+    @Test(arguments: ["openclaw", "openclaw-debug"])
+    func gatewayAddDeepLinkPreservesAddressAndLabel(scheme: String) throws {
+        var components = URLComponents(string: "\(scheme)://gateway/add")!
+        components.queryItems = [
+            URLQueryItem(name: "url", value: "HTTPS://Gateway.Example:8443/openclaw%20gateway/"),
+            URLQueryItem(name: "name", value: " Research & Design "),
+        ]
+        let route = DeepLinkParser.parse(try #require(components.url))
+        guard case let .gatewayAdd(link) = route else {
+            Issue.record("Expected a gateway-add intent")
+            return
+        }
+        #expect(link.url.absoluteString == "https://gateway.example:8443/openclaw%20gateway/")
+        #expect(link.name == "Research & Design")
+        #expect(GatewayConnectDeepLink.fromSetupInput(components.url!.absoluteString) == nil)
+    }
+
+    @Test(arguments: [
+        "https://gateway.example/",
+        "https://127.0.0.1:8443/",
+        "https://openclaw.local/gateway",
+        "https://gateway.example/operator%2Fteam",
+    ])
+    func gatewayAddDeepLinkDoesNotRequireADeploymentHostname(address: String) throws {
+        var components = URLComponents(string: "openclaw://gateway/add")!
+        components.queryItems = [URLQueryItem(name: "url", value: address)]
+        guard case let .gatewayAdd(link) = DeepLinkParser.parse(try #require(components.url)) else {
+            Issue.record("Expected a gateway-add intent")
+            return
+        }
+        #expect(link.url.absoluteString == address)
+        #expect(link.name == nil)
+    }
+
+    @Test(arguments: [
+        "http://gateway.example/",
+        "http://127.0.0.1:18789/",
+        "wss://gateway.example/",
+        "file:///tmp/gateway",
+        "https://user@gateway.example/",
+        "https://gateway.example/?token=secret",
+        "https://gateway.example/#secret",
+        "https://gateway.example/?",
+        "https://gateway.example/#",
+        "https://gateway.example:0/",
+        "https://gateway.example:65536/",
+    ])
+    func gatewayAddDeepLinkRejectsNonAddressMetadata(address: String) throws {
+        var components = URLComponents(string: "openclaw://gateway/add")!
+        components.queryItems = [URLQueryItem(name: "url", value: address)]
+        #expect(DeepLinkParser.parse(try #require(components.url)) == nil)
+    }
+
+    @Test func gatewayAddDeepLinkRejectsPasswordCredentials() throws {
+        var address = try #require(URLComponents(string: "https://gateway.example/"))
+        address.user = "fixture-user"
+        address.password = "fixture-password"
+        var link = try #require(URLComponents(string: "openclaw://gateway/add"))
+        link.queryItems = [URLQueryItem(name: "url", value: try #require(address.url).absoluteString)]
+        #expect(DeepLinkParser.parse(try #require(link.url)) == nil)
+    }
+
+    @Test(arguments: [
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&token=secret",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&password=secret",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&url=https%3A%2F%2Fother.example",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&name=One&name=Two",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example#secret",
+        "openclaw://user@gateway/add?url=https%3A%2F%2Fgateway.example",
+        "openclaw://gateway:443/add?url=https%3A%2F%2Fgateway.example",
+        "openclaw://gateway/add?host=gateway.example&tls=1&token=secret",
+    ])
+    func gatewayAddDeepLinkRejectsCredentialsAndAmbiguousParameters(raw: String) throws {
+        #expect(DeepLinkParser.parse(try #require(URL(string: raw))) == nil)
+    }
+
     @Test func gatewayDeepLinkUsesTlsDefaultPortWhenPortMissing() {
         let link = gatewayLink(from: "openclaw://gateway?host=gateway.example.com&tls=1")
         #expect(link?.port == 443)

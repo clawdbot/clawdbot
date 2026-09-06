@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   getReplyPayloadMetadata,
@@ -102,7 +102,6 @@ export async function prepareReplyAgentPayloads(state: {
     sessionModel,
     terminalFailurePayload,
     usage,
-    verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
   const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
@@ -244,6 +243,8 @@ export async function prepareReplyAgentPayloads(state: {
   // Share this state across deliverable lanes so replyToMode=first still threads
   // at most one visible payload without hidden reasoning/commentary consuming it.
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  const isGeneratedToolWarning = (payload: ReplyPayload) =>
+    getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
     const isDisabledReasoningLane =
       payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
@@ -251,7 +252,11 @@ export async function prepareReplyAgentPayloads(state: {
       payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
-    return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+    const shouldDeferToolWarning = yieldAcknowledgmentPayload && isGeneratedToolWarning(payload);
+    return isDisabledReasoningLane ||
+      isDisabledCommentaryLane ||
+      isFilteredPayload ||
+      shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -303,6 +308,7 @@ export async function prepareReplyAgentPayloads(state: {
       hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
       silentExpected: followupRun.run.silentExpected,
+      hasExplicitSilentReply: deliberateSilentTerminalReply,
     });
     if (!silentFallbackFailurePayload) {
       return undefined;
@@ -418,18 +424,29 @@ export async function prepareReplyAgentPayloads(state: {
   const payloadResult = await buildFinalPayloads(payloadCandidates);
   let { replyPayloads } = payloadResult;
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
-  const hasTerminalReplyPayload = replyPayloads.some(
+  const replyPayloadsWithoutToolWarnings = yieldAcknowledgmentPayload
+    ? replyPayloads.filter((payload) => !isGeneratedToolWarning(payload))
+    : replyPayloads;
+  const hasTerminalReplyPayload = replyPayloadsWithoutToolWarnings.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
+  if (yieldAcknowledgmentPayload && hasTerminalReplyPayload) {
+    replyPayloads = replyPayloadsWithoutToolWarnings;
+  }
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
     const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
   } else if (yieldAcknowledgmentPayload && !hasTerminalReplyPayload) {
     const acknowledgmentResult = await buildFinalPayloads([yieldAcknowledgmentPayload]);
-    replyPayloads = [...replyPayloads, ...acknowledgmentResult.replyPayloads];
+    replyPayloads =
+      acknowledgmentResult.replyPayloads.length > 0
+        ? [...replyPayloadsWithoutToolWarnings, ...acknowledgmentResult.replyPayloads]
+        : replyPayloads.map((payload) =>
+            isGeneratedToolWarning(payload) ? applyFinalReplyToMode(payload) : payload,
+          );
     didLogHeartbeatStrip = acknowledgmentResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -557,13 +574,13 @@ export async function prepareReplyAgentPayloads(state: {
       promptTokens,
       usage,
     });
-    const costConfig = resolveModelCostConfig({
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
       agentDir: followupRun.run.agentDir,
     });
-    const costUsd = estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
       ...(runResult.diagnosticTrace
@@ -612,12 +629,15 @@ export async function prepareReplyAgentPayloads(state: {
     replyUsageState,
   });
 
-  if (verboseEnabled) {
+  // Refresh inherited verbosity even when it started off: session preferences
+  // and plugin diagnostics may change while the model runs.
+  if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
     activeSessionEntry = refreshSessionEntryFromStore({
       storePath,
       sessionKey,
       fallbackEntry: activeSessionEntry,
       activeSessionStore,
+      expectedGeneration: accounting.expectedSession,
     });
   }
 

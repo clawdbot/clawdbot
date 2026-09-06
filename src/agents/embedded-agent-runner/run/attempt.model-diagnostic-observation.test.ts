@@ -650,18 +650,35 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
         errorMessage: undefined,
         errorCode: undefined,
         failureKind: "aborted",
+        requestIdHash: undefined,
       },
       {
         stopReason: "error",
         errorMessage: "request timed out",
         errorCode: undefined,
         failureKind: "timeout",
+        requestIdHash: undefined,
       },
       {
         stopReason: "error",
         errorMessage: "provider unavailable",
         errorCode: "ETIMEDOUT",
         failureKind: "timeout",
+        requestIdHash: undefined,
+      },
+      {
+        stopReason: "error",
+        errorMessage: "synthetic-private-error [request_id=req_error_usage]",
+        errorCode: "ECONNRESET",
+        failureKind: "connection_reset",
+        requestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
+      },
+      {
+        stopReason: "aborted",
+        errorMessage: "synthetic-private-error [request_id=req_error_usage]",
+        errorCode: "ECONNRESET",
+        failureKind: "aborted",
+        requestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
       },
     ].flatMap((failure) =>
       ["iterator", "result", "result-then-iterator", "iterator-then-result"].map((consumption) =>
@@ -670,7 +687,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
     ),
   )(
     "records $stopReason/$failureKind via $consumption with usage and no duplicate terminal event",
-    async ({ stopReason, errorMessage, errorCode, failureKind, consumption }) => {
+    async ({ stopReason, errorMessage, errorCode, failureKind, requestIdHash, consumption }) => {
       const assistant = {
         role: "assistant",
         content: [{ type: "text", text: "partial reply" }],
@@ -702,7 +719,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
         },
       );
 
-      const events = await collectModelCallEvents(async () => {
+      const entries = await collectTrustedModelCallEvents(async () => {
         const response = wrapped(
           {} as never,
           {} as never,
@@ -722,9 +739,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
         }
       });
 
+      const events = entries.map(({ event }) => event);
       expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
       const errorEvent = getEvent(events, 1);
+      expect(errorEvent.errorCategory).toBe("Error");
       expect(errorEvent.failureKind).toBe(failureKind);
+      expect(errorEvent.upstreamRequestIdHash).toEqual(requestIdHash);
       expect(errorEvent.responseStreamBytes).toBeGreaterThan(0);
       expect(errorEvent.usage).toEqual({
         input: 11,
@@ -735,6 +755,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
         total: 28,
         promptTokens: 16,
       });
+      expect(entries[1]?.privateData.modelContent).toBeUndefined();
+      expect(JSON.stringify(entries)).not.toContain("synthetic-private-error");
+      expect(JSON.stringify(entries)).not.toContain("req_error_usage");
+      expect(JSON.stringify(entries)).not.toContain("partial reply");
     },
   );
 

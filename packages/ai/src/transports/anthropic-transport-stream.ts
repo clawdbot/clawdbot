@@ -9,6 +9,7 @@ import type {
   TextContent,
   ToolCall,
 } from "@openclaw/llm-core";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
  * Native Anthropic Messages streaming transport.
@@ -100,6 +101,10 @@ import {
 } from "./anthropic-compaction-replay.js";
 import {
   applyAnthropicPayloadPolicyToParams,
+  applyAnthropicContextManagementToRequest,
+  isDirectAnthropicModel,
+  logAnthropicContextEdits,
+  resolveAnthropicContextManagementBetaHeader,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import {
@@ -145,7 +150,6 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 
 type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop"> & {
-    anthropicServerCompaction?: boolean;
     authProfileId?: string;
   };
 type AnthropicMessagesClient = {
@@ -229,14 +233,6 @@ function resolveAnthropicMessagesMaxTokens(params: {
           Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
         ),
       );
-}
-
-function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
-  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
-    return false;
-  }
-  const endpointClass = resolveProviderEndpoint(model).endpointClass;
-  return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
@@ -555,22 +551,11 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   const projection = projectAnthropicTools(tools ?? [], (name) =>
     isOAuthToken ? toClaudeCodeToolName(name) : name,
   );
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
-  for (const tool of projection.tools) {
-    converted.push({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    });
-  }
+  const converted = projection.tools.map((tool) => ({
+    name: tool.wireName,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
   return { projection, tools: converted };
 }
 
@@ -1106,7 +1091,9 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning,
-    ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
+    anthropicServerCompaction: options?.anthropicServerCompaction,
+    anthropicCompactThreshold: options?.anthropicCompactThreshold,
+    cacheTtlPruning: options?.cacheTtlPruning,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   });
   if (reasoning === "off") {
@@ -1160,9 +1147,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-            notifyLlmRequestActivity(options?.signal),
-          )
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
         : undefined;
       const eventSink = refusalBuffer ?? stream;
       // Fallback-served turns bill at the serving model's rates; a boundary
@@ -1193,15 +1178,24 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
+        applyAnthropicContextManagementToRequest(
+          params,
+          model,
+          transportOptions,
+          directApiKeyBetaHeader,
+        );
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const bindingHeaders = applyAnthropicThinkingBindingControls(
+        const betaHeader = resolveAnthropicContextManagementBetaHeader(
           params,
           directApiKeyBetaHeader,
         );
+        const bindingHeaders =
+          applyAnthropicThinkingBindingControls(params, betaHeader) ??
+          (betaHeader !== undefined ? { "anthropic-beta": betaHeader } : undefined);
         const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           { signal: transportOptions.signal, headers: bindingHeaders },
@@ -1271,7 +1265,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (contentIndex === undefined) {
             return false;
           }
-          block.thinking += text;
+          appendAssistantThinking(block, text);
           block.thinkingSignature = "reasoning_content";
           eventSink.push({
             type: "thinking_delta",
@@ -1354,6 +1348,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         for await (const event of anthropicStream) {
           // A serving-model fallback replaces the initial snapshot; report only once at completion.
           inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
+          notifyLlmRequestActivity(transportOptions.signal);
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
             throw new Error(error?.message || "Anthropic Messages stream failed");
@@ -1625,7 +1620,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "thinking_delta" &&
               typeof delta.thinking === "string"
             ) {
-              block.thinking += delta.thinking;
+              appendAssistantThinking(block, delta.thinking);
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,
@@ -1718,6 +1713,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "message_delta") {
+            logAnthropicContextEdits(event);
             const delta = event.delta as
               | { stop_reason?: string; stop_details?: unknown }
               | undefined;

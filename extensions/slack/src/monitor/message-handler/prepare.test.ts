@@ -11,10 +11,13 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { compileSafeRegexDetailed } from "openclaw/plugin-sdk/security-runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { slackPlugin } from "../../channel.js";
 import { registerSlackInstallationState } from "../../installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
@@ -521,12 +524,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   it("sends Enterprise pairing codes through the validated listener scope", async () => {
     const postMessage = vi.fn(async () => ({ ok: true, ts: "123.456", channel: "D999" }));
-    const listenerClient = {
+    const writeClient = {
       chat: { postMessage },
     } as unknown as SlackEventScope["client"];
     const eventScope = {
       teamId: "T123ENTERPRISE",
-      client: listenerClient,
+      client: {} as SlackEventScope["client"],
+      writeClient,
     } satisfies SlackEventScope;
     const ctx = createDefaultSlackCtx();
     ctx.allowFrom = [];
@@ -1147,23 +1151,30 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
-  it("restores Slack assistant DM thread context from Slack message metadata", async () => {
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
-        {
-          user: "B1",
-          metadata: {
-            event_type: "assistant_thread_context",
-            event_payload: {
-              channel_id: "C999",
-              team_id: "T1",
-              enterprise_id: "E1",
-            },
+  it("restores Slack assistant DM thread context from root-only Slack metadata", async () => {
+    const messages = [
+      {
+        user: "B1",
+        ts: "10.000",
+        metadata: {
+          event_type: "assistant_thread_context",
+          event_payload: {
+            channel_id: "C999",
+            team_id: "T1",
+            enterprise_id: "E1",
           },
         },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
+      },
+    ];
+    const replies = vi.fn(
+      async ({ oldest, inclusive }: { oldest?: string; inclusive?: boolean }) => ({
+        messages: messages.filter(
+          (message) =>
+            !oldest || Number(message.ts) > Number(oldest) || (message.ts === oldest && inclusive),
+        ),
+        response_metadata: { next_cursor: "" },
+      }),
+    );
     const ctx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
@@ -1184,13 +1195,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     assertPrepared(prepared);
     const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
-    expect(replies).toHaveBeenCalledWith({
-      channel: "D123",
-      ts: "10.000",
-      oldest: "10.000",
-      include_all_metadata: true,
-      limit: 4,
-    });
+    expect(replies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D123",
+        ts: "10.000",
+        include_all_metadata: true,
+        limit: 4,
+      }),
+    );
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
     expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
     expect(prepared.forcedReplyThreadTs).toBe("10.000");
@@ -1833,7 +1845,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    slackCtx.ackReactionScope = "group-all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -1874,7 +1885,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    slackCtx.ackReactionScope = "all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -5048,6 +5058,19 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 });
 
 describe("prepareSlackMessage sender prefix", () => {
+  const stripPreparedMentions = (ctx: FinalizedMsgContext, text: string): string => {
+    const compiled = (slackPlugin.mentions?.stripPatterns?.({ ctx, cfg: undefined }) ?? []).map(
+      (pattern) => compileSafeRegexDetailed(pattern, "gi"),
+    );
+    expect(compiled).not.toHaveLength(0);
+    expect(compiled.map((entry) => entry.reason)).toEqual(compiled.map(() => null));
+    return compiled
+      .flatMap((entry) => (entry.regex ? [entry.regex] : []))
+      .reduce((value, regex) => value.replace(regex, " "), text)
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
   function createSenderPrefixCtx(params: {
     channels: Record<string, unknown>;
     allowFrom?: string[];
@@ -5058,6 +5081,7 @@ describe("prepareSlackMessage sender prefix", () => {
       cfg: {
         agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
         channels: { slack: params.channels },
+        messages: { ackReactionScope: "off" },
       },
       accountId: "default",
       botToken: "xoxb",
@@ -5092,7 +5116,6 @@ describe("prepareSlackMessage sender prefix", () => {
       threadInheritParent: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
-      ackReactionScope: "off",
       mediaMaxBytes: 1000,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
@@ -5141,7 +5164,36 @@ describe("prepareSlackMessage sender prefix", () => {
     expect(result.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello");
   });
 
-  it("keeps raw Slack mention tokens when user lookup cannot resolve them", async () => {
+  it("keeps rendered mention names out of command text while retaining them for the agent", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: {},
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek (Ops)" });
+
+    const result = await prepareSenderPrefixMessage(
+      ctx,
+      "<@BOT> Please /help continue",
+      "1700000000.0002",
+    );
+
+    if (!result) {
+      throw new Error("expected Slack sender prefix message");
+    }
+    expect(result.ctxPayload.RawBody).toBe("<@BOT> (Bek (Ops)) Please /help continue");
+    expect(result.ctxPayload.BodyForAgent).toBe("<@BOT> (Bek (Ops)) Please /help continue");
+    expect(result.ctxPayload.CommandBody).toBe("Please /help continue");
+    expect(result.ctxPayload.ChannelContext?.chat?.commandSourceText).toBe(
+      "<@BOT> (Bek (Ops)) Please /help continue",
+    );
+    const strippedRawBody = stripPreparedMentions(
+      result.ctxPayload,
+      result.ctxPayload.RawBody ?? "",
+    );
+    expect(strippedRawBody).toBe(result.ctxPayload.CommandBody);
+  });
+
+  it("keeps user parenthetical text when a Slack mention name cannot resolve", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
       slashCommand: { command: "/openclaw", enabled: true },
@@ -5150,14 +5202,88 @@ describe("prepareSlackMessage sender prefix", () => {
       name: id === "U1" ? "Alice" : undefined,
     });
 
-    const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
+    const result = await prepareSenderPrefixMessage(
+      ctx,
+      "<@BOT> (urgent) Please /help continue",
+      "1700000000.0001",
+    );
 
     if (!result) {
       throw new Error("expected Slack sender prefix message");
     }
     const body = result.ctxPayload.Body;
-    expect(body).toContain("Alice (U1): <@BOT> hello");
-    expect(result.ctxPayload.RawBody).toBe("<@BOT> hello");
+    expect(body).toContain("Alice (U1): <@BOT> (urgent) Please /help continue");
+    expect(result.ctxPayload.RawBody).toBe("<@BOT> (urgent) Please /help continue");
+    expect(result.ctxPayload.CommandBody).toBe("(urgent) Please /help continue");
+    expect(stripPreparedMentions(result.ctxPayload, result.ctxPayload.RawBody ?? "")).toBe(
+      result.ctxPayload.CommandBody,
+    );
+  });
+
+  it("records the rendered command source for direct messages", async () => {
+    const ctx = createInboundSlackTestContext({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+    });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" });
+    const result = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount(),
+      message: {
+        type: "message",
+        channel: "D1",
+        channel_type: "im",
+        text: "<@B1> Please /help continue",
+        user: "U1",
+        ts: "1700000000.0003",
+        event_ts: "1700000000.0003",
+      } as never,
+      opts: { source: "message" },
+    });
+
+    if (!result) {
+      throw new Error("expected Slack direct message");
+    }
+    expect(result.ctxPayload.ChatType).toBe("direct");
+    expect(result.ctxPayload.CommandBody).toBe("Please /help continue");
+    expect(result.ctxPayload.ChannelContext?.chat?.commandSourceText).toBe(
+      "<@B1> (Bek) Please /help continue",
+    );
+  });
+
+  it("keeps the complete multiline sender span separate from attachment context", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: {},
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" });
+
+    const result = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {}, replyToMode: "off" } as never,
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        text: "<@BOT> Please /help\ncontinue",
+        attachments: [{ is_share: true, author_name: "Bob", text: "Forwarded context" }],
+        user: "U1",
+        ts: "1700000000.0004",
+        event_ts: "1700000000.0004",
+      } as never,
+      opts: { source: "message", wasMentioned: true },
+    });
+
+    if (!result) {
+      throw new Error("expected Slack message with attachment context");
+    }
+    expect(result.ctxPayload.CommandBody).toBe("Please /help continue");
+    expect(result.ctxPayload.ChannelContext?.chat?.commandSourceText).toBe(
+      "<@BOT> (Bek) Please /help\ncontinue",
+    );
+    expect(result.ctxPayload.BodyForAgent).toContain("[Forwarded message from Bob]");
+    expect(result.ctxPayload.ChannelContext?.chat?.commandSourceText).not.toContain(
+      "Forwarded context",
+    );
   });
 
   it("caps Slack mention username lookups per inbound message and leaves overflow mentions raw", async () => {

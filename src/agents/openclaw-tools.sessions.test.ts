@@ -1019,10 +1019,8 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let historyCallCount = 0;
     let waitCallCount = 0;
     let sendCallCount = 0;
-    let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1051,25 +1049,11 @@ describe("sessions tools", () => {
       if (request.method === "agent.wait") {
         waitCallCount += 1;
         const params = request.params as { runId?: string } | undefined;
-        lastWaitedRunId = params?.runId;
-        return { runId: params?.runId ?? "run-1", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        historyCallCount += 1;
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const runId = params?.runId ?? "run-1";
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text,
-                },
-              ],
-              timestamp: 20,
-            },
-          ],
+          runId,
+          status: "ok",
+          terminalReply: { disposition: "visible", text: replyByRunId.get(runId) },
         };
       }
       if (request.method === "send") {
@@ -1097,7 +1081,6 @@ describe("sessions tools", () => {
     expect(fireDetails.delivery?.mode).toBe("announce");
     await waitForCalls(() => agentCallCount, 3);
     await waitForCalls(() => waitCallCount, 3);
-    await waitForCalls(() => historyCallCount, 3);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -1150,7 +1133,6 @@ describe("sessions tools", () => {
     );
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
-    await waitForCalls(() => historyCallCount, 7);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
@@ -1196,8 +1178,71 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(6);
-    expect(historyOnlyCalls).toHaveLength(7);
+    expect(historyOnlyCalls).toHaveLength(0);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_send does not redeliver a source reply when history lacks its message-tool result", async () => {
+    const sessionKey = "agent:main:discord:group:source";
+    const marker = "source reply delivered once";
+    let waitObserved = false;
+    const deliveredMessages: string[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      if (request.method === "agent") {
+        return { runId: "run-source-reply", status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        waitObserved = true;
+        deliveredMessages.push(marker);
+        return {
+          runId: "run-source-reply",
+          status: "ok",
+          terminalReply: { disposition: "visible", text: marker },
+          terminalReceipt: {
+            runId: "run-source-reply",
+            sessionId: "source-session",
+            turnId: "source-turn",
+            requested: { provider: "provider", model: "model" },
+            effective: { provider: "provider", model: "model", responseModel: "model" },
+            successfulToolNames: ["message"],
+            sourceReplyDelivered: true,
+            rerouted: false,
+            terminalDisposition: "visible",
+          },
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: waitObserved ? [{ role: "assistant", content: marker, timestamp: 20 }] : [],
+        };
+      }
+      if (request.method === "send") {
+        deliveredMessages.push(String(request.params?.message));
+        return { messageId: "duplicate-reply" };
+      }
+      return {};
+    });
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: sessionKey,
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-source-reply", {
+      sessionKey,
+      message: "Reply through the message tool",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-source-reply" });
+    await vi.waitFor(() => {
+      expect(waitObserved).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(deliveredMessages).toEqual([marker]);
+    expect(callGatewayMock.mock.calls.some(([request]) => request.method === "chat.history")).toBe(
+      false,
+    );
   });
 
   it("keeps scoped sends from creating post-return work or durable watches", async () => {
@@ -1297,10 +1342,11 @@ describe("sessions tools", () => {
         return { runId: "run-waited-audit", status: "accepted", acceptedAt: 1 };
       }
       if (request.method === "agent.wait") {
-        return { runId: request.params?.runId, status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [{ role: "assistant", content: "REPLY_SKIP", timestamp: 2 }] };
+        return {
+          runId: request.params?.runId,
+          status: "ok",
+          terminalReply: { disposition: "silent" },
+        };
       }
       return {};
     });
@@ -1428,9 +1474,6 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
       if (request.method === "agent") {
         return {
           runId: "run-pending-model-error",
@@ -1487,10 +1530,7 @@ describe("sessions tools", () => {
         return { runId: "run-1", acceptedAt: 123 };
       }
       if (request.method === "agent.wait") {
-        return { status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
+        return { status: "ok", terminalReply: { disposition: "empty" } };
       }
       return {};
     });
@@ -1517,7 +1557,6 @@ describe("sessions tools", () => {
   it("sessions_send runs ping-pong then announces", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "discord:group:target";
@@ -1551,19 +1590,11 @@ describe("sessions tools", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
-        lastWaitedRunId = params?.runId;
-        return { runId: params?.runId ?? "run-1", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const runId = params?.runId ?? "run-1";
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: 20,
-            },
-          ],
+          runId,
+          status: "ok",
+          terminalReply: { disposition: "visible", text: replyByRunId.get(runId) },
         };
       }
       if (request.method === "send") {
@@ -1667,37 +1698,19 @@ describe("sessions tools", () => {
             return { runId: "run-target", status: "timeout" };
           }
           await delayedWaitGate;
-          return { runId: "run-target", status: "ok" };
+          return {
+            runId: "run-target",
+            status: "ok",
+            terminalReply: { disposition: "visible", text: "late director reply" },
+          };
         }
         if (params?.runId === "run-requester") {
-          return { runId: "run-requester", status: "ok" };
-        }
-      }
-      if (request.method === "chat.history") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        if (params?.sessionKey === targetKey && targetWaitCount > 1) {
           return {
-            messages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "late director reply" }],
-                timestamp: 20,
-              },
-            ],
+            runId: "run-requester",
+            status: "ok",
+            terminalReply: { disposition: "visible", text: "requester saw director" },
           };
         }
-        if (params?.sessionKey === requesterKey) {
-          return {
-            messages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "requester saw director" }],
-                timestamp: 21,
-              },
-            ],
-          };
-        }
-        return { messages: [] };
       }
       return {};
     });
@@ -1945,27 +1958,15 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
-      if (request.method === "chat.history") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        const text =
-          params?.sessionKey === durableCronCallerKey
-            ? "existing durable reply"
-            : "existing run reply";
-        return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: 20,
-            },
-          ],
-        };
-      }
       if (request.method === "agent") {
         return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
       }
       if (request.method === "agent.wait") {
-        return { runId: "durable-fallback-run", status: "ok" };
+        return {
+          runId: "durable-fallback-run",
+          status: "ok",
+          terminalReply: { disposition: "empty" },
+        };
       }
       return {};
     });
@@ -1993,24 +1994,11 @@ describe("sessions tools", () => {
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
-    await waitForCalls(
-      () =>
-        countMatching(
-          calls,
-          (call) =>
-            call.method === "chat.history" &&
-            (call.params as { sessionKey?: string } | undefined)?.sessionKey ===
-              durableCronCallerKey,
-        ),
-      2,
-    );
-    const firstFallbackHistoryIndex = calls.findIndex(
-      (call) =>
-        call.method === "chat.history" &&
-        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCronCallerKey,
-    );
-    const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
-    expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
+    await waitForCalls(() => countMatching(calls, (call) => call.method === "agent.wait"), 1);
+    expect(calls.find((call) => call.method === "agent.wait")?.params).toMatchObject({
+      runId: "durable-fallback-run",
+    });
+    expect(calls.filter((call) => call.method === "chat.history")).toHaveLength(0);
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
@@ -2300,9 +2288,6 @@ describe("sessions tools", () => {
           error: "agent run timed out",
         };
       }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
       return {};
     });
 
@@ -2337,9 +2322,6 @@ describe("sessions tools", () => {
       if (request.method === "agent.wait") {
         return { runId: "run-error", status: "error", error: "agent failed" };
       }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
       return {};
     });
 
@@ -2364,7 +2346,6 @@ describe("sessions tools", () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:discord:direct:parent";
     const targetKey = "agent:main:subagent:child";
-    let historyCallCount = 0;
     loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
       sessionKey === targetKey
         ? {
@@ -2385,21 +2366,10 @@ describe("sessions tools", () => {
         return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
       }
       if (request.method === "agent.wait") {
-        return { runId: "run-child", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        historyCallCount += 1;
         return {
-          messages:
-            historyCallCount === 1
-              ? []
-              : [
-                  {
-                    role: "assistant",
-                    content: [{ type: "text", text: "child reply" }],
-                    timestamp: 20,
-                  },
-                ],
+          runId: "run-child",
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "child reply" },
         };
       }
       return {};
@@ -2437,7 +2407,6 @@ describe("sessions tools", () => {
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "agent:main:worker";
@@ -2477,19 +2446,11 @@ describe("sessions tools", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
-        lastWaitedRunId = params?.runId;
-        return { runId: params?.runId ?? "run-1", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const runId = params?.runId ?? "run-1";
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: 20,
-            },
-          ],
+          runId,
+          status: "ok",
+          terminalReply: { disposition: "visible", text: replyByRunId.get(runId) },
         };
       }
       if (request.method === "sessions.list") {

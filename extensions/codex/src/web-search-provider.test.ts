@@ -155,6 +155,7 @@ function createFakeClient(options?: {
     addRequestHandler() {
       return () => {};
     },
+    addCloseHandler: () => () => undefined,
   } as unknown as CodexAppServerClient;
 
   return { client, requests };

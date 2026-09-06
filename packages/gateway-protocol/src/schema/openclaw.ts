@@ -3,6 +3,10 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import {
+  SetupInferenceActivationRejectionSchema,
+  SetupInferenceFailureStatusSchema,
+} from "./setup-inference.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 export const SystemAgentWizardCancelSchema = closedObject({
@@ -93,6 +97,8 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  /** Optional navigation only; the destination obtains its own human authorization. */
+  handoff: Type.Optional(closedObject({ kind: Type.Literal("model-accounts") })),
   /** Optional localized-draft intent for an `open-agent` handoff. */
   agentDraft: Type.Optional(Type.Literal("hatch")),
   /** Destination agent for a specific `open-agent` handoff. */
@@ -192,23 +198,7 @@ const SetupInferenceKind = Type.Union([
 
 const SetupInferenceStatus = Type.Union([
   Type.Literal("ok"),
-  Type.Literal("auth"),
-  Type.Literal("rate_limit"),
-  Type.Literal("billing"),
-  Type.Literal("timeout"),
-  Type.Literal("format"),
-  Type.Literal("unavailable"),
-  Type.Literal("unknown"),
-]);
-
-const SetupInferenceFailureStatus = Type.Union([
-  Type.Literal("auth"),
-  Type.Literal("rate_limit"),
-  Type.Literal("billing"),
-  Type.Literal("timeout"),
-  Type.Literal("format"),
-  Type.Literal("unavailable"),
-  Type.Literal("unknown"),
+  ...SetupInferenceFailureStatusSchema.anyOf,
 ]);
 
 export const SystemAgentSetupDetectResultSchema = closedObject({
@@ -323,7 +313,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
   }),
   closedObject({
     ok: Type.Literal(false),
-    status: SetupInferenceFailureStatus,
+    status: SetupInferenceFailureStatusSchema,
     error: NonEmptyString,
   }),
 ]);
@@ -370,6 +360,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   /** Present on failure: coarse bucket for client copy + docs links. */
   status: Type.Optional(SetupInferenceStatus),
   error: Type.Optional(Type.String()),
+  /** Owner-recorded rejection, not a claim that preparation had no persistent effects. */
+  disposition: Type.Optional(SetupInferenceActivationRejectionSchema.properties.disposition),
 });
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */

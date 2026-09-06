@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   createSqliteSchemaIssue,
@@ -158,11 +159,11 @@ export function collectSqliteSchemaIssues(
     const actualIndexFingerprints = new Set(
       actualTable.indexes.map((index) => JSON.stringify(index)),
     );
-    const expectedIndexFingerprints = new Set(
-      expectedTable.indexes.map((index) => JSON.stringify(index)),
-    );
+    const expectedIndexFingerprints = new Set<string>();
     for (const expectedIndex of expectedTable.indexes) {
-      if (!actualIndexFingerprints.has(JSON.stringify(expectedIndex))) {
+      const fingerprint = JSON.stringify(expectedIndex);
+      expectedIndexFingerprints.add(fingerprint);
+      if (!actualIndexFingerprints.has(fingerprint)) {
         const objectName = expectedIndex.name ?? tableName;
         const namedIndexPresent = expectedIndex.name
           ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
@@ -422,9 +423,12 @@ function collectSqliteTableContract(
   database: DatabaseSync,
   tableName: string,
 ): SqliteTableContract | undefined {
-  const table = database
-    .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get(tableName) as SqliteSchemaRow | undefined;
+  const table = executeWithCachedStatement(
+    database,
+    "SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    [tableName],
+    (statement) => statement.get(tableName),
+  ) as SqliteSchemaRow | undefined;
   if (!table) {
     return undefined;
   }
@@ -442,16 +446,17 @@ function collectSqliteTableContract(
     .map((index) => collectSqliteIndexContract(database, index))
     .toSorted(compareJson);
   const triggers = (
-    database
-      .prepare(
-        `
+    executeWithCachedStatement(
+      database,
+      `
           SELECT name, sql
           FROM sqlite_schema
           WHERE type = 'trigger' AND tbl_name = ?
           ORDER BY name
         `,
-      )
-      .all(tableName) as SqliteSchemaRow[]
+      [tableName],
+      (statement) => statement.all(tableName),
+    ) as SqliteSchemaRow[]
   ).map((trigger) => ({
     name: trigger.name,
     sql: normalizeSchemaSql(trigger.sql),
@@ -579,9 +584,12 @@ function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
 ): SqliteIndexContract {
-  const row = database
-    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?")
-    .get(index.name) as { sql?: unknown } | undefined;
+  const row = executeWithCachedStatement(
+    database,
+    "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
+    [index.name],
+    (statement) => statement.get(index.name),
+  ) as { sql?: unknown } | undefined;
   const terms = (
     database
       .prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(index.name)})`)

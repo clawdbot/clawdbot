@@ -65,9 +65,11 @@ export function renderDiffBlock(
                   : "";
           const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
           return html`<div class="chat-diff__row ${kindClass}">
-            ${hasLineNumbers
-              ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
-              : nothing}
+            ${
+              hasLineNumbers
+                ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
+                : nothing
+            }
             <span class="chat-diff__sign">${sign}</span>
             <span class="chat-diff__text">${renderLine(line)}</span>
           </div>`;

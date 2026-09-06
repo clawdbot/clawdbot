@@ -30,6 +30,7 @@ export async function proveHotReloadBrowserSettings({
   const SESSION_KEY = "agent:qa:main";
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
+    recordVideo: { dir: outputDir, size: { width: 1280, height: 900 } },
     serviceWorkers: "block",
   });
   await context.addInitScript(
@@ -68,7 +69,9 @@ export async function proveHotReloadBrowserSettings({
         (label) => document.title.endsWith(` · ${label}`),
         environment.label,
       );
-      assert.equal(await page.locator(".control-ui-environment-stripe").count(), 1);
+      const stripe = page.locator(".control-ui-environment-stripe");
+      await stripe.waitFor({ state: "visible" });
+      assert.equal(await stripe.count(), 1);
       await page.screenshot({ path: path.join(outputDir, `environment-${environment.color}.png`) });
     }
     await verifyContinuity(
@@ -147,5 +150,7 @@ export async function proveHotReloadBrowserSettings({
     );
   });
 
+  const video = page.video();
   await context.close();
+  await video?.saveAs(path.join(outputDir, "control-ui-hot-reload.webm"));
 }

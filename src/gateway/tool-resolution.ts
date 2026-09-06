@@ -43,6 +43,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
+import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -89,6 +90,8 @@ export function resolveGatewayScopedTools(params: {
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
+  /** Trusted run-local context carried only by a Gateway-launched CLI grant. */
+  pinnedWidgetAuthoring?: boolean;
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -111,6 +114,8 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   /** Server-minted coding tools that must be mediated through the loopback surface. */
   mediatedToolNames?: Iterable<string>;
+  /** Host-projected canonical authority for native CLI tools absent from this bridge. */
+  nativeCronCreatorToolAllowlist?: readonly string[];
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
@@ -307,6 +312,13 @@ export function resolveGatewayScopedTools(params: {
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    questionPrompt: createChannelQuestionPromptDelivery({
+      cfg: params.cfg,
+      channel: params.messageProvider,
+      to: params.currentChannelId ?? params.agentTo,
+      accountId: params.accountId,
+      threadId: params.currentThreadTs ?? params.agentThreadId,
+    }),
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
@@ -339,6 +351,7 @@ export function resolveGatewayScopedTools(params: {
     modelId: params.modelId,
     modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist([
@@ -488,8 +501,6 @@ export function resolveGatewayScopedTools(params: {
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             sessionStore: params.cfg.session?.store,
-            mainKey: params.cfg.session?.mainKey,
-            sessionScope: params.cfg.session?.scope,
             eventRouting: resolveEventSessionRoutingPolicy({
               cfg: params.cfg,
               sessionKey: params.sessionKey,
@@ -572,8 +583,16 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
-    getPluginToolMeta(tool),
+  replaceWithEffectiveCronCreatorToolAllowlist(
+    cronCreatorToolAllowlist,
+    inheritableTools,
+    (tool) => getPluginToolMeta(tool),
+    {
+      canonicalToolNames: params.nativeCronCreatorToolAllowlist,
+      // The loopback grant only carries native authority for Gateway-placed
+      // CLI runs, so its native shell is pinned restrict-only to this host.
+      nativeExecTarget: { host: "gateway" },
+    },
   );
 
   return {

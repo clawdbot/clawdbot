@@ -19,6 +19,7 @@ import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
+import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import {
   buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
@@ -369,6 +370,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       env: {
         ...handoffEnv,
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        ...(params.opts.run ? { [UPDATE_RUN_ID_ENV]: params.opts.run.runId } : {}),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,

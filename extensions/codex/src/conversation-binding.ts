@@ -116,6 +116,7 @@ import {
   getCodexAppServerTurnRouter,
   type CodexThreadRouteReservation,
 } from "./app-server/turn-router.js";
+import { defineCodexBuildState } from "./build-state.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
@@ -286,17 +287,13 @@ async function resolveConversationAppServerRuntime(params: {
   };
 }
 
-const CODEX_CONVERSATION_GLOBAL_STATE = Symbol.for("openclaw.codex.conversationBinding");
 const CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS =
   "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.";
 
-function getGlobalState(): CodexConversationGlobalState {
-  const globalState = globalThis as typeof globalThis & {
-    [CODEX_CONVERSATION_GLOBAL_STATE]?: CodexConversationGlobalState;
-  };
-  globalState[CODEX_CONVERSATION_GLOBAL_STATE] ??= { queue: new KeyedAsyncQueue() };
-  return globalState[CODEX_CONVERSATION_GLOBAL_STATE];
-}
+const getGlobalState = defineCodexBuildState(
+  "openclaw.codex.conversationBinding",
+  (): CodexConversationGlobalState => ({ queue: new KeyedAsyncQueue() }),
+);
 
 async function startCodexConversationThread(
   params: CodexConversationStartParams,
@@ -623,11 +620,8 @@ function codexConversationSandboxOrPermissions(
   // globally configured Codex apps even when a network profile adds config.
   // Per-app user config overrides apps._default, so the feature kill switch
   // is the only authoritative boundary for this handlerless runtime.
-  const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
-    "features.apps": false,
-  })!;
   const config = buildCodexProjectDocThreadConfig(
-    mergeCodexThreadConfigs(networkProxy?.configPatch, disabledApps),
+    mergeCodexThreadConfigs(networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
   );
   return networkProxy ? { config } : { sandbox, config };
 }

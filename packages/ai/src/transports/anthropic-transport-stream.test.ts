@@ -11,6 +11,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
@@ -1652,6 +1653,30 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
+  it("reports every parsed Anthropic event as request activity", async () => {
+    const events = [
+      anthropicMessageStart({ id: "msg_activity", usage: {} }),
+      { type: "ping" },
+      { type: "message_stop" },
+    ];
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse(events));
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runTransportStream(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(events.length);
+  });
+
   it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic"],
     ["claude-opus-5", "Claude Opus 5", "anthropic"],
@@ -2806,9 +2831,11 @@ describe("anthropic transport stream", () => {
             parameters: {
               type: "object",
               properties: {
-                query: { type: "string" },
+                query: { $ref: "#/$defs/Query" },
               },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           },
         ],
@@ -2822,8 +2849,12 @@ describe("anthropic transport stream", () => {
     expect(tools).toHaveLength(1);
     const tool = requireRecord(tools[0], "tool");
     expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
+      required: ["query"],
+      additionalProperties: false,
     });
   });
 

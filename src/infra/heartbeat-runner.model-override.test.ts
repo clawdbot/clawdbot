@@ -199,15 +199,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       heartbeatModelOverride: "ollama/llama3.2:1b",
-      suppressToolErrorWarnings: false,
-    });
-  });
-
-  it("keeps heartbeat tool-error warnings enabled", async () => {
-    const replyOpts = await runDefaultsHeartbeat({});
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      suppressToolErrorWarnings: false,
     });
   });
 

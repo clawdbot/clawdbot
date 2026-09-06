@@ -33,6 +33,7 @@ export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
+  | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
@@ -42,6 +43,12 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  sdkCompatibility?: {
+    seam: string;
+    coreVersion: string;
+    builtWithOpenClawVersion?: string;
+    nestedSdk: boolean;
+  };
 };
 
 export type PluginManifestChannelConfig = {
@@ -263,6 +270,14 @@ export type PluginManifestDashboard = {
   actionVerbs?: PluginManifestDashboardActionVerb[];
 };
 
+/** Built browser assets activated by the trusted native Control UI host. */
+export type PluginManifestControlUi = {
+  /** JavaScript entry in a dedicated dist subdirectory, relative to the plugin root. */
+  entry: string;
+  /** Stylesheets in the same asset directory, loaded before activation. */
+  styles?: string[];
+};
+
 export type PluginManifestMcpServer = Record<string, unknown>;
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
@@ -351,6 +366,8 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
+  /** Lightweight capability descriptor collections; omitted families retain register() discovery. */
+  capabilityCatalogEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -413,6 +430,7 @@ export type PluginManifest = {
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
@@ -577,6 +595,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Interactive method stages one inline credential without host login imports or persistence. */
+  personalAccount?: boolean;
   /** Short provider-owned command label for starting app-guided setup. */
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */

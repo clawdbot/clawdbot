@@ -211,7 +211,7 @@ export type CodeModeConfig =
 export type SwarmConfig =
   | boolean
   | {
-      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      /** Enable collector-mode subagents and agents_wait. Default: true. */
       enabled?: boolean;
       /** Maximum concurrently running collector children per swarm group. */
       maxConcurrent?: number;
@@ -550,7 +550,7 @@ export type ToolsConfig = {
   swarm?: SwarmConfig;
   /** sessions_spawn tool configuration. */
   sessions_spawn?: SessionsSpawnToolsConfig;
-  /** Sub-agent tool policy defaults (deny wins). */
+  /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
   subagents?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
@@ -558,7 +558,7 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Unified progress_card status tool; enabled by default. Set false to opt out. */
+  /** Unified progress_card status tool for parent sessions; enabled by default. False opts out. */
   updatePlan?: boolean;
 };
 

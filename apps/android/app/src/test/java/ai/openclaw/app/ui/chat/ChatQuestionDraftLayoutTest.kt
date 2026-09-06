@@ -290,15 +290,18 @@ class ChatQuestionDraftLayoutTest {
         }
       }
     }
-    composeRule.waitUntil { viewModel.chatMessages.value.size >= 24 }
+    // ViewModel bridge updates need the Android main queue, not just Compose clock advancement.
+    composeRule.waitUntil { composeRule.runOnIdle { viewModel.chatMessages.value.size >= 24 } }
     composeRule.waitForIdle()
     assertTrue(viewModel.chatQuestions.value.isEmpty())
     composeRule.onNodeWithText("Draft a short status update for the team.").assertIsDisplayed()
     controller.handleGatewayEvent("question.requested", Json.encodeToString(question))
     composeRule.waitUntil {
-      viewModel.chatQuestions.value
-        .singleOrNull()
-        ?.record == question
+      composeRule.runOnIdle {
+        viewModel.chatQuestions.value
+          .singleOrNull()
+          ?.record == question
+      }
     }
     val history = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
     repeat(3) { history.performTouchInput { swipeUp(durationMillis = 500) } }

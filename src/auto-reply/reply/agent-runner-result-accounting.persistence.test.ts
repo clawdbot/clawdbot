@@ -1,17 +1,30 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  disposeOpenClawAgentDatabaseByPath,
+  isOpenClawAgentDatabaseOpen,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { isReplyPayloadTerminalContent } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -20,6 +33,7 @@ import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-acc
 import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
   createReplyOperation,
@@ -37,6 +51,20 @@ vi.mock("../../agents/live-model-switch.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
+let suiteRoot: string;
+let storePath: string;
+let fixtureSequence = 0;
+beforeAll(() => {
+  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
+  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+});
+afterAll(async () => {
+  await drainSessionStoreWriterQueuesForTest();
+  disposeOpenClawAgentDatabaseByPath(storePath);
+  expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
+  fs.rmSync(suiteRoot, { recursive: true, force: true });
+});
 afterEach(() => {
   for (const operation of operations.splice(0)) {
     operation.complete();
@@ -64,12 +92,14 @@ const diagnostic = {
 
 async function createFixture() {
   const root = tempDirs.make("openclaw-context-pressure-");
-  const storePath = path.join(root, "sessions.json");
-  const sessionKey = "agent:main:main";
+  const fixtureId = ++fixtureSequence;
+  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionId = `accounting-session-${fixtureId}`;
+  const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
-    sessionId: "session",
+    sessionId,
     lifecycleRevision: "generation-1",
-    activeWriterRunId: "context-pressure-run",
+    activeWriterRunId: runId,
     updatedAt: 1,
     modelProvider: diagnostic.provider,
     model: diagnostic.model,
@@ -157,7 +187,7 @@ async function createFixture() {
       autoCompactionCount: 0,
       didLogHeartbeatStrip: false,
     },
-    runId: "context-pressure-run",
+    runId,
     runStartedAt: Date.now(),
     sessionCtx: {},
     sessionKey,
@@ -230,7 +260,44 @@ async function createFixture() {
     return compaction;
   };
   return {
+    sessionId,
     context,
+    turn,
+    deliverQueued: async () => {
+      const registry = createEmptyPluginRegistry();
+      registry.providers.push({
+        pluginId: "synthetic",
+        source: "test",
+        provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+      });
+      return withPluginRuntimeRegistryScope(registry, async () => {
+        const delivered: ReplyPayload[] = [];
+        const accounting = await accountQueued(context.execution);
+        const decision = resolveFollowupDeliveryDecision({
+          turn,
+          execution: { runId: context.runId, outcome: context.execution },
+          accounting,
+          opts: { onBlockReply: async () => {} },
+        });
+        await deliverFollowupDecision({
+          decision,
+          turn,
+          defaults: {
+            defaultModel: diagnostic.model,
+            typing: createMockTypingController(),
+            typingMode: "never",
+            opts: {
+              onBlockReply: async (payload) => {
+                delivered.push(payload);
+              },
+            },
+          },
+          runId: context.runId,
+          runFollowup: async () => {},
+        });
+        return delivered;
+      });
+    },
     recordCompaction,
     accountAborted: (reason: "user" | "restart") => {
       const compaction =
@@ -276,13 +343,179 @@ async function createFixture() {
   };
 }
 
+it.each([
+  { stored: "off", selected: "raw", authorized: true, trace: true },
+  { stored: "raw", selected: "off", authorized: true, trace: false },
+  { stored: "raw", selected: undefined, authorized: true, trace: true },
+  { stored: "off", selected: "raw", authorized: false, trace: false },
+] as const)(
+  "delivers queued trace $selected over stored $stored with authority=$authorized",
+  async ({ stored, selected, authorized, trace }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      traceLevel: stored,
+      verboseLevel: "off",
+    });
+    fixture.context.followupRun.prompt = "QUEUED_INPUT";
+    fixture.context.followupRun.run.traceAuthorized = authorized;
+    fixture.context.followupRun.run.traceLevelOverride = selected;
+    const delivered = await fixture.deliverQueued();
+    expect(delivered.some((payload) => payload.text === "done")).toBe(true);
+    const diagnostics = delivered.find((payload) =>
+      payload.text?.includes("Model Input (User Role)"),
+    );
+    expect(Boolean(diagnostics)).toBe(trace);
+    if (diagnostics) {
+      expect(diagnostics.text).toContain("QUEUED_INPUT");
+      expect(isReplyPayloadTerminalContent(diagnostics)).toBe(false);
+    }
+    expect(fixture.read()?.traceLevel).toBe(stored);
+  },
+);
+
+it.each([
+  { stored: "off", selected: "on", status: true },
+  { stored: "on", selected: "off", status: false },
+] as const)(
+  "delivers queued plugin status at turn verbosity $selected over stored $stored",
+  async ({ stored, selected, status }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      verboseLevel: stored,
+      pluginDebugEntries: [{ pluginId: "synthetic", lines: ["PLUGIN_STATUS_MARKER"] }],
+    });
+    fixture.context.followupRun.run.verboseLevelOverride = selected;
+    const delivered = await fixture.deliverQueued();
+    expect(delivered.some((payload) => payload.text?.includes("PLUGIN_STATUS_MARKER"))).toBe(
+      status,
+    );
+    expect(fixture.read()?.verboseLevel).toBe(stored);
+  },
+);
+
+describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
+  it.each([
+    { initial: "on", live: "off", override: undefined, visible: false },
+    { initial: "off", live: "on", override: undefined, visible: true },
+    { initial: "on", live: "off", override: "on", visible: true },
+    { initial: "off", live: "on", override: "off", visible: false },
+  ] as const)(
+    "uses live $live after $initial unless the turn selects $override",
+    async ({ initial, live, override, visible }) => {
+      const fixture = await createFixture();
+      const entry = fixture.context.activeSessionEntry!;
+      entry.verboseLevel = initial;
+      fixture.context.resolvedVerboseLevel = override ?? initial;
+      fixture.context.followupRun.run.verboseLevel = override ?? initial;
+      fixture.context.followupRun.run.verboseLevelOverride = override;
+      fixture.context.followupRun.run.traceAuthorized = false;
+      await fixture.replace({
+        ...entry,
+        verboseLevel: live,
+        pluginDebugEntries: [{ pluginId: "synthetic", lines: ["LIVE_VERBOSE_STATUS"] }],
+      });
+      const result =
+        lane === "ordinary"
+          ? await finalizeReplyAgentRun(fixture.context)
+          : await fixture.deliverQueued();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text).toContain("done");
+      expect(text.includes("LIVE_VERBOSE_STATUS")).toBe(visible);
+      expect(fixture.read()?.verboseLevel).toBe(live);
+    },
+  );
+});
+
+it.each([
+  { lane: "ordinary", field: "sessionId" },
+  { lane: "ordinary", field: "lifecycleRevision" },
+  { lane: "followup", field: "sessionId" },
+  { lane: "followup", field: "lifecycleRevision" },
+] as const)(
+  "keeps $lane diagnostic refresh inside its captured $field",
+  async ({ lane, field }) => {
+    const fixture = await createFixture();
+    const original = fixture.context.activeSessionEntry!;
+    const replacement = {
+      ...original,
+      [field]: field === "sessionId" ? `${fixture.sessionId}-replacement` : "replacement",
+      updatedAt: Date.now(),
+      traceLevel: "on" as const,
+      pluginDebugEntries: [{ pluginId: "replacement", lines: ["🔎 REPLACEMENT_DIAGNOSTIC"] }],
+    };
+    fixture.context.followupRun.run.traceAuthorized = true;
+    fixture.context.followupRun.run.traceLevelOverride = "on";
+    fixture.context.activeSessionStore = fixture.turn.sessionStore;
+    const reader = vi
+      .spyOn(sessionAccessor, "loadSessionEntryReadOnly")
+      .mockReturnValue(replacement);
+    try {
+      const result =
+        lane === "ordinary"
+          ? await finalizeReplyAgentRun(fixture.context)
+          : await fixture.deliverQueued();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text).not.toContain("REPLACEMENT_DIAGNOSTIC");
+    } finally {
+      reader.mockRestore();
+      expect(fixture.turn.session.current()).toMatchObject({
+        sessionId: original.sessionId,
+        lifecycleRevision: original.lifecycleRevision,
+      });
+    }
+  },
+);
+
+it.each(["NO_REPLY", "hook_block"] as const)(
+  "keeps a queued %s completion silent despite trace",
+  async (kind) => {
+    const fixture = await createFixture();
+    fixture.context.followupRun.run.traceAuthorized = true;
+    fixture.context.followupRun.run.traceLevelOverride = "raw";
+    fixture.context.execution.result.payloads = [];
+    if (kind === "NO_REPLY") {
+      fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else {
+      fixture.context.execution.result.meta.error = { kind: "hook_block", message: "blocked" };
+    }
+    expect(await fixture.deliverQueued()).toEqual([]);
+  },
+);
+
+it("does not let queued diagnostics replace a missing terminal answer", async () => {
+  const fixture = await createFixture();
+  fixture.context.followupRun.run.traceAuthorized = true;
+  fixture.context.followupRun.run.traceLevelOverride = "raw";
+  fixture.context.execution.result.payloads = [];
+  const delivered = await fixture.deliverQueued();
+  expect(
+    delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
+  ).toBe(true);
+  const supplement = delivered.find((payload) => payload.text?.includes("Model Input (User Role)"));
+  expect(supplement?.isStatusNotice).toBe(true);
+});
+
+it("keeps queued diagnostic supplements behind source send policy", async () => {
+  const fixture = await createFixture();
+  fixture.context.followupRun.run.traceAuthorized = true;
+  fixture.context.followupRun.run.traceLevelOverride = "raw";
+  fixture.turn.sendPolicy = "deny";
+  expect(await fixture.deliverQueued()).toEqual([]);
+});
+
 it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
   const fixture = await createFixture();
   fixture.context.isHeartbeat = true;
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];
   fixture.context.execution.result.meta.agentMeta = {
-    sessionId: "session",
+    sessionId: fixture.sessionId,
     provider: diagnostic.provider,
     model: diagnostic.model,
     compactionCount: 1,
@@ -292,13 +525,54 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(await finalizeReplyAgentRun(fixture.context)).toBeUndefined();
 
   expect(fixture.read()).toMatchObject({
-    sessionId: "session",
+    sessionId: fixture.sessionId,
     compactionCount: 1,
     totalTokens: 40,
     totalTokensFresh: true,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
+
+it.each(["NO_REPLY", "hook_block", "empty"] as const)(
+  "finalizes a %s fallback without confusing deliberate silence with failure",
+  async (completion) => {
+    const fixture = await createFixture();
+    const { context } = fixture;
+    const onAgentRunTerminalOutcome = vi.fn();
+    context.opts = { onAgentRunTerminalOutcome };
+    context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
+    context.execution.fallback.attempts = [
+      { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
+    ];
+    context.execution.result.payloads = [];
+    if (completion === "NO_REPLY") {
+      context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else if (completion === "hook_block") {
+      context.execution.result.meta.error = { kind: "hook_block", message: "Reply suppressed" };
+    }
+
+    const result = await finalizeReplyAgentRun(context);
+    context.replyOperation.complete();
+
+    if (completion === "empty") {
+      expect(result).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("produced no visible reply"),
+      });
+      expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+    } else {
+      expect(result).toBeUndefined();
+      expect(context.replyOperation.result).toEqual({ kind: "completed" });
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+    }
+    expect(fixture.read()?.fallbackNotice).toMatchObject({
+      kind: "active",
+      activeModel: "fallback-provider/fallback-model",
+    });
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+  },
+);
 
 describe("cancelled followup compaction accounting", () => {
   it.each(["user", "restart"] as const)(
@@ -316,7 +590,7 @@ describe("cancelled followup compaction accounting", () => {
       expect(await fixture.accountAborted(reason)).toBeUndefined();
 
       expect(fixture.read()).toMatchObject({
-        sessionId: "session",
+        sessionId: fixture.sessionId,
         lifecycleRevision: "generation-1",
         compactionCount: 4,
         totalTokens: 40,
@@ -332,7 +606,7 @@ describe("cancelled followup compaction accounting", () => {
 
   it("accounts cancellation against the committed successor despite a predecessor cache", async () => {
     const fixture = await createFixture();
-    const sessionId = "accepted-successor";
+    const sessionId = `${fixture.sessionId}-accepted-successor`;
     await fixture.replace({
       ...fixture.context.activeSessionEntry!,
       sessionId,
@@ -340,7 +614,7 @@ describe("cancelled followup compaction accounting", () => {
     });
     fixture.recordCompaction({ sessionId, currentContextTokens: 40 });
     fixture.context.replyOperation.updateSessionId(sessionId);
-    expect(fixture.context.activeSessionEntry?.sessionId).toBe("session");
+    expect(fixture.context.activeSessionEntry?.sessionId).toBe(fixture.sessionId);
 
     await fixture.accountAborted("user");
 
@@ -362,7 +636,7 @@ describe("cancelled followup compaction accounting", () => {
     fixture.recordCompaction({ currentContextTokens: 40 });
     fixture.context.replyOperation.complete();
     const replacement = createReplyOperation({
-      sessionId: "session",
+      sessionId: fixture.sessionId,
       sessionKey: fixture.context.sessionKey!,
       resetTriggered: false,
     });
@@ -378,11 +652,11 @@ describe("cancelled followup compaction accounting", () => {
     { name: "session", replacement: { sessionId: "replacement-session" } },
     { name: "lifecycle", replacement: { lifecycleRevision: "generation-2" } },
     { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
-  ])("does not apply cancelled facts to a replacement $name", async ({ replacement }) => {
+  ])("does not apply cancelled facts to a replacement $name", async ({ name, replacement }) => {
     const fixture = await createFixture();
     await fixture.replace({
       ...fixture.context.activeSessionEntry!,
-      ...replacement,
+      ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
       compactionCount: 9,
       totalTokens: 666,
     });
@@ -448,7 +722,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     fixture.context.execution.compaction = { count: 2, durable: [] };
 
     await fixture.account(lane, {
-      sessionId: "unverified-successor",
+      sessionId: `${fixture.sessionId}-unverified-successor`,
       compactionCount: 2,
       compactionTokensAfter: 40,
       usage: { input: 120, output: 8 },
@@ -456,7 +730,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       promptTokens: 120,
     });
 
-    expect(fixture.read()?.sessionId).toBe("session");
+    expect(fixture.read()?.sessionId).toBe(fixture.sessionId);
     expect(fixture.read()?.compactionCount).toBeUndefined();
     expect(fixture.read()?.totalTokens).toBeUndefined();
     expect(fixture.read()).toMatchObject({
@@ -589,8 +863,12 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each(["session", "context-pressure-successor"])(
     "accounts current-generation compaction into accepted %s",
-    async (sessionId) => {
+    async (target) => {
       const fixture = await createFixture();
+      const sessionId =
+        target === "session"
+          ? fixture.sessionId
+          : `${fixture.sessionId}-context-pressure-successor`;
       fixture.recordCompaction({ sessionId, currentContextTokens: 120 });
       await fixture.replace({ ...fixture.context.activeSessionEntry!, sessionId });
       fixture.context.replyOperation.updateSessionId(sessionId);
@@ -618,7 +896,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
   ])(
     "does not compact replacement $name telemetry after the old owner resumes",
-    async ({ replacement }) => {
+    async ({ name, replacement }) => {
       const fixture = await createFixture();
       fixture.recordCompaction();
       const pendingTool = createDeferred();
@@ -633,7 +911,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       // owner's write fence after replacement, not a claim that reset bypasses it.
       const next: SessionEntry = {
         ...fixture.context.activeSessionEntry!,
-        ...replacement,
+        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
         updatedAt: 30,
         contextBudgetStatus: {
           ...diagnostic,
@@ -668,11 +946,11 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
   ])(
     "does not write an old result into a replacement $name with usage=$withUsage",
-    async ({ replacement, withUsage }) => {
+    async ({ name, replacement, withUsage }) => {
       const fixture = await createFixture();
       const next = {
         ...fixture.context.activeSessionEntry!,
-        ...replacement,
+        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
         contextBudgetStatus: undefined,
       };
       await fixture.replace(next);

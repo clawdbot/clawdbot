@@ -1730,44 +1730,66 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "latest",
-      updateChannel: undefined,
-      registrySpec: "@acme/demo",
-      registryVersion: "1.2.4",
-      overrideSpec: "@acme/demo@latest",
-    },
-    {
-      name: "beta",
-      updateChannel: "beta" as const,
-      registrySpec: "@acme/demo@beta",
-      registryVersion: "1.3.0-beta.1",
-      overrideSpec: "@acme/demo@beta",
-    },
-  ])(
-    "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
-    async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
-      const { config } = createNpmUpdateFixture({
+  it.each(
+    [
+      {
+        name: "latest",
+        updateChannel: undefined,
+        registryVersion: "1.2.4",
+      },
+      {
+        name: "beta",
+        updateChannel: "beta" as const,
+        registryVersion: "1.3.0-beta.1",
+      },
+    ].flatMap((release) => [
+      {
+        ...release,
         pluginId: "demo",
         packageName: "@acme/demo",
+        syncOfficialPluginInstalls: false,
+      },
+      {
+        ...release,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer $name releases for exact-pinned $pluginId records (official sync=$syncOfficialPluginInstalls)",
+    async ({
+      updateChannel,
+      registryVersion,
+      pluginId,
+      packageName,
+      syncOfficialPluginInstalls,
+    }) => {
+      const registrySpec = updateChannel === "beta" ? `${packageName}@beta` : packageName;
+      const overrideSpec = `${packageName}@${updateChannel === "beta" ? "beta" : "latest"}`;
+      const { config } = createNpmUpdateFixture({
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.3",
         registryIntegrity: "sha512-same",
         registryShasum: "same",
-        spec: "@acme/demo@1.2.3",
+        spec: `${packageName}@1.2.3`,
         integrity: "sha512-same",
         shasum: "same",
         installedAt: "2026-07-01T00:00:00.000Z",
         resolvedAt: "2026-07-01T00:00:01.000Z",
       });
       mockNpmViewMetadata({
-        name: "@acme/demo",
+        name: packageName,
         version: registryVersion,
       });
       installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
-      const result = await updatePlugin(config, "demo", updateChannel ? { updateChannel } : {});
+      const result = await updatePlugin(config, pluginId, {
+        updateChannel,
+        syncOfficialPluginInstalls,
+      });
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(2);
@@ -1786,14 +1808,14 @@ describe("updateNpmInstalledPlugins", () => {
       expect(result.config).toBe(config);
       expect(result.outcomes).toEqual([
         {
-          pluginId: "demo",
+          pluginId,
           status: "unchanged",
           currentVersion: "1.2.3",
           nextVersion: registryVersion,
           message:
-            `demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); ` +
+            `${pluginId} is pinned to ${packageName}@1.2.3 (installed 1.2.3); ` +
             `registry ${updateChannel === "beta" ? "beta" : "latest"} resolves to ${registryVersion}. ` +
-            `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
+            `Pass \`openclaw plugins update ${overrideSpec}\` to replace this version pin.`,
         },
       ]);
     },
@@ -1909,7 +1931,7 @@ describe("updateNpmInstalledPlugins", () => {
         nextVersion: "1.2.4",
         message:
           "demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. " +
-          "Pass `openclaw plugins update @acme/demo@latest` to follow that registry line.",
+          "Pass `openclaw plugins update @acme/demo@latest` to replace this version pin.",
       },
     ]);
   });
@@ -3217,25 +3239,39 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each(["@acme/demo@1.2.3", "@acme/demo@v1.2.3"])(
-    "reports newer registry default releases for exact pinned npm dry-runs from %s",
-    async (spec) => {
+  it.each(
+    ["1.2.3", "v1.2.3"].flatMap((version) => [
+      { version, pluginId: "demo", packageName: "@acme/demo", syncOfficialPluginInstalls: false },
+      {
+        version,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer registry default releases for exact pinned $pluginId@$version dry-runs (official sync=$syncOfficialPluginInstalls)",
+    async ({ version, pluginId, packageName, syncOfficialPluginInstalls }) => {
+      const spec = `${packageName}@${version}`;
       const { config } = createNpmUpdateFixture({
-        pluginId: "demo",
-        packageName: "@acme/demo",
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.4",
         spec,
         installerVersion: "1.2.3",
         installerResolvedSpec: spec,
       });
-      const result = await updatePlugin(config, "demo", { dryRun: true });
+      const result = await updatePlugin(config, pluginId, {
+        dryRun: true,
+        syncOfficialPluginInstalls,
+      });
 
       expect(npmInstallCall()?.spec).toBe(spec);
       expect(npmViewCall()?.[0]).toEqual([
         "npm",
         "view",
-        "@acme/demo",
+        packageName,
         "name",
         "version",
         "dist.integrity",
@@ -3244,11 +3280,11 @@ describe("updateNpmInstalledPlugins", () => {
         "--json",
       ]);
       expectRecordFields(result.outcomes[0], {
-        pluginId: "demo",
+        pluginId,
         status: "unchanged",
         currentVersion: "1.2.3",
         nextVersion: "1.2.4",
-        message: `demo is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow that registry line.`,
+        message: `${pluginId} is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update ${packageName}@latest\` to replace this version pin.`,
       });
     },
   );

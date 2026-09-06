@@ -159,9 +159,11 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
                   autofocus
                 />
               </label>
-              ${failure
-                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
-                : nothing}
+              ${
+                failure
+                  ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
                 <button type="submit" class="btn primary" ?disabled=${submitting || blocked}>
                   ${options.submitLabel ?? t("common.save")}

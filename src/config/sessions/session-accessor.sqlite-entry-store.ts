@@ -503,6 +503,7 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: {
     allowStoredAliases?: boolean;
+    consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
     routeContext?: ConversationRouteContext | null;
@@ -522,7 +523,6 @@ export function writeSessionEntry(
   if (!hasValidSessionEntryIdentity(normalizedEntry)) {
     throw new Error("Refusing invalid SQLite session entry identity");
   }
-  const updatedAt = normalizedEntry.updatedAt;
   // Doctor validated the raw rejected row before entering the transaction and passes its
   // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
   const canonicalPreviousEntry =
@@ -552,6 +552,16 @@ export function writeSessionEntry(
     options.previousEntry === undefined
       ? canonicalPreviousEntry
       : (options.previousEntry ?? undefined);
+  if (
+    options.consumePendingReset !== true &&
+    previousEntry?.updatedAt === 0 &&
+    previousEntry.sessionId === normalizedEntry.sessionId &&
+    previousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision
+  ) {
+    // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
+    normalizedEntry.updatedAt = 0;
+  }
+  const updatedAt = normalizedEntry.updatedAt;
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;

@@ -182,8 +182,8 @@ export function buildDeclaredToolAllowlistContext(params: {
     }),
   );
   const pluginContext = collectDeclaredPluginContext(params);
-  const pluginIds = uniqueStrings(pluginContext.pluginIds ?? []);
-  const pluginToolNames = uniqueStrings(pluginContext.pluginToolNames ?? []);
+  const pluginIds = [...(pluginContext.pluginIds ?? [])];
+  const pluginToolNames = [...(pluginContext.pluginToolNames ?? [])];
   if (mcpServerNames.length === 0 && pluginIds.length === 0 && pluginToolNames.length === 0) {
     return undefined;
   }

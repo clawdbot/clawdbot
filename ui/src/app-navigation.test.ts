@@ -257,7 +257,7 @@ describe("subtitleForRoute", () => {
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
-      dashboards: "Sessions that open on their dashboard face.",
+      dashboards: "Tasks with saved dashboards.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",

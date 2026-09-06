@@ -19,7 +19,6 @@ import {
   hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
-  markTerminalPollObserved,
   prepareSessionPoll,
   setJobTtlMs,
 } from "./bash-process-registry.js";
@@ -202,7 +201,6 @@ function finishedPollResult(
   pollScope: object | undefined,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
-  acknowledgeNotifyOnExit(finished);
   const delivery = prepareSessionPoll(finished, pollScope);
   const { output: unreadOutput, outputDropped } = delivery;
   const output = unreadOutput.trim();
@@ -225,7 +223,10 @@ function finishedPollResult(
       ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
     }),
-    () => delivery.acknowledge(),
+    () => {
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(finished);
+    },
   );
 }
 
@@ -349,9 +350,9 @@ export function createProcessTool(
               },
               s.endedAt !== undefined
                 ? {
+                    ...finishedSessionDetails(s.id, s),
+                    status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
-                    exitCode: s.exitCode ?? undefined,
-                    exitSignal: s.exitSignal ?? undefined,
                   }
                 : Object.assign(
                     { pid: s.pid ?? undefined },
@@ -361,10 +362,16 @@ export function createProcessTool(
           );
         const lines = sessions.map((s) => {
           const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const timeoutReason =
+            "exitReason" in s &&
+            (s.exitReason === "overall-timeout" || s.exitReason === "no-output-timeout")
+              ? s.exitReason
+              : undefined;
+          const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
           return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${marker} :: ${label}`;
+          }${timeoutMarker}${marker} :: ${label}`;
         });
         return textResult(lines.join("\n") || "No running or recent sessions.", {
           status: "completed",
@@ -451,7 +458,6 @@ export function createProcessTool(
             }
           }
           if (scopedSession.exited) {
-            markTerminalPollObserved(scopedSession);
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
             if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {

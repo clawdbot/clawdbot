@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
@@ -199,7 +200,7 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
-  it("renders public docs redirects with destination fragments overriding source fragments", () => {
+  it("renders mirror routes and public redirects with destination fragment precedence", () => {
     const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
     const docsRoot = path.join(fixtureDir, "docs");
     const taxonomyPath = path.join(fixtureDir, "taxonomy.yaml");
@@ -214,6 +215,13 @@ describe("maturity docs renderer CLI", () => {
       ["docs/guide.md#direct-section", "[Direct Section](/guide#direct-section)"],
       ["docs/direct.mdx#direct-section", "[Direct Section](/direct#direct-section)"],
       ["docs/legacy-page.md", "[Legacy Page](/guide)"],
+      ["docs/clawhub/publishing.md", "[Publishing](/clawhub/publishing)"],
+      ["docs/clawhub/skill-format.md", "[Skill Format](/clawhub/skill-format)"],
+      ["docs/clawhub/security-audits.md", "[Security Audits](/clawhub/security-audits)"],
+      ["docs/clawhub/index.md", "[Index](/clawhub/index)"],
+      ["docs/clawhub.md", "[Clawhub](/clawhub)"],
+      ["docs/clawhub/unknown.md", null],
+      ["docs/unpublished.md", null],
       ["docs/unknown.md", null],
       ["docs/legacy-missing.md", null],
       ["docs/internal/private.md", null],
@@ -232,6 +240,22 @@ describe("maturity docs renderer CLI", () => {
     fs.writeFileSync(
       path.join(docsRoot, "docs.json"),
       JSON.stringify({
+        navigation: {
+          groups: [
+            {
+              group: "Fixture routes",
+              pages: [
+                "unpublished",
+                "clawhub/index",
+                "clawhub/publishing",
+                {
+                  group: "Format and trust",
+                  pages: ["clawhub/skill-format", "clawhub/security-audits"],
+                },
+              ],
+            },
+          ],
+        },
         redirects: [
           ["/legacy-fragment", "/guide#destination-section"],
           ["/legacy-page", "/guide"],
@@ -391,7 +415,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
   });
 
-  it("renders passing evidence without impossible failed or blocked result counts", () => {
+  it("renders passing evidence with unique section jump targets", () => {
     const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
     writeQaEvidence({
@@ -416,6 +440,18 @@ describe("maturity docs renderer CLI", () => {
     expect(taxonomy).not.toMatch(
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
+    for (const [markdown, id] of [
+      [scorecard, "surface-explorer"],
+      [taxonomy, "product-areas"],
+    ]) {
+      const document = parseDocsDocument(markdown);
+      expect(document.links).toContain(`#${id}`);
+      expect(
+        document.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+      expect(document.collisions).toEqual([]);
+    }
   });
 
   it("renders the maturity score from quality and completeness without coverage", () => {

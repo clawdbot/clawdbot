@@ -134,7 +134,7 @@ struct TailscaleIntegrationSection: View {
                 await self.loadConfig()
             }
             guard !Task.isCancelled else { return }
-            // Cached settings panes stay mounted; only the active pane owns polling.
+            // Connection tabs stay mounted; only the active tab owns polling.
             repeat {
                 await self.tailscaleService.checkTailscaleStatus()
             } while await SimpleTaskSupport.waitForNextOperation(interval: 5)
@@ -278,9 +278,9 @@ struct TailscaleIntegrationSection: View {
     }
 
     private func loadConfig() async {
-        let root = await ConfigStore.load()
-        guard !Task.isCancelled else { return }
-        let loaded = TailscaleIntegrationSection.loadedSettings(from: root)
+        let document = await ConfigStore.load()
+        guard !Task.isCancelled, document.isCurrent else { return }
+        let loaded = TailscaleIntegrationSection.loadedSettings(from: document.root)
         self.tailscaleMode = loaded.snapshot.mode
         self.requireCredentialsForServe = loaded.snapshot.requireCredentialsForServe
         self.password = loaded.displayPassword
@@ -321,10 +321,11 @@ struct TailscaleIntegrationSection: View {
             mode: tailscaleMode,
             requireCredentialsForServe: requireCredentialsForServe,
             password: password)
-        let root = await self.buildTailscaleConfigRoot(root: ConfigStore.load(), settings: settings)
+        var document = await ConfigStore.load()
+        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
 
         do {
-            try await ConfigStore.save(root, allowGatewayAuthMutation: true)
+            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
             return (true, nil)
         } catch {
             return (false, error.localizedDescription)
@@ -495,10 +496,13 @@ struct TailscaleIntegrationSection: View {
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
-        connectionMode _: AppState.ConnectionMode,
+        connectionMode: AppState.ConnectionMode,
         isPaused _: Bool) async -> (Bool, String?)
     {
-        await self.buildAndSaveTailscaleConfig(
+        guard connectionMode == .local, AppStateStore.shared.connectionMode == .local else {
+            return (false, "Local mode required. Update settings on the gateway host.")
+        }
+        return await self.buildAndSaveTailscaleConfig(
             tailscaleMode: settings.mode,
             requireCredentialsForServe: settings.requireCredentialsForServe,
             password: settings.password)

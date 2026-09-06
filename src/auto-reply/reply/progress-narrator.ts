@@ -43,9 +43,6 @@ function normalizeNarrationText(raw: string): string {
     .trim()
     .replace(/^["'`“”]+|["'`“”]+$/gu, "")
     .trim();
-  if (!collapsed) {
-    return "";
-  }
   return truncateAtWordBoundary(collapsed, NARRATION_MAX_CHARS);
 }
 
@@ -69,7 +66,6 @@ function createProgressNarrator(params: {
   let consecutiveFailures = 0;
   let lastText = "";
   let preparedPromise: ReturnType<typeof prepareNarrationModel> | undefined;
-  let lastFailure: string | undefined;
   let utilityModelLabel: string | undefined;
   let lastPreambleAt: number | undefined;
   let visibilityRetryCount = 0;
@@ -88,32 +84,28 @@ function createProgressNarrator(params: {
     retryImmediate = false;
   };
 
-  const resetTurnState = () => {
+  const stopTurn = () => {
     turnController.abort();
+    inFlight = false;
+    pendingImmediate = false;
+    clearRetryTimer();
+  };
+
+  const resetTurnState = () => {
+    stopTurn();
     turnController = new AbortController();
     // Queued turns reuse the narrator lifecycle but not the primary request.
     // Empty context is safer than describing follow-up work with stale intent.
     userMessage = "";
     activity = createSessionActivityNoteState();
     disabled = false;
-    inFlight = false;
-    pendingImmediate = false;
     noteSequenceAtLastRun = -1;
     lastRunAt = 0;
     narrationCount = 0;
     consecutiveFailures = 0;
     lastText = "";
-    lastFailure = undefined;
     lastPreambleAt = undefined;
     visibilityRetryCount = 0;
-    clearRetryTimer();
-  };
-
-  const stopTurn = () => {
-    turnController.abort();
-    inFlight = false;
-    pendingImmediate = false;
-    clearRetryTimer();
   };
 
   // Stopping mid-turn must clear any rendered narration so the channel draft
@@ -236,12 +228,14 @@ function createProgressNarrator(params: {
       );
       return;
     }
+    // An event or completion wakeup inherits urgency from the timer it replaces.
+    const runImmediately = immediate || retryImmediate;
     clearRetryTimer();
     if (inFlight) {
-      pendingImmediate ||= immediate;
+      pendingImmediate ||= runImmediately;
       return;
     }
-    if (!shouldRunNow(immediate)) {
+    if (!shouldRunNow(runImmediately)) {
       return;
     }
     if (narrationCount >= MAX_NARRATIONS_PER_TURN) {
@@ -265,7 +259,6 @@ function createProgressNarrator(params: {
         if (runSignal.aborted) {
           return;
         }
-        lastFailure = outcome?.error;
         const text = outcome?.text ? normalizeNarrationText(outcome.text) : "";
         if (!text) {
           consecutiveFailures += 1;
@@ -276,7 +269,7 @@ function createProgressNarrator(params: {
             narratorLog.warn(
               `narration disabled after ${consecutiveFailures} consecutive failures` +
                 (utilityModelLabel ? ` (${utilityModelLabel})` : "") +
-                (lastFailure ? `: ${lastFailure}` : ""),
+                (outcome?.error ? `: ${outcome.error}` : ""),
             );
             disableNarration();
           }
@@ -295,9 +288,8 @@ function createProgressNarrator(params: {
           inFlight = false;
           const rerunImmediate = pendingImmediate;
           pendingImmediate = false;
-          if (rerunImmediate) {
-            maybeRun(true);
-          }
+          // Tool notes received during the request must not wait for another event.
+          maybeRun(rerunImmediate);
         }
       }
     })();
@@ -306,9 +298,7 @@ function createProgressNarrator(params: {
   params.abortSignal?.addEventListener("abort", stopTurn, { once: true });
 
   return {
-    beginTurn() {
-      resetTurnState();
-    },
+    beginTurn: resetTurnState,
     stopTurn,
     noteToolStart(payload: ToolStartPayload) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {

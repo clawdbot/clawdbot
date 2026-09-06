@@ -1,12 +1,15 @@
 /** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -398,6 +401,7 @@ export function resolveCommandArgMenu(params: {
   model?: string;
   agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
+  session?: { agentId: string; sessionKey: string };
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
   if (!command.args || !command.argsMenu) {
@@ -448,8 +452,19 @@ export function resolveCommandArgMenu(params: {
   if (choices.length === 0) {
     return null;
   }
-  const title = argSpec !== "auto" ? argSpec.title : undefined;
-  return { arg, choices, title };
+  const menu = { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
+  if (command.key === "verbose" && cfg && params.session) {
+    // Native menus bypass directive dispatch; keep its status tied to the same target session.
+    const { agentId, sessionKey } = params.session;
+    const entry = loadSessionEntryReadOnly({
+      agentId,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    const level = entry?.verboseLevel ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
+    menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+  }
+  return menu;
 }
 
 /** Formats the prompt title shown before an argument-choice menu. */

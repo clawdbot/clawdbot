@@ -274,9 +274,11 @@ async function readCodexAppServerRolloutTokenSnapshot(
         bytesRead += result.bytesRead;
       }
       let lineEnd = bytesRead;
-      for (let index = bytesRead - 1; index >= 0; index -= 1) {
-        if (chunk[index] !== 0x0a) {
-          continue;
+      // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.
+      while (lineEnd > 0) {
+        const index = chunk.lastIndexOf(0x0a, lineEnd - 1);
+        if (index < 0) {
+          break;
         }
         const lineFragment = chunk.subarray(index + 1, lineEnd);
         const line =
@@ -408,6 +410,7 @@ function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThread
 
 /** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
+  assertCurrent?: () => void;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
@@ -475,10 +478,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await params.bindingStore.mutate(params.identity, {
-        kind: "clear",
-        threadId: binding.threadId,
-      });
+      await params.bindingStore.mutate(
+        params.identity,
+        {
+          kind: "clear",
+          threadId: binding.threadId,
+        },
+        params.assertCurrent,
+      );
       return { binding: undefined };
     }
   }
@@ -537,10 +544,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await params.bindingStore.mutate(params.identity, {
-      kind: "clear",
-      threadId: binding.threadId,
-    });
+    await params.bindingStore.mutate(
+      params.identity,
+      {
+        kind: "clear",
+        threadId: binding.threadId,
+      },
+      params.assertCurrent,
+    );
     return { binding: undefined };
   }
   // Session metadata has no source provenance and may contain a catalog fallback.

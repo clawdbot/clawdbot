@@ -208,25 +208,12 @@ export function planPristineStartupConfigMigrations(
   }
   const skipCoreStateMigrations = configIsPristineCoreStateSafe(config);
   return {
-    skipAllStateMigrations: skipCoreStateMigrations && configIsPristineStateSafe(config, env),
+    skipAllStateMigrations:
+      skipCoreStateMigrations &&
+      hasOnlyMigrationSafePluginEntries(config, env) &&
+      !configMayRequireStartupPluginConvergence({ config: config as OpenClawConfig, env }),
     skipCoreStateMigrations,
   };
-}
-
-function configIsPristineStateSafe(
-  config: Record<string, unknown>,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  if (!configIsPristineCoreStateSafe(config)) {
-    return false;
-  }
-  if (!hasOnlyMigrationSafePluginEntries(config, env)) {
-    return false;
-  }
-  return !configMayRequireStartupPluginConvergence({
-    config: config as OpenClawConfig,
-    env,
-  });
 }
 
 function stateDirHasOnlyConfig(stateDir: string, configPath: string): boolean {
@@ -241,16 +228,9 @@ function stateDirHasOnlyConfig(stateDir: string, configPath: string): boolean {
 }
 
 /**
- * A missing/empty state root plus migration-free bundled config has no legacy data to migrate.
+ * A missing/empty state root can skip core migrations; plugin config may still require work.
  * Keep ambiguity on the full migration path; this shortcut only accepts a proven new install.
  */
-export function canSkipPristineStartupStateMigrations(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return planPristineStartupStateMigrations(env).skipAllStateMigrations;
-}
-
-/** Separates provably absent core state from plugin-owned migration work. */
 export function planPristineStartupStateMigrations(
   env: NodeJS.ProcessEnv = process.env,
 ): PristineStartupMigrationPlan {
@@ -276,9 +256,5 @@ export function planPristineStartupStateMigrations(
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
   const config = fs.existsSync(configPath) ? tryReadJsonSync(configPath) : {};
-  const configPlan = planPristineStartupConfigMigrations(config, env);
-  return {
-    skipAllStateMigrations: configPlan.skipAllStateMigrations,
-    skipCoreStateMigrations: configPlan.skipCoreStateMigrations,
-  };
+  return planPristineStartupConfigMigrations(config, env);
 }

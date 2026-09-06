@@ -46,8 +46,7 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 }
 
-function isCredentialFieldName(key: string): boolean {
-  const normalized = normalizeDiagnosticFieldName(key);
+function isCredentialFieldName(normalized: string): boolean {
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -114,10 +113,10 @@ export type DiagnosticProjectionPolicy = {
 
 function extractDiagnosticMediaField(
   key: string,
+  normalized: string,
   value: unknown,
   parentMedia: boolean,
 ): DiagnosticMediaField | undefined {
-  const normalized = normalizeDiagnosticFieldName(key);
   const privateField = normalized === "b64json";
   const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
   const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
@@ -184,7 +183,8 @@ export function projectDiagnosticValue(
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
     const redactValueField =
-      keys.length > 64 || (typeof rawName === "string" && isCredentialFieldName(rawName));
+      keys.length > 64 ||
+      (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
     const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (
@@ -197,7 +197,8 @@ export function projectDiagnosticValue(
         continue;
       }
       const child = descriptor.value;
-      if (policy.omitField?.(key) || isCredentialFieldName(key)) {
+      const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
+      if (normalized === undefined || isCredentialFieldName(normalized)) {
         state.changed = true;
         continue;
       }
@@ -206,7 +207,7 @@ export function projectDiagnosticValue(
         state.changed = true;
         continue;
       }
-      const media = extractDiagnosticMediaField(key, child, redactMedia);
+      const media = extractDiagnosticMediaField(key, normalized, child, redactMedia);
       if (media?.kind === "redacted") {
         const redacted =
           media.bytes === undefined ? "<redacted>" : { redacted: "<redacted>", bytes: media.bytes };

@@ -37,21 +37,49 @@ type CodexUsageLimitErrorResult = {
   rateLimitsForProfile?: JsonValue;
 };
 
-export function createCodexUsageLimitPromptError(message: string): Error & { status: 429 } {
-  return Object.assign(new Error(message), { status: 429 as const });
+// HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
+export class CodexUsageLimitPromptError extends Error {
+  readonly status = 429;
 }
 
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
-  return usageLimitMessage
-    ? createCodexUsageLimitPromptError(usageLimitMessage)
-    : (source.message ?? undefined);
-}
-
-export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
-  return error instanceof Error && "status" in error && error.status === 429;
+  if (usageLimitMessage) {
+    return new CodexUsageLimitPromptError(usageLimitMessage);
+  }
+  // Native retry exhaustion is not a permanent model/configuration failure.
+  // Preserve the provider facts before terminal projection drops the native envelope.
+  const info = source.codexErrorInfo;
+  let status =
+    info === "rateLimitExceeded"
+      ? 429
+      : info === "serverOverloaded"
+        ? 503
+        : info === "internalServerError"
+          ? 500
+          : undefined;
+  if (isJsonObject(info)) {
+    for (const variant of [
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ]) {
+      const detail = info[variant];
+      if (isJsonObject(detail) && typeof detail.httpStatusCode === "number") {
+        status = detail.httpStatusCode;
+        break;
+      }
+    }
+  }
+  return status === undefined
+    ? (source.message ?? undefined)
+    : Object.assign(new Error(source.message ?? "codex app-server error"), {
+        status,
+        ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
+      });
 }
 
 /** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */

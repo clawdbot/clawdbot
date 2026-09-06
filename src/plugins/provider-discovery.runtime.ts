@@ -65,7 +65,7 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
-function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDiscoveryModule {
+function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): ProviderPlugin[] {
   const registry = getPluginRuntimeGenerationRegistry();
   const loadContext = getPluginRuntimeLoadContext(registry);
   // Lightweight entries share the prepared registry's artifact policy, but must
@@ -106,10 +106,13 @@ function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDi
     loaderFilename: import.meta.url,
     preferBuiltDist: true,
   });
-  return withProfile(
+  const loaded = withProfile(
     { pluginId: manifest.id, source: modulePath },
     "provider-discovery-entry",
     () => moduleLoader(modulePath) as ProviderDiscoveryModule,
+  );
+  return normalizeDiscoveryModule(loaded).map((provider) =>
+    Object.assign({}, provider, { pluginId: manifest.id }),
   );
 }
 
@@ -257,12 +260,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      const moduleExport = loadProviderDiscoveryModule(manifest);
-      providers.push(
-        ...normalizeDiscoveryModule(moduleExport).map((provider) =>
-          Object.assign({}, provider, { pluginId: manifest.id }),
-        ),
-      );
+      providers.push(...loadProviderDiscoveryProviders(manifest));
     } catch {
       // Entry loading is all-or-nothing: discarded results no longer cover their owners.
       // Keep static manifest coverage for the scope-aware full-loader fallback.
@@ -294,7 +292,8 @@ export function planPluginDiscoveryRuntime(
     (provider) =>
       hasProviderCatalogHook(provider) ||
       (params.includeSyntheticAuthProviders === true &&
-        typeof provider.resolveSyntheticAuth === "function"),
+        (typeof provider.resolveSyntheticAuth === "function" ||
+          typeof provider.prepareSyntheticAuth === "function")),
   );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {

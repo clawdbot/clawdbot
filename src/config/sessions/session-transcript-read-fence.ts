@@ -4,6 +4,7 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 
 const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
 
@@ -27,7 +28,25 @@ export function runWithSessionTranscriptReadFence<T>(
   return receipt ? transcriptReadFenceStorage.run(receipt, run) : run();
 }
 
-function resolveSessionTranscriptReadFence(session: {
+export function withSessionContextAdmission<T>(
+  target: SessionTranscriptRuntimeTarget,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+  read: () => T,
+): T {
+  if (
+    admission &&
+    (target.agentId !== admission.agentId ||
+      target.sessionId !== admission.sessionId ||
+      target.sessionKey !== admission.sessionKey)
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission belongs to a different transcript target",
+    );
+  }
+  return runWithSessionTranscriptReadFence(admission, read);
+}
+
+export function resolveSessionTranscriptReadFence(session: {
   agentId: string;
   sessionId: string;
 }): UserTurnTranscriptAdmissionReceipt | undefined {

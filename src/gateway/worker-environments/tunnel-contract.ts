@@ -12,6 +12,26 @@ import type {
 
 export type { WorkerTunnelStatus };
 
+/** A disconnected node cannot hide an unfinished or failed local sibling cleanup. */
+export async function joinWorkerTunnelStops(operations: readonly (Promise<void> | undefined)[]) {
+  const outcomes = await Promise.allSettled(
+    operations.filter((operation) => operation !== undefined),
+  );
+  const errors = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  );
+  if (
+    errors.length === 1 ||
+    (errors.length > 1 &&
+      errors.every((error) => error instanceof WorkerTunnelOwnerDisconnectedError))
+  ) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Worker tunnel cleanup failed");
+  }
+}
+
 export class WorkerTunnelOwnerDisconnectedError extends Error {
   constructor(message = "Worker tunnel owner is no longer connected") {
     super(message);
@@ -45,10 +65,7 @@ export type WorkerTunnelRequest = {
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
-export type WorkerTunnelStopReason =
-  | "provider-destroying"
-  | "provider-destroyed"
-  | "operator-abandon";
+export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];

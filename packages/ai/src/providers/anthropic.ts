@@ -9,6 +9,7 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -19,7 +20,11 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { calculateCost } from "../model-utils.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
+import type {
+  AnthropicContextManagementOptions,
+  AnthropicOptions,
+  AnthropicThinkingDisplay,
+} from "../provider-options.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   buildAnthropicReplayPlan,
@@ -28,7 +33,13 @@ import {
   suppressAnthropicCompaction,
   type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
-import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import {
+  applyAnthropicCacheControlToMessages,
+  applyAnthropicContextManagementToRequest,
+  isDirectAnthropicModel,
+  logAnthropicContextEdits,
+  resolveAnthropicContextManagementBetaHeader,
+} from "../transports/anthropic-payload-policy.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
@@ -134,7 +145,6 @@ const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
 
 type AnthropicCompactionOptions = AnthropicOptions & {
-  anthropicServerCompaction?: boolean;
   authProfileId?: string;
 };
 
@@ -290,6 +300,7 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 async function* iterateAnthropicEvents(
   response: Response,
   requireMessageStop = false,
+  signal?: AbortSignal,
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -302,6 +313,7 @@ async function* iterateAnthropicEvents(
       throw new Error(sse.data);
     }
 
+    notifyLlmRequestActivity(signal);
     if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
       continue;
     }
@@ -357,9 +369,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     // Classifier refusals can invalidate partial output, so no event is safe
     // to expose until the terminal stop reason is known.
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-      ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-          notifyLlmRequestActivity(requestOptions?.signal),
-        )
+      ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
     const eventSink = refusalBuffer ?? stream;
     // Fallback-served turns bill at the serving model's rates; a boundary
@@ -421,16 +431,28 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       usedCompactionReplay = builtParams.usedCompactionReplay;
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
+      applyAnthropicContextManagementToRequest(
+        params,
+        model,
+        requestOptions,
+        directApiKeyBetaHeader,
+      );
       const nextParams = await requestOptions?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params, model);
+      const betaHeader = resolveAnthropicContextManagementBetaHeader(
+        params,
+        directApiKeyBetaHeader,
+      );
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
         maxRetries: 0,
-        headers: applyAnthropicThinkingBindingControls(params, directApiKeyBetaHeader),
+        headers:
+          applyAnthropicThinkingBindingControls(params, betaHeader) ??
+          (betaHeader !== undefined ? { "anthropic-beta": betaHeader } : undefined),
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -452,11 +474,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         contentIndex: number;
       }> = [];
       const compactionCapture = createCompactionCapture(output, model, requestOptions);
-      const requireMessageStop =
-        refusalBuffer !== undefined ||
-        (model.provider === "anthropic" && isAnthropicPublicEndpoint(model.baseUrl));
+      const requireMessageStop = refusalBuffer !== undefined || isDirectAnthropicModel(model);
 
-      for await (const event of iterateAnthropicEvents(response, requireMessageStop)) {
+      for await (const event of iterateAnthropicEvents(
+        response,
+        requireMessageStop,
+        requestOptions?.signal,
+      )) {
         // A serving-model fallback replaces the initial snapshot; report only once at completion.
         inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
         if (event.type === "message_start") {
@@ -612,7 +636,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "thinking") {
-              block.thinking += event.delta.thinking;
+              appendAssistantThinking(block, event.delta.thinking);
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,
@@ -673,6 +697,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             }
           }
         } else if (event.type === "message_delta") {
+          logAnthropicContextEdits(event);
           if (event.delta.stop_reason) {
             if (event.delta.stop_reason === "refusal") {
               applyAnthropicRefusal(output, event.delta.stop_details, model.provider);
@@ -757,11 +782,11 @@ function normalizeAnthropicThinkingOptions(
   return { ...options, thinkingEnabled: false, thinkingBudgetTokens: undefined };
 }
 
-type AnthropicSimpleStreamOptions = SimpleStreamOptions & {
-  anthropicServerCompaction?: boolean;
-  authProfileId?: string;
-  toolChoice?: AnthropicCompactionOptions["toolChoice"];
-};
+type AnthropicSimpleStreamOptions = SimpleStreamOptions &
+  AnthropicContextManagementOptions & {
+    authProfileId?: string;
+    toolChoice?: AnthropicCompactionOptions["toolChoice"];
+  };
 
 export const streamSimpleAnthropic: StreamFunction<
   "anthropic-messages",
@@ -779,6 +804,8 @@ export const streamSimpleAnthropic: StreamFunction<
   const base = {
     ...buildBaseOptions(model, options, apiKey),
     anthropicServerCompaction: options?.anthropicServerCompaction,
+    anthropicCompactThreshold: options?.anthropicCompactThreshold,
+    cacheTtlPruning: options?.cacheTtlPruning,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
@@ -846,17 +873,6 @@ export const streamSimpleAnthropic: StreamFunction<
   } satisfies AnthropicCompactionOptions);
 };
 
-function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return true;
-  }
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.anthropic.com";
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Server-side refusal fallback is a first-party Claude API beta: proxies and
  * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
@@ -870,7 +886,7 @@ function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">)
   ) {
     return false;
   }
-  return isAnthropicPublicEndpoint(model.baseUrl);
+  return isDirectAnthropicModel(model);
 }
 
 function createClient(
@@ -1039,13 +1055,11 @@ function createClient(
     isOAuthToken: false,
     serverSideFallback,
     // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-    directApiKeyBetaHeader:
-      model.provider === "anthropic" &&
-      isAnthropicPublicEndpoint(model.baseUrl ?? process.env.ANTHROPIC_BASE_URL)
-        ? (Object.entries(defaultHeaders).findLast(
-            ([name]) => name.toLowerCase() === "anthropic-beta",
-          )?.[1] ?? "")
-        : undefined,
+    directApiKeyBetaHeader: isDirectAnthropicModel(model)
+      ? (Object.entries(defaultHeaders).findLast(
+          ([name]) => name.toLowerCase() === "anthropic-beta",
+        )?.[1] ?? "")
+      : undefined,
   };
 }
 

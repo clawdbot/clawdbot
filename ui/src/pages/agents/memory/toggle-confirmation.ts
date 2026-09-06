@@ -48,9 +48,13 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
         <div class="callout ${props.enabling ? "info" : "warn"}" style="margin-top: 12px;">
           ${detail}
         </div>
-        ${props.hasError
-          ? html`<div class="exec-approval-error">${t("dreaming.toggleConfirmation.failed")}</div>`
-          : nothing}
+        ${
+          props.hasError
+            ? html`<div class="exec-approval-error">
+                ${t("dreaming.toggleConfirmation.failed")}
+              </div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button
             class="btn ${props.enabling ? "primary" : "danger"}"

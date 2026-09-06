@@ -73,6 +73,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  presented?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -115,11 +116,12 @@ export type ChatThreadProps = ChatSendStatusActions & {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  avatarPlacement?: "none";
   basePath?: string;
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -244,18 +246,20 @@ export function renderTranscriptSearch(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
-        ${state.searchFocusPending
-          ? ref((element) => {
-              if (element instanceof HTMLInputElement) {
-                state.searchFocusPending = false;
-                queueMicrotask(() => {
-                  if (element.isConnected) {
-                    element.focus({ preventScroll: true });
-                  }
-                });
-              }
-            })
-          : nothing}
+        ${
+          state.searchFocusPending
+            ? ref((element) => {
+                if (element instanceof HTMLInputElement) {
+                  state.searchFocusPending = false;
+                  queueMicrotask(() => {
+                    if (element.isConnected) {
+                      element.focus({ preventScroll: true });
+                    }
+                  });
+                }
+              })
+            : nothing
+        }
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();

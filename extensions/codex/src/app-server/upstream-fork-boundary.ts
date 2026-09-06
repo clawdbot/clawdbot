@@ -312,6 +312,8 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                       currentThread.path !== thread.path ||
                       currentThread.cwd !== thread.cwd ||
                       currentThread.historyMode !== thread.historyMode ||
+                      currentThread.model !== thread.model ||
+                      currentThread.modelProvider !== thread.modelProvider ||
                       currentThread.status?.type === "active"
                     ) {
                       throw new Error("The canonical Codex source changed during initialization");

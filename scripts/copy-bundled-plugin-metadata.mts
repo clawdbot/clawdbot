@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectSourceCheckoutPluginBuildEntries,
+  mapPluginCatalogEntries,
+} from "./lib/bundled-plugin-build-entries.mjs";
+import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -189,35 +193,6 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
-function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string) {
-  const sourceModules = path.join(pluginDir, "node_modules");
-  if (!fs.existsSync(sourceModules)) {
-    return;
-  }
-  const packages = fs.readdirSync(sourceModules).flatMap((name) => {
-    if (name.startsWith(".") && name !== ".bin") {
-      return [];
-    }
-    return name.startsWith("@")
-      ? fs.readdirSync(path.join(sourceModules, name)).map((child) => path.join(name, child))
-      : [name];
-  });
-  // An outer node_modules junction misresolves pnpm's relative links on Windows.
-  // Link canonical package roots individually; keep scopes real and payloads source-owned.
-  // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
-  for (const name of packages) {
-    const target = path.join(distNodeModules, name);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const canonical = fs.realpathSync(path.join(sourceModules, name));
-    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
-    fs.symlinkSync(
-      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
-      target,
-      "junction",
-    );
-  }
-}
-
 function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
   const source = path.join(pluginDir, PACKAGE_ICON_PATH);
   const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
@@ -294,7 +269,9 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
       const mergedManifest = mergeGeneratedChannelConfigs(
-        manifest,
+        mapPluginCatalogEntries(manifest, (entry: string) =>
+          rewritePackageEntry(entry, buildEntry.runtimeExtension),
+        ),
         pluginId ? generatedChannelConfigsByPlugin.get(pluginId) : undefined,
       );
       // Generated skill assets live under a dedicated dist-owned directory.

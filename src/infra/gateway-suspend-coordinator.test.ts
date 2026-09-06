@@ -23,6 +23,9 @@ import {
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
 import {
+  armGatewaySuspendHandoff,
+  consumeGatewaySuspendHandoff,
+  disarmGatewaySuspendHandoff,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
@@ -67,6 +70,111 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
+  describe("external restart handoff", () => {
+    const setup = (draining: boolean) => {
+      let now = 1_000;
+      let pending = 0;
+      let work = Number(draining);
+      let current = true;
+      const owner = { isCurrent: () => current };
+      const params = {
+        requestId: "external-host",
+        drain: true,
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect: inspectors({ getRootRequests: () => work, getTerminalPersistence: () => pending }),
+        nowMs: () => now,
+        createSuspensionId: () => "external-lease",
+      };
+      expect(prepareGatewaySuspend(params).status).toBe(draining ? "draining" : "ready");
+      return {
+        owner,
+        params,
+        arm: () =>
+          armGatewaySuspendHandoff({
+            suspensionId: "external-lease",
+            owner,
+          }),
+        consume: () => consumeGatewaySuspendHandoff(owner),
+        advance: (ms: number) => {
+          now += ms;
+        },
+        persist: () => {
+          pending = 1;
+        },
+        replaceHost: () => {
+          current = false;
+        },
+        finishWork: () => {
+          work = 0;
+        },
+      };
+    };
+
+    it.each([false, true])(
+      "consumes one explicit arm without renewing it (draining: %s)",
+      (draining) => {
+        const fixture = setup(draining);
+        expect(fixture.consume()).toEqual({ ok: true, value: false });
+        expect(fixture.arm()).toEqual({
+          ok: true,
+          value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 121_000 },
+        });
+        fixture.advance(30_000);
+        expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
+        expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 121_000 } });
+        expect(fixture.consume()).toEqual({ ok: true, value: true });
+        expect(fixture.consume()).toEqual({ ok: true, value: false });
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(fixture.params.resumeScheduling).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["expiry", "resume", "replacement", "host", "restart", "disarm", "persistence"])(
+      "refuses a previously armed handoff after %s",
+      (change) => {
+        const fixture = setup(true);
+        expect(fixture.arm().ok).toBe(true);
+        if (change === "expiry") {
+          fixture.advance(SUSPEND_TTL_MS);
+        }
+        if (change === "resume" || change === "replacement") {
+          resumeGatewaySuspend("external-lease");
+        }
+        if (change === "replacement") {
+          prepareGatewaySuspend(fixture.params);
+        }
+        if (change === "host") {
+          fixture.replaceHost();
+        }
+        if (change === "restart") {
+          markGatewayRestartDraining();
+        }
+        if (change === "disarm") {
+          disarmGatewaySuspendHandoff(fixture.owner);
+        }
+        if (change === "persistence") {
+          fixture.persist();
+        }
+        expect(fixture.consume()).not.toEqual({ ok: true, value: true });
+        expect(fixture.consume()).toEqual({ ok: true, value: false });
+      },
+    );
+
+    it("retains the final-chat inspector after a draining lease becomes READY", () => {
+      const fixture = setup(true);
+      fixture.finishWork();
+      expect(getGatewaySuspendStatus("external-lease").status).toBe("ready");
+      expect(fixture.arm().ok).toBe(true);
+      fixture.persist();
+      expect(fixture.consume()).toEqual({
+        ok: false,
+        error: "gateway terminal persistence is still pending",
+      });
+      expect(fixture.arm().ok).toBe(false);
+    });
+  });
+
   it.each([false, true])(
     "lifecycle reset resumes a held scheduler before admission is cleared (drain: %s)",
     (drain) => {

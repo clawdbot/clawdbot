@@ -43,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   consumeTrustedToolNoStartError,
+  copyInternalToolResultState,
   getCoreTtsToolResultMediaUrls,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -65,6 +66,7 @@ import {
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
   projectCodexDynamicTools,
@@ -426,6 +428,7 @@ export type CodexDynamicToolBridge = {
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
+    sourceReplyDelivered?: true;
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
@@ -518,34 +521,42 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
+  // Supervised thread declarations are native-owned and fingerprinted. Narrow
+  // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
   const inheritedSpecs = params.registeredSpecs
     ? structuredClone([...params.registeredSpecs])
     : undefined;
   const inheritedNames = inheritedSpecs
     ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
     : undefined;
-  const availableTools = availableProjection.tools.filter(
-    (entry) => !inheritedNames || inheritedNames.has(entry.name),
+  const registrationNames =
+    inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
+  const finalized = finalizeCodexToolAvailability(
+    availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
+  const availableTools = finalized.tools;
+  availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
+  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
   const quarantinedAvailableToolNames = new Set(
     availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
-  const registeredSpecTools = (
-    params.registeredTools ? registeredProjection.tools : availableTools
-  ).filter((entry) => !quarantinedAvailableToolNames.has(entry.name));
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
+  const registeredSpecTools = (params.registeredTools ? registeredProjection.tools : availableTools)
+    .filter((entry) => !quarantinedAvailableToolNames.has(entry.name))
+    .map((entry) =>
+      finalized.preparedNames.has(entry.name) ? (toolMap.get(entry.name) ?? entry) : entry,
+    );
   const registeredToolNames =
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
-  warnQuarantinedDynamicTools({
+  reportQuarantinedDynamicTools({
     tools: quarantinedTools,
     availableToolCount: availableTools.length,
     registeredToolCount: registeredSpecTools.length,
+    hookContext: params.hookContext,
   });
-  emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     didDeliverSourceReplyViaMessageTool: false,
@@ -730,6 +741,15 @@ export function createCodexDynamicToolBridge(params: {
         }
         const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
         captureExecutionBoundary();
+        // Delivery is committed before result middleware; presentation changes
+        // cannot erase the source owner's confirmation or infer a new one.
+        if (
+          toolName === "message" &&
+          asOptionalRecord(asOptionalRecord(rawResult.details)?.messageDelivery)
+            ?.sourceReplyDelivered === true
+        ) {
+          telemetry.sourceReplyDelivered = true;
+        }
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
@@ -909,6 +929,7 @@ export function createCodexDynamicToolBridge(params: {
           (!asyncStarted &&
             isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
+        copyInternalToolResultState(rawResult, response);
         return withDynamicToolExecutionState(response, {
           executedArguments: executedArgs,
           executionStarted: didStartExecution && !executionPrevented,
@@ -1007,14 +1028,31 @@ function projectCodexExecutableDynamicToolSurface(
   tools: ProjectedCodexDynamicTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const projected = projectCodexDynamicTools(tools);
-  const wrapped = wrapProjectedCodexDynamicTools(projected.tools, hookContext);
+  const { tools: projectedTools, quarantinedTools } = projectCodexDynamicTools(tools);
+  const wrappedTools: ProjectedCodexDynamicTool[] = [];
+  for (const entry of projectedTools) {
+    try {
+      if (isToolWrappedWithBeforeToolCallHook(entry.tool)) {
+        setBeforeToolCallDiagnosticsEnabled(entry.tool, false);
+        wrappedTools.push(entry);
+        continue;
+      }
+      wrappedTools.push({
+        ...entry,
+        tool: wrapToolWithBeforeToolCallHook(entry.tool, hookContext, {
+          emitDiagnostics: false,
+        }),
+      });
+    } catch {
+      quarantinedTools.push({
+        tool: entry.name,
+        violations: [`${entry.name} could not be wrapped for before-tool-call hooks`],
+      });
+    }
+  }
   return {
-    tools: wrapped.tools,
-    quarantinedTools: dedupeQuarantinedDynamicTools([
-      ...projected.quarantinedTools,
-      ...wrapped.quarantinedTools,
-    ]),
+    tools: wrappedTools,
+    quarantinedTools: dedupeQuarantinedDynamicTools(quarantinedTools),
   };
 }
 
@@ -1027,9 +1065,10 @@ export function projectCodexExecutableDynamicTools(params: {
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
-    availableTools: projected.tools.map((entry) => entry.tool),
-    quarantinedTools: projected.quarantinedTools,
+    availableTools: finalized.tools.map((entry) => entry.tool),
+    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 
@@ -1062,71 +1101,30 @@ function failedToolResult(
   };
 }
 
-function wrapProjectedCodexDynamicTools(
-  tools: readonly ProjectedCodexDynamicTool[],
-  hookContext: CodexDynamicToolHookContext | undefined,
-): {
-  tools: ProjectedCodexDynamicTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
-} {
-  const wrappedTools: ProjectedCodexDynamicTool[] = [];
-  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  for (const entry of tools) {
-    try {
-      if (isToolWrappedWithBeforeToolCallHook(entry.tool)) {
-        setBeforeToolCallDiagnosticsEnabled(entry.tool, false);
-        wrappedTools.push(entry);
-        continue;
-      }
-      wrappedTools.push({
-        ...entry,
-        tool: wrapToolWithBeforeToolCallHook(entry.tool, hookContext, {
-          emitDiagnostics: false,
-        }),
-      });
-    } catch {
-      quarantinedTools.push({
-        tool: entry.name,
-        violations: [`${entry.name} could not be wrapped for before-tool-call hooks`],
-      });
-    }
-  }
-  return { tools: wrappedTools, quarantinedTools };
-}
-
-function warnQuarantinedDynamicTools(params: {
+function reportQuarantinedDynamicTools(params: {
   tools: readonly CodexDynamicToolSchemaQuarantine[];
   availableToolCount: number;
   registeredToolCount: number;
+  hookContext?: CodexDynamicToolHookContext;
 }): void {
   if (params.tools.length === 0) {
     return;
   }
-  const unique = new Map<string, readonly string[]>();
-  for (const tool of params.tools) {
-    unique.set(tool.tool, tool.violations);
-  }
   embeddedAgentLog.warn(
-    `codex app-server quarantined ${unique.size} unsupported dynamic tool ${unique.size === 1 ? "definition" : "definitions"}: ${[...unique.keys()].join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
+    `codex app-server quarantined ${params.tools.length} unsupported dynamic tool ${params.tools.length === 1 ? "definition" : "definitions"}: ${params.tools.map((tool) => tool.tool).join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
     {
-      tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
+      tools: params.tools.map(({ tool, violations }) => ({ tool, violations })),
       availableToolCount: params.availableToolCount,
       registeredToolCount: params.registeredToolCount,
     },
   );
-}
-
-function emitQuarantinedDynamicToolDiagnostics(
-  tools: readonly CodexDynamicToolSchemaQuarantine[],
-  ctx: CodexDynamicToolHookContext | undefined,
-): void {
-  for (const tool of tools) {
+  for (const tool of params.tools) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
-      agentId: ctx?.agentId,
-      runId: ctx?.runId,
-      sessionId: ctx?.sessionId,
-      sessionKey: ctx?.sessionKey,
+      agentId: params.hookContext?.agentId,
+      runId: params.hookContext?.runId,
+      sessionId: params.hookContext?.sessionId,
+      sessionKey: params.hookContext?.sessionKey,
       toolName: tool.tool,
       deniedReason: "unsupported_tool_schema",
       reason: tool.violations.join(", "),

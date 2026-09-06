@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { splitCommandArgs } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as readRecord,
@@ -95,10 +96,11 @@ export function resolveArgs(configArgs: unknown, envArgs: string | undefined): s
       .map((entry) => readNonEmptyString(entry))
       .filter((entry): entry is string => entry !== undefined);
   }
-  if (typeof configArgs === "string") {
-    return splitShellWords(configArgs);
-  }
-  return splitShellWords(envArgs ?? "");
+  // v2026.9.1 string overrides preserve backslashes and accept unfinished quotes;
+  // applying shell escaping or strict quote validation would change existing argv.
+  return splitCommandArgs(typeof configArgs === "string" ? configArgs : (envArgs ?? ""), {
+    allowUnclosedQuotes: true,
+  });
 }
 
 export function hashSecretForKey(value: string | undefined, label: string): string | null {
@@ -118,36 +120,4 @@ function getStartOptionsKeySecret(): Buffer {
   };
   globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
   return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
-}
-
-function splitShellWords(value: string): string[] {
-  const words: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  for (const char of value) {
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        words.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) {
-    words.push(current);
-  }
-  return words;
 }

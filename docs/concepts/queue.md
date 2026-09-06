@@ -83,6 +83,19 @@ When channel streaming is `partial` or `block`, steering can look like several s
 
 `steer` does not abort in-flight tools. Skipped OpenClaw tool calls receive synthetic paired error results so the transcript remains valid. Use `/queue interrupt` when the newest message should abort the current run.
 
+## Answering a pending question
+
+A plain-text answer to a pending agent question goes to that question before
+ordinary queue handling, including when a native CLI cannot accept steering.
+OpenClaw checks the answer against the question creator's permissions and active
+run, not the model selected for your next turn. Changed permissions or a closed
+creator produce an explicit refusal rather than starting another turn.
+
+If the answer may have committed but confirmation is lost, OpenClaw reports that
+uncertainty and does not resend it as steering or a followup. Check the conversation
+before retrying. A later delivery or source-cleanup failure does not make the
+answer replayable, and uncertainty alone does not cancel the original agent run.
+
 ## Precedence
 
 For mode selection, OpenClaw resolves:

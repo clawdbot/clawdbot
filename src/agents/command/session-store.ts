@@ -169,16 +169,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const hasUsage = hasNonzeroUsage(usage);
   if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
-    const { estimateAggregateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
+    const { estimateAggregateUsageCost } = await getUsageFormatModule();
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: cfg,
-          agentDir: params.agentDir,
-        }),
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        agentDir: params.agentDir,
       }),
     );
     if (hasUsage) {

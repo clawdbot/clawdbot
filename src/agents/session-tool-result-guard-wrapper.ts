@@ -114,6 +114,11 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  const preparedUserReplayKey =
+    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+    pendingPreparedUserTurnMessage?.idempotencyKey
+      ? pendingPreparedUserTurnMessage?.idempotencyKey
+      : undefined;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
@@ -226,6 +231,15 @@ export function guardSessionManager(
       queuedUserTurnTranscriptRecorder = undefined;
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
+      // Replay may reuse the current user without appending it. Its prepared
+      // metadata must not leak onto a later queued user, including staged steering.
+      if (
+        message.role === "user" &&
+        preparedUserReplayKey !== undefined &&
+        Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
+      ) {
+        pendingPreparedUserTurnMessage = undefined;
+      }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
         runtimeContext?.recorder ??
@@ -264,7 +278,8 @@ export function guardSessionManager(
             contextWindowTokens: opts.contextWindowTokens,
           })
         : undefined,
-    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,

@@ -481,6 +481,7 @@ extension WatchExecApprovalDecision {
 struct WatchChatSessionIdentity: Hashable {
     var gatewayID: WatchGatewayID.Key?
     var sessionKey: WatchOpaqueUTF8Key
+    var deliveryContext: OpenClawWatchChatDeliveryContext?
 }
 
 struct WatchAppSnapshotMessage: Codable, Equatable {
@@ -500,11 +501,22 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var chatStatus: OpenClawWatchAppStatus?
     var sentAtMs: Int64?
     var snapshotId: String?
+    var chatDeliveryContext: OpenClawWatchChatDeliveryContext?
+
+    var validatedChatDeliveryContext: OpenClawWatchChatDeliveryContext? {
+        guard let context = self.chatDeliveryContext,
+              (try? OpenClawWatchChatDeliveryCodec.validateContext(context)) != nil,
+              self.gatewayStableID?.utf8.elementsEqual(context.gatewayStableID.utf8) == true,
+              self.sessionKey.utf8.elementsEqual(context.sessionKey.utf8)
+        else { return nil }
+        return context
+    }
 
     var chatSessionIdentity: WatchChatSessionIdentity {
         WatchChatSessionIdentity(
             gatewayID: WatchGatewayID.key(self.gatewayStableID),
-            sessionKey: WatchOpaqueUTF8Key(self.sessionKey))
+            sessionKey: WatchOpaqueUTF8Key(self.sessionKey),
+            deliveryContext: self.validatedChatDeliveryContext)
     }
 
     init(
@@ -523,7 +535,8 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         chatItems: [WatchChatItem]?,
         chatStatus: OpenClawWatchAppStatus?,
         sentAtMs: Int64?,
-        snapshotId: String?)
+        snapshotId: String?,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
     {
         self.gatewayStatus = gatewayStatus
         self.gatewayConnected = gatewayConnected
@@ -541,6 +554,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         self.chatStatus = chatStatus
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
+        self.chatDeliveryContext = chatDeliveryContext
     }
 
     static func parsePayload(_ payload: [String: Any]) -> Self? {
@@ -556,8 +570,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let agentAvatarText = (payload["agentAvatarText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let sessionKey = (payload["sessionKey"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sessionKey = (payload["sessionKey"] as? String) ?? ""
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
         let talkEnabled = Self.boolValue(payload["talkEnabled"])
         let talkListening = Self.boolValue(payload["talkListening"])
@@ -602,7 +615,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
                     code: payload["chatStatusCode"] as? String,
                     text: payload["chatStatusText"] as? String),
             sentAtMs: sentAtMs,
-            snapshotId: snapshotId)
+            snapshotId: snapshotId,
+            chatDeliveryContext: (payload["chatDeliveryContext"] as? [String: Any])
+                .flatMap { try? OpenClawWatchChatDeliveryCodec.decodeContext($0) })
     }
 
     static func localizedChatStatusText(
@@ -644,6 +659,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         case chatStatusText
         case sentAtMs
         case snapshotId
+        case chatDeliveryContext
     }
 
     init(from decoder: Decoder) throws {
@@ -661,6 +677,8 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         self.chatItems = try container.decodeIfPresent([WatchChatItem].self, forKey: .chatItems)
         self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+        self.chatDeliveryContext = try container.decodeIfPresent(
+            OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
         let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
@@ -726,6 +744,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         try container.encodeIfPresent(self.chatStatus, forKey: .chatStatus)
         try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
         try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
+        try container.encodeIfPresent(self.chatDeliveryContext, forKey: .chatDeliveryContext)
     }
 
     private static func parseStatus(
@@ -854,6 +873,7 @@ struct WatchNotifyMessage: Codable {
     var expiresAtMs: Int64?
     var risk: String?
     var actions: [WatchPromptAction]
+    var chatDeliveryContext: OpenClawWatchChatDeliveryContext?
 }
 
 struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {

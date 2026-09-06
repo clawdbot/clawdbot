@@ -51,7 +51,6 @@ await runCliWithExitFinalization({
           downgradeRisk: false,
           shouldRestart: true,
           opts: { json: true },
-          showProgress: false,
           controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords: {},
           startedAt: Date.now(),

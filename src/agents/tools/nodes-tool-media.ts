@@ -24,7 +24,6 @@ import {
 import { mediaPathMatchesFormat } from "../../cli/nodes-media-utils.js";
 import {
   parseScreenRecordPayload,
-  parseScreenSnapshotPayload,
   screenRecordTempPath,
   screenSnapshotFormatForPath,
   screenSnapshotTempPath,
@@ -32,6 +31,7 @@ import {
   writeScreenSnapshotToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { parseScreenSnapshotResult } from "../../plugins/computer-use-contract.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
@@ -439,12 +439,8 @@ async function executeScreenSnapshot({
     params: { screenIndex, maxWidth, format: requestedFormat },
     idempotencyKey: crypto.randomUUID(),
   });
-  const payload = parseScreenSnapshotPayload(raw?.payload);
-  const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
-  if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-    throw new Error(`unsupported screen.snapshot format: ${payload.format}`);
-  }
-  const ext = normalizedFormat === "png" ? "png" : "jpg";
+  const payload = parseScreenSnapshotResult(raw?.payload);
+  const ext = payload.format === "png" ? "png" : "jpg";
   assertMediaOutPathFormat({ command: "screen.snapshot", outPath, format: ext });
   const filePath = outPath ?? screenSnapshotTempPath({ ext });
   const written = await writeScreenSnapshotToFile(filePath, payload.base64);

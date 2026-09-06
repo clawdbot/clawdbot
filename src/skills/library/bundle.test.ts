@@ -1,8 +1,14 @@
+import { renameSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareSkillBundle, prepareSkillLibraryBundle, readSkillLibraryTree } from "./bundle.js";
+import {
+  prepareSkillBundle,
+  prepareSkillLibraryBundle,
+  readSkillBundleTree,
+  readSkillLibraryTree,
+} from "./bundle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const markdown = {
@@ -43,6 +49,10 @@ describe("portable complete skill revision identity", () => {
     "a//b",
     "a/./b",
     "CON.txt",
+    "CONIN$",
+    "conout$",
+    "COM¹.txt",
+    "LPT³",
     "file.",
     "a/../b",
     "node_modules/a",
@@ -76,6 +86,88 @@ describe("portable complete skill revision identity", () => {
     await fs.link(path.join(directory, "SKILL.md"), path.join(directory, "linked"));
     await expect(readSkillLibraryTree(directory)).rejects.toThrow();
   });
+  it.runIf(process.platform !== "win32")(
+    "reads a regular-file tree through a symlink root while rejecting nested links",
+    async () => {
+      const parent = await fs.realpath(tempDirs.make("skill-root-link-"));
+      const target = path.join(parent, "target");
+      const linkedRoot = path.join(parent, "managed-skill");
+      await fs.mkdir(path.join(target, "scripts"), { recursive: true });
+      await fs.writeFile(path.join(target, "SKILL.md"), markdown.content);
+      await fs.writeFile(path.join(target, "scripts/run.sh"), resource.content);
+      await fs.symlink(target, linkedRoot, "dir");
+
+      await expect(readSkillBundleTree(linkedRoot)).resolves.toMatchObject([
+        { path: "SKILL.md" },
+        { path: "scripts/run.sh" },
+      ]);
+      await fs.symlink("../SKILL.md", path.join(target, "scripts/linked"));
+      await expect(readSkillBundleTree(linkedRoot)).rejects.toMatchObject({
+        code: "INVALID_BUNDLE",
+        message: expect.stringContaining("Skill trees cannot contain links or special files"),
+      });
+    },
+  );
+  it.runIf(process.platform !== "win32")(
+    "reports a broken root path and filesystem cause",
+    async () => {
+      const parent = await fs.realpath(tempDirs.make("skill-broken-root-"));
+      const missing = path.join(parent, "missing");
+      const linkedRoot = path.join(parent, "managed-skill");
+      await fs.symlink(missing, linkedRoot, "dir");
+
+      await expect(readSkillBundleTree(linkedRoot)).rejects.toMatchObject({
+        code: "INVALID_BUNDLE",
+        message: expect.stringMatching(/root=.*managed-skill.*path=.*managed-skill.*ENOENT/s),
+        rootPath: linkedRoot,
+        failedPath: linkedRoot,
+        cause: { code: "ENOENT" },
+      });
+    },
+  );
+  it("classifies a root removed after traversal with root path diagnostics", async () => {
+    const parent = await fs.realpath(tempDirs.make("skill-post-walk-root-"));
+    const directory = path.join(parent, "skill");
+    const moved = path.join(parent, "moved");
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "SKILL.md"), markdown.content);
+    let removed = false;
+
+    await expect(
+      readSkillBundleTree(directory, () => {
+        if (!removed) {
+          renameSync(directory, moved);
+          removed = true;
+        }
+        return true;
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_BUNDLE",
+      message: expect.stringMatching(/root=.*skill.*path=.*skill.*not-found/s),
+      rootPath: directory,
+      failedPath: directory,
+      cause: { code: "not-found" },
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps unreadable nested directories fail-closed with path diagnostics",
+    async () => {
+      const directory = await fs.realpath(tempDirs.make("skill-unreadable-"));
+      const nested = path.join(directory, "private");
+      await fs.writeFile(path.join(directory, "SKILL.md"), markdown.content);
+      await fs.mkdir(nested);
+      await fs.chmod(nested, 0);
+      try {
+        await expect(readSkillBundleTree(directory)).rejects.toMatchObject({
+          code: "INVALID_BUNDLE",
+          message: expect.stringMatching(/path=.*private.*EACCES/s),
+        });
+      } finally {
+        await fs.chmod(nested, 0o700);
+      }
+    },
+  );
   it("rejects a tree beyond the path depth limit instead of silently omitting its files", async () => {
     const directory = await fs.realpath(tempDirs.make("skill-depth-"));
     await fs.writeFile(path.join(directory, "SKILL.md"), markdown.content);

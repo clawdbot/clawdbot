@@ -69,19 +69,6 @@ export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): b
   return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
 }
 
-export function isOpenClawInternalSourceReplyMirrorAssistantMessage(message: unknown): boolean {
-  if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-    return false;
-  }
-  const marker = (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror;
-  return (
-    Boolean(marker) &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    (marker as { sourceReplySink?: unknown }).sourceReplySink === "internal-ui"
-  );
-}
-
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return false;

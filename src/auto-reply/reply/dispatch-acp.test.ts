@@ -15,6 +15,7 @@ import {
   emitAcpLifecycleEnd,
   resolveAcpLifecycleEndFields,
 } from "../../agents/command/attempt-execution.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
@@ -976,6 +977,56 @@ describe("tryDispatchAcpReplyCore", () => {
       "channel-local-1",
     ]);
   });
+
+  it.each([false, true, "delivery-throws"] as const)(
+    "reports uncertain question input through ACP delivery policy (suppressed=%s)",
+    async (mode) => {
+      const suppressUserDelivery = mode === true;
+      if (mode === "delivery-throws") {
+        routeMocks.routeReply.mockRejectedValueOnce(new Error("synthetic notice delivery failure"));
+      }
+      setReadyAcpResolution();
+      const registration = registerPendingAgentQuestion({
+        questionId: "synthetic-acp-question",
+        sessionKey,
+        questions: [
+          { id: "answer", header: "Answer", question: "Continue?", options: [], isOther: true },
+        ],
+        gatewayCall: async () => {
+          throw new Error("custom response lost");
+        },
+      });
+      registration.attachRegistration(Promise.resolve());
+      const { dispatcher } = createDispatcher();
+      const recordProcessed = vi.fn();
+      try {
+        const result = await runDispatch({
+          bodyForAgent: "candidate answer",
+          dispatcher,
+          shouldRouteToOriginating: true,
+          suppressUserDelivery,
+          recordProcessed,
+        });
+        expect(result).toMatchObject({ queuedFinal: mode === false });
+        expect(recordProcessed).toHaveBeenCalledWith(
+          "error",
+          expect.objectContaining({ reason: "acp_question_answer_unconfirmed" }),
+        );
+        expect(managerMocks.runTurn).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        if (suppressUserDelivery) {
+          expect(routeMocks.routeReply).not.toHaveBeenCalled();
+        } else {
+          expect(routePayload()).toMatchObject({
+            isError: true,
+            text: expect.stringContaining("confirmation was lost"),
+          });
+        }
+      } finally {
+        registration.dispose();
+      }
+    },
+  );
 
   it("routes default ACP output to the originating channel as a final reply", async () => {
     setReadyAcpResolution();

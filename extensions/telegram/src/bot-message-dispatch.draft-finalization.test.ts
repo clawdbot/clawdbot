@@ -311,7 +311,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
         } as TelegramMessageContext["ctxPayload"],
       }),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();

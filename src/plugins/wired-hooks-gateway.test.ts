@@ -5,6 +5,7 @@
  * calls at the unit level by verifying the hook runner functions exist
  * and validating the integration pattern.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
@@ -33,14 +34,6 @@ async function expectGatewayHookCall(params: {
   }
 
   expect(handler).toHaveBeenCalledWith(params.event, params.gatewayCtx);
-}
-
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 describe("gateway hook runner methods", () => {
@@ -159,7 +152,7 @@ describe("gateway hook runner methods", () => {
     expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
   });
 
-  it("runCronChanged handles removed events without job", async () => {
+  it("runCronChanged passes removed events with the deleted job snapshot", async () => {
     const handler = vi.fn();
     const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
     const event: PluginHookCronChangedEvent = {
@@ -172,7 +165,10 @@ describe("gateway hook runner methods", () => {
     await runner.runCronChanged(event, gatewayCtx);
 
     expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
-    const [cronChangedEvent] = requireFirstMockCall(handler, "cron_changed handler");
+    const [cronChangedEvent] = expectDefined<unknown[]>(
+      handler.mock.calls[0],
+      "cron_changed handler",
+    );
     expect((cronChangedEvent as PluginHookCronChangedEvent).job).toEqual({
       id: "job-3",
       name: "deleted-job",

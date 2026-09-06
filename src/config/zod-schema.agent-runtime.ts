@@ -11,6 +11,11 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  resolveExactExecModeFromPolicy,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals-core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
@@ -540,16 +545,27 @@ const ToolExecBaseShape = {
 } as const;
 
 function addExecPolicyModeConflictIssue(
-  value: { mode?: unknown; security?: unknown; ask?: unknown },
+  value: { mode?: unknown; security?: ExecSecurity; ask?: ExecAsk },
   ctx: z.RefinementCtx,
 ): void {
   if (value.mode === undefined || (value.security === undefined && value.ask === undefined)) {
     return;
   }
+  // The issue path identifies root or agent scope; repair that same object without
+  // inferring missing policy values or using the lossy display-mode projection.
+  const exactMode =
+    value.security !== undefined && value.ask !== undefined
+      ? resolveExactExecModeFromPolicy({ security: value.security, ask: value.ask })
+      : null;
+  const repair = exactMode
+    ? `Replace security/ask with mode="${exactMode}" (the equivalent of security="${value.security}" + ask="${value.ask}").`
+    : value.security !== undefined && value.ask !== undefined
+      ? "This security/ask pair has no exact mode equivalent. To keep this policy, retain both legacy fields and remove mode."
+      : "The legacy policy is incomplete. Choose the intended security and ask values before converting; no mode equivalent can be inferred.";
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["mode"],
-    message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
+    message: `mode cannot be combined with security or ask in the same exec object. Update the deploy script, template, or patch at this scope. ${repair} Doctor migrates supported legacy policies to mode; run "openclaw doctor --fix" only when the saved file still needs migration.`,
   });
 }
 

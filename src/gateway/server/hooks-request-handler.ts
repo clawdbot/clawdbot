@@ -1,8 +1,7 @@
-// Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -35,12 +34,15 @@ import {
   resolveHookPathBodyLimit,
   resolveHookSessionKey,
 } from "../hooks.js";
+import type {
+  HookAgentCompletion,
+  HookAgentDispatchResult,
+  HookAgentDispatchSuccess,
+} from "../hooks.types.js";
 import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
-
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -56,6 +58,8 @@ const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 
+const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+
 const FAN_OUT_PENDING = Symbol("hook-fanout-pending");
 type FanOutSettled = HookAgentDispatchResult | typeof FAN_OUT_PENDING;
 
@@ -66,13 +70,11 @@ async function settleFanOutDispatches(
   // Rejections must settle to failures even when the race already resolved
   // pending, or the detached dispatch promise rejects unhandled later.
   const guarded = dispatches.map((dispatch) =>
-    dispatch.catch(
-      (err: unknown): HookAgentDispatchResult => ({
-        ok: false,
-        statusCode: 502,
-        error: String(err),
-      }),
-    ),
+    dispatch.catch((err: unknown): HookAgentDispatchResult => ({
+      ok: false,
+      statusCode: 502,
+      error: String(err),
+    })),
   );
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof FAN_OUT_PENDING>((resolve) => {
@@ -88,23 +90,11 @@ async function settleFanOutDispatches(
   }
 }
 
-function sendAgentResult(
-  res: ServerResponse,
-  result: HookAgentDispatchResult & Partial<WakeResult>,
-) {
-  if (result.ok) {
-    sendJson(res, 200, result);
-    return;
-  }
-  const { statusCode, ...body } = result;
-  sendJson(res, statusCode, body);
-}
-
 function sendFanOutResult(res: ServerResponse, settled: FanOutSettled[], wake?: WakeResult) {
   const first = settled[0];
   if (settled.length === 1 && first !== undefined && first !== FAN_OUT_PENDING) {
     // Single-item batches keep the exact single-dispatch response shape.
-    sendAgentResult(res, { ...first, ...wake });
+    void sendAgentResult(res, first, wake);
     return;
   }
   const runIds: string[] = [];
@@ -155,14 +145,31 @@ type HookDispatchers = {
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
 };
 
-export type HookAgentDispatchResult =
-  | { ok: true; runId: string }
-  | { ok: false; statusCode: 400 | 409 | 502 | 503; error: string; runId?: string };
+function sendAgentResult(
+  res: ServerResponse,
+  result: HookAgentDispatchResult,
+  extra?: Partial<WakeResult>,
+  waitForCompletion = false,
+): void | Promise<void> {
+  if (!result.ok) {
+    const { statusCode, ...body } = result;
+    sendJson(res, statusCode, { ...body, ...extra });
+    return;
+  }
+  const send = (completion?: HookAgentCompletion) =>
+    sendJson(res, 200, {
+      ok: true,
+      runId: result.runId,
+      ...extra,
+      ...(completion ? { completion } : {}),
+    });
+  return waitForCompletion ? result.completion.then(send) : send();
+}
 
-type HookReplayEntry = {
-  ts: number;
-  runId: string;
-};
+type HookReplayEntry =
+  | { state: "pending"; dispatch: Promise<HookAgentDispatchResult> }
+  | { state: "active"; dispatch: HookAgentDispatchSuccess }
+  | { state: "terminal"; ts: number; dispatch: HookAgentDispatchSuccess };
 
 type HookReplayScope = {
   pathKey: string;
@@ -183,7 +190,7 @@ export function createHooksRequestHandler(
     getHooksConfig: () => HooksConfigResolved | null;
     bindHost: string;
     port: number;
-    logHooks: SubsystemLogger;
+    logHooks: ReturnType<typeof createSubsystemLogger>;
     getClientIpConfig?: () => HookClientIpConfig;
     fanoutResponseDeadlineMs?: number;
   } & HookDispatchers,
@@ -192,7 +199,6 @@ export function createHooksRequestHandler(
   const fanoutResponseDeadlineMs =
     opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const pendingHookReplays = new Map<string, Promise<HookAgentDispatchResult>>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -218,13 +224,15 @@ export function createHooksRequestHandler(
   };
 
   const pruneHookReplayCache = (now: number) => {
-    const cutoff = now - DEDUPE_TTL_MS;
     for (const [key, entry] of hookReplayCache) {
-      if (entry.ts < cutoff) {
+      if (entry.state === "terminal" && entry.ts < now - DEDUPE_TTL_MS) {
         hookReplayCache.delete(key);
       }
     }
-    pruneMapToMaxSize(hookReplayCache, DEDUPE_MAX);
+    const terminal = [...hookReplayCache].filter(([, entry]) => entry.state === "terminal");
+    for (const [key] of terminal.slice(0, Math.max(0, terminal.length - DEDUPE_MAX))) {
+      hookReplayCache.delete(key);
+    }
   };
 
   const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {
@@ -232,86 +240,72 @@ export function createHooksRequestHandler(
     if (!idem) {
       return undefined;
     }
-    const tokenFingerprint = createHash("sha256")
-      .update(params.token ?? "", "utf8")
-      .digest("hex");
-    const idempotencyFingerprint = createHash("sha256").update(idem, "utf8").digest("hex");
-    const scopeFingerprint = createHash("sha256")
-      .update(
-        JSON.stringify({
-          pathKey: params.pathKey,
-          dispatchScope: params.dispatchScope,
-        }),
-        "utf8",
-      )
-      .digest("hex");
-    return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
+    const scope = JSON.stringify({
+      pathKey: params.pathKey,
+      dispatchScope: params.dispatchScope,
+    });
+    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
   };
 
-  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+  const resolveHookReplay = (key: string | undefined) => {
     if (!key) {
       return undefined;
     }
-    pruneHookReplayCache(now);
+    pruneHookReplayCache(Date.now());
     const cached = hookReplayCache.get(key);
     if (!cached) {
       return undefined;
     }
-    hookReplayCache.delete(key);
-    hookReplayCache.set(key, cached);
-    return cached.runId;
-  };
-
-  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
-    if (!key) {
-      return;
+    if (cached.state === "terminal") {
+      hookReplayCache.delete(key);
+      hookReplayCache.set(key, cached);
     }
-    hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ts: now, runId });
-    pruneHookReplayCache(now);
-  };
-
-  const resolveHookReplay = (
-    key: string | undefined,
-    now: number,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> | undefined => {
-    if (!key) {
-      return undefined;
-    }
-    const cachedRunId = resolveCachedHookRunId(key, now);
-    if (cachedRunId) {
-      return { ok: true, runId: cachedRunId };
-    }
-    return pendingHookReplays.get(key);
+    return cached.dispatch;
   };
 
   const dispatchAgentHookWithReplay = (
     key: string | undefined,
-    now: number,
     dispatch: () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
   ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> => {
     if (!key) {
       return dispatch();
     }
-    const existing = resolveHookReplay(key, now);
+    const existing = resolveHookReplay(key);
     if (existing) {
       return existing;
     }
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        if (result.ok) {
-          rememberHookRunId(key, result.runId, now);
+        const current = hookReplayCache.get(key);
+        if (current?.state === "pending" && current.dispatch === pending) {
+          if (result.ok) {
+            const active = { state: "active", dispatch: result } as const;
+            hookReplayCache.set(key, active);
+            const settle = () => {
+              if (hookReplayCache.get(key) !== active) {
+                return;
+              }
+              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
+              hookReplayCache.delete(key);
+              hookReplayCache.set(key, terminal);
+              pruneHookReplayCache(terminal.ts);
+            };
+            void result.completion.then(settle, settle);
+          } else {
+            hookReplayCache.delete(key);
+          }
         }
         return result;
       })
-      .finally(() => {
-        // Failed admission stays retryable; identity guards against deleting a newer replay.
-        if (pendingHookReplays.get(key) === pending) {
-          pendingHookReplays.delete(key);
+      .catch((err: unknown) => {
+        const current = hookReplayCache.get(key);
+        if (current?.state === "pending" && current.dispatch === pending) {
+          hookReplayCache.delete(key);
         }
+        throw err;
       });
-    pendingHookReplays.set(key, pending);
+    hookReplayCache.set(key, { state: "pending", dispatch: pending });
     return pending;
   };
 
@@ -393,13 +387,9 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
+    const payload = asRecord(body.value);
     const headers = normalizeHookHeaders(req);
-    const idempotencyKey = resolveHookIdempotencyKey({
-      payload: payload as Record<string, unknown>,
-      headers,
-    });
-    const now = Date.now();
+    const idempotencyKey = resolveHookIdempotencyKey({ payload, headers });
     // Later mapped validation errors must report any wake outcome that already occurred.
     let wakeResult: WakeResult | undefined;
     const sendHookError = (error: string) =>
@@ -465,7 +455,7 @@ export function createHooksRequestHandler(
     };
 
     if (subPath === "wake") {
-      const normalized = normalizeWakePayload(payload as Record<string, unknown>);
+      const normalized = normalizeWakePayload(payload);
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -483,7 +473,12 @@ export function createHooksRequestHandler(
     }
 
     if (subPath === "agent") {
-      const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
+      const waitForCompletion = payload.waitForCompletion;
+      if (waitForCompletion !== undefined && typeof waitForCompletion !== "boolean") {
+        sendJson(res, 400, { ok: false, error: "waitForCompletion must be boolean" });
+        return true;
+      }
+      const normalized = normalizeAgentPayload(payload);
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -540,9 +535,9 @@ export function createHooksRequestHandler(
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
         },
       });
-      const replay = resolveHookReplay(replayKey, now);
+      const replay = resolveHookReplay(replayKey);
       if (replay) {
-        sendAgentResult(res, await replay);
+        await sendAgentResult(res, await replay, undefined, waitForCompletion === true);
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -552,7 +547,7 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
+      const dispatched = await dispatchAgentHookWithReplay(replayKey, () =>
         dispatchAgentHook({
           ...normalized.value,
           effectiveAgentId: target.effectiveAgentId,
@@ -563,14 +558,14 @@ export function createHooksRequestHandler(
           externalContentSource: "webhook",
         }),
       );
-      sendAgentResult(res, dispatched);
+      await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
       return true;
     }
 
     if (hooksConfig.mappings.length > 0) {
       try {
         const mapped = await applyHookMappings(hooksConfig.mappings, {
-          payload: payload as Record<string, unknown>,
+          payload,
           headers,
           url,
           path: subPath,
@@ -675,7 +670,7 @@ export function createHooksRequestHandler(
               dispatchScope,
             });
             return () =>
-              dispatchAgentHookWithReplay(replayKey, now, () =>
+              dispatchAgentHookWithReplay(replayKey, () =>
                 dispatchAgentHook({
                   message: action.message,
                   name: action.name ?? "Hook",
@@ -745,7 +740,7 @@ export function createHooksRequestHandler(
           if (!mapped.fanout) {
             // Non-fanout mappings produce exactly one action.
             const dispatched = await dispatches[0]!();
-            sendAgentResult(res, { ...dispatched, ...wakeResult });
+            void sendAgentResult(res, dispatched, wakeResult);
             return true;
           }
           const settled = await settleFanOutDispatches(

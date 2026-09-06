@@ -33,6 +33,7 @@ import {
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 export {
   assertOkOrThrowHttpError,
   readProviderJsonObjectResponse,
@@ -44,6 +45,16 @@ export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-reque
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function buildOpenAiCompatibleAuthHeaders(
+  params: Pick<AudioTranscriptionRequest, "apiKey" | "auth">,
+) {
+  const apiKey = params.auth?.kind === "api-key" ? params.auth.apiKey : params.apiKey;
+  // Explicit no-auth suppresses legacy markers; configured headers still override these defaults.
+  return params.auth?.kind === "none" || !apiKey
+    ? undefined
+    : { authorization: `Bearer ${apiKey}` };
+}
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
@@ -650,23 +661,6 @@ type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
     fetchFn: typeof fetch;
   };
 
-export async function postTranscriptionRequest(params: GuardedPostRequestParams<BodyInit>) {
-  return await postGuardedRequest({
-    url: params.url,
-    init: {
-      method: "POST",
-      headers: params.headers,
-      body: params.body,
-      ...(params.signal ? { signal: params.signal } : {}),
-    },
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    guardedOptions: resolveGuardedRequestOptions(params),
-    retryStage: params.retryStage,
-    retry: params.retry,
-  });
-}
-
 async function postGuardedRequest(params: {
   url: string;
   init: RequestInit;
@@ -741,6 +735,9 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
     retry: params.retry,
   });
 }
+
+// Keep the shipped transcription name on the canonical multipart transport.
+export { postMultipartRequest as postTranscriptionRequest };
 
 export function requireTranscriptionText(
   value: string | undefined,

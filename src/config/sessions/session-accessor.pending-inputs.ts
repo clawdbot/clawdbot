@@ -31,6 +31,7 @@ import {
   releaseSessionPendingInputOwner,
   runWithSessionPendingInput,
   runWithSessionPendingInputPersistence,
+  withSessionPendingInputRelocation,
   type SessionPendingInput,
   type SessionPendingInputOwner,
   type SessionPendingInputPage,
@@ -50,6 +51,7 @@ import {
 } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 
+export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
 export type SessionPendingInputReceipt = {
@@ -123,9 +125,11 @@ export function bindSessionPendingInputSources(
   if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
+  const aggregateInputId = randomUUID();
   return ownerReceipt({
     ...first,
-    inputId: randomUUID(),
+    inputId: aggregateInputId,
+    transcriptInputId: aggregateInputId,
     idempotencyKey,
     messageJson,
     sources,
@@ -257,6 +261,7 @@ export async function stageSessionPendingInput(
     let finished = false;
     const owner: SessionPendingInputOwner = {
       inputId,
+      transcriptInputId: inputId,
       sessionId: scope.sessionId,
       sessionKey: resolved.sessionKey,
       databasePath: database.path,

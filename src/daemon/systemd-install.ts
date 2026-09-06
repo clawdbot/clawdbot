@@ -170,7 +170,7 @@ function removeLegacyGatewayVersionMetadata(content: string): string {
   }
   const inlineEnvironment = new Map<string, string>();
   let inServiceSection = false;
-  for (const rawLine of content.split("\n")) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
     if (/^\[[^\]]+\]$/u.test(line)) {
       inServiceSection = line === "[Service]";

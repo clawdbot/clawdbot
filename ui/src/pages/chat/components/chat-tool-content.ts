@@ -160,12 +160,14 @@ function renderToolDataBlock(params: { label?: string; text: string }) {
   const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
   return html`
     <div class="chat-tool-card__block">
-      ${label
-        ? html`<div class="chat-tool-card__block-header">
-            <span class="chat-tool-card__block-icon">${icons.zap}</span>
-            <span class="chat-tool-card__block-label">${label}</span>
-          </div>`
-        : nothing}
+      ${
+        label
+          ? html`<div class="chat-tool-card__block-header">
+              <span class="chat-tool-card__block-icon">${icons.zap}</span>
+              <span class="chat-tool-card__block-label">${label}</span>
+            </div>`
+          : nothing
+      }
       <pre class="chat-tool-card__block-content"><code class=${codeClass}>${text}</code></pre>
     </div>
   `;
@@ -309,9 +311,11 @@ function renderTerminalBlock(command: string, output: string | undefined) {
         <span class="chat-tool-term__prompt">$</span
         ><code>${renderHighlightedCommand(command)}</code>
       </div>
-      ${output?.trim()
-        ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
-        : nothing}
+      ${
+        output?.trim()
+          ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -364,6 +368,9 @@ function serializeDiff(lines: readonly { kind: string; text: string }[]): string
 
 export type ToolRenderOptions = {
   messageKey: string;
+  sessionKey?: string;
+  agentId?: string;
+  presented?: boolean;
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -413,18 +420,24 @@ export function renderExpandedToolCardContent(
       ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
 
-  // Command calls render terminal-style: `$ command` + raw output. Remaining
-  // args (workdir, timeout, env…) stay visible as key-value rows so identical
-  // commands in different contexts remain distinguishable in the audit trail.
-  if (view.kind === "command" && view.command && !card.preview) {
+  // Code-mode hooks pair code/command aliases; code selects plain source.
+  // Source stays visible before serialized inputText arrives, and only the
+  // rendered field leaves the remaining execution-context arguments.
+  if (view.kind === "command" && (view.command || view.code) && !card.preview) {
     const argsRecord = asNullableRecord(card.args);
+    const sourceKey = view.code ? "code" : "command";
     const extraArgs = Object.fromEntries(
-      Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
+      Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey),
     );
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText)}
+        ${
+          view.code
+            ? html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
+              ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
+            : renderTerminalBlock(view.command!, card.outputText)
+        }
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
@@ -445,9 +458,11 @@ export function renderExpandedToolCardContent(
           )}
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
-        ${hasOutput
-          ? renderToolCardModes(card, messageKey, view.diff, outcome, isError, file)
-          : renderDiffBlock(view.diff, outcome, undefined, file)}
+        ${
+          hasOutput
+            ? renderToolCardModes(card, messageKey, view.diff, outcome, isError, file)
+            : renderDiffBlock(view.diff, outcome, undefined, file)
+        }
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
@@ -463,39 +478,47 @@ export function renderExpandedToolCardContent(
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      ${detail || canOpenSidebar
-        ? html`
-            <div class="chat-tool-card__header">
-              ${detail
-                ? view.kind === "read"
-                  ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
-                  : html`<div class="chat-tool-card__detail">${detail}</div>`
-                : nothing}
-              <div class="chat-tool-card__actions">${sidebarAction}</div>
-            </div>
-          `
-        : nothing}
-      ${showInputBlock
-        ? canRenderArgsAsKeyValue(inputBlockArgs)
-          ? renderArgsKeyValueList(inputBlockArgs)
-          : renderToolDataBlock({
-              label: t("chat.toolCards.toolInput"),
-              text: card.inputText!,
-            })
-        : nothing}
-      ${hasOutput
-        ? card.preview?.kind === "canvas"
-          ? renderRawOutputToggle(card.outputText!)
-          : renderToolDataBlock({
-              ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-              text: card.outputText!,
-            })
-        : isError
-          ? renderToolDataBlock({
-              label: t("chat.toolCards.toolError"),
-              text: t("chat.toolCards.noOutputFailed"),
-            })
-          : nothing}
+      ${
+        detail || canOpenSidebar
+          ? html`
+              <div class="chat-tool-card__header">
+                ${
+                  detail
+                    ? view.kind === "read"
+                      ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
+                      : html`<div class="chat-tool-card__detail">${detail}</div>`
+                    : nothing
+                }
+                <div class="chat-tool-card__actions">${sidebarAction}</div>
+              </div>
+            `
+          : nothing
+      }
+      ${
+        showInputBlock
+          ? canRenderArgsAsKeyValue(inputBlockArgs)
+            ? renderArgsKeyValueList(inputBlockArgs)
+            : renderToolDataBlock({
+                label: t("chat.toolCards.toolInput"),
+                text: card.inputText!,
+              })
+          : nothing
+      }
+      ${
+        hasOutput
+          ? card.preview?.kind === "canvas"
+            ? renderRawOutputToggle(card.outputText!)
+            : renderToolDataBlock({
+                ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+                text: card.outputText!,
+              })
+          : isError
+            ? renderToolDataBlock({
+                label: t("chat.toolCards.toolError"),
+                text: t("chat.toolCards.noOutputFailed"),
+              })
+            : nothing
+      }
       ${renderToolOutcome(outcome, card.exitCode)}
     </div>
   `;

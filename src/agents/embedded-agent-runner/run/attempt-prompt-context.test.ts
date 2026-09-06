@@ -50,7 +50,8 @@ const projectionState: ToolResultPromptProjectionState = {
   replacements: new Map(),
   frozen: new Set(),
   ambiguousBaseKeys: new Set(),
-  sourceTextByKey: new Map(),
+  restoredCacheTtl: new Map(),
+  sourceHashByKey: new Map(),
 };
 
 function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {

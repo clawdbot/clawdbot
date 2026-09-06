@@ -79,10 +79,6 @@ extension OnboardingView {
         return local == persisted ? local : persisted
     }
 
-    func openSettings(tab: SettingsTab) {
-        AppNavigationActions.openSettings(tab: tab)
-    }
-
     func handleBack() {
         withAnimation {
             self.currentPage = max(0, self.currentPage - 1)
@@ -122,13 +118,13 @@ extension OnboardingView {
     }
 
     @discardableResult
-    func finish() -> Bool {
+    func finish(openPrimaryDashboard: Bool = true) -> Bool {
         guard !finishState.didFinish else { return false }
         finishState.didFinish = true
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        guard state.connectionMode != .unconfigured else { return true }
+        guard openPrimaryDashboard, state.connectionMode != .unconfigured else { return true }
         // Fresh activation hands off to the dashboard's custodian onboarding, which
         // owns the remaining first-run steps (memory import, channels, permissions,
         // hatch). A live-verified pre-existing setup reopens the normal dashboard.

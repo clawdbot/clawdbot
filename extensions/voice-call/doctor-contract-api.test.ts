@@ -220,7 +220,7 @@ describe("voice-call doctor state migration", () => {
       expect.stringContaining("Archived Voice Call call-log legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
 
     const restored = loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-doctor")?.providerCallId).toBe("provider-doctor");
@@ -420,7 +420,7 @@ describe("voice-call doctor state migration", () => {
       "Skipped malformed Voice Call call-log line 2",
       "Left Voice Call call-log source in place because migration was incomplete",
     ]);
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
     expect(loadActiveCallsFromStore(storePath).activeCalls.has("call-valid")).toBe(true);
   });

@@ -193,7 +193,7 @@ export async function collectGatewayHealthFindings(
             fixHint:
               mode === "remote"
                 ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
-                : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+                : "Inspect the service with `openclaw gateway status --deep`, or run `openclaw doctor` for guided checks.",
           };
     return [warning(diagnostic.message, diagnostic.fixHint)];
   }
@@ -230,7 +230,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is not installed.",
       path: "gateway.mode",
       target: service.label,
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
+      fixHint: "Run `openclaw gateway install` to install the service.",
     });
     return findings;
   }
@@ -241,7 +241,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is installed but not loaded.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway start` to load it.",
+      fixHint: "Start the installed service with `openclaw gateway start`.",
     });
   }
   const status = gatewayRuntimeStatus(state.runtime);
@@ -254,7 +254,8 @@ export async function collectGatewayDaemonFindings(
         : "Gateway service is loaded but runtime status could not confirm it is running.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Run `openclaw gateway status --deep` or `openclaw doctor --fix` for repair hints.",
+      fixHint:
+        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
     });
   }
   if (state.runtime?.missingGuiSession) {
@@ -267,7 +268,7 @@ export async function collectGatewayDaemonFindings(
       fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
     });
   }
-  if (state.runtime?.missingSupervision || state.runtime?.missingUnit) {
+  if (state.runtime?.missingUnit) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",

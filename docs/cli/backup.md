@@ -222,6 +222,11 @@ openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> -
 
 Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
 
+Git backup creation, restore, and verification stream table data instead of
+retaining complete table dumps in memory. Restores still require space for the
+materialized Git files and the private SQLite staging copy; verification does
+not write a second set of table dumps.
+
 ## Schedule backups
 
 Provision one Gateway-owned automation with a fixed name:
@@ -308,7 +313,7 @@ The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symli
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link. Other absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and

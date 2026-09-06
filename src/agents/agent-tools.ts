@@ -69,7 +69,10 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
-import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  bindCronManagementGrant,
+} from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -116,6 +119,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
+  type ToolSearchToolContext,
 } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -125,6 +129,7 @@ import {
 } from "./tools/cron-tool.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -182,8 +187,15 @@ type OpenClawCodingToolsOptions = {
   messageProvider?: string;
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
   messageChannel?: string;
+  /**
+   * How this run shows a blocking question tool's prompt. Left unset by harnesses
+   * whose tool lifecycle reserves the prompt for them.
+   */
+  questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
@@ -234,6 +246,8 @@ type OpenClawCodingToolsOptions = {
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
+  /** Additional containment for a trusted scheduled workspace; never weakens configured policy. */
+  requireWorkspaceOnly?: true;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /**
    * Workspace directory that spawned subagents should inherit.
@@ -361,6 +375,8 @@ type OpenClawCodingToolsOptions = {
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with attempt compaction. */
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  /** Already-admitted skill locations for mistaken tool-id recovery. */
+  codeModeSkills?: ToolSearchToolContext["codeModeSkills"];
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
@@ -580,18 +596,19 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly =
-    isMemoryFlushRun || (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
+    options?.requireWorkspaceOnly === true ||
+    isMemoryFlushRun ||
+    (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
   const fsPolicy = {
     workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
-  // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
-  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
   const applyPatchWorkspaceOnly =
-    sessionCoreToolPolicy?.applyPatchWorkspaceOnly ??
-    (workspaceOnly || applyPatchConfig?.workspaceOnly !== false);
+    workspaceOnly ||
+    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
   const applyPatchEnabled =
     !readOnly &&
     applyPatchConfig?.enabled !== false &&
@@ -662,8 +679,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,
       sessionStore: options?.config?.session?.store,
-      mainKey: options?.config?.session?.mainKey,
-      sessionScope: options?.config?.session?.scope,
       eventRouting: resolveEventSessionRoutingPolicy({
         cfg: options?.config,
         sessionKey: options?.runSessionKey ?? options?.sessionKey,
@@ -692,12 +707,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     recordToolPrepStage: options?.recordToolPrepStage,
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
-  // A fresh exact-run capability authorizes only automation creation. Keep every
+  const cronManagementGrant = bindCronManagementGrant(options?.runId);
+  // Exact-run capabilities authorize only their automation operations. Keep every
   // other owner-only control-plane tool denied for senderless operator turns.
   const ownerOnlyCoreToolDenylist =
     options?.senderIsOwner === false
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) => toolName !== AUTOMATIONS_TOOL_NAME || !cronCreatorAuthorityResolver,
+          (toolName) =>
+            toolName !== AUTOMATIONS_TOOL_NAME ||
+            !(cronCreatorAuthorityResolver || cronManagementGrant),
         )
       : [];
   const ownerOnlyCoreToolPolicy =
@@ -802,6 +820,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           sessionId: options?.sessionId,
           runId: options?.runId,
           catalogRef: options?.toolSearchCatalogRef,
+          codeModeSkills: options?.codeModeSkills,
           abortSignal: options?.abortSignal,
           executeTool: options?.toolSearchCatalogExecutor,
         })
@@ -826,6 +845,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
             requesterThinkingLevel: options?.requesterThinkingLevel,
             sessionPermissionPolicy,
             execSession: sessionPermissionPolicy
@@ -879,6 +899,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
+            pinnedWidgetAuthoring: options?.pinnedWidgetAuthoring,
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,

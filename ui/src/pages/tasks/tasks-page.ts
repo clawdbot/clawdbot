@@ -470,9 +470,11 @@ class TasksPage extends OpenClawLightDomElement {
             ?disabled=${!this.gateway.connected || this.listTask.status === TaskStatus.PENDING}
             @click=${() => void this.refreshTasks()}
           >
-            ${this.listTask.status === TaskStatus.PENDING
-              ? t("common.refreshing")
-              : t("common.refresh")}
+            ${
+              this.listTask.status === TaskStatus.PENDING
+                ? t("common.refreshing")
+                : t("common.refresh")
+            }
           </button>
         `,
       })}

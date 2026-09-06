@@ -138,13 +138,11 @@ const runtimeMocks = vi.hoisted(() => ({
       return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
     },
   ),
-  sendDurableMessageBatch: vi.fn(
-    async (): Promise<DurableMessageBatchSendResult> => ({
-      status: "sent",
-      results: [],
-      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
-    }),
-  ),
+  sendDurableMessageBatch: vi.fn(async (): Promise<DurableMessageBatchSendResult> => ({
+    status: "sent",
+    results: [],
+    receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+  })),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(
     (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({

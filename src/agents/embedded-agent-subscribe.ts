@@ -1,3 +1,4 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
@@ -30,7 +31,6 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
@@ -517,6 +517,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
+    getSourceReplyDelivered: () => state.sourceReplyDelivered,
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),

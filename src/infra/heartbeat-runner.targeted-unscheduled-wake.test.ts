@@ -3,6 +3,7 @@
 // heartbeat-runner.scheduler.test.ts so that file stays inside the oxlint
 // max-lines budget.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { wake as wakeCronService } from "../cron/service/wake.js";
 import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
@@ -357,6 +358,158 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
 
       expect(runSpy).not.toHaveBeenCalled();
       runner.stop();
+    },
+  );
+
+  it.each(["0m", "30m"])(
+    "retains the shared flood limit through reload with cadence %s",
+    async (every) => {
+      useFakeHeartbeatTime();
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { heartbeat: { every } }, list: [{ id: "main" }] },
+      };
+      const callTimes: number[] = [];
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce: async () => {
+          callTimes.push(Date.now());
+          return { status: "ran", durationMs: 0 };
+        },
+      });
+      try {
+        for (let i = 0; i < 5; i++) {
+          requestHeartbeat({
+            source: "background-task",
+            intent: "immediate",
+            reason: "background-task",
+            sessionKey: "agent:main:main",
+            coalesceMs: 0,
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(callTimes).toEqual([0, 1, 2, 3, 4]);
+        runner.updateConfig(cfg);
+        requestHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          sessionKey: "agent:main:main",
+          coalesceMs: 0,
+        });
+        await vi.advanceTimersByTimeAsync(60_000 - Date.now());
+        expect(callTimes).toHaveLength(5);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(callTimes).toEqual([0, 1, 2, 3, 4, 60_001]);
+      } finally {
+        runner.stop();
+      }
+    },
+  );
+
+  it.each(["0m", "30m"])(
+    "preserves an in-flight start across a reload with cadence %s",
+    async (every) => {
+      useFakeHeartbeatTime();
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { heartbeat: { every } }, list: [{ id: "main" }] },
+      };
+      const release = createDeferred();
+      const callTimes: number[] = [];
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce: async () => {
+          callTimes.push(Date.now());
+          await release.promise;
+          return { status: "ran", durationMs: 0 };
+        },
+      });
+      const wakeEvent = () =>
+        requestHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          sessionKey: "agent:main:main",
+          coalesceMs: 0,
+        });
+      try {
+        wakeEvent();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(callTimes).toEqual([0]);
+        runner.updateConfig(cfg);
+        release.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        wakeEvent();
+        await vi.advanceTimersByTimeAsync(29_999 - Date.now());
+        expect(callTimes).toEqual([0]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(callTimes).toEqual([0, 30_000]);
+      } finally {
+        release.resolve();
+        runner.stop();
+      }
+    },
+  );
+
+  it.each([undefined, { every: "0m" }])(
+    "keeps event spacing through enrollment changes for %j without adding broadcast wakes",
+    async (heartbeat) => {
+      useFakeHeartbeatTime();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", heartbeat },
+            { id: "ops", heartbeat: { every: "1m" } },
+          ],
+        },
+      };
+      const calls: { agentId: string | undefined; at: number }[] = [];
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce: async ({ agentId }) => {
+          calls.push({ agentId, at: Date.now() });
+          return { status: "ran", durationMs: 0 };
+        },
+      });
+      const wakeEvent = () =>
+        requestHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          sessionKey: "agent:main:main",
+          coalesceMs: 0,
+        });
+      try {
+        wakeEvent();
+        await vi.advanceTimersByTimeAsync(1);
+        runner.updateConfig({
+          agents: {
+            list: [
+              { id: "main", heartbeat: { every: "1m" } },
+              { id: "ops", heartbeat: { every: "1m" } },
+            ],
+          },
+        });
+        runner.updateConfig(cfg);
+        wakeEvent();
+        await vi.advanceTimersByTimeAsync(29_999 - Date.now());
+        expect(calls).toEqual([{ agentId: "main", at: 0 }]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(calls).toEqual([
+          { agentId: "main", at: 0 },
+          { agentId: "main", at: 30_000 },
+        ]);
+        requestHeartbeat({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(calls).toEqual([
+          { agentId: "main", at: 0 },
+          { agentId: "main", at: 30_000 },
+          { agentId: "ops", at: 30_000 },
+        ]);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(calls).toHaveLength(3);
+      } finally {
+        runner.stop();
+      }
     },
   );
 });

@@ -155,10 +155,12 @@ describe("Gateway copied Codex session resume", () => {
     {
       name: "rejects a copied session whose harness plugin is explicitly disabled",
       enabled: false,
+      unavailableReason: "owner-plugin-not-activatable",
     },
     {
       name: "rejects a copied session whose installed harness has no explicit trust",
       enabled: undefined,
+      unavailableReason: "owner-plugin-degraded",
     },
     {
       name: "selects a lazy harness from cron with per-agent model overrides",
@@ -167,7 +169,7 @@ describe("Gateway copied Codex session resume", () => {
     },
   ])(
     "$name",
-    async ({ enabled, cron }) => {
+    async ({ enabled, cron, unavailableReason }) => {
       const config = buildCopiedStateConfig(enabled);
       if (cron) {
         config.agents!.entries = {
@@ -269,8 +271,9 @@ describe("Gateway copied Codex session resume", () => {
 
         if (enabled !== true) {
           await expect(request).rejects.toThrow(
-            "plugin registration is missing from this prepared run",
+            `Agent harness runtime "codex" is unavailable. (reason=${unavailableReason}, ownerPluginId=codex)`,
           );
+          await expect(request).rejects.toThrow('Run "openclaw doctor --fix"');
           return;
         }
         expect(await request).toMatchObject({

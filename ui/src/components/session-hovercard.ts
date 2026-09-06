@@ -98,12 +98,20 @@ function renderDiffStats(item: { additions?: number; deletions?: number }) {
     return nothing;
   }
   return html`<span class="session-hovercard__diff">
-    ${item.additions === undefined
-      ? nothing
-      : html`<span class="session-hovercard__additions">+${item.additions.toLocaleString()}</span>`}
-    ${item.deletions === undefined
-      ? nothing
-      : html`<span class="session-hovercard__deletions">−${item.deletions.toLocaleString()}</span>`}
+    ${
+      item.additions === undefined
+        ? nothing
+        : html`<span class="session-hovercard__additions"
+            >+${item.additions.toLocaleString()}</span
+          >`
+    }
+    ${
+      item.deletions === undefined
+        ? nothing
+        : html`<span class="session-hovercard__deletions"
+            >−${item.deletions.toLocaleString()}</span
+          >`
+    }
   </span>`;
 }
 
@@ -246,11 +254,13 @@ function renderParticipantMenu(
         )}
       </div>`;
     })}
-    ${unresolvedCount > 0
-      ? html`<div class="session-hovercard__more" role="listitem">
-          ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
-        </div>`
-      : nothing}
+    ${
+      unresolvedCount > 0
+        ? html`<div class="session-hovercard__more" role="listitem">
+            ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
+          </div>`
+        : nothing
+    }
   </div>`;
 }
 
@@ -341,41 +351,45 @@ function renderSessionAttribution({
   return html`<div class="session-hovercard__attribution" aria-label=${attributionLabel}>
     <span class="session-hovercard__attribution-copy">
       ${renderPersonName(primaryLabel, primaryActivity, "session-hovercard__attribution-name")}
-      ${otherCount > 0
-        ? remainingParticipants.length > 0
-          ? html`<openclaw-tooltip
-              class="session-hovercard__participants-tooltip"
-              .describe=${false}
-              open-on-click
-            >
-              <button
-                type="button"
-                class="session-hovercard__attribution-others"
-                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
-                aria-label=${t("sessionHovercard.moreParticipantsLabel", {
-                  count: String(otherCount),
-                })}
+      ${
+        otherCount > 0
+          ? remainingParticipants.length > 0
+            ? html`<openclaw-tooltip
+                class="session-hovercard__participants-tooltip"
+                .describe=${false}
+                open-on-click
               >
-                ${otherLabel}
-              </button>
-              ${renderParticipantMenu(remainingParticipants, otherCount, personActivity)}
-            </openclaw-tooltip>`
-          : html`<span class="session-hovercard__attribution-others">${otherLabel}</span>`
-        : nothing}
+                <button
+                  type="button"
+                  class="session-hovercard__attribution-others"
+                  style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
+                  aria-label=${t("sessionHovercard.moreParticipantsLabel", {
+                    count: String(otherCount),
+                  })}
+                >
+                  ${otherLabel}
+                </button>
+                ${renderParticipantMenu(remainingParticipants, otherCount, personActivity)}
+              </openclaw-tooltip>`
+            : html`<span class="session-hovercard__attribution-others">${otherLabel}</span>`
+          : nothing
+      }
     </span>
     <span class="session-hovercard__attribution-avatars">
       ${renderPersonAvatarLink(primaryAvatar, primaryActivity)}
-      ${remainingParticipants.length > 0
-        ? html`<openclaw-viewer-facepile
-            .staticParticipants=${remainingParticipants}
-            .totalCount=${otherCount}
-            .maxVisible=${Math.min(
-              remainingParticipants.length,
-              MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS,
-            )}
-            .personActivity=${personActivity}
-          ></openclaw-viewer-facepile>`
-        : nothing}
+      ${
+        remainingParticipants.length > 0
+          ? html`<openclaw-viewer-facepile
+              .staticParticipants=${remainingParticipants}
+              .totalCount=${otherCount}
+              .maxVisible=${Math.min(
+                remainingParticipants.length,
+                MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS,
+              )}
+              .personActivity=${personActivity}
+            ></openclaw-viewer-facepile>`
+          : nothing
+      }
     </span>
   </div>`;
 }
@@ -390,46 +404,51 @@ function renderHeader(input: SessionHovercardInput) {
       <span class="session-hovercard__title">${renderSessionColorDot(row.color)}${row.label}</span>
       ${renderSessionAttribution(input)}
     </span>
-    ${age
-      ? html`<span class="session-hovercard__created-age" title=${created}>${age}</span>`
-      : nothing}
+    ${
+      age
+        ? html`<span class="session-hovercard__created-age" title=${created}>${age}</span>`
+        : nothing
+    }
   </header>`;
 }
 
-function renderProgressHeadsUp(
-  card: ProgressCard | null | undefined,
-  sessionStatus: SidebarSessionHovercardRow["status"],
-) {
-  const headsUp = progressCardHeadsUp(card, sessionStatus);
+function renderProgressHeadsUp(headsUp: ReturnType<typeof progressCardHeadsUp>) {
   if (!headsUp) {
     return nothing;
   }
   const statusLabel = t(
-    headsUp.step.status === "in_progress"
+    headsUp.status === "in_progress"
       ? "sessionProgressCard.status.inProgress"
-      : "sessionProgressCard.status.pending",
+      : headsUp.status === "paused"
+        ? "sessionProgressCard.status.paused"
+        : "sessionProgressCard.status.pending",
   );
   return html`<div
     class="session-hovercard__context-row session-hovercard__plan-row"
     aria-label=${t("sessionProgressCard.stepLabel", {
       status: statusLabel,
-      step: headsUp.step.step,
+      step: headsUp.step,
     })}
-    title=${headsUp.step.step}
+    title=${headsUp.step}
   >
     <span class="session-hovercard__context-icon" aria-hidden="true"
-      >${headsUp.step.status === "in_progress"
-        ? html`<span class="session-run-spinner"></span>`
-        : icons.clock}</span
+      >${
+        headsUp.status === "in_progress"
+          ? html`<span class="session-run-spinner"></span>`
+          : icons.clock
+      }</span
     >
     <span class="session-hovercard__context-value session-hovercard__plan-step"
-      >${headsUp.step.step}</span
+      >${headsUp.step}</span
     >
     <span class="session-hovercard__plan-count">${headsUp.completed}/${headsUp.total}</span>
   </div>`;
 }
 
-function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
+function renderSessionContext(
+  { row }: SessionHovercardInput,
+  headsUp: ReturnType<typeof progressCardHeadsUp>,
+) {
   const context = row?.workContext;
   const placementIdentity =
     row?.placementProviderId && row.placementProfileId
@@ -441,75 +460,74 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
           }),
         }
       : undefined;
-  if (
-    !context &&
-    !placementIdentity &&
-    row?.boardFace !== "dashboard" &&
-    row?.hasAutomation !== true &&
-    !progressCardHeadsUp(progressCard, row?.status)
-  ) {
-    return nothing;
-  }
   return html`<div class="session-hovercard__context">
-    ${context
-      ? html`<div
-          class="session-hovercard__context-row"
-          aria-label=${`${t(
-            context.kind === "project"
-              ? "sessionHovercard.projectLabel"
-              : "sessionHovercard.workspaceLabel",
-          )}: ${context.name}`}
-          title=${`${t(
-            context.kind === "project"
-              ? "sessionHovercard.projectLabel"
-              : "sessionHovercard.workspaceLabel",
-          )}: ${context.path}`}
-        >
-          <span class="session-hovercard__context-icon" aria-hidden="true">${icons.folder}</span>
-          <span
-            class="session-hovercard__context-value session-hovercard__context-text"
-            title=${context.path}
-            >${context.name}</span
+    ${
+      context
+        ? html`<div
+            class="session-hovercard__context-row"
+            aria-label=${`${t(
+              context.kind === "project"
+                ? "sessionHovercard.projectLabel"
+                : "sessionHovercard.workspaceLabel",
+            )}: ${context.name}`}
+            title=${`${t(
+              context.kind === "project"
+                ? "sessionHovercard.projectLabel"
+                : "sessionHovercard.workspaceLabel",
+            )}: ${context.path}`}
           >
-        </div>`
-      : nothing}
-    ${placementIdentity
-      ? html`<div
-          class="session-hovercard__context-row"
-          aria-label=${placementIdentity.title}
-          title=${placementIdentity.title}
-        >
-          <span class="session-hovercard__context-icon" aria-hidden="true">${icons.server}</span>
-          <span class="session-hovercard__context-value session-hovercard__context-text"
-            >${placementIdentity.label}</span
+            <span class="session-hovercard__context-icon" aria-hidden="true">${icons.folder}</span>
+            <span
+              class="session-hovercard__context-value session-hovercard__context-text"
+              title=${context.path}
+              >${context.name}</span
+            >
+          </div>`
+        : nothing
+    }
+    ${
+      placementIdentity
+        ? html`<div
+            class="session-hovercard__context-row"
+            aria-label=${placementIdentity.title}
+            title=${placementIdentity.title}
           >
-        </div>`
-      : nothing}
-    ${row?.boardFace === "dashboard"
-      ? html`<div
-          class="session-hovercard__context-row"
-          aria-label=${t("sessionsView.opensAsDashboard")}
-        >
-          <span class="session-hovercard__context-icon" aria-hidden="true"
-            >${icons.layoutDashboard}</span
+            <span class="session-hovercard__context-icon" aria-hidden="true">${icons.server}</span>
+            <span class="session-hovercard__context-value session-hovercard__context-text"
+              >${placementIdentity.label}</span
+            >
+          </div>`
+        : nothing
+    }
+    ${
+      row?.boardFace === "dashboard"
+        ? html`<div
+            class="session-hovercard__context-row"
+            aria-label=${t("sessionsView.opensAsDashboard")}
           >
-          <span class="session-hovercard__context-value session-hovercard__context-text"
-            >${t("sessionsView.opensAsDashboard")}</span
+            <span class="session-hovercard__context-icon" aria-hidden="true"
+              >${icons.layoutDashboard}</span
+            >
+            <span class="session-hovercard__context-value session-hovercard__context-text"
+              >${t("sessionsView.opensAsDashboard")}</span
+            >
+          </div>`
+        : nothing
+    }
+    ${
+      row?.hasAutomation === true
+        ? html`<div
+            class="session-hovercard__context-row"
+            aria-label=${t("sessionsView.automationAttached")}
           >
-        </div>`
-      : nothing}
-    ${row?.hasAutomation === true
-      ? html`<div
-          class="session-hovercard__context-row"
-          aria-label=${t("sessionsView.automationAttached")}
-        >
-          <span class="session-hovercard__context-icon" aria-hidden="true">${icons.clock}</span>
-          <span class="session-hovercard__context-value session-hovercard__context-text"
-            >${t("sessionsView.automationAttached")}</span
-          >
-        </div>`
-      : nothing}
-    ${renderProgressHeadsUp(progressCard, row?.status)}
+            <span class="session-hovercard__context-icon" aria-hidden="true">${icons.clock}</span>
+            <span class="session-hovercard__context-value session-hovercard__context-text"
+              >${t("sessionsView.automationAttached")}</span
+            >
+          </div>`
+        : nothing
+    }
+    ${renderProgressHeadsUp(headsUp)}
   </div>`;
 }
 
@@ -568,11 +586,13 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
     const hiddenCount = snapshot.pullRequests.length - visible.length;
     return html`<div class="session-hovercard__pr-list">
       ${visible.map(renderPullRequestRow)}
-      ${hiddenCount > 0
-        ? html`<span class="session-hovercard__more"
-            >${t("sessionHovercard.more", { count: String(hiddenCount) })}</span
-          >`
-        : nothing}
+      ${
+        hiddenCount > 0
+          ? html`<span class="session-hovercard__more"
+              >${t("sessionHovercard.more", { count: String(hiddenCount) })}</span
+            >`
+          : nothing
+      }
     </div>`;
   }
   const branch = snapshot.branch;
@@ -585,22 +605,30 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
   });
   return html`<div class="session-hovercard__branch-row">
     <span class="session-hovercard__branch-icon" aria-hidden="true">${icons.gitBranch}</span>
-    ${branch.createUrl
-      ? html`<a
-          class="session-hovercard__branch-action"
-          href=${branch.createUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label=${createPullRequestLabel}
-          title=${createPullRequestLabel}
-          >${createPullRequest}</a
-        >`
-      : html`<span class="session-hovercard__branch-label">${t("chat.sessionDiff.title")}</span>`}
+    ${
+      branch.createUrl
+        ? html`<a
+            class="session-hovercard__branch-action"
+            href=${branch.createUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label=${createPullRequestLabel}
+            title=${createPullRequestLabel}
+            >${createPullRequest}</a
+          >`
+        : html`<span class="session-hovercard__branch-label">${t("chat.sessionDiff.title")}</span>`
+    }
     ${renderDiffStats(branch)}
   </div>`;
 }
 
 export function renderSessionHovercard(input: SessionHovercardInput) {
+  const headsUp = progressCardHeadsUp(
+    input.progressCard,
+    input.row?.status,
+    input.row?.startedAt,
+    input.row?.hasActiveRun ?? false,
+  );
   const hasPullRequestDetails = Boolean(
     input.pullRequests && (input.pullRequests.pullRequests.length > 0 || input.pullRequests.branch),
   );
@@ -609,7 +637,7 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     (input.row?.placementProviderId && input.row.placementProfileId) ||
     input.row?.boardFace === "dashboard" ||
     input.row?.hasAutomation === true ||
-    progressCardHeadsUp(input.progressCard, input.row?.status),
+    headsUp,
   );
   const lastMessagePreview = input.progressCard
     ? undefined
@@ -618,26 +646,34 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     return nothing;
   }
   return html`<div class="session-hovercard">
-    ${input.row
-      ? html`<section class="session-hovercard__section session-hovercard__section--header">
-          ${renderHeader(input)}
-        </section>`
-      : nothing}
-    ${hasContext
-      ? html`<section class="session-hovercard__section session-hovercard__section--metadata">
-          ${renderSessionContext(input)}
-        </section>`
-      : nothing}
-    ${hasPullRequestDetails
-      ? html`<section class="session-hovercard__section session-hovercard__section--prs">
-          ${renderPullRequestDetails(input.pullRequests)}
-        </section>`
-      : nothing}
-    ${lastMessagePreview
-      ? html`<section class="session-hovercard__section session-hovercard__section--optional">
-          <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
-        </section>`
-      : nothing}
+    ${
+      input.row
+        ? html`<section class="session-hovercard__section session-hovercard__section--header">
+            ${renderHeader(input)}
+          </section>`
+        : nothing
+    }
+    ${
+      hasContext
+        ? html`<section class="session-hovercard__section session-hovercard__section--metadata">
+            ${renderSessionContext(input, headsUp)}
+          </section>`
+        : nothing
+    }
+    ${
+      hasPullRequestDetails
+        ? html`<section class="session-hovercard__section session-hovercard__section--prs">
+            ${renderPullRequestDetails(input.pullRequests)}
+          </section>`
+        : nothing
+    }
+    ${
+      lastMessagePreview
+        ? html`<section class="session-hovercard__section session-hovercard__section--optional">
+            <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
+          </section>`
+        : nothing
+    }
     ${renderAgentNotepad(input.progressCard)}
   </div>`;
 }

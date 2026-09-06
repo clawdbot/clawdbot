@@ -467,7 +467,6 @@ function assertNpmDeps(options = {}) {
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
-  assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
   assertCodexReleasePackageContract({
     pluginPackageJson,

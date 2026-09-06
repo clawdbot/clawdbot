@@ -206,7 +206,6 @@ async function finishSuccessfulPackageSwitch(
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
     opts: { json: params.json },
-    showProgress: false,
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
@@ -271,6 +270,8 @@ describe("successful update finalization ordering", () => {
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(failure).toBeUndefined();
     expect.soft(output).toContain("Shell completion refresh failed");
+    expect.soft(output).toContain("Resolve the reported error before retrying");
+    expect.soft(output).not.toContain("session only");
     expect.soft(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.checkCompletionStatus.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -317,6 +318,8 @@ describe("successful update finalization ordering", () => {
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
+    expect(output).toContain("Resolve the reported error before retrying");
+    expect(output).not.toContain("source /tmp/openclaw-completion.zsh");
     expect(output).toContain("openclaw completion --write-state --install");
     expect(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
@@ -366,6 +369,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
       expect.any(Object),
+      expect.any(Object),
     );
     expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "restart-unhealthy" }),
@@ -413,7 +417,6 @@ describe("successful update finalization ordering", () => {
         restartEnvironment: process.env,
         json: true,
         windowsTaskAutoStartRecovery: {
-          suspended: Promise.resolve(true),
           beginMutation: () => {},
           restore,
           complete: () => {},
@@ -435,6 +438,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "windows-task-autostart-restore-failed" }),
       expect.objectContaining({ json: true }),
+      expect.any(Object),
     );
     expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
       mocks.printResult.mock.lastCall?.[0],
@@ -530,7 +534,6 @@ describe("successful update finalization ordering", () => {
       downgradeRisk: false,
       shouldRestart: false,
       opts: {},
-      showProgress: false,
       ownedManagedUpdateEnv,
       controlPlaneUpdateSentinelMeta: {},
       preUpdatePluginInstallRecords: {},
@@ -574,6 +577,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.printResult).toHaveBeenCalledWith(
         expect.objectContaining({ status: "error", reason: "wrapper-retirement-failed" }),
+        expect.any(Object),
         expect.any(Object),
       );
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
@@ -826,6 +830,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "service-revalidation-failed" }),
           expect.objectContaining({ json: true }),
+          expect.any(Object),
         );
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
           mocks.printResult.mock.lastCall?.[0],
@@ -905,6 +910,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledWith(
           expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
+          expect.any(Object),
           expect.any(Object),
         );
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(

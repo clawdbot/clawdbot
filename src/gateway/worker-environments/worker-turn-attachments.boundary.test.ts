@@ -292,8 +292,10 @@ describe("current attachments in an active remote placement", () => {
         },
       );
       if (executionMode === "remote-exec") {
+        const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
+        expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));
         // At most one setup, three PDF chunks, and one image chunk.
-        expect(vi.mocked(tunnel.runWorkspaceCommand).mock.calls.length).toBeLessThanOrEqual(5);
+        expect(commands.length - 1).toBeLessThanOrEqual(5);
       }
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();

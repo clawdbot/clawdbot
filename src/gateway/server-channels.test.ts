@@ -26,11 +26,13 @@ import {
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
-import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
-import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  requireActivePluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -47,7 +49,11 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
-import { channelReadyPatch, createTransportActivityStatusPatch } from "./channel-status-patches.js";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  createTransportActivityStatusPatch,
+} from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
@@ -279,7 +285,7 @@ function createManager(options?: {
   tryRecoverAutostartSuppression?: () => boolean;
   isClosing?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
-  getPluginHttpRouteRegistry?: () => PluginRegistry;
+  getPluginRegistry?: () => PluginRegistry;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -294,6 +300,7 @@ function createManager(options?: {
   }
   const manager = createChannelManager({
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
+    getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -313,9 +320,6 @@ function createManager(options?: {
     ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
-      : {}),
-    ...(options?.getPluginHttpRouteRegistry
-      ? { getPluginHttpRouteRegistry: options.getPluginHttpRouteRegistry }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -357,6 +361,103 @@ describe("server-channels auto restart", () => {
     }
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+  });
+
+  it("keeps channel hooks and snapshots bound to their Gateway registry", async () => {
+    const joined: AbortSignal[] = [];
+    const createLifecycle = (id: ChannelId) => {
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        joined.push(abortSignal);
+      });
+      const stopAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => undefined);
+      return {
+        plugin: createTestPlugin({ id, startAccount, stopAccount }),
+        startAccount,
+        stopAccount,
+      };
+    };
+    const a = createLifecycle("discord");
+    const b = createLifecycle("discord");
+    const bOnly = createLifecycle("slack");
+    const registryA = installTestRegistry(a.plugin);
+    const managerA = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginRegistry: () => registryA,
+    });
+    await managerA.startChannels();
+    await waitForImmediate();
+    expect(a.startAccount).toHaveBeenCalledTimes(1);
+    const originalA = firstStartAccountContext(a.startAccount).abortSignal;
+
+    const registryB = installTestRegistry(b.plugin, bOnly.plugin);
+    const managerB = createManager({
+      channelIds: ["discord", "slack"],
+      getPluginRegistry: () => registryB,
+    });
+    try {
+      await managerB.startChannels();
+      await waitForImmediate();
+      expect(b.startAccount).toHaveBeenCalledTimes(1);
+      expect(bOnly.startAccount).toHaveBeenCalledTimes(1);
+      const originalB = firstStartAccountContext(b.startAccount).abortSignal;
+      const originalBOnly = firstStartAccountContext(bOnly.startAccount).abortSignal;
+      const snapshotChannels = Object.keys(
+        managerA.getRuntimeSnapshot().channelAccounts,
+      ).toSorted();
+
+      await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+      const stopped = {
+        aHook: a.stopAccount.mock.calls.length,
+        bHook: b.stopAccount.mock.calls.length,
+        aHookReceivedOwnSignal: a.stopAccount.mock.calls[0]?.[0].abortSignal === originalA,
+        foreignHookReceivedASignal: b.stopAccount.mock.calls.some(
+          ([ctx]) => ctx.abortSignal === originalA,
+        ),
+        aAborted: originalA.aborted,
+        aJoined: joined.includes(originalA),
+        bAborted: originalB.aborted,
+        bOnlyAborted: originalBOnly.aborted,
+      };
+      await managerA.startChannels();
+      await waitForImmediate();
+      expect(
+        {
+          snapshotChannels,
+          stopped,
+          starts: [a, b, bOnly].map(({ startAccount }) => startAccount.mock.calls.length),
+          bStillLive: !originalB.aborted && !originalBOnly.aborted,
+        },
+        "channel manager borrowed another Gateway registry",
+      ).toEqual({
+        snapshotChannels: ["discord"],
+        stopped: {
+          aHook: 1,
+          bHook: 0,
+          aHookReceivedOwnSignal: true,
+          foreignHookReceivedASignal: false,
+          aAborted: true,
+          aJoined: true,
+          bAborted: false,
+          bOnlyAborted: false,
+        },
+        starts: [2, 1, 1],
+        bStillLive: true,
+      });
+    } finally {
+      await Promise.all(
+        [managerA, managerB].flatMap((manager) =>
+          ["discord", "slack"].map((id) => manager.stopChannel(id)),
+        ),
+      );
+      const signals = [a, b, bOnly].flatMap(({ startAccount }) =>
+        startAccount.mock.calls.map(([ctx]) => ctx.abortSignal),
+      );
+      expect(signals.every((signal) => signal.aborted && joined.includes(signal))).toBe(true);
+      expect(joined).toHaveLength(signals.length);
+    }
   });
 
   it("keeps a channel task admitted after the starting request finishes", async () => {
@@ -923,6 +1024,114 @@ describe("server-channels auto restart", () => {
       restartPending: false,
       lastError: "stop hook failed",
     });
+  });
+
+  it.each(["changed", "removed", "plugin-replaced"] as const)(
+    "stops the admitted account after its configuration is %s without stopping a sibling",
+    async (change) => {
+      const originalConfig: OpenClawConfig = {
+        channels: { discord: { accounts: { alpha: { enabled: true }, beta: { enabled: true } } } },
+      };
+      let config = originalConfig;
+      const admitted = new Map<string, ChannelGatewayContext<TestAccount>>();
+      const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
+      const replacementStop = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
+      const plugin = createTestPlugin({
+        listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+        resolveAccount: (cfg, id) => {
+          const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
+          if (!account) {
+            throw new Error(`Account ${id} no longer exists`);
+          }
+          return account;
+        },
+        startAccount: async (context) => {
+          admitted.set(context.accountId, context);
+          await new Promise<void>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        stopAccount,
+      });
+      installTestRegistry(plugin);
+      const manager = createManager({ getRuntimeConfig: () => config });
+      await manager.startChannels();
+      await flushMicrotasks();
+      expect(admitted.size).toBe(2);
+
+      config = {
+        channels: {
+          discord: {
+            accounts: {
+              ...(change === "removed" ? {} : { alpha: { enabled: false } }),
+              beta: { enabled: true },
+            },
+          },
+        },
+      };
+      if (change === "plugin-replaced") {
+        installTestRegistry({
+          ...plugin,
+          gateway: { ...plugin.gateway, stopAccount: replacementStop },
+        });
+      }
+      await expect(
+        manager.stopChannel("discord", "alpha", { manual: false }),
+      ).resolves.toBeUndefined();
+      expect(stopAccount).toHaveBeenCalledOnce();
+      expect(stopAccount.mock.calls[0]?.[0].cfg).toBe(originalConfig);
+      expect(stopAccount.mock.calls[0]?.[0].account).toBe(admitted.get("alpha")?.account);
+      expect(replacementStop).not.toHaveBeenCalled();
+      expect(admitted.get("alpha")?.abortSignal.aborted).toBe(true);
+      expect(admitted.get("beta")?.abortSignal.aborted).toBe(false);
+      expect(manager.getRuntimeSnapshot().channelAccounts.discord?.beta?.running).toBe(true);
+    },
+  );
+
+  it("retains the admitted teardown owner for a failed stop retry after account removal", async () => {
+    const originalConfig: OpenClawConfig = {
+      channels: { discord: { accounts: { alpha: { enabled: true } } } },
+    };
+    let config = originalConfig;
+    let stopFails = true;
+    const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {
+      if (stopFails) {
+        throw new Error("first stop failed");
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+        resolveAccount: (cfg, id) => {
+          const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
+          if (!account) {
+            throw new Error(`Account ${id} no longer exists`);
+          }
+          return account;
+        },
+        startAccount: async ({ abortSignal }) =>
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+        stopAccount,
+      }),
+    );
+    const manager = createManager({ getRuntimeConfig: () => config });
+    await manager.startChannels();
+    await flushMicrotasks();
+    await expect(manager.stopChannel("discord", "alpha", { manual: false })).rejects.toThrow(
+      "first stop failed",
+    );
+    config = { channels: { discord: { accounts: {} } } };
+    stopFails = false;
+    await expect(
+      manager.stopChannel("discord", "alpha", { manual: false }),
+    ).resolves.toBeUndefined();
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(stopAccount.mock.calls[1]?.[0].cfg).toBe(originalConfig);
+    expect(stopAccount.mock.calls[1]?.[0].account).toBe(
+      originalConfig.channels?.discord?.accounts?.alpha,
+    );
   });
 
   it("serializes overlapping stops until the last teardown settles", async () => {
@@ -1881,6 +2090,545 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
+  it.each(["retry", "superseded", "terminal"] as const)(
+    "ends retry ingress with the recovery lifetime (%s)",
+    async (mode) => {
+      const terminal = mode === "terminal";
+      const replacement = createDeferred();
+      let starts = 0;
+      const registry = installTestRegistry(
+        createTestPlugin({
+          startAccount: async ({ abortSignal, setStatus }) => {
+            const stopped = new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            const generation = ++starts;
+            if (generation === 2) {
+              if (terminal) {
+                setStatus(
+                  channelBlockedPatch("startup blocked", { accountId: DEFAULT_ACCOUNT_ID }),
+                );
+                await Promise.race([stopped, replacement.promise]);
+                if (abortSignal.aborted) {
+                  return;
+                }
+              } else {
+                throw new Error("startup failed");
+              }
+            }
+            if (generation === 3) {
+              await replacement.promise;
+            }
+            registerPluginHttpRoute({
+              path: "/plugins/reload/retry",
+              auth: "plugin",
+              pluginId: "discord",
+              handler: vi.fn(),
+              throwOnFailure: true,
+            });
+            setStatus(channelReadyPatch({ accountId: DEFAULT_ACCOUNT_ID }));
+            await stopped;
+          },
+        }),
+      );
+      const manager = createManager({ getPluginRegistry: () => registry });
+      try {
+        await manager.startChannels();
+        await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+        await manager.startChannels();
+        await flushMicrotasks(30);
+        if (terminal) {
+          expect(registry.httpRoutes).toEqual([]);
+          expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+          replacement.resolve();
+          await flushMicrotasks(30);
+          expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([undefined]);
+          expect(
+            manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+          ).toMatchObject({ lifecycle: "ready", terminalDisconnect: undefined });
+          return;
+        }
+        expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
+        if (mode === "superseded") {
+          await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+          expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
+          await manager.startChannels();
+        } else {
+          await vi.advanceTimersByTimeAsync(6_000);
+        }
+        expect(starts).toBe(3);
+        expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
+        replacement.resolve();
+        await flushMicrotasks();
+        expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([undefined]);
+      } finally {
+        replacement.resolve();
+        await manager.stopChannel("discord");
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "terminal pending startup retires only its handoff (sibling pending=%s)",
+    async (siblingPending) => {
+      const siblingReady = createDeferred();
+      const starts = new Map<string, number>();
+      const sharedHandler = vi.fn();
+      const registry = installTestRegistry(
+        createTestPlugin({
+          listAccountIds: () => ["blocked", "healthy"],
+          startAccount: async ({ accountId, abortSignal, setStatus }) => {
+            const stopped = new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            const generation = (starts.get(accountId) ?? 0) + 1;
+            starts.set(accountId, generation);
+            if (generation === 2 && accountId === "blocked") {
+              setStatus(channelBlockedPatch("startup validation failed", { accountId }));
+              await stopped;
+              return;
+            }
+            if (generation === 2 && accountId === "healthy") {
+              await siblingReady.promise;
+            }
+            for (const key of [accountId, "shared"]) {
+              registerPluginHttpRoute({
+                path: `/plugins/terminal/${key}`,
+                auth: "plugin",
+                pluginId: "discord",
+                source: key,
+                handler: sharedHandler,
+                reuseExistingSameOwner: true,
+                throwOnFailure: true,
+              });
+            }
+            setStatus(channelReadyPatch({ accountId }));
+            await stopped;
+          },
+        }),
+      );
+      const manager = createManager({ getPluginRegistry: () => registry });
+      const route = (key: string) =>
+        registry.httpRoutes.find(({ path: routePath }) => routePath === `/plugins/terminal/${key}`);
+      try {
+        await manager.startChannels();
+        await manager.stopChannel("discord", "blocked", { manual: false, routeHandoff: true });
+        if (siblingPending) {
+          await manager.stopChannel("discord", "healthy", { manual: false, routeHandoff: true });
+          await manager.startChannel("discord", "healthy");
+        }
+        await manager.startChannel("discord", "blocked");
+        await flushMicrotasks(30);
+        expect(route("blocked")).toBeUndefined();
+        expect(route("shared")?.handoff).toBe(siblingPending ? true : undefined);
+        expect(route("healthy")?.handoff).toBe(siblingPending ? true : undefined);
+        expect(manager.getRuntimeSnapshot().channelAccounts.discord?.blocked).toMatchObject({
+          running: true,
+          lifecycle: "blocked",
+          terminalDisconnect: true,
+        });
+        expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+        siblingReady.resolve();
+        await flushMicrotasks(30);
+        expect(route("shared")?.handler).toBe(sharedHandler);
+        expect(route("shared")?.handoff).toBeUndefined();
+        expect(starts.get("healthy")).toBe(siblingPending ? 2 : 1);
+      } finally {
+        siblingReady.resolve();
+        await manager.stopChannel("discord");
+      }
+    },
+  );
+
+  it("preserves admitted sibling ingress when partial rollback releases failed handoffs", async () => {
+    const replacement = createDeferred();
+    const starts = new Map<string, number>();
+    let failStop = true;
+    const registry = installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => ["failed", "started"],
+        startAccount: async ({ accountId, abortSignal, setStatus }) => {
+          const generation = (starts.get(accountId) ?? 0) + 1;
+          starts.set(accountId, generation);
+          if (generation > 1) {
+            await replacement.promise;
+          }
+          registerPluginHttpRoute({
+            path: `/plugins/reload/${accountId}`,
+            auth: "plugin",
+            pluginId: "discord",
+            handler: vi.fn(),
+            throwOnFailure: true,
+          });
+          setStatus(channelReadyPatch({ accountId }));
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        stopAccount: async ({ accountId }) => {
+          if (accountId === "failed" && failStop) {
+            failStop = false;
+            throw new Error("teardown failed");
+          }
+        },
+      }),
+    );
+    const manager = createManager({ getPluginRegistry: () => registry });
+    try {
+      await manager.startChannels();
+      await expect(
+        manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true }),
+      ).rejects.toThrow("teardown failed");
+      expect(
+        await manager.startChannel("discord", undefined, { preserveManualStop: true }),
+      ).toEqual(
+        new Map([
+          ["failed", { status: "retry", reason: "stop-in-flight" }],
+          ["started", { status: "handed-off" }],
+        ]),
+      );
+      manager.releaseChannelRouteHandoffs("discord");
+      expect(
+        registry.httpRoutes.map((route) => ({ path: route.path, handoff: route.handoff })),
+      ).toEqual([{ path: "/plugins/reload/started", handoff: true }]);
+      replacement.resolve();
+      await flushMicrotasks();
+      expect(
+        registry.httpRoutes.map((route) => ({ path: route.path, handoff: route.handoff })),
+      ).toEqual([{ path: "/plugins/reload/started", handoff: undefined }]);
+    } finally {
+      replacement.resolve();
+      await manager.stopChannel("discord");
+    }
+  });
+
+  it.each([
+    { phase: "starting", retiredStop: "none" },
+    { phase: "blocked", retiredStop: "none" },
+    { phase: "recovering", retiredStop: "none" },
+    { phase: "starting", retiredStop: "returned" },
+    { phase: "starting", retiredStop: "timed-out" },
+  ] as const)(
+    "retires unclaimed webhook paths on readiness (phase=$phase, retired stop=$retiredStop)",
+    async ({ phase, retiredStop }) => {
+      const firstRegistered = createDeferred<(next: ChannelAccountSnapshot) => void>();
+      const stoppedStatus = createDeferred<(next: ChannelAccountSnapshot) => void>();
+      const finishStop = createDeferred();
+      const completeIngress = createDeferred();
+      let starts = 0;
+      const registry = installTestRegistry(
+        createTestPlugin({
+          startAccount: async ({ abortSignal, setStatus }) => {
+            const generation = ++starts;
+            const register = (suffix: string) =>
+              registerPluginHttpRoute({
+                path: `/plugins/reload/${generation}/${suffix}`,
+                auth: "plugin",
+                pluginId: "discord",
+                handler: vi.fn(),
+                throwOnFailure: true,
+              });
+            register("first");
+            if (generation === 2) {
+              setStatus({ accountId: DEFAULT_ACCOUNT_ID, lifecycle: phase });
+              firstRegistered.resolve(setStatus);
+              await completeIngress.promise;
+            }
+            register("second");
+            setStatus(channelReadyPatch({ accountId: DEFAULT_ACCOUNT_ID }));
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+          },
+          stopAccount: async ({ setStatus }) => {
+            if (retiredStop !== "none" && starts === 1) {
+              stoppedStatus.resolve(setStatus);
+              if (retiredStop === "timed-out") {
+                await finishStop.promise;
+              }
+            }
+          },
+        }),
+      );
+      const manager = createManager({ getPluginRegistry: () => registry });
+      try {
+        await manager.startChannels();
+        const stop = manager.stopChannel("discord", undefined, {
+          manual: false,
+          routeHandoff: true,
+        });
+        if (retiredStop === "timed-out") {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        await stop;
+        await manager.startChannels();
+        const setReplacementStatus = await firstRegistered.promise;
+        if (retiredStop !== "none") {
+          (await stoppedStatus.promise)(
+            channelBlockedPatch("late stop diagnosis", { accountId: DEFAULT_ACCOUNT_ID }),
+          );
+          expect(
+            manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]
+              ?.terminalDisconnect,
+          ).toBeUndefined();
+        }
+        setReplacementStatus({ accountId: DEFAULT_ACCOUNT_ID, lifecycle: phase });
+        expect(
+          registry.httpRoutes.filter((route) => route.handoff).map((route) => route.path),
+        ).toEqual(["/plugins/reload/1/first", "/plugins/reload/1/second"]);
+        completeIngress.resolve();
+        await flushMicrotasks();
+        expect(registry.httpRoutes.map((route) => route.path)).toEqual([
+          "/plugins/reload/2/first",
+          "/plugins/reload/2/second",
+        ]);
+      } finally {
+        completeIngress.resolve();
+        finishStop.resolve();
+        await manager.stopChannel("discord");
+      }
+    },
+  );
+
+  it("keeps stopped webhook routes retryable until replacement ingress is ready", async () => {
+    const route = { path: "/plugins/reload", auth: "plugin" as const, pluginId: "discord" };
+    const replacement = createDeferred();
+    let starts = 0;
+    const registry = installTestRegistry(
+      createTestPlugin({
+        startAccount: async ({ abortSignal }) => {
+          const generation = ++starts;
+          if (generation > 1) {
+            await replacement.promise;
+          }
+          if (abortSignal.aborted) {
+            return;
+          }
+          const unregister = registerPluginHttpRoute({
+            ...route,
+            throwOnFailure: true,
+            handler: (_req, res) => {
+              res.end(String(generation));
+              return true;
+            },
+          });
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          unregister();
+        },
+      }),
+    );
+    const manager = createManager({ getPluginRegistry: () => registry });
+    const server = createTestGatewayServer({
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        getRuntimeConfig: () => ({}),
+        handlePluginRequest: createGatewayPluginRequestHandler({
+          registry,
+          log: createSubsystemLogger("gateway/webhook-reload-test"),
+        }),
+      },
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected a TCP listener");
+    }
+    const read = async () => {
+      const response = await fetch(`http://127.0.0.1:${address.port}${route.path}`);
+      return {
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+        body: await response.text(),
+      };
+    };
+    try {
+      await manager.startChannels();
+      expect(await read()).toMatchObject({ status: 200, body: "1" });
+      await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+      expect(await read()).toMatchObject({ status: 503, retryAfter: "1" });
+      await manager.startChannels();
+      expect(await read()).toMatchObject({ status: 503, retryAfter: "1" });
+      const repeatedStop = manager.stopChannel("discord", undefined, {
+        manual: false,
+        routeHandoff: true,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await repeatedStop;
+      expect(await read()).toMatchObject({ status: 503, retryAfter: "1" });
+      // Timed-out preparation is retired by the existing two-attempt recovery owner.
+      await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+      await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+      expect(await read()).toMatchObject({ status: 503, retryAfter: "1" });
+      replacement.resolve();
+      await flushMicrotasks();
+      expect(await read()).toMatchObject({ status: 200, body: "3" });
+      await manager.stopChannel("discord");
+      expect(await read()).toMatchObject({ status: 404 });
+      await manager.startChannels();
+      expect(await read()).toMatchObject({ status: 200, body: "4" });
+      await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+      expect(await read()).toMatchObject({ status: 503, retryAfter: "1" });
+      manager.pruneInactiveChannelAccountState(new Set());
+      expect(await read()).toMatchObject({ status: 404 });
+    } finally {
+      replacement.resolve();
+      await manager.stopChannel("discord");
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("rejects late startup registration while the next ingress handoff remains parked", async () => {
+    const pending = createDeferred();
+    const lateAttempt = createDeferred<string>();
+    let starts = 0;
+    const registry = installTestRegistry(
+      createTestPlugin({
+        startAccount: async ({ abortSignal }) => {
+          const generation = ++starts;
+          if (generation === 2) {
+            await pending.promise;
+          }
+          try {
+            registerPluginHttpRoute({
+              path: "/plugins/late-reload",
+              auth: "plugin",
+              pluginId: "discord",
+              handler: vi.fn(),
+              throwOnFailure: true,
+            });
+            if (generation === 2) {
+              lateAttempt.resolve("registered after retirement");
+              return;
+            }
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+          } catch (error) {
+            lateAttempt.resolve(String(error));
+          }
+        },
+      }),
+    );
+    const manager = createManager({ getPluginRegistry: () => registry });
+    await manager.startChannels();
+    await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+    await manager.startChannels();
+    const stop = manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stop;
+    pending.resolve();
+    expect(await lateAttempt.promise).toContain("lease is no longer active");
+    await flushMicrotasks();
+    expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
+  });
+
+  it.each(["removed", "disabled", "resolved-disabled", "manual"] as const)(
+    "removes %s ingress while its timed-out predecessor still needs cleanup",
+    async (action) => {
+      const pending = createDeferred();
+      let disabled = false;
+      const registry = installTestRegistry(
+        createTestPlugin({
+          resolveAccount: () => ({ enabled: action !== "resolved-disabled" || !disabled }),
+          startAccount: async () => {
+            registerPluginHttpRoute({
+              path: "/plugins/removed-reload",
+              auth: "plugin",
+              pluginId: "discord",
+              handler: vi.fn(),
+              throwOnFailure: true,
+            });
+            await pending.promise;
+          },
+        }),
+      );
+      const manager = createManager({
+        getPluginRegistry: () => registry,
+        getRuntimeConfig: () => ({
+          channels: { discord: { enabled: action === "resolved-disabled" || !disabled } },
+        }),
+      });
+      try {
+        await manager.startChannels();
+        if (action === "manual") {
+          const stop = manager.stopChannel("discord");
+          await vi.advanceTimersByTimeAsync(5_000);
+          await stop;
+        }
+        const stop = manager.stopChannel("discord", undefined, {
+          manual: false,
+          routeHandoff: true,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await stop;
+        if (action !== "manual") {
+          expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
+        }
+        if (action === "manual") {
+          await manager.startChannel("discord", undefined, { preserveManualStop: true });
+        } else if (action === "resolved-disabled") {
+          disabled = true;
+          pending.resolve();
+          await flushMicrotasks(30);
+          expect(await manager.startChannel("discord")).toEqual(
+            new Map([[DEFAULT_ACCOUNT_ID, { status: "skipped", reason: "disabled" }]]),
+          );
+        } else if (action === "disabled") {
+          disabled = true;
+          await manager.startChannels();
+        } else {
+          manager.pruneInactiveChannelAccountState(new Set());
+        }
+        expect(registry.httpRoutes).toEqual([]);
+      } finally {
+        pending.resolve();
+        await flushMicrotasks();
+      }
+    },
+  );
+
+  it("retires removed ingress even when account teardown rejects", async () => {
+    let removed = false;
+    const stopAccount = vi.fn().mockRejectedValueOnce(new Error("teardown failed"));
+    const registry = installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => (removed ? [] : [DEFAULT_ACCOUNT_ID]),
+        resolveAccount: () => {
+          if (removed) {
+            throw new Error("account is no longer configured");
+          }
+          return { enabled: true };
+        },
+        startAccount: async ({ abortSignal }) => {
+          registerPluginHttpRoute({
+            path: "/plugins/removed",
+            auth: "plugin",
+            pluginId: "discord",
+            handler: vi.fn(),
+          });
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        stopAccount,
+      }),
+    );
+    const manager = createManager({ getPluginRegistry: () => registry });
+    await manager.startChannels();
+    removed = true;
+    await expect(
+      manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true }),
+    ).rejects.toThrow("teardown failed");
+    expect(registry.httpRoutes).toEqual([]);
+    removed = false;
+  });
+
   it.each([false, true])(
     "scopes stop routes to their Gateway and releases them when teardown settles (rejects=%s)",
     async (rejects) => {
@@ -1910,7 +2658,8 @@ describe("server-channels auto restart", () => {
           },
         }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+      routeRegistry.channels = registry.channels;
+      const manager = createManager({ getPluginRegistry: () => routeRegistry });
       await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
       const stopping = manager
         .stopChannel("discord", DEFAULT_ACCOUNT_ID)
@@ -2016,7 +2765,7 @@ describe("server-channels auto restart", () => {
       const registry = installTestRegistry(
         createTestPlugin({ startAccount, stopAccount, isConfigured }),
       );
-      const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
+      const manager = createManager({ getPluginRegistry: () => registry });
       const server = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
         overrides: {
@@ -2098,9 +2847,6 @@ describe("server-channels auto restart", () => {
     let startCount = 0;
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
       startCount += 1;
-      const commandRuntime = createPluginCommandRuntime();
-      expect(commandRuntime.listNativeCandidates("discord")).toHaveLength(1);
-      commandRuntime.retainNativeCatalog("discord");
       abortSignal.addEventListener("abort", () => {}, { once: true });
       if (startCount === 1) {
         await releaseFirstTask.promise;
@@ -2113,14 +2859,6 @@ describe("server-channels auto restart", () => {
         startAccount,
       }),
     );
-    expect(
-      registerPluginCommandInRegistry(getActivePluginRegistry()!, "catalog-owner", {
-        name: "catalog",
-        description: "Catalog command",
-        channels: ["discord"],
-        handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({ ok: true });
     const manager = createManager();
 
     await manager.startChannels();
@@ -2133,9 +2871,6 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(2);
-    expect(manager.getPluginCommandCatalogAccounts().get("discord")).toEqual(
-      new Set([DEFAULT_ACCOUNT_ID]),
-    );
 
     releaseFirstTask.resolve();
     await flushMicrotasks();
@@ -2145,9 +2880,6 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toBeNull();
-    expect(manager.getPluginCommandCatalogAccounts().get("discord")).toEqual(
-      new Set([DEFAULT_ACCOUNT_ID]),
-    );
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
@@ -2666,6 +3398,7 @@ describe("server-channels auto restart", () => {
     const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
       getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs,
       channelRuntimeEnvs,
     });
@@ -2839,7 +3572,10 @@ describe("server-channels auto restart", () => {
     const firstStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     const secondStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
 
-    await Promise.resolve();
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 1,
+      "expected the shared account startup preflight",
+    );
     expect(isConfigured).toHaveBeenCalledTimes(1);
     expect(startAccount).not.toHaveBeenCalled();
 
@@ -2849,77 +3585,152 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("reports only running accounts that retained a real plugin command catalog", async () => {
-    const startAccount = vi.fn(
-      async ({ accountId, abortSignal }: { accountId: string; abortSignal: AbortSignal }) => {
-        if (accountId === "catalog") {
-          const commandRuntime = createPluginCommandRuntime();
-          expect(commandRuntime.listNativeCandidates("discord")).toHaveLength(1);
-          commandRuntime.retainNativeCatalog("discord");
+  it("preserves a failed replacement pause across cancelled retries until publication", async () => {
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    let registry = installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ getPluginRegistry: () => registry });
+    const firstPause = manager.pauseChannelStarts();
+    firstPause("rollback");
+    await manager.startChannel("discord", "default");
+    await waitForImmediate();
+    expect(startAccount).toHaveBeenCalledOnce();
+    await manager.stopChannel("discord", undefined, { manual: false });
+
+    const failedPause = manager.pauseChannelStarts();
+    const cancelledRetry = manager.pauseChannelStarts();
+    cancelledRetry("rollback");
+    await expect(manager.startChannel("discord", "default")).rejects.toThrow(
+      "plugins are reloading; retry",
+    );
+    const publishedRetry = manager.pauseChannelStarts();
+    registry = installTestRegistry(createTestPlugin({ startAccount }));
+    publishedRetry("published");
+    // Late settlement cannot reinstate an old pause or release a newer one.
+    cancelledRetry("rollback");
+    await manager.startChannel("discord", "default");
+    await waitForImmediate();
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const latestPause = manager.pauseChannelStarts();
+    failedPause("published");
+    await expect(manager.startChannel("discord", "default")).rejects.toThrow(
+      "plugins are reloading; retry",
+    );
+    latestPause("rollback");
+  });
+
+  it.each(["list-accounts", "runtime"])(
+    "fences starts awaiting %s and concurrent starts across plugin replacement",
+    async (phase) => {
+      const preparing = createDeferred();
+      const release = createDeferred();
+      const cleanupStarted = createDeferred();
+      const releaseCleanup = createDeferred();
+      if (phase === "runtime") {
+        hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValueOnce(async () => {
+          cleanupStarted.resolve();
+          await releaseCleanup.promise;
+        });
+      }
+      const originalStart = vi.fn(async () => {});
+      const replacementStart = vi.fn(
+        async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+      );
+      let registry = installTestRegistry(createTestPlugin({ startAccount: originalStart }));
+      const manager = createManager({
+        getPluginRegistry: () => registry,
+        startupTrace: {
+          measure: async (name, run) => {
+            const result = await run();
+            if (name.endsWith(`.${phase}`)) {
+              preparing.resolve();
+              await release.promise;
+            }
+            return result;
+          },
+        },
+      });
+      const original = manager.startChannel("discord");
+      const rejected = expect(original).rejects.toThrow("plugins are reloading; retry");
+      await preparing.promise;
+      const resume = manager.pauseChannelStarts();
+      try {
+        await expect(manager.startChannel("discord", "default")).rejects.toThrow(
+          "plugins are reloading; retry",
+        );
+        await manager.stopChannel("discord", undefined, { manual: false });
+        registry = installTestRegistry(createTestPlugin({ startAccount: replacementStart }));
+        resume("published");
+        const replacements = [
+          manager.startChannel("discord", "default"),
+          manager.startChannel("discord", "default"),
+        ];
+        await flushMicrotasks();
+        release.resolve();
+        if (phase === "runtime") {
+          await cleanupStarted.promise;
+          await waitForImmediate();
+          expect(replacementStart).not.toHaveBeenCalled();
+          releaseCleanup.resolve();
         }
+        await rejected;
+        const outcomes = await Promise.all(replacements);
+        expect(outcomes.map((result) => result.get("default"))).toContainEqual({
+          status: "handed-off",
+        });
+        await waitForImmediate();
+        expect(originalStart).not.toHaveBeenCalled();
+        expect(replacementStart).toHaveBeenCalledOnce();
+      } finally {
+        resume("rollback");
+        release.resolve();
+        releaseCleanup.resolve();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves a manual stop during preparation with queued start=%s",
+    async (queueStart) => {
+      const preparing = createDeferred();
+      const startupGate = createDeferred();
+      const isConfigured = vi.fn(async () => {
+        preparing.resolve();
+        await startupGate.promise;
+        return true;
+      });
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
         await new Promise<void>((resolve) => {
           abortSignal.addEventListener("abort", () => resolve(), { once: true });
         });
-      },
-    );
-    installTestRegistry(
-      createTestPlugin({
-        startAccount,
-        listAccountIds: () => ["catalog", "plain"],
-      }),
-    );
-    expect(
-      registerPluginCommandInRegistry(getActivePluginRegistry()!, "catalog-owner", {
-        name: "catalog",
-        description: "Catalog command",
-        channels: ["discord"],
-        handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({ ok: true });
-    const manager = createManager();
+      });
+      installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+      const manager = createManager();
+      const starts = [manager.startChannel("discord", DEFAULT_ACCOUNT_ID)];
+      await preparing.promise;
+      if (queueStart) {
+        starts.push(manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true }));
+        await flushMicrotasks();
+      }
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      startupGate.resolve();
+      await Promise.all(starts);
+      expect(startAccount).not.toHaveBeenCalled();
+      expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
 
-    await manager.startChannels();
-    await waitForMicrotaskCondition(
-      () => startAccount.mock.calls.length === 2,
-      "expected both account tasks to start",
-    );
-
-    const reported = manager.getPluginCommandCatalogAccounts();
-    expect(reported).toEqual(new Map([["discord", new Set(["catalog"])]]));
-    (reported.get("discord") as Set<string>).clear();
-    expect(manager.getPluginCommandCatalogAccounts()).toEqual(
-      new Map([["discord", new Set(["catalog"])]]),
-    );
-
-    await manager.stopChannel("discord", "plain");
-    expect(manager.getPluginCommandCatalogAccounts()).toEqual(
-      new Map([["discord", new Set(["catalog"])]]),
-    );
-    await manager.stopChannel("discord", "catalog");
-    expect(manager.getPluginCommandCatalogAccounts()).toEqual(new Map());
-  });
-
-  it("cancels a pending startup when the account is stopped mid-boot", async () => {
-    const startupGate = createDeferred();
-    const isConfigured = vi.fn(async () => {
-      await startupGate.promise;
-      return true;
-    });
-    const startAccount = vi.fn(async () => {});
-
-    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
-    const manager = createManager();
-
-    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    await Promise.resolve();
-
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    startupGate.resolve();
-
-    await Promise.all([startTask, stopTask]);
-
-    expect(startAccount).not.toHaveBeenCalled();
-  });
+      await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+      await flushMicrotasks();
+      expect(startAccount).toHaveBeenCalledOnce();
+      expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    },
+  );
 
   it("does not resolve channelRuntime until a channel starts", async () => {
     const channelRuntime = {
@@ -3526,7 +4337,10 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
 
     const start = manager.startChannel("discord");
-    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 4,
+      "expected first account startup wave",
+    );
 
     expect(isConfigured).toHaveBeenCalledTimes(4);
     expect(maxActive).toBe(4);
@@ -3576,7 +4390,10 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelIds });
 
     const start = manager.startChannels();
-    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => releases.length === 4,
+      "expected first channel startup wave",
+    );
 
     expect(releases).toHaveLength(4);
     expect(maxActive).toBe(4);

@@ -9,8 +9,7 @@ import {
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
 } from "../../plugins/install-persistence.js";
-import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../../plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
@@ -44,9 +43,9 @@ function renderJsonBlock(label: string, value: unknown): string {
 
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
-  index: InstalledPluginIndex,
+  ownershipResolver: ReturnType<typeof createInstalledPluginOwnershipResolver>,
 ) {
-  const ownership = resolveInstalledPluginPackageOwnership(index, inspect.plugin.id);
+  const ownership = ownershipResolver.resolvePackage(inspect.plugin.id);
   return {
     inspect,
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
@@ -230,8 +229,9 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           return commandReply(formatPluginsList(report));
         }
         if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+          const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
           const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-            buildPluginInspectJson(inspect, metadataSnapshot.index),
+            buildPluginInspectJson(inspect, ownershipResolver),
           );
           return commandReply(renderJsonBlock("🔌 Plugins", reports));
         }
@@ -243,7 +243,10 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         if (!inspect) {
           return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
         }
-        const payload = buildPluginInspectJson(inspect, metadataSnapshot.index);
+        const payload = buildPluginInspectJson(
+          inspect,
+          createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+        );
         return commandReply(
           renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
             ...inspect,
