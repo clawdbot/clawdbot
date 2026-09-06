@@ -72,8 +72,9 @@ describe("deliverLineAutoReply", () => {
     });
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
-    expect(messages.map((message) => (message.type === "text" ? message.text : message.type)))
-      .toEqual(["After"]);
+    expect(
+      messages.map((message) => (message.type === "text" ? message.text : message.type)),
+    ).toEqual(["After"]);
   });
 
   it.each([
