@@ -5122,58 +5122,45 @@ setImmediate(() => {
     expect(jobs["check-docs"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
       const expression = jobs[jobName]?.["runs-on"];
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          runnerBackend: "github",
-        }),
-        jobName,
-      ).toBe(hostedRunner);
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          runnerBackend: "hybrid",
-        }),
-        jobName,
-      ).toBe(expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners]);
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        }),
-        jobName,
-      ).toBe(hostedRunner);
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          runnerBackend: "blacksmith",
-        }),
-        jobName,
-      ).toBe(evaluateWorkflowExpression(expression, canonicalPullRequest));
-      // Authors with no landed commit stay on free hosted infrastructure, so an
-      // unreviewed PR cannot spend Blacksmith capacity.
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          authorAssociation: "NONE",
-          headRepository: "contributor/openclaw",
-          runnerBackend: "hybrid",
-        }),
-        `${jobName}: untrusted fork`,
-      ).toBe(hostedRunner);
-      // A fork PR from someone who already landed a commit routes exactly like a
-      // maintainer PR. Maintainers report CONTRIBUTOR here too (org membership is
-      // concealed), so this case also protects their own routing.
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          authorAssociation: "CONTRIBUTOR",
-          headRepository: "contributor/openclaw",
-          runnerBackend: "hybrid",
-        }),
-        `${jobName}: returning-contributor fork`,
-      ).toBe(expectedHybridForkRunners[jobName as keyof typeof expectedHostedRunners]);
+      for (const [label, overrides, expectedRunner] of [
+        ["github backend", { runnerBackend: "github" }, hostedRunner],
+        [
+          "hybrid first attempt",
+          { runnerBackend: "hybrid" },
+          expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
+        ],
+        ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, hostedRunner],
+        [
+          "explicit Blacksmith matches default",
+          { runnerBackend: "blacksmith" },
+          evaluateWorkflowExpression(expression, canonicalPullRequest),
+        ],
+        // New contributors stay hosted. GitHub can also report maintainers as
+        // CONTRIBUTOR when organization membership is concealed.
+        [
+          "untrusted fork",
+          {
+            authorAssociation: "NONE",
+            headRepository: "contributor/openclaw",
+            runnerBackend: "hybrid",
+          },
+          hostedRunner,
+        ],
+        [
+          "returning-contributor fork",
+          {
+            authorAssociation: "CONTRIBUTOR",
+            headRepository: "contributor/openclaw",
+            runnerBackend: "hybrid",
+          },
+          expectedHybridForkRunners[jobName as keyof typeof expectedHostedRunners],
+        ],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, { ...canonicalPullRequest, ...overrides }),
+          `${jobName}: ${label}`,
+        ).toBe(expectedRunner);
+      }
       for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
         expect(
           evaluateWorkflowExpression(expression, {
@@ -5241,50 +5228,30 @@ setImmediate(() => {
     ] as const;
     for (const { jobName, matrix, runner } of widenedHybridMatrixRows) {
       const expression = jobs[jobName]?.["runs-on"];
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          matrix,
-          runnerBackend: "hybrid",
-        }),
-        `${jobName}: hybrid attempt 1`,
-      ).toBe(runner);
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          matrix,
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        }),
-        `${jobName}: hybrid retry`,
-      ).toBe("ubuntu-24.04");
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          matrix,
-          runnerBackend: "github",
-        }),
-        `${jobName}: github backend`,
-      ).toBe("ubuntu-24.04");
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          authorAssociation: "NONE",
-          headRepository: "contributor/openclaw",
-          matrix,
-          runnerBackend: "hybrid",
-        }),
-        `${jobName}: untrusted fork pull request`,
-      ).toBe("ubuntu-24.04");
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...canonicalPullRequest,
-          eventName: "workflow_dispatch",
-          matrix,
-          runnerBackend: "hybrid",
-        }),
-        `${jobName}: workflow dispatch`,
-      ).toBe("ubuntu-24.04");
+      for (const [label, overrides, expectedRunner] of [
+        ["hybrid attempt 1", { runnerBackend: "hybrid" }, runner],
+        ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
+        ["github backend", { runnerBackend: "github" }, "ubuntu-24.04"],
+        [
+          "untrusted fork pull request",
+          {
+            authorAssociation: "NONE",
+            headRepository: "contributor/openclaw",
+            runnerBackend: "hybrid",
+          },
+          "ubuntu-24.04",
+        ],
+        [
+          "workflow dispatch",
+          { eventName: "workflow_dispatch", runnerBackend: "hybrid" },
+          "ubuntu-24.04",
+        ],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, { ...canonicalPullRequest, matrix, ...overrides }),
+          `${jobName}: ${label}`,
+        ).toBe(expectedRunner);
+      }
     }
   });
 
@@ -5318,35 +5285,16 @@ setImmediate(() => {
     };
 
     for (const [jobName, hostedTimeout] of Object.entries(expectedHostedTimeouts)) {
-      expect(
-        evaluateTimeout(jobName, {
-          ...canonicalPullRequest,
-          runnerBackend: "github",
-        }),
-        jobName,
-      ).toBe(hostedTimeout);
-      expect(
-        evaluateTimeout(jobName, {
-          ...canonicalPullRequest,
-          runnerBackend: "blacksmith",
-        }),
-        jobName,
-      ).toBe(20);
-      expect(
-        evaluateTimeout(jobName, {
-          ...canonicalPullRequest,
-          runnerBackend: "hybrid",
-        }),
-        jobName,
-      ).toBe(20);
-      expect(
-        evaluateTimeout(jobName, {
-          ...canonicalPullRequest,
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        }),
-        jobName,
-      ).toBe(hostedTimeout);
+      for (const [overrides, expectedTimeout] of [
+        [{ runnerBackend: "github" }, hostedTimeout],
+        [{ runnerBackend: "blacksmith" }, 20],
+        [{ runnerBackend: "hybrid" }, 20],
+        [{ runnerBackend: "hybrid", runAttempt: 2 }, hostedTimeout],
+      ] as const) {
+        expect(evaluateTimeout(jobName, { ...canonicalPullRequest, ...overrides }), jobName).toBe(
+          expectedTimeout,
+        );
+      }
       expect(jobs[jobName]?.["timeout-minutes"], jobName).toContain(
         "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
       );
