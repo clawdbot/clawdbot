@@ -50,7 +50,7 @@ const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
 vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
 const readFileSync = fs.readFileSync.bind(fs);
 vi.spyOn(fs, "readFileSync").mockImplementation(
-  (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) =>
+  (filePath, options?: Parameters<typeof fs.readFileSync>[1]) =>
     filePath === "/proc/meminfo" && options === "utf8"
       ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
       : readFileSync(

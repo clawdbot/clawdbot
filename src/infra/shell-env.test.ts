@@ -111,8 +111,10 @@ describe("shell env fallback", () => {
     const etcShellsContent = `${shells.join("\n")}\n`;
     const readFileSyncSpy = vi
       .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
-        if (filePath === "/etc/shells" && encoding === "utf8") {
+      // Track the real signature rather than a named options type: @types/node
+      // has renamed and removed those (ReadFileSyncOptions is gone in v26).
+      .mockImplementation((filePath, options?: Parameters<typeof fs.readFileSync>[1]) => {
+        if (filePath === "/etc/shells" && options === "utf8") {
           return etcShellsContent;
         }
         throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
