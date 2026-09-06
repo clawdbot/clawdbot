@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
@@ -38,7 +39,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
       shimFailure: true,
       rollbackFailure: "none",
     } as const,
-    ...(["shim", "package"] as const).map((rollbackFailure) => ({
+    ...(["shim", "package", "backup-cleanup"] as const).map((rollbackFailure) => ({
       layout: "pnpm11" as const,
       siblingChange: "none" as const,
       shimFailure: false,
@@ -98,6 +99,31 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         const preparationStarted = createDeferred();
         const finishPreparation = createDeferred();
         const phases: string[] = [];
+        let cleanupRejected = false;
+        const originalRename = fs.rename.bind(fs);
+        const originalUnlink = fs.unlink.bind(fs);
+        const backupRenameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (rollbackFailure === "backup-cleanup" && String(args[0]) === project) {
+            throw Object.assign(new Error("cross-device move"), { code: "EXDEV" });
+          }
+          return originalRename(...args);
+        });
+        const backupUnlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+          if (
+            rollbackFailure === "backup-cleanup" &&
+            String(target) === path.join(packageRoot, "dist", "index.js")
+          ) {
+            await fs.rm(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), {
+              force: true,
+            });
+            await originalUnlink(target);
+            cleanupRejected = true;
+            throw Object.assign(new Error("source cleanup failed after commit"), {
+              code: "EACCES",
+            });
+          }
+          return originalUnlink(target);
+        });
         const update = runGlobalPackageUpdateSteps({
           installTarget: target,
           installSpec: "openclaw@2.0.0",
@@ -230,7 +256,35 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             finishPreparation.resolve();
           }
         }
-        const result = await update;
+        const result = await update.finally(() => {
+          backupRenameSpy.mockRestore();
+          backupUnlinkSpy.mockRestore();
+        });
+        if (rollbackFailure === "backup-cleanup") {
+          expect(cleanupRejected).toBe(true);
+          expect(result.failedStep?.stderrTail).toContain("source cleanup failed after commit");
+          expect(result.activePackageRoot).toBeNull();
+          expect(result.recovery?.serviceRestartSafe).toBe(false);
+          if (!retained) {
+            throw new Error("transaction missing");
+          }
+          expect(await retained.rollback()).toMatchObject({ exitCode: 1, activePackageRoot: null });
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(
+            fs.readFile(
+              path.join(
+                retained.backupRoot,
+                path.relative(project, packageRoot),
+                "dist",
+                "index.js",
+              ),
+              "utf8",
+            ),
+          ).resolves.toBe("export {};\n");
+          return;
+        }
         if (shimFailure) {
           const activeRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
           expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });

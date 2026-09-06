@@ -268,7 +268,7 @@ export async function swapStagedPackageInstall(params: {
         original.version === previousVersion &&
         previousDistFiles !== undefined &&
         isDeepStrictEqual(
-          await collectPackageDistInventory(targetPackageRoot).catch(() => null),
+          await collectPackageDistInventory(params.installTarget.packageRoot!).catch(() => null),
           previousDistFiles,
         );
       if (packageRollbackVerified) {
@@ -319,8 +319,8 @@ export async function swapStagedPackageInstall(params: {
       : null;
     if (hadPackage && previousVersion) {
       previousDistFiles =
-        (await readPackageDistInventoryIfPresent(targetPackageRoot)) ??
-        (await collectPackageDistInventory(targetPackageRoot));
+        (await readPackageDistInventoryIfPresent(params.installTarget.packageRoot!)) ??
+        (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
     packageRollbackVerified = hadPackage && previousVersion !== null;
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
