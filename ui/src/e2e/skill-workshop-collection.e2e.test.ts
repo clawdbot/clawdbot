@@ -35,6 +35,87 @@ describe("Workshop current collection", () => {
     await server?.close();
   });
 
+  it.each([
+    { action: "Apply", status: "applied", remaining: 0, width: 1280 },
+    { action: "Reject", status: "rejected", remaining: 0, width: 1280 },
+    { action: "Apply", status: "applied", remaining: 1, width: 390 },
+    { action: "Reject", status: "rejected", remaining: 1, width: 390 },
+  ])(
+    "keeps $action confirmation visible with $remaining suggestions remaining",
+    async ({ action, status, remaining, width }) => {
+      const fixture = createSkillWorkshopCollectionFixture();
+      const proposal = fixture.manifest.proposals[0]!;
+      const inspect = fixture.responses["skills.proposals.inspect"].cases[0]!;
+      if (remaining) {
+        const next = { ...proposal, id: "next-proposal", title: "Next suggestion" };
+        fixture.manifest.proposals.push(next);
+        fixture.responses["skills.proposals.inspect"].cases.push({
+          match: { proposalId: next.id },
+          response: { ...inspect.response, record: { ...inspect.response.record, ...next } },
+        });
+      }
+      const proof = createControlUiE2eArtifactDir(`workshop-${status}-${remaining}`);
+      const context = await browser.newContext({
+        viewport: { width, height: 900 },
+        serviceWorkers: "block",
+      });
+      const page = await context.newPage();
+      try {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, ...fixture.featureMethods],
+          methodResponses: fixture.responses,
+        });
+        await page.goto(`${server.baseUrl}skills/workshop`);
+        await page.locator("#skill-workshop-mode-tab-suggestions").click();
+        await page.getByText("Pending instructions waiting for review.", { exact: true }).waitFor();
+        const method = `skills.proposals.${action.toLowerCase()}`;
+        await gateway.deferNext(method);
+        await page
+          .locator(".sw-action-bar")
+          .getByRole("button", { name: action, exact: true })
+          .click();
+        await gateway.waitForRequest(method);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proof, "01-decision-pending.png"),
+        });
+
+        proposal.status = status;
+        inspect.response.record.status = status;
+        await gateway.setMethodResponse(
+          "skills.proposals.list",
+          fixture.responses["skills.proposals.list"],
+        );
+        await gateway.setMethodResponse(
+          "skills.proposals.inspect",
+          fixture.responses["skills.proposals.inspect"],
+        );
+        await gateway.resolveDeferred(method, {});
+        await expect.poll(() => page.locator(".sw-row").count()).toBe(remaining);
+        const notice = page.locator(".sw-action-toast");
+        await expect
+          .poll(() => notice.textContent())
+          .toContain(action === "Apply" ? "Applied" : "Rejected");
+        expect(await notice.textContent()).toContain("release-review");
+        expect(await notice.getAttribute("role")).toBe("status");
+        expect(
+          await notice.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+          }),
+        ).toBe(true);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proof, "02-decision-confirmed.png"),
+        });
+      } catch (error) {
+        await reportWorkshopFailure(page, error);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it.each([1280, 390])(
     "separates five current skills from thirty-one history records at %spx",
     async (width) => {

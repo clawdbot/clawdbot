@@ -124,6 +124,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
       <div class="sw-view" data-mode=${props.mode}>
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
+      ${props.actionNotice ? renderActionNotice(props.actionNotice) : nothing}
     </section>
     ${
       preview && selected
@@ -495,7 +496,6 @@ function renderDetail(
         ${proposal.evaluation ? renderSkillWorkshopEvaluation(proposal.evaluation) : nothing}
       </div>
 
-      ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
       ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
     </div>
   `;
