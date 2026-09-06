@@ -52,6 +52,7 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     assets: [],
     skipped: [],
     skippedVolatileCount: 0,
+    skippedSymbolicLinks: [],
     ...overrides,
   };
 }
@@ -3016,46 +3017,21 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it.each([
-    {
-      label: "absolute",
-      relative: false,
-      targetExists: true,
-      error: /Archive symbolic link target must be relative/iu,
-    },
-    {
-      label: "dangling absolute",
-      relative: false,
-      targetExists: false,
-      error: /Archive symbolic link target must be relative/iu,
-    },
-    {
-      label: "declared-asset-escaping relative",
-      relative: true,
-      targetExists: true,
-      error: /Archive symbolic link is outside the declared backup assets/iu,
-    },
-  ])(
-    "rejects $label symlink targets before publishing the archive",
-    async ({ relative, targetExists, error }) => {
-      if (process.platform === "win32") {
-        return;
-      }
-
+  it.runIf(process.platform !== "win32")(
+    "rejects a declared-asset-escaping relative symlink target before publishing the archive",
+    async () => {
       await withOpenClawTestState(
         {
           layout: "state-only",
-          prefix: "openclaw-backup-absolute-symlink-",
+          prefix: "openclaw-backup-escaping-symlink-",
           scenario: "minimal",
         },
         async (state) => {
-          const outputPath = state.path("absolute-symlink.tar.gz");
+          const outputPath = state.path("escaping-symlink.tar.gz");
           const outsideTarget = state.path("outside-target.txt");
-          if (targetExists) {
-            await fs.writeFile(outsideTarget, "outside\n", "utf8");
-          }
+          await fs.writeFile(outsideTarget, "outside\n", "utf8");
           await fs.symlink(
-            relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
+            path.relative(state.stateDir, outsideTarget),
             state.statePath("ordinary-link"),
           );
 
@@ -3065,8 +3041,62 @@ describe("createBackupArchive", () => {
               includeWorkspace: false,
               nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
             }),
-          ).rejects.toThrow(error);
+          ).rejects.toThrow(/Archive symbolic link is outside the declared backup assets/iu);
           await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { label: "an existing target", targetExists: true },
+    { label: "a dangling target", targetExists: false },
+  ])(
+    "skips and reports an absolute symlink with $label outside every declared asset",
+    async ({ targetExists }) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-unrestorable-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("unrestorable-symlink.tar.gz");
+          const outsideTarget = state.path("outside-target.txt");
+          if (targetExists) {
+            await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          }
+          const unrestorableLinkPath = state.statePath("ordinary-link");
+          await fs.symlink(outsideTarget, unrestorableLinkPath);
+          await state.writeText("payload.txt", "state payload\n");
+          await fs.symlink("payload.txt", state.statePath("payload-link"));
+
+          const result = await createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          });
+
+          expect(result.skippedSymbolicLinks).toEqual([
+            { sourcePath: unrestorableLinkPath, linkTarget: outsideTarget },
+          ]);
+          expect(formatBackupCreateSummary(result)).toContainEqual(
+            expect.stringContaining(`-> ${outsideTarget}`),
+          );
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          expect(entries.some((entry) => entry.path.endsWith("/state/ordinary-link"))).toBe(false);
+          const archivedLink = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/payload-link")),
+            "archived relative symlink",
+          );
+          expect(archivedLink.type).toBe("SymbolicLink");
+          expect(archivedLink.linkpath).toBe("payload.txt");
+          expect(entries.some((entry) => entry.path.endsWith("/state/payload.txt"))).toBe(true);
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
         },
       );
     },

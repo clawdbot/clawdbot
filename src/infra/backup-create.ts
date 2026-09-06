@@ -1,5 +1,4 @@
 // Creates backup archives while filtering volatile runtime state.
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +19,7 @@ import type { BackupManifest } from "../commands/backup-verify-manifest.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
@@ -29,6 +28,11 @@ import {
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
+import {
+  isUnrestorableSymbolicLinkTarget,
+  readSymbolicLinkTarget,
+  remapDeclaredAbsoluteSymbolicLinkTarget,
+} from "./backup-archive-symbolic-links.js";
 import {
   observeBackupTarEntryProgress,
   removePreparedBackupArchive,
@@ -98,6 +102,12 @@ export type BackupCreateResult = {
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
+  /**
+   * Symbolic links the archiver actively skipped because their absolute target
+   * is outside every backed-up asset, so no restore could recreate them.
+   * Populated on real writes only; dry runs report an empty list.
+   */
+  skippedSymbolicLinks: Array<{ sourcePath: string; linkTarget: string }>;
 };
 
 async function resolveOutputPath(params: {
@@ -307,6 +317,16 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
         } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }
+    if (result.skippedSymbolicLinks.length > 0) {
+      lines.push(
+        `Skipped ${result.skippedSymbolicLinks.length} symbolic link${
+          result.skippedSymbolicLinks.length === 1 ? "" : "s"
+        } (target outside the backup):`,
+      );
+      for (const link of result.skippedSymbolicLinks) {
+        lines.push(`- ${shortenHomePath(link.sourcePath)} -> ${link.linkTarget}`);
+      }
+    }
     if (result.verified) {
       lines.push("Archive verification: passed");
     }
@@ -331,34 +351,14 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
-function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
-  linkpath: string | undefined;
-  archiveEntryPath: string;
-  archiveRoot: string;
-  assets: readonly BackupAsset[];
-}): string | undefined {
-  if (!params.linkpath || !path.isAbsolute(params.linkpath) || params.linkpath.includes("\\")) {
-    return params.linkpath;
-  }
-  // Tar exposes the first link hop, while assets own the final canonical path.
-  // Resolve before containment so chains map to one portable archive target.
-  let targetSourcePath: string;
-  try {
-    targetSourcePath = realpathSync(params.linkpath);
-  } catch {
-    return params.linkpath;
-  }
-  if (!params.assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))) {
-    return params.linkpath;
-  }
-  return path.posix.relative(
-    path.posix.dirname(params.archiveEntryPath),
-    buildBackupArchivePath(params.archiveRoot, targetSourcePath),
-  );
-}
-
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
+}
+
+function isBackupTarFilterSymbolicLink(
+  entry: import("node:fs").Stats | import("tar").ReadEntry,
+): boolean {
+  return "isSymbolicLink" in entry ? entry.isSymbolicLink() : entry.type === "SymbolicLink";
 }
 
 const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
@@ -501,6 +501,7 @@ export async function createBackupArchive(
         }),
     skipped: plan.skipped,
     skippedVolatileCount: 0,
+    skippedSymbolicLinks: [],
   };
 
   if (opts.dryRun) {
@@ -547,6 +548,7 @@ export async function createBackupArchive(
     const tar = await loadTarRuntime();
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     let skippedVolatileCount = 0;
+    const skippedSymbolicLinks: BackupCreateResult["skippedSymbolicLinks"] = [];
     // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
@@ -603,6 +605,13 @@ export async function createBackupArchive(
         skippedVolatileCount += 1;
         return false;
       }
+      if (isBackupTarFilterSymbolicLink(entryStat)) {
+        const linkTarget = readSymbolicLinkTarget(resolvedEntryPath);
+        if (linkTarget && isUnrestorableSymbolicLinkTarget(linkTarget, result.assets)) {
+          skippedSymbolicLinks.push({ sourcePath: resolvedEntryPath, linkTarget });
+          return false;
+        }
+      }
       return true;
     };
     const completedArchive = await writeTarArchiveWithRetry({
@@ -610,9 +619,10 @@ export async function createBackupArchive(
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
         // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
-        // attempt, so reset the closure counter here or retries would report
+        // attempt, so reset the closure counters here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
+        skippedSymbolicLinks.length = 0;
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
@@ -694,6 +704,11 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
+    // Traversal order follows readdir; sort so operators and JSON consumers see
+    // the same list for the same state directory.
+    result.skippedSymbolicLinks = skippedSymbolicLinks.toSorted((left, right) =>
+      left.sourcePath.localeCompare(right.sourcePath),
+    );
     if (skippedVolatileCount > 0) {
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${
