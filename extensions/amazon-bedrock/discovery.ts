@@ -7,12 +7,11 @@ import type {
   ListFoundationModelsCommandOutput,
   ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
@@ -27,6 +26,7 @@ import {
   supportsClaudeAdaptiveThinking,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -39,8 +39,6 @@ import {
 } from "./control-plane.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
-
-const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
 const DEFAULT_CONTEXT_WINDOW = 32_000;
@@ -224,7 +222,6 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
-let hasLoggedBedrockError = false;
 
 // ---------------------------------------------------------------------------
 // Helper utilities
@@ -391,34 +388,26 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
 
 /**
  * Fetch raw inference profile summaries from the Bedrock control plane.
- * Handles pagination. Best-effort: silently returns empty array if IAM lacks
- * bedrock:ListInferenceProfiles permission.
+ * All pages must succeed before discovery can cache a complete catalog.
  */
 async function fetchInferenceProfileSummaries(
   client: BedrockClient,
   createListInferenceProfilesCommand: BedrockControlPlaneSdk["createListInferenceProfilesCommand"],
 ): Promise<InferenceProfileSummary[]> {
-  try {
-    const profiles: InferenceProfileSummary[] = [];
-    let nextToken: string | undefined;
-    do {
-      const command = createListInferenceProfilesCommand({ nextToken });
-      const response = await runBedrockControlPlaneRequest({
-        operation: "Bedrock ListInferenceProfiles",
-        send: (options) => client.send(command, options),
-      });
-      for (const summary of response.inferenceProfileSummaries ?? []) {
-        profiles.push(summary);
-      }
-      nextToken = response.nextToken;
-    } while (nextToken);
-    return profiles;
-  } catch (error) {
-    log.debug?.("Skipping inference profile discovery", {
-      error: formatErrorMessage(error),
+  const profiles: InferenceProfileSummary[] = [];
+  let nextToken: string | undefined;
+  do {
+    const command = createListInferenceProfilesCommand({ nextToken });
+    const response = await runBedrockControlPlaneRequest({
+      operation: "Bedrock ListInferenceProfiles",
+      send: (options) => client.send(command, options),
     });
-    return [];
-  }
+    for (const summary of response.inferenceProfileSummaries ?? []) {
+      profiles.push(summary);
+    }
+    nextToken = response.nextToken;
+  } while (nextToken);
+  return profiles;
 }
 
 /**
@@ -614,6 +603,12 @@ export async function discoverBedrockModels(params: {
         }
         return a.name.localeCompare(b.name);
       });
+    } catch (error) {
+      const status = asOptionalRecord(asOptionalRecord(error)?.$metadata)?.httpStatusCode;
+      if (typeof status === "number") {
+        throw new LiveModelCatalogHttpError("amazon-bedrock", status);
+      }
+      throw error;
     } finally {
       // Discovery owns the short-lived control-plane client and its socket agents.
       client.destroy();
@@ -648,13 +643,7 @@ export async function discoverBedrockModels(params: {
     if (refreshIntervalSeconds > 0) {
       discoveryCache.delete(cacheKey);
     }
-    if (!hasLoggedBedrockError) {
-      hasLoggedBedrockError = true;
-      log.warn("Failed to discover Bedrock models", {
-        error: formatErrorMessage(error),
-      });
-    }
-    return [];
+    throw error;
   }
 }
 
@@ -685,10 +674,6 @@ export async function resolveImplicitBedrockProvider(params: {
     config: discoveryConfig,
     clientFactory: params.clientFactory,
   });
-  if (models.length === 0) {
-    return null;
-  }
-
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
     api: "bedrock-converse-stream",

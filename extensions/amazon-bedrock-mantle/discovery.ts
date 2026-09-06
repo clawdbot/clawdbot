@@ -8,6 +8,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
@@ -254,7 +255,7 @@ interface OpenAIModelEntry {
 }
 
 interface OpenAIModelsResponse {
-  data?: OpenAIModelEntry[];
+  data: OpenAIModelEntry[];
   object?: string;
 }
 
@@ -286,8 +287,8 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
         `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
       ),
   });
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return {};
+  if (!body || typeof body !== "object" || !("data" in body) || !Array.isArray(body.data)) {
+    throw new Error("Mantle model discovery response must contain a data array");
   }
   return body as OpenAIModelsResponse;
 }
@@ -297,6 +298,7 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
 // ---------------------------------------------------------------------------
 
 interface MantleCacheEntry {
+  bearerToken: string;
   models: ModelDefinitionConfig[];
   fetchedAt: number;
 }
@@ -319,8 +321,8 @@ const discoveryCache = new Map<string, MantleCacheEntry>();
  * { "data": [{ "id": "anthropic.claude-sonnet-4-6", "object": "model", "owned_by": "anthropic" }] }
  * ```
  *
- * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
- * Returns an empty array if the request fails (no permission, network error, etc.).
+ * Results are cached per region and bearer credential for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
+ * Failed acquisitions propagate to the catalog owner, which retains compatible last-good models.
  */
 /** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
@@ -331,58 +333,47 @@ export async function discoverMantleModels(params: {
 }): Promise<ModelDefinitionConfig[]> {
   const { region, bearerToken, fetchFn = fetch, now = Date.now } = params;
 
-  // Check cache
-  const cacheKey = region;
-  const cached = discoveryCache.get(cacheKey);
-  if (cached && now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000) {
+  const cached = discoveryCache.get(region);
+  if (
+    cached?.bearerToken === bearerToken &&
+    now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+  ) {
     return cached.models;
   }
+  discoveryCache.delete(region);
 
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
 
-  try {
-    const response = await fetchFn(endpoint, {
-      method: "GET",
-      signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-      },
-    });
+  const response = await fetchFn(endpoint, {
+    method: "GET",
+    signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+      Accept: "application/json",
+    },
+  });
 
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      log.debug?.("Mantle model discovery failed", {
-        status: response.status,
-        statusText: response.statusText,
-      });
-      return cached?.models ?? [];
-    }
-
-    const body = await readMantleModelDiscoveryJson(response);
-    const rawModels = body.data ?? [];
-
-    const models = rawModels
-      .filter((m) => m.id?.trim())
-      .map((m) => ({
-        id: m.id,
-        name: m.id, // Mantle doesn't return display names
-        reasoning: inferReasoningSupport(m.id),
-        input: ["text" as const],
-        cost: DEFAULT_COST,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
-      }))
-      .toSorted((a, b) => a.id.localeCompare(b.id));
-
-    discoveryCache.set(cacheKey, { models, fetchedAt: now() });
-    return models;
-  } catch (error) {
-    log.debug?.("Mantle model discovery error", {
-      error: formatErrorMessage(error),
-    });
-    return cached?.models ?? [];
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
   }
+
+  const body = await readMantleModelDiscoveryJson(response);
+  const models = body.data
+    .filter((model) => model.id?.trim())
+    .map((model) => ({
+      id: model.id,
+      name: model.id,
+      reasoning: inferReasoningSupport(model.id),
+      input: ["text" as const],
+      cost: DEFAULT_COST,
+      contextWindow: DEFAULT_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_MAX_TOKENS,
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+
+  discoveryCache.set(region, { bearerToken, models, fetchedAt: now() });
+  return models;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +425,6 @@ export async function resolveImplicitMantleProvider(params: {
     bearerToken,
     fetchFn: params.fetchFn,
   });
-
-  if (models.length === 0) {
-    return null;
-  }
 
   log.debug?.("Mantle provider resolved", { region, modelCount: models.length });
 
@@ -527,7 +514,7 @@ export async function resolveImplicitMantleProvider(params: {
     api: "openai-completions",
     auth: "api-key",
     apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
-    models: allModels,
+    models: models.length === 0 ? [] : allModels,
   };
 }
 

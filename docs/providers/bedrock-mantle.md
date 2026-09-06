@@ -87,10 +87,15 @@ OpenClaw attempts to generate a Mantle bearer token from the AWS default
 credential chain. It then discovers available Mantle models by querying the
 region's `/v1/models` endpoint.
 
-| Behavior          | Detail                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| Discovery cache   | Results cached for 1 hour per region; a fetch failure returns the last cached result |
-| IAM token refresh | Every 2 hours, cached per region                                                     |
+| Behavior          | Detail                                                              |
+| ----------------- | ------------------------------------------------------------------- |
+| Discovery cache   | Results cached for 1 hour for the same region and bearer credential |
+| IAM token refresh | Every 2 hours, cached per region                                    |
+
+A failed refresh reports unavailable or rejected catalog access. The catalog keeps
+compatible last-good models with that failure status; expired discovery data does
+not become a successful refresh. A successful empty response clears discovered
+membership. Restore endpoint access and refresh again after a failure.
 
 To keep the Mantle plugin enabled but suppress automatic discovery and IAM
 bearer-token generation, disable the plugin-owned discovery toggle:

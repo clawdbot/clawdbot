@@ -137,6 +137,11 @@ OpenClaw can automatically discover Bedrock models that support **streaming**
 and **text output**. Discovery uses `bedrock:ListFoundationModels` and
 `bedrock:ListInferenceProfiles`, and results are cached (default: 1 hour).
 
+Both lists, including every inference-profile page, must succeed before OpenClaw
+caches the result. A failed refresh reports unavailable or rejected catalog access
+and preserves compatible last-good models. Restore access to both list operations
+and refresh again. A successful empty list clears discovered membership.
+
 How the implicit provider is enabled:
 
 - If `plugins.entries.amazon-bedrock.config.discovery.enabled` is `true`,
