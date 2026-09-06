@@ -23,7 +23,10 @@ import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./run
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-type PublicApi = { read: () => string; view: { read: () => string } };
+type PublicApi = {
+  read: () => string;
+  view: { read: () => string; frozen: readonly (() => string)[] };
+};
 const temp = createTempDirTracker();
 const records: PluginRecord[] = [];
 afterEach(async () => {
@@ -51,7 +54,7 @@ afterEach(async () => {
   }
 });
 
-function writeSource(root: string, version: string, extension: "ts" | "js" = "ts") {
+function writeSource(root: string, version: string, extension: "ts" | "js" = "ts", size = 1) {
   const annotation = extension === "ts" ? ": string" : "";
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
   fs.writeFileSync(
@@ -59,7 +62,7 @@ function writeSource(root: string, version: string, extension: "ts" | "js" = "ts
     `let value = ${JSON.stringify(version)};
     export const read = () => value;
     export const set = (next${annotation}) => { value = next; };
-    export const view = { read };`,
+    export const view = { read, frozen: Object.freeze(Array.from({ length: ${size} }, () => read)) };`,
   );
   fs.writeFileSync(
     path.join(root, `index.${extension}`),
@@ -129,6 +132,7 @@ describe("managed plugin public surfaces", () => {
           artifactBasename: "runtime-api.js",
         });
       const lazy = createLazyFacadeObjectValue(() => loadFacade().view);
+      const frozen = createLazyFacadeObjectValue(() => loadFacade().view.frozen);
 
       // Neither public entry has executed yet. The captured graph survives source deletion.
       fs.rmSync(path.join(root, "api.ts"));
@@ -143,6 +147,28 @@ describe("managed plugin public surfaces", () => {
       expect(loadFacade().read()).toBe("registered-one");
       expect(lazy.read()).toBe("registered-one");
       const retainedLazyRead = lazy.read;
+      for (const [property, descriptor] of [
+        ["read", { configurable: false, writable: false }],
+        ["added", { value: "fixed" }],
+        [Symbol("fixed"), { get: () => "fixed", configurable: false }],
+      ] as const) {
+        const before = Object.getOwnPropertyDescriptor(originalApi.view, property);
+        expect(Reflect.defineProperty(lazy, property, descriptor)).toBe(false);
+        expect(Object.getOwnPropertyDescriptor(originalApi.view, property)).toEqual(before);
+      }
+      expect(Reflect.set(lazy, "note", "first")).toBe(true);
+      expect(Reflect.defineProperty(lazy, "note", { value: "updated" })).toBe(true);
+      expect(Reflect.get(originalApi.view, "note")).toBe("updated");
+      const configurable = Symbol("configurable");
+      expect(
+        Reflect.defineProperty(lazy, configurable, { value: "allowed", configurable: true }),
+      ).toBe(true);
+      expect(Reflect.get(originalApi.view, configurable)).toBe("allowed");
+      expect(Object.getOwnPropertyDescriptor(frozen, "length")).toMatchObject({
+        value: 1,
+        configurable: true,
+      });
+      expect(Object.keys(frozen)).toEqual(["0"]);
       for (const operation of ["preventExtensions", "seal", "freeze"] as const) {
         const applyIntegrity: (value: object) => object = Object[operation];
         expect(() => applyIntegrity(lazy)).toThrow(TypeError);
@@ -163,12 +189,15 @@ describe("managed plugin public surfaces", () => {
       }
 
       await first.instance.dispose();
-      writeSource(root, "source-two");
+      writeSource(root, "source-two", "ts", 2);
       const second = prepare(root, "surface-fixture", origin);
       second.entry.default.register("registered-two");
       second.publish();
       expect(loadApi().read()).toBe("registered-two");
       expect(lazy.read()).toBe("registered-two");
+      expect(frozen.length).toBe(2);
+      expect(Object.keys(frozen)).toEqual(["0", "1"]);
+      expect(frozen[1]?.()).toBe("registered-two");
       expect(originalRead).toThrow(/reloaded|disabled|retiring/);
       expect(retainedLazyRead).toThrow(/reloaded|disabled|retiring/);
       expect(() =>

@@ -49,6 +49,8 @@ Keep lifecycle-dependent operations on ordinary API objects or registered callba
 
 Reacquire plugin APIs after reload and call their public members. JavaScript prototype reflection preserves the original prototype identities needed by `instanceof` and native libraries; it can reach unwrapped constructors and methods. Instance lifecycle management governs supported calls and owned resources, rather than revoking every reference in a JavaScript object graph. Plugins remain trusted in-process code, as described in the [execution model](/plugins/architecture#execution-model).
 
+Managed lazy facades keep reflected properties configurable across replacement and reject definitions that would make facade properties non-configurable; ordinary assignments and configurable definitions remain available.
+
 ## Config loading and writes
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.

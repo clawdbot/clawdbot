@@ -107,6 +107,9 @@ export function createLazyFacadeObjectValue<T extends object>(load: () => T): T 
   const syncProperty = (property: PropertyKey) => {
     const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), property);
     if (descriptor) {
+      if (managedPluginId) {
+        descriptor.configurable = true;
+      }
       Object.defineProperty(target, property, descriptor);
     } else {
       Reflect.deleteProperty(target, property);
@@ -116,6 +119,11 @@ export function createLazyFacadeObjectValue<T extends object>(load: () => T): T 
   const syncTarget = () => {
     const original = resolve();
     const descriptors = Object.getOwnPropertyDescriptors(original);
+    if (managedPluginId) {
+      for (const property of Reflect.ownKeys(descriptors)) {
+        Reflect.set(Reflect.get(descriptors, property), "configurable", true);
+      }
+    }
     for (const property of Reflect.ownKeys(target)) {
       if (!Object.hasOwn(descriptors, property)) {
         Reflect.deleteProperty(target, property);
@@ -129,7 +137,16 @@ export function createLazyFacadeObjectValue<T extends object>(load: () => T): T 
   };
   return new Proxy(target, {
     defineProperty(_target, property, descriptor) {
-      const defined = Reflect.defineProperty(resolve(), property, descriptor);
+      const original = resolve();
+      // Managed facades span generations, so their own properties must stay replaceable.
+      if (
+        managedPluginId &&
+        (descriptor.configurable === false ||
+          (descriptor.configurable !== true && !Object.hasOwn(original, property)))
+      ) {
+        return false;
+      }
+      const defined = Reflect.defineProperty(original, property, descriptor);
       if (defined) {
         syncProperty(property);
       }

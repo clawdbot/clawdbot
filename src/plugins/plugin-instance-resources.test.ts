@@ -76,10 +76,7 @@ describe("native plugin resource lifecycle", () => {
     "accepted-http2-stream",
     "requested-http2-stream",
   ])("preserves %s ownership and Node behavior", (scenario) => {
-    const fixture = new URL(
-      "../../test/helpers/plugins/plugin-instance-resources.test-support.ts",
-      import.meta.url,
-    );
+    const fixture = new URL("./test/plugin-instance-resources.test-support.ts", import.meta.url);
     const result = spawnNodeEvalSync(
       `
       import { verifyResourceLifecycle } from ${JSON.stringify(fixture.href)};

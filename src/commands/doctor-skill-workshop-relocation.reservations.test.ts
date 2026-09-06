@@ -355,7 +355,7 @@ describe("doctor Workshop relocation reservations", () => {
     expect(result.warnings.join("\n")).toContain(child.record.id);
     if (legacyState) {
       expect(result.warnings.join("\n")).toContain(
-        `Legacy workspace setup state requires migration for ${formerWorkspace}`,
+        `Legacy workspace setup state requires migration; run openclaw doctor --fix. Workspaces: ${formerWorkspace}.`,
       );
       await expect(fs.readFile(attestationPath, "utf8")).resolves.toBe(attestationContent);
     }
