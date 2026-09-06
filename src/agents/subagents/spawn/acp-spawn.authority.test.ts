@@ -1,6 +1,7 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -27,6 +28,7 @@ import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import * as globals from "../../../globals.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -157,6 +159,8 @@ describe("pending ACP spawn authority", () => {
   ] as const)(
     "transfers initialized ACP work only from its live parent: %s / %s",
     async (stage, closure) => {
+      const cleanupEvents: Array<{ phase: string; at: number }> = [];
+      const cleanupLogs = vi.spyOn(globals, "logVerbose");
       const cfg = getRuntimeConfig();
       await writeSubagentSessionEntry({
         stateDir,
@@ -289,7 +293,9 @@ describe("pending ACP spawn authority", () => {
       const pausesRuntime = stage === "runtime" || stage === "thread";
       const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
       const ensuredSessions: string[] = [];
-      const closeRuntime = vi.fn(async () => {});
+      const closeRuntime = vi.fn(async () => {
+        cleanupEvents.push({ phase: "runtime-close", at: performance.now() });
+      });
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
         async ensureSession(input) {
@@ -397,6 +403,7 @@ describe("pending ACP spawn authority", () => {
         expect(subagentRuns.size).toBe(0);
         expect(loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" })).toBeDefined();
         if (closure === "abort") {
+          cleanupEvents.push({ phase: "parent-abort-request", at: performance.now() });
           const reply = vi.fn();
           const request = { sessionKey: parentSessionKey, runId: parentRunId };
           await handleChatAbortRequest({
@@ -418,14 +425,20 @@ describe("pending ACP spawn authority", () => {
           expect(parent.controller.signal.aborted).toBe(false);
         }
         expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(closure === "live");
+        cleanupEvents.push({ phase: "runtime-release", at: performance.now() });
         release.resolve();
         const result = await forwarded;
+        cleanupEvents.push({ phase: "source-returned", at: performance.now() });
         const sourceBoundary = {
+          at: performance.now(),
+          cleanupLogs: cleanupLogs.mock.calls.map((call) => [...call]),
           entry: loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }),
           closes: closeRuntime.mock.calls.length,
         };
         await wrappedOutcome;
+        cleanupEvents.push({ phase: "work-drain-start", at: performance.now() });
         await work.drain();
+        cleanupEvents.push({ phase: "work-drain-complete", at: performance.now() });
         expect
           .soft(lateMetadata, "closed parent must not publish ACP metadata after async planning")
           .not.toHaveBeenCalled();
@@ -450,7 +463,21 @@ describe("pending ACP spawn authority", () => {
           expect.soft(subagentRuns.size, "closed parent must never register runnable work").toBe(0);
           expect.soft(socket).not.toHaveBeenCalled();
           expect
-            .soft(sourceBoundary.entry, "cleanup completes before spawn returns")
+            .soft(
+              sourceBoundary.entry,
+              `cleanup completes before spawn returns: ${JSON.stringify({
+                stage,
+                closure,
+                timeOrigin: performance.timeOrigin,
+                sourceBoundary,
+                events: cleanupEvents,
+                cleanupLogs: cleanupLogs.mock.calls,
+                result,
+              })
+                .replaceAll(JSON.stringify(process.cwd()).slice(1, -1), "[checkout]")
+                .replaceAll(JSON.stringify(os.homedir()).slice(1, -1), "[home]")
+                .replaceAll(JSON.stringify(os.tmpdir()).slice(1, -1), "[temporary]")}`,
+            )
             .toBeUndefined();
           expect
             .soft(sourceBoundary.closes, "runtime closes before spawn returns")

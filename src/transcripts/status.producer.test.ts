@@ -1,3 +1,5 @@
+import { homedir, tmpdir } from "node:os";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -12,6 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { activeSessions, readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
+import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import * as providerRegistry from "./provider-registry.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
@@ -414,15 +417,27 @@ describe("configured transcript source provenance", () => {
     async ({ whenOccupied, fault }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied }] } });
+      const startupEvents: Array<{
+        phase: string;
+        at: number;
+        sessionId?: string;
+        stoppedAt?: string;
+        error?: string;
+        stack?: string;
+      }> = [];
       const watches: TranscriptOccupancyWatchRequest[] = [];
       const unwatch = vi.fn();
       f.provider.watchOccupancy = async (request) => {
+        startupEvents.push({ phase: "watch-entered", at: performance.now() });
         watches.push(request);
         request.onOccupied();
+        startupEvents.push({ phase: "occupied-callback-returned", at: performance.now() });
+        startupEvents.push({ phase: "watch-returning-success", at: performance.now() });
         return { ok: true, value: { stop: unwatch } };
       };
       const gate = createDeferred();
       const start = vi.fn(async (request: TranscriptStartRequest) => {
+        startupEvents.push({ phase: "provider-start-entered", at: performance.now() });
         await request.onUtterance({ text: "Before shutdown" });
         await gate.promise;
         await request.onUtterance({ text: "After shutdown" });
@@ -444,7 +459,29 @@ describe("configured transcript source provenance", () => {
         if (cleanupFails && fault === "session-write" && session.stoppedAt) {
           throw new Error("final session unavailable");
         }
-        await writeSession(session);
+        startupEvents.push({
+          phase: "session-write-entered",
+          at: performance.now(),
+          sessionId: session.sessionId,
+          stoppedAt: session.stoppedAt,
+        });
+        try {
+          await writeSession(session);
+          startupEvents.push({
+            phase: "session-write-resolved",
+            at: performance.now(),
+            sessionId: session.sessionId,
+          });
+        } catch (error) {
+          startupEvents.push({
+            phase: "session-write-rejected",
+            at: performance.now(),
+            sessionId: session.sessionId,
+            error: String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+          throw error;
+        }
       });
       const writeSummary = f.store.writeSummary.bind(f.store);
       vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
@@ -455,8 +492,40 @@ describe("configured transcript source provenance", () => {
       });
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
+        startupEvents.push({ phase: "service-start", at: performance.now() });
         service.start();
-        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        try {
+          await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        } catch (error) {
+          const configuredStarts = readConfiguredTranscriptStarts(f.ctx.config.transcripts);
+          console.error(
+            "[transcript-startup-diagnostic]",
+            JSON.stringify({
+              whenOccupied,
+              fault,
+              timeOrigin: performance.timeOrigin,
+              observedAt: performance.now(),
+              events: startupEvents,
+              providerStartCalls: start.mock.calls.length,
+              warnings: f.ctx.logger.warn.mock.calls,
+              watches: watches.map((request) => ({
+                source: request.source,
+                aborted: request.abortSignal?.aborted,
+              })),
+              configuredStarts:
+                configuredStarts === undefined
+                  ? null
+                  : [...configuredStarts].map(([index, fact]) => ({
+                      index,
+                      diagnostic: fact.diagnostic ?? null,
+                    })),
+            })
+              .replaceAll(JSON.stringify(process.cwd()).slice(1, -1), "[checkout]")
+              .replaceAll(JSON.stringify(homedir()).slice(1, -1), "[home]")
+              .replaceAll(JSON.stringify(tmpdir()).slice(1, -1), "[temporary]"),
+          );
+          throw error;
+        }
         const request = start.mock.calls[0]![0];
         const session = request.session;
         const stopping = service.stop();
