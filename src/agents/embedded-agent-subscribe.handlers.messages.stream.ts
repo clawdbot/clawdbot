@@ -372,7 +372,7 @@ export function resolveStreamingReply(params: {
     params.parsedStreamDirectives &&
     !params.parsedStreamDirectives.isSilent &&
     !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
-    !/(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
+    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
     params.parsedStreamDirectives.text === params.visibleDelta &&
     params.appendDelta !== null &&
     params.previousText === params.previousCleaned

@@ -132,6 +132,11 @@ Notes:
 - `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
+In [Code Mode](/tools/code-mode), `process` returns its structured details directly.
+For `action: "log"`, `output` contains the requested log page, including paging,
+retention, and input-recovery hints. Failed process actions include an `error`
+message alongside `status: "failed"`, so the agent can choose the next action.
+
 ## Examples
 
 Run a long task and poll later:
