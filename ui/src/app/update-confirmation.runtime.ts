@@ -10,6 +10,7 @@
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { renderUpdateChangePreview } from "../components/update-change-preview.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
@@ -172,6 +173,11 @@ export async function confirmAndStartUpdateRuntime(
               ${
                 details && current.kind === "confirm"
                   ? html`<div class="exec-approval-command mono">${details}</div>`
+                  : nothing
+              }
+              ${
+                current.kind === "confirm"
+                  ? renderUpdateChangePreview(params.updateAvailable, params.updateSchedule)
                   : nothing
               }
               ${

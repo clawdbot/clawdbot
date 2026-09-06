@@ -1,0 +1,31 @@
+.update-change-preview {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.update-change-preview__title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.update-change-preview__count {
+  margin: 4px 0;
+  color: var(--muted);
+}
+
+.update-change-preview__list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding-inline-start: 18px;
+  overflow-wrap: anywhere;
+}
+
+.update-change-preview__list code {
+  margin-inline-start: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
