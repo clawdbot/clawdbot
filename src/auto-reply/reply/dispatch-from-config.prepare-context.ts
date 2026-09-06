@@ -17,6 +17,7 @@ import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { claimSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
@@ -418,7 +419,27 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     };
   }
 
-  const inboundDedupeClaim = claimInboundDedupe(ctx);
+  const inboundDedupeClaim = claimInboundDedupe(ctx, {
+    reclaimPendingInput: () => {
+      const sourceRunId = normalizeOptionalString(ctx.MessageSid);
+      return Boolean(
+        params.replyOptions?.userTurnTranscriptRecorder?.getPendingInputMessage?.() &&
+        !params.replyOptions.userTurnTranscriptRecorder.hasPersisted() &&
+        sourceRunId &&
+        sessionStoreEntry.sessionKey &&
+        sessionStoreEntry.entry?.sessionId &&
+        claimSessionPendingInputDedupeRecovery(
+          {
+            agentId: sessionStoreEntry.agentId ?? sessionAgentId,
+            storePath: sessionStoreEntry.storePath,
+            sessionKey: sessionStoreEntry.sessionKey,
+            sessionId: sessionStoreEntry.entry.sessionId,
+          },
+          sourceRunId,
+        ),
+      );
+    },
+  });
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return {

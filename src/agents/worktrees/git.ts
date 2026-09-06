@@ -7,6 +7,7 @@ import {
   enqueueGitRefMutation,
   executeGitCommand,
   requireGitCommandBuffer,
+  requireGitCommandOutput,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
 
@@ -85,10 +86,7 @@ export async function requireGit(
   } = {},
 ): Promise<string> {
   const result = await runGit(cwd, args, options);
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw commandError(`git ${args.join(" ")}`, result);
-  }
-  return result.stdout.trim();
+  return requireGitCommandOutput(`git ${args.join(" ")}`, result).trim();
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {

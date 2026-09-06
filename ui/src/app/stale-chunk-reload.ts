@@ -38,13 +38,14 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-type RecoveryState = [attemptsByBuild: Map<string, number>, pendingBuildId: string | null];
+type ReloadAttempt = { attemptedAt: number; active: number };
+type RecoveryState = [attemptsByBuild: Map<string, ReloadAttempt>, pendingBuildId: string | null];
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
 const unavailableStorage = {};
 // A shared probe can release automatic and manual recovery in the same microtask.
 // Admit one navigation before either path can replace the guard or reload.
-let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
+let inFlightDocumentProbe: Promise<boolean> | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
@@ -56,9 +57,9 @@ export function reloadControlUiDocument(url = new URL(window.location.href)): vo
   window.location.replace(url.href);
 }
 
-function probeControlUiDocument(buildId?: string): Promise<boolean> {
+function probeControlUiDocument(): Promise<boolean> {
   if (inFlightDocumentProbe) {
-    return inFlightDocumentProbe.promise;
+    return inFlightDocumentProbe;
   }
   const probe = (async () => {
     const controller = new AbortController();
@@ -77,11 +78,11 @@ function probeControlUiDocument(buildId?: string): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe?.promise === settledProbe) {
+    if (inFlightDocumentProbe === settledProbe) {
       inFlightDocumentProbe = null;
     }
   });
-  inFlightDocumentProbe = { buildId, promise: settledProbe };
+  inFlightDocumentProbe = settledProbe;
   return settledProbe;
 }
 
@@ -125,30 +126,51 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   const now = deps.now?.() ?? Date.now();
   const storageIdentity = storage ?? unavailableStorage;
-  const recovery = recoveryByStorage.get(storageIdentity) ?? [new Map<string, number>(), buildId];
+  const recovery = recoveryByStorage.get(storageIdentity) ?? [
+    new Map<string, ReloadAttempt>(),
+    buildId,
+  ];
   const attemptsByBuild = recovery[0];
-  for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
-    if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
+  const currentTarget = recovery[1];
+  // A generic chunk failure cannot replace the server build already being
+  // recovered. Only the Gateway owns a new target artifact and retry lifetime.
+  if (
+    deps.buildId === undefined &&
+    currentTarget !== null &&
+    currentTarget !== buildId &&
+    (attemptsByBuild.get(currentTarget)?.active ?? 0) > 0
+  ) {
+    return false;
+  }
+  for (const [attemptedBuildId, attempt] of attemptsByBuild) {
+    if (attempt.active === 0 && now - attempt.attemptedAt >= ATTEMPT_COOLDOWN_MS) {
       attemptsByBuild.delete(attemptedBuildId);
     }
   }
-  // A replacement connection can join a pending probe; only starting another
-  // probe is throttled, so retiring the first caller cannot strand its successor.
-  if (attemptsByBuild.has(buildId) && (!inFlightDocumentProbe || recovery[1] !== buildId)) {
+  const previous = attemptsByBuild.get(buildId);
+  // Replacement connections may join during a retry delay, not only while a
+  // HEAD request is pending. Each waiter retains its own connection authority.
+  if (previous && (previous.active === 0 || recovery[1] !== buildId)) {
     return false;
   }
-  attemptsByBuild.set(buildId, now);
+  const attempt = previous ?? { attemptedAt: now, active: 0 };
+  attempt.active += 1;
+  attemptsByBuild.set(buildId, attempt);
   recovery[1] = buildId;
   recoveryByStorage.set(storageIdentity, recovery);
-  // A newer build cannot inherit the failed probe started for an older build.
-  const joinedOlderBuildProbe = Boolean(
-    inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
-  );
-  if (
-    !(await probeControlUiDocument(buildId)) &&
-    (!joinedOlderBuildProbe || !(await probeControlUiDocument(buildId)))
-  ) {
-    return false;
+  try {
+    if (
+      !(await waitForReachableControlUiDocument(
+        { timeoutMs: deps.buildId === undefined ? 0 : undefined },
+        () =>
+          deps.canReload?.() !== false && canReloadControlUiDocument() && recovery[1] === buildId,
+      ))
+    ) {
+      return false;
+    }
+  } finally {
+    attempt.active -= 1;
+    attempt.attemptedAt = deps.now?.() ?? Date.now();
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
@@ -193,23 +215,17 @@ async function probeWithinDeadline(
   }
 }
 
-/**
- * User-initiated retry that survives the restart which caused the stale chunk:
- * poll until the gateway answers, then reload if the caller still owns recovery.
- * Unreachable or retired requests keep the current document instead of navigating
- * into a fatal error page or discarding a newer action.
- */
-export async function retryStaleChunkReloadWhenReachable(
-  deps: StaleChunkReloadDeps & {
-    timeoutMs?: number;
-    intervalMs?: number;
-    probe?: () => Promise<boolean>;
-    wait?: (ms: number) => Promise<void>;
-  } = {},
+type ReachableReloadDeps = StaleChunkReloadDeps & {
+  timeoutMs?: number;
+  intervalMs?: number;
+  probe?: () => Promise<boolean>;
+  wait?: (ms: number) => Promise<void>;
+};
+
+async function waitForReachableControlUiDocument(
+  deps: ReachableReloadDeps,
+  isCurrent: () => boolean,
 ): Promise<boolean> {
-  if (deps.canReload?.() === false || !canReloadControlUiDocument(true)) {
-    return false;
-  }
   const now = deps.now ?? Date.now;
   const probe = deps.probe ?? probeControlUiDocument;
   const wait =
@@ -221,42 +237,62 @@ export async function retryStaleChunkReloadWhenReachable(
   const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
   const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
+    if (!isCurrent()) {
+      return false;
+    }
     const remaining = deadline - now();
-    // The interval wait can carry the loop past the deadline, so re-check here:
-    // only the first attempt may probe from outside the window.
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
-    // The first attempt always probes, so timeoutMs: 0 means "single shot"
-    // rather than "never ask"; the probe's own abort bounds that case.
-    const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
-    if (reachable) {
-      // The probe may outlive Close, a new request, or a failed replay-state write.
-      if (deps.canReload?.() === false || !canReloadControlUiDocument(true)) {
-        return false;
-      }
-      const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
-      const storageIdentity = storage ?? unavailableStorage;
-      const reload = deps.reload ?? reloadControlUiDocument;
-      const recovery = recoveryByStorage.get(storageIdentity) ?? [
-        new Map<string, number>(),
-        CONTROL_UI_BUILD_INFO.buildId,
-      ];
-      recoveryByStorage.set(storageIdentity, recovery);
-      const buildId = recovery[1];
-      if (buildId === null) {
-        return false;
-      }
-      recovery[1] = null;
-      persistGuardBuildId(storage, buildId);
-      reload();
-      return true;
-    }
-    if (now() >= deadline) {
+    // timeoutMs: 0 remains one request; bound caller-supplied probes as well.
+    const reachable = await probeWithinDeadline(
+      probe,
+      remaining > 0 ? remaining : DOCUMENT_PROBE_TIMEOUT_MS,
+    );
+    if (!isCurrent()) {
       return false;
     }
-    await wait(intervalMs);
+    if (reachable) {
+      return true;
+    }
+    const remainingWait = deadline - now();
+    if (remainingWait <= 0) {
+      return false;
+    }
+    await wait(Math.min(intervalMs, remainingWait));
   }
+}
+
+/** User-initiated retry may bypass the automatic build guard, but never live ownership. */
+export async function retryStaleChunkReloadWhenReachable(
+  deps: ReachableReloadDeps = {},
+): Promise<boolean> {
+  if (
+    !(await waitForReachableControlUiDocument(
+      deps,
+      () => deps.canReload?.() !== false && canReloadControlUiDocument(true),
+    )) ||
+    deps.canReload?.() === false ||
+    !canReloadControlUiDocument(true)
+  ) {
+    return false;
+  }
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  const storageIdentity = storage ?? unavailableStorage;
+  const reload = deps.reload ?? reloadControlUiDocument;
+  const recovery = recoveryByStorage.get(storageIdentity) ?? [
+    new Map<string, ReloadAttempt>(),
+    CONTROL_UI_BUILD_INFO.buildId,
+  ];
+  recoveryByStorage.set(storageIdentity, recovery);
+  const buildId = recovery[1];
+  if (buildId === null) {
+    return false;
+  }
+  recovery[1] = null;
+  persistGuardBuildId(storage, buildId);
+  reload();
+  return true;
 }
 
 /**

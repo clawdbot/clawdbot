@@ -26,6 +26,8 @@ export async function enqueueGitRefMutation<T>(
   return await gitRefMutations.enqueue(key, run);
 }
 
+type GitCommandResult = SpawnResult & { timeoutMs: number };
+
 export function withForegroundGitMaintenance(argv: string[]): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
   return argv[0] === "git"
@@ -40,7 +42,7 @@ export async function executeGitCommand(
     CommandOptions,
     "baseEnv" | "env" | "input" | "timeoutMs" | "signal" | "killProcessTree" | "maxOutputBytes"
   > = {},
-): Promise<SpawnResult & { timeoutMs: number }> {
+): Promise<GitCommandResult> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = ["git", "-C", cwd, ...args];
   const result = await runCommandWithTimeout(
@@ -77,9 +79,23 @@ export async function requireGitCommandRaw(
   args: string[],
   options: Parameters<typeof requireGitCommand>[2] = {},
 ): Promise<string> {
-  const result = await executeGitCommand(cwd, args, options);
+  return requireGitCommandOutput(
+    `git ${args.join(" ")}`,
+    await executeGitCommand(cwd, args, options),
+  );
+}
+
+export function requireGitCommandOutput(
+  command: string,
+  result: GitCommandResult,
+  createError: (command: string, result: GitCommandResult) => Error = createGitCommandError,
+): string {
   if (result.termination !== "exit" || result.code !== 0) {
-    throw createGitCommandError(`git ${args.join(" ")}`, result);
+    throw createError(command, result);
+  }
+  // Required stdout is data, not a diagnostic tail; a clean exit cannot make it complete.
+  if (result.stdoutTruncatedBytes) {
+    throw createError(command, { ...result, code: null, outputLimitExceeded: true });
   }
   return result.stdout;
 }

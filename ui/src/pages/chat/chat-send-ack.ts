@@ -15,6 +15,8 @@ type ChatSendAckServerTiming = {
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  stopReason?: "restart";
+  messageSeq?: number;
   serverTiming?: ChatSendAckServerTiming;
 };
 
@@ -43,6 +45,12 @@ export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): C
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
+  const messageSeq =
+    typeof record.messageSeq === "number" &&
+    Number.isSafeInteger(record.messageSeq) &&
+    record.messageSeq > 0
+      ? record.messageSeq
+      : undefined;
   return {
     runId,
     status:
@@ -50,6 +58,8 @@ export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): C
         ? status
         : "started",
     ...(serverTiming ? { serverTiming } : {}),
+    ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(record.stopReason === "restart" ? { stopReason: "restart" as const } : {}),
   };
 }
 

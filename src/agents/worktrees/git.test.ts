@@ -44,6 +44,17 @@ describe("Git ref mutation ownership", () => {
     return root;
   }
 
+  it("rejects incomplete required stdout through the worktree wrapper", async () => {
+    const root = await repository();
+    const input = Buffer.alloc(17 * 1024 * 1024, "x");
+    const oid = await requireGit(root, ["hash-object", "-w", "--stdin"], { input });
+    const outcome = await requireGit(root, ["cat-file", "blob", oid]).then(
+      () => "returned incomplete output",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(outcome).toContain("output limit exceeded");
+  });
+
   function holdSnapshotDeletion(failure?: Error, discoverySignal?: AbortSignal) {
     const started = createDeferred();
     const release = createDeferred();

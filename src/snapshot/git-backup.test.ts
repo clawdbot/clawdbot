@@ -656,6 +656,50 @@ describe("Git-backed SQLite snapshots", () => {
     expect(output).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
   });
 
+  it("rejects a truncated Git history record with bounded redacted diagnostics", async () => {
+    const repositoryPath = await tempRoot();
+    await requireGit(repositoryPath, ["init"]);
+    const tree = await requireGit(repositoryPath, ["hash-object", "-w", "-t", "tree", "--stdin"], {
+      input: "",
+    });
+    const secret = ["synthetic", "history", "password"].join("-");
+    const remote = `https://synthetic:${secret}@example.invalid/history`;
+    const commit = await requireGit(
+      repositoryPath,
+      [
+        "-c",
+        "user.name=OpenClaw Backup Test",
+        "-c",
+        "user.email=backup@example.invalid",
+        "commit-tree",
+        tree,
+      ],
+      { input: `openclaw backup ${"x".repeat(17 * 1024 * 1024)} ${remote}\n` },
+    );
+    await fs.writeFile(path.join(repositoryPath, ".git", "HEAD"), `${commit}\n`);
+
+    const outcome = await readGitBackupLog({ repositoryPath, limit: 1 }).then(
+      (entries) => ({
+        kind: "returned",
+        entries: entries.map((entry) => ({
+          commitBytes: Buffer.byteLength(entry.commit),
+          date: entry.date,
+          messageBytes: Buffer.byteLength(entry.message),
+        })),
+      }),
+      (error: unknown) => ({
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    expect(outcome).toEqual({ kind: "error", message: expect.stringContaining("output-limit") });
+    if ("message" in outcome) {
+      expect(outcome.message.length).toBeLessThanOrEqual(1_200);
+      expect(outcome.message).toContain("https://***:***@example.invalid/history");
+      expect(outcome.message).not.toContain(secret);
+    }
+  });
+
   it("does not treat a symbolic HEAD with a missing object as an empty log", async () => {
     const root = await tempRoot();
     const repositoryPath = path.join(root, "broken-repository");

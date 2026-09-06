@@ -7,10 +7,9 @@ read_when:
 title: "Restart recovery"
 ---
 
-Restarting the gateway does not lose agent state. Conversations, transcripts,
-scheduled jobs, background task records, and queued outbound messages all live
-on disk, and work that was interrupted mid-turn is detected and resumed
-automatically after the gateway comes back up. Recovery is always on and
+Conversations, transcripts, scheduled jobs, background task records, and queued
+outbound messages live on disk. After a gateway restart, eligible work interrupted
+mid-turn is detected and resumed automatically. Recovery is always on and
 normally needs no manual intervention. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may quarantine one session
 until you inspect or replace it.
@@ -20,21 +19,60 @@ and what the automatic resume looks like.
 
 ## What survives a restart
 
-| State                          | Storage                                     | Behavior across restart                                                     |
-| ------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------- |
-| Conversation history           | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                     |
-| Accepted Control UI follow-ups | Per-agent SQLite pending inputs             | Unconsumed inputs remain visible as interrupted and require explicit resend |
-| Interrupted main-session turn  | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup             |
-| Subagent runs                  | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                         |
-| Background tasks               | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost                  |
-| Queued outbound deliveries     | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                      |
-| Scheduled (cron) jobs          | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                            |
-| Restart continuation           | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart     |
-| Gateway terminal PTYs          | Process memory                              | End with the old process; terminal sessions are not recovered               |
+| State                          | Storage                                            | Behavior across restart                                                 |
+| ------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| Conversation history           | Per-agent SQLite database                          | Untouched; sessions continue from the stored transcript                 |
+| Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Matching interrupted inputs are re-admitted when the browser reconnects |
+| Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup         |
+| Subagent runs                  | SQLite (shared state database)                     | Registry restored on boot; interrupted runs resumed                     |
+| Background tasks               | SQLite (shared state database)                     | Reconciled on boot; orphaned runs recovered or marked lost              |
+| Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                  |
+| Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                        |
+| Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart |
+| Gateway terminal PTYs          | Process memory                                     | End with the old process; terminal sessions are not recovered           |
 
-Accepted input that has not reached the transcript does not automatically run
-after restart. Its saved text survives, but its old queue and execution authority
-do not. This is separate from recovery of a turn already admitted to the transcript.
+The Control UI retains accepted text and attachments in its outbox until the
+Gateway confirms transcript consumption. After reconnecting, it checks the saved
+receipt before resubmitting an interrupted input through normal authentication
+and session admission. The old queue and execution authority are never reused.
+This preserves each browser outbox's order without submitting already-consumed
+messages again. Different browsers can reconnect in a different order.
+
+Accepted Control UI input is committed to its admitted source session before ACP
+execution or question consumption. If the conversation routes to a bound ACP
+session, the source keeps the original request and the bound session owns the ACP
+transcript and reply. An output-persistence failure does not make consumed input
+eligible for automatic resubmission.
+
+If the browser no longer has the matching outbox payload, the saved interrupted
+input remains available for explicit resend. Cancelled input is not replayed.
+Inputs accepted by older versions without resumable custody also require explicit resend.
+An uncertain submission stays unconfirmed until its outcome can be reconciled
+or the user chooses to retry it. Recovery of a turn already in the transcript
+does not depend on the browser returning.
+
+When an update replaces the bundled Control UI, an open tab reloads after the
+Gateway reports the new build. Automatic recovery for that reported build and
+manual reloads share a bounded document-readiness check, so a transient failed
+probe does not immediately strand the tab. Generic lazy-chunk failures make one
+automatic probe and leave further recovery to the visible retry action. The
+browser still limits automatic navigation to one reload per target build. If the
+Gateway remains unavailable, use the visible reload action once it is reachable.
+
+Downgrading to `v2026.9.2` preserves newer accepted-input records, but that version
+rejects same-ID retries against retained newer receipts before execution. This
+includes queued or interrupted inputs and consumed collected-input receipts;
+consumed receipts remain excluded from pending counts. Individually consumed
+inputs have already left the pending-input store and retain normal transcript
+idempotency. Upgrading again restores matching unconsumed-input recovery through
+fresh authentication and admission, provided the session and accepted input have
+not been changed or removed. Already-consumed input remains consumed. Do not
+delete receipts or change message IDs merely to bypass a downgrade conflict.
+
+Native Codex recovery reconstructs saved document contents under the current
+attachment policy and context limits. The Codex plugin owns that native input
+path: update its artifact alongside the Gateway. An intentionally pinned older
+plugin does not acquire the fix from a core-only update.
 
 Pending delivery rows drain or retry after restart. When a delivery exhausts its
 retry budget, recovery reclaims expired producer custody; an active producer
@@ -76,6 +114,14 @@ admission for new requests.
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
+
+Restart cancellation also preserves recoverability when the bulk shutdown marker
+cannot be written. Native runtime preparation interrupted by the same Gateway
+restart is recorded as restart cancellation rather than a provider failure.
+Explicit user cancellation and genuine execution timeouts
+remain terminal. Recovery startup uses the admitted run's existing deadline,
+including runtime preparation and waiting for session or global capacity; waiting
+in a healthy queue does not consume separate failed-start attempts.
 
 ## Host sleep and process freezes
 
@@ -331,6 +377,11 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot the registry is restored and
 interrupted subagent sessions are resumed with their original task context.
 
+If a parent yielded while waiting for children, recovery first resumes the
+interrupted children. Their saved completion batch follows replacement run IDs,
+so the parent receives its follow-up after the batch settles, including when some
+children finished before the restart.
+
 A completed child may still owe its requester a final follow-up. If that
 follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
@@ -339,8 +390,9 @@ not exhaust the obligation. Existing delivery retry limits still apply.
 
 Two safety valves apply:
 
-- Runs interrupted more than 2 hours ago are finalized instead of resumed, so
-  a gateway that was down overnight does not resurrect stale work.
+- Runs whose recorded interruption is more than 2 hours old are finalized instead
+  of resumed. A long-running task interrupted moments ago remains eligible;
+  total task age is not the interruption age.
 - A session that repeatedly fails to recover is tombstoned as wedged so
   recovery cannot loop forever.
 
@@ -443,6 +495,19 @@ channels.start --params '{"channel":"<id>"}'`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,
   with the recovered session, run, account, and conversation context.
+
+## Verify recovery after an update
+
+A healthy Gateway confirms availability, not completion of interrupted work.
+Check each previously active session and its child tasks: it should have finished
+before shutdown, resumed execution, or reached a visible terminal outcome or
+recovery error. Check queued inputs separately for transcript consumption or an
+explicit unresolved state.
+
+The main-session recovery log distinguishes execution resumption from the later
+`main-session restart recovery terminal` event. A recovered count at startup means
+execution resumed; it does not prove that an assistant reply was delivered.
+Use the session transcript and recorded delivery outcome to verify completion.
 
 ## What is not resumed
 

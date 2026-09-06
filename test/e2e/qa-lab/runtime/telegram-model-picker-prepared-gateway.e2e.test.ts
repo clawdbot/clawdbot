@@ -221,7 +221,7 @@ async function resolveBuiltModule(params: {
   exportMarker: string;
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
-    if (!name.startsWith(params.prefix) || !name.endsWith(".js")) {
+    if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);

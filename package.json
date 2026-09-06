@@ -365,7 +365,7 @@
     "!dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
     "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
     "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-    "!dist/qa-runtime-*.js",
+    "!dist/qa-runtime-*",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/**",

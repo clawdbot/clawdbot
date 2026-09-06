@@ -99,7 +99,7 @@ it.each([false, true])("preserves fd paths with trailing search separator=%s", a
       process.platform === "win32" ? "literal/" : "literal\\",
     ].join("\n"),
   );
-  expect(result.details).toBeUndefined();
+  expect(result.details).toEqual({ content: textContent(result) });
 });
 
 it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
