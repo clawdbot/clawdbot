@@ -4,6 +4,7 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { validateAnthropicTurns } from "./embedded-agent-helpers/turns.js";
 
@@ -269,9 +270,15 @@ describe("resolveTranscriptPolicy", () => {
     const mockedResolve = vi.mocked(resolveProviderRuntimePlugin);
     // Same provider id and config after an in-process plugin package swap: the first
     // resolution must not pin the previous package's policy for the second one.
+    const stubPlugin = (sanitizeToolCallIds: boolean): ProviderPlugin => ({
+      id: "demo",
+      label: "Demo",
+      auth: [],
+      buildReplayPolicy: () => ({ sanitizeToolCallIds }),
+    });
     mockedResolve
-      .mockImplementationOnce(() => ({ buildReplayPolicy: () => ({ sanitizeToolCallIds: false }) }))
-      .mockImplementationOnce(() => ({ buildReplayPolicy: () => ({ sanitizeToolCallIds: true }) }));
+      .mockImplementationOnce(() => stubPlugin(false))
+      .mockImplementationOnce(() => stubPlugin(true));
 
     const stalePolicy = resolveTranscriptPolicy({
       provider: "demo",
@@ -279,7 +286,7 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "openai-completions",
     });
 
-    await invalidatePluginRuntimeDiscoveryAfterConfigMutation();
+    await invalidatePluginRuntimeDiscoveryAfterConfigMutation({});
 
     const refreshedPolicy = resolveTranscriptPolicy({
       provider: "demo",
