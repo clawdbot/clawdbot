@@ -115,6 +115,21 @@ describe("session list resolver cache", () => {
     const now = Date.now();
     const rowCount = 30;
     const rowContext = buildSessionListRowMetadataContext({ now });
+    let catalogProviderReads = 0;
+    const modelCatalog = [
+      ...Array.from({ length: 64 }, (_, index) => ({
+        modelProvider: "synthetic",
+        model: `catalog-padding-${index}`,
+      })),
+      ...tuples,
+    ].map((tuple) => ({
+      get provider() {
+        catalogProviderReads += 1;
+        return tuple.modelProvider;
+      },
+      id: tuple.model,
+      name: tuple.model,
+    }));
     const thinkingSpy = vi
       .spyOn(thinking, "resolveThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
@@ -139,6 +154,9 @@ describe("session list resolver cache", () => {
     });
     try {
       for (let index = 0; index < rowCount; index += 1) {
+        if (index === tuples.length) {
+          catalogProviderReads = 0;
+        }
         const tuple = expectDefined(
           tuples[index % tuples.length],
           "tuples[index % tuples.length] test invariant",
@@ -170,6 +188,8 @@ describe("session list resolver cache", () => {
             sessionKey,
             entry,
             rowContext,
+            modelCatalog,
+            providerPolicySource: "active",
           }).thinkingOptions,
         ).toEqual(["Off"]);
         const resolvedCost = resolveEstimatedSessionCostUsd({
@@ -189,6 +209,11 @@ describe("session list resolver cache", () => {
       // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
       expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
       expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
+      // After warming every tuple, runtime projection needs one lookup per row;
+      // cached thinking metadata must not repeat that scan for a resolved runtime.
+      expect(catalogProviderReads).toBeLessThanOrEqual(
+        (rowCount - tuples.length) * modelCatalog.length,
+      );
     } finally {
       thinkingSpy.mockRestore();
       costSpy.mockRestore();

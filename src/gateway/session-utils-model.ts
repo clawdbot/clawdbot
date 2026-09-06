@@ -169,12 +169,14 @@ export function resolveGatewayModelThinkingProfile(params: {
   sessionKey?: string;
   providerPolicySource?: ThinkingProviderPolicySource;
 }): GatewayModelThinkingProfile {
-  const catalogEntry = params.modelCatalog
-    ? findModelCatalogEntry(params.modelCatalog, {
-        provider: params.provider,
-        modelId: params.model,
-      })
-    : undefined;
+  // Session rows already resolved the runtime; do not rescan before a metadata cache hit.
+  const catalogEntry =
+    params.agentRuntime === undefined && params.modelCatalog
+      ? findModelCatalogEntry(params.modelCatalog, {
+          provider: params.provider,
+          modelId: params.model,
+        })
+      : undefined;
   const agentRuntime =
     params.agentRuntime ??
     resolveEffectiveAgentRuntime({
