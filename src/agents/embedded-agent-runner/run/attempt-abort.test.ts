@@ -2,13 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
-import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
 import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
 } from "./attempt-finalize.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedAttemptExecutionState } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   countActiveToolExecutions: vi.fn(() => 0),

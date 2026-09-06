@@ -19,12 +19,8 @@ import {
 import { log } from "../logger.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
-import type {
-  EmbeddedAttemptExecutionPhaseInput,
-  EmbeddedAttemptExecutionState,
-} from "./attempt-execution-types.js";
+import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
-import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import {
   runEmbeddedAttemptPromptPhase,
   type EmbeddedAttemptPromptState,
@@ -33,35 +29,14 @@ import {
   completeEmbeddedAttemptResult,
   type EmbeddedRunAttemptWithReceiptEvidence,
 } from "./attempt-result.js";
-import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { shouldContinueInteractiveAcceptedSessionSpawns } from "./attempt-terminal-evidence.js";
-import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
 
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
-
-export type PreparedStreamRuntime = {
-  abortable: <T>(promise: Promise<T>) => Promise<T>;
-  cache: {
-    observabilityEnabled: boolean;
-    promptTools: ReturnType<typeof installEmbeddedAttemptStreamGuards>["promptCacheTools"];
-  };
-  history: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
-  isProbeSession: boolean;
-  onBlockReplyFlush: Parameters<typeof prepareEmbeddedAttemptStream>[0]["onBlockReplyFlush"];
-  promptActiveSession: (
-    prompt: string,
-    options?: Parameters<
-      Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["prompt"]
-    >[1],
-  ) => Promise<void>;
-  stream: ReturnType<typeof prepareEmbeddedAttemptStream>;
-  timeout: ReturnType<typeof prepareEmbeddedAttemptTimeout>;
-};
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";

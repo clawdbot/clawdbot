@@ -10,13 +10,12 @@ import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
 
 /** Tracks native prompt and abort settlement through attempt cleanup. */
 

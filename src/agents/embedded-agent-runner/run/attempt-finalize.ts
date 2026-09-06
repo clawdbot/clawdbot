@@ -23,10 +23,7 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
-import type {
-  EmbeddedAttemptExecutionPhaseInput,
-  EmbeddedAttemptExecutionState,
-} from "./attempt-execution-types.js";
+import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
@@ -43,6 +40,8 @@ import {
   resolveEmbeddedRunAttemptTerminalOutcome,
 } from "./terminal-outcome.js";
 import type {
+  EmbeddedAttemptExternalAbortController,
+  EmbeddedAttemptExecutionState,
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
   EmbeddedRunAttemptTrajectoryRecorder,
@@ -430,18 +429,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   runAbortController: AbortController;
   runId: string;
   state: Pick<EmbeddedAttemptExecutionState, "terminal">;
-}): {
-  arm: () => void;
-  dispose: () => void;
-  setActiveSessionAbort: (abort: ActiveSessionAbort) => void;
-  setCompactionState: (state: {
-    isInFlight: () => boolean;
-    isPendingOrRetrying: () => boolean;
-  }) => void;
-  setRunAbort: (abort: RunAbort) => void;
-  throwIfFired: () => void;
-  throwIfFiredAfterPrepCleanup: () => Promise<void>;
-} {
+}): EmbeddedAttemptExternalAbortController {
   let abortActiveSession: ActiveSessionAbort | undefined;
   let abortRun: RunAbort | undefined;
   let isCompactionPendingOrRetrying: (() => boolean) | undefined;

@@ -43,7 +43,7 @@ vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
 vi.mock("./attempt-finalize.js", () => ({
   createEmbeddedAttemptRunAbort: mocks.createRunAbort,
 }));
-vi.mock("./attempt-history.js", () => ({
+vi.mock("./attempt-history-prepare.js", () => ({
   prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));
 vi.mock("./attempt-settle.js", () => ({

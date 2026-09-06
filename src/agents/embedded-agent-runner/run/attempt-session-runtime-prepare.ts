@@ -9,7 +9,6 @@ import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
-import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
 import {
   prepareEmbeddedAttemptAgentSession,
   prepareEmbeddedAttemptSessionBoundary,
@@ -26,7 +25,11 @@ import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.j
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type {
+  EmbeddedAttemptExternalAbortController,
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "./types.js";
 
 type SessionSettleTracker = ReturnType<typeof createEmbeddedAttemptSessionSettleTracker>;
 
@@ -50,10 +53,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   systemPrompt: Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>;
   sessionLock: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>;
   runAbortSignal: AbortSignal;
-  externalAbortController: Pick<
-    ReturnType<typeof createEmbeddedAttemptExternalAbortController>,
-    "setActiveSessionAbort"
-  >;
+  externalAbortController: Pick<EmbeddedAttemptExternalAbortController, "setActiveSessionAbort">;
   resources: EmbeddedAttemptSessionResources;
   onSessionYieldReady: (input: {
     abortActiveSession: SessionSettleTracker["abortActiveSession"];

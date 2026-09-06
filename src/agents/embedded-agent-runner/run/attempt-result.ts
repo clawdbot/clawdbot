@@ -18,7 +18,7 @@ import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-typ
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedAttemptPromptState } from "./attempt-prompt-phase.js";
 import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
-import type { PreparedStreamRuntime } from "./attempt-settle.js";
+import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
   buildAttemptReplayMetadata,
@@ -26,7 +26,7 @@ import {
 } from "./attempt-terminal-evidence.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptResult } from "./types.js";
 
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 
@@ -56,13 +56,6 @@ export function createAttemptCarryover() {
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
   successfulNestedToolNames?: string[];
-};
-
-export type EmbeddedAttemptClientToolCallSlot = {
-  toolCallId: string;
-  name: string;
-  params?: Record<string, unknown>;
-  completed: boolean;
 };
 
 /**

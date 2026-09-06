@@ -22,7 +22,6 @@ import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
-import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
 import { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
 import { createEmbeddedAttemptPreparation } from "./attempt-preparation.js";
 import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
@@ -48,7 +47,11 @@ import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type {
+  EmbeddedAttemptExecutionState,
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "./types.js";
 
 export async function runEmbeddedAttempt(
   input: EmbeddedRunAttemptParams,

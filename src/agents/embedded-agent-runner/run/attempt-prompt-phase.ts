@@ -30,7 +30,7 @@ import {
   submitEmbeddedAttemptPrompt,
 } from "./attempt-prompt-submit.js";
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
-import type { PreparedStreamRuntime } from "./attempt-settle.js";
+import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
