@@ -56,7 +56,6 @@ vi.mock("./register.runtime.js", () => ({
 import plugin from "./index.js";
 
 const tempDirs: string[] = [];
-type RegisteredEmbeddingProvider = Parameters<OpenClawPluginApi["registerEmbeddingProvider"]>[0];
 type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
 type GithubCopilotTestProvider = RegisteredProvider & {
   auth: Array<{
@@ -147,33 +146,18 @@ function writeExistingCopilotTokenProfile(agentDir: string) {
   );
 }
 
-function requireFirstMockArg<T>(
-  mock: { mock: { calls: Array<[T, ...unknown[]]> } },
-  label: string,
-) {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`Expected ${label}`);
-  }
-  return call[0];
-}
-
 function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
   plugin.register(
     createTestPluginApi({
       id: "github-copilot",
-      name: "GitHub Copilot",
-      source: "test",
-      config: {},
       pluginConfig,
-      runtime: {} as never,
       registerProvider: registerProviderMock,
     }),
   );
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return requireFirstMockArg(
-    registerProviderMock,
+  return expectDefined(
+    registerProviderMock.mock.calls[0]?.[0],
     "provider registration",
   ) as GithubCopilotTestProvider;
 }
@@ -564,8 +548,8 @@ describe("github-copilot plugin", () => {
     );
 
     expect(registerEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-    const adapter = requireFirstMockArg<RegisteredEmbeddingProvider>(
-      registerEmbeddingProviderMock,
+    const adapter = expectDefined(
+      registerEmbeddingProviderMock.mock.calls[0]?.[0],
       "embedding provider registration",
     );
     expect(adapter.id).toBe("github-copilot");

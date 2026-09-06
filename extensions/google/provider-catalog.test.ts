@@ -235,12 +235,19 @@ describe("google provider catalog", () => {
       }));
 
       const provider = await buildGoogleLiveCatalogProvider({
+        discoveryMode: "strict",
         apiKey: "GEMINI_API_KEY",
         discoveryApiKey: "resolved-google-key",
         fetchGuard,
       });
 
       expect(provider.models).toEqual([]);
+      const advisory = await buildGoogleLiveCatalogProvider({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: "resolved-google-key",
+        fetchGuard,
+      });
+      expect(advisory.models).toEqual(buildGoogleStaticCatalogProvider().models);
     },
   );
 
@@ -252,9 +259,11 @@ describe("google provider catalog", () => {
       release,
     }));
     await expect(
-      buildGoogleLiveCatalogProvider({ apiKey: "google-key", fetchGuard }),
+      buildGoogleLiveCatalogProvider({ discoveryMode: "strict", apiKey: "google-key", fetchGuard }),
     ).rejects.toMatchObject({ status });
     expect(release).toHaveBeenCalledOnce();
+    const advisory = await buildGoogleLiveCatalogProvider({ apiKey: "google-key", fetchGuard });
+    expect(advisory.models).toEqual(buildGoogleStaticCatalogProvider().models);
   });
 
   it.each([null, { models: "invalid" }, { models: [null] }])(
@@ -266,7 +275,11 @@ describe("google provider catalog", () => {
         release: async () => undefined,
       });
       await expect(
-        buildGoogleLiveCatalogProvider({ apiKey: "google-key", fetchGuard }),
+        buildGoogleLiveCatalogProvider({
+          discoveryMode: "strict",
+          apiKey: "google-key",
+          fetchGuard,
+        }),
       ).rejects.toThrow("invalid model");
     },
   );

@@ -114,6 +114,7 @@ export function buildGoogleProvider(): ProviderPlugin {
           run: async () => ({
             providers: {
               google: await buildGoogleLiveCatalogProvider({
+                discoveryMode: "strict",
                 apiKey: auth.apiKey,
                 discoveryApiKey: auth.discoveryApiKey,
               }),

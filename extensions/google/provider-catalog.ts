@@ -146,6 +146,7 @@ function parseGoogleLiveModels(rows: readonly unknown[]): ModelDefinitionConfig[
 }
 
 export async function buildGoogleLiveCatalogProvider(params: {
+  discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -153,7 +154,6 @@ export async function buildGoogleLiveCatalogProvider(params: {
 }): Promise<ModelProviderConfig> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
   return await buildLiveModelProviderConfig({
-    discoveryMode: "strict",
     providerId: "google",
     endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
     providerConfig,
