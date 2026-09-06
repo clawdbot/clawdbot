@@ -256,7 +256,10 @@ export function workerProbe(
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
           const sourceLoader = sourceMode && !process.versions.bun;
-          expect(args.includes('tsx')).toBe(sourceLoader);
+          // The tsx loader is pinned to an absolute file:// URL (#140416),
+          // so the bare "tsx" specifier is replaced by the URL at args[1].
+          expect(args.includes('--import')).toBe(sourceLoader);
+          if (sourceLoader) expect(args[1]).toMatch(/tsx/);
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
