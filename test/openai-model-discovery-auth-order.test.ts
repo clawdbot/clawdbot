@@ -76,7 +76,7 @@ describe("Provider model discovery auth preparation", () => {
   }
 
   async function createChutesCatalogFixture() {
-    await chutesPlugin.register(
+    chutesPlugin.register(
       createTestPluginApi({
         registerProvider: (provider) => {
           discovery.providers = [provider];
