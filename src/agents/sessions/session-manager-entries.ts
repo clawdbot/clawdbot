@@ -94,14 +94,16 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     try {
       persistenceResult = this.persist(canonicalEntry, attemptOptions);
     } catch (error) {
+      const deliberateBranchAppend = this.pendingDeliberateAppend;
       if (
-        !activeBranchAppend ||
+        (!activeBranchAppend && !deliberateBranchAppend) ||
         !(error instanceof Error) ||
         error.name !== "SqliteTranscriptMutationConflictError"
       ) {
         throw error;
       }
       const canRetryPreparedAppend =
+        deliberateBranchAppend ||
         canonicalEntry.type !== "message" ||
         canonicalEntry.message.role === "user" ||
         preparedAssistant;

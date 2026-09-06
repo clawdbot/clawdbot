@@ -86,15 +86,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return 0;
     }
     if (this.boundedContextIncomplete && candidateRemoveStart === 1) {
-      const previousSeq = (this.persistedSuffixStartSeq ?? 0) - 1;
-      const previous =
-        previousSeq >= 0 && this.persistenceTarget
-          ? readTranscriptEventAtSeqSync(this.persistenceTarget, previousSeq)?.event
-          : undefined;
-      // SAFETY: SQLite transcript rows deserialize to the persisted SessionEntry/FileEntry union.
-      const previousEntry = previous as FileEntry | undefined;
-      if (previousEntry && isIndexedSessionEntry(previousEntry) && predicate(previousEntry)) {
-        throw new RangeError("Bounded transcript cleanup cannot cross the hydrated removal window");
+      let previousSeq = (this.persistedSuffixStartSeq ?? 0) - 1;
+      while (previousSeq >= 0 && this.persistenceTarget) {
+        const previous = readTranscriptEventAtSeqSync(this.persistenceTarget, previousSeq)?.event;
+        // SAFETY: SQLite transcript rows deserialize to the persisted SessionEntry/FileEntry union.
+        const previousEntry = previous as FileEntry | undefined;
+        if (previousEntry && isIndexedSessionEntry(previousEntry)) {
+          if (predicate(previousEntry)) {
+            throw new RangeError(
+              "Bounded transcript cleanup cannot cross the hydrated removal window",
+            );
+          }
+          break;
+        }
+        previousSeq -= 1;
       }
     }
     // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,
@@ -401,7 +406,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
         Object.assign(scope, initialWriter.committedFence);
       }
     }
-    if (this.persistenceHeaderPending) {
+    const persistedHeader = this.persistenceHeaderPending;
+    if (persistedHeader) {
       const header = this.fileEntries[0];
       if (!header || header.type !== "session") {
         throw new Error("Session transcript header was not persisted");
@@ -423,16 +429,17 @@ export class SessionManagerPersistence extends SessionManagerCore {
       this.transcriptMutationAt = committedMutationAt;
       this.persistenceHeaderPending = false;
     }
+    const expectedMutationAt = persistedHeader
+      ? this.transcriptMutationAt
+      : options?.expectedMutationAt !== undefined
+        ? options.expectedMutationAt
+        : this.transcriptMutationAt;
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
       let committedMutationAt: number | null | undefined;
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry, {
-          ...(options?.expectedMutationAt !== undefined
-            ? { expectedMutationAt: options.expectedMutationAt }
-            : this.transcriptMutationAt !== undefined
-              ? { expectedMutationAt: this.transcriptMutationAt }
-              : {}),
+          ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -453,11 +460,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
             : {}),
-          ...(options?.expectedMutationAt !== undefined
-            ? { expectedMutationAt: options.expectedMutationAt }
-            : this.transcriptMutationAt !== undefined
-              ? { expectedMutationAt: this.transcriptMutationAt }
-              : {}),
+          ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
           captureMutationAtInTransaction: (mutationAt) => {
             committedMutationAt = mutationAt;
           },
@@ -477,11 +480,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
       ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
-      ...(options?.expectedMutationAt !== undefined
-        ? { expectedMutationAt: options.expectedMutationAt }
-        : this.transcriptMutationAt !== undefined
-          ? { expectedMutationAt: this.transcriptMutationAt }
-          : {}),
+      ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,

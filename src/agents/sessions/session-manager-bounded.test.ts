@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   loadTranscriptEvents,
@@ -514,6 +515,41 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
     { message: { content: "oldest" } },
     { message: { content: "middle" } },
   ]);
+});
+
+it("rejects bounded cleanup across opaque hydration-boundary rows", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-opaque-boundary-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-opaque-boundary",
+    sessionKey: "agent:main:bounded-opaque-boundary",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const seed = SessionManager.open(scope, dir);
+  seed.appendMessage({ role: "user", content: "retained", timestamp: 1 });
+  seed.appendMessage({ role: "user", content: "remove", timestamp: 2 });
+  await appendTranscriptEvent(scope, {
+    type: "future-metadata",
+    id: "opaque-boundary",
+    parentId: null,
+  });
+  seed.reloadPersistedTranscript();
+  seed.appendMessage({ role: "user", content: "remove", timestamp: 3 });
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
+
+  expect(() =>
+    manager.removeTrailingEntries(
+      (entry) =>
+        entry.type === "message" &&
+        "content" in entry.message &&
+        entry.message.content === "remove",
+    ),
+  ).toThrow("Bounded transcript cleanup cannot cross the hydrated removal window");
 });
 
 it("keeps the original hydration boundary after a partial bounded trim", async () => {

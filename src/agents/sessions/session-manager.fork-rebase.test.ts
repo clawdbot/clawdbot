@@ -323,6 +323,41 @@ describe("SessionManager stale-parent rebase", () => {
     expect(persisted).toMatchObject({ parentId: firstTail.messageId });
   });
 
+  it("retries a stale deliberate branch against an unchanged explicit parent", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-deliberate-branch",
+      sessionKey: "agent:main:stale-deliberate-branch",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const base = await appendTranscriptMessage(target, {
+      eventId: "deliberate-base",
+      message: { role: "user", content: "base", timestamp: 1 },
+      now: 1,
+    });
+    const manager = SessionManager.open(target, dir);
+    manager.branch(base.messageId);
+    await appendTranscriptMessage(target, {
+      eventId: "concurrent-tail",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "concurrent" }],
+        timestamp: 2,
+      },
+      now: 2,
+      parentId: base.messageId,
+    });
+
+    const branchId = manager.appendMessage({ role: "user", content: "branch", timestamp: 3 });
+
+    const persisted = (
+      (await loadTranscriptEvents(target)) as Array<SessionMessageEntry & { type?: string }>
+    ).find((entry) => entry.type === "message" && entry.id === branchId);
+    expect(persisted).toMatchObject({ parentId: base.messageId });
+  });
+
   it("honors an explicit active parent when the tail is not its descendant", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const target = {

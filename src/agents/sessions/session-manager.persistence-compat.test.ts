@@ -39,6 +39,23 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("SessionManager persistence compatibility", () => {
+  it("persists an assistant-first session after creating its header", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-assistant-first-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "assistant-first-session";
+    const sessionKey = "agent:main:dashboard:assistant-first";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+
+    const manager = SessionManager.open(scope, dir);
+    const assistantId = manager.appendMessage(buildAssistantMessage("first response"));
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: assistantId, type: "message", parentId: null }),
+    ]);
+  });
+
   it("persists canonical delivery facts and keeps the live assistant bytes identical", async () => {
     const dir = tempDirs.make("openclaw-session-manager-directives-");
     const storePath = path.join(dir, "sessions.json");
