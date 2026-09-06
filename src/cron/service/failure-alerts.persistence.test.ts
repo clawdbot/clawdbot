@@ -1,8 +1,8 @@
 // Failure alerts must describe only cron outcomes that survived durable persistence.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -47,13 +47,9 @@ function createAlertState(params: {
   nowMs: () => number;
   sendCronFailureAlert: SendCronFailureAlert;
 }) {
-  return createCronServiceState({
-    cronEnabled: true,
+  return createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     sendCronFailureAlert: params.sendCronFailureAlert,
     runIsolatedAgentJob: vi.fn(),
   });

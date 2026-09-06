@@ -3065,7 +3065,7 @@ NODE
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
     expect(
       actionPublishStep.run.match(/timeout --signal=TERM --kill-after=10s 60s/gu),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
     expect(actionPublishStep.env.PUBLISH_ACTION_PATH).toBe("${{ github.action_path }}");
     expect(actionPublishStep.run).toContain(
       'exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"',
@@ -3118,7 +3118,6 @@ NODE
       "gh auth setup-git",
       "gh pr list",
       "gh pr close",
-      "--disable-auto",
       'GH_TOKEN="${CONTENTS_TOKEN}"',
       'HEAD:"${BASE_BRANCH}"',
     ]) {
@@ -3359,19 +3358,22 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
-    "defers stale generator inputs and neutralizes an existing pull request",
+    "defers stale generator inputs and preserves an existing pull request and disarms auto-merge",
     () => {
       const result = runGeneratedPublisherScenario(null, {
         existingPr: true,
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
         updateSource: true,
       });
 
-      expect(result.branchHead).toBe(result.mainHead);
-      expect(result.generatedA).toBe("old-a");
+      expect(result.branchHead).not.toBe(result.mainHead);
+      expect(result.generatedA).toBe("stale-pr-a");
       expect(result.summary).toContain(
         "Deferred stale generated output because generator inputs changed on main.",
       );
-      expect(result.summary).toContain("Neutralized stale generated pull request");
+      expect(result.mergeCalls).toContain("--disable-auto");
+      expect(result.summary).toContain("Preserved stale generated pull request");
     },
   );
 
@@ -3391,20 +3393,72 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
-    "neutralizes an existing pull request when generation has no changes",
+    "preserves an existing pull request when a no-change run becomes stale",
     () => {
       const result = runGeneratedPublisherScenario("b", {
         existingPr: true,
         noGeneratedChange: true,
       });
 
-      expect(result.branchHead).toBe(result.mainHead);
-      expect(result.generatedA).toBe("old-a");
-      expect(result.generatedB).toBe("newer-b");
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.generatedB).toBe("old-b");
       expect(result.summary).toContain(
         "Deferred stale generated output because owned generated paths changed on main.",
       );
-      expect(result.summary).toContain("Neutralized stale generated pull request");
+      expect(result.summary).toContain("Preserved stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "disarms stale output when inputs advance during PR publication (inherited=%s)",
+    (inherited) => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingPr: inherited,
+        existingAutoMergeMethod: inherited ? "SQUASH" : undefined,
+        updateSourceBeforeAutoMerge: true,
+      });
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.branchHead).not.toBe(result.mainHead);
+      expect(result.mergeCalls).not.toContain("--auto --squash");
+      expect(result.mergeCalls.includes("--disable-auto")).toBe(inherited);
+      expect(result.summary).toContain("Deferred stale generated output");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "leaves a current no-change run's existing pull request and auto-merge unchanged",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        noGeneratedChange: true,
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+      });
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not overwrite a successor that moves while stale auto-merge is disabled",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        updateSource: true,
+        existingAutoMergeMethod: "SQUASH",
+        autoMerge: true,
+        disarmRace: true,
+        expectFailure: true,
+      });
+      expect(result.branchHead).not.toBe(result.initialBranch);
+      expect(result.generatedA).toBe("old-a");
+      expect(result.mergeCalls).toContain("--disable-auto");
+      expect(result.mergeCalls).not.toContain("--auto --squash");
+      expect(result.summary).not.toContain("Preserved stale");
     },
   );
 
@@ -3427,8 +3481,8 @@ NODE
         overlapPolicy: "fail",
         updateSource: true,
       });
-      expect(stalePr.branchHead).toBe(stalePr.mainHead);
-      expect(stalePr.summary).toContain("Neutralized stale generated pull request");
+      expect(stalePr.branchHead).toBe(stalePr.initialBranch);
+      expect(stalePr.summary).toContain("Preserved stale generated pull request");
       expect(stalePr.publishOutput).toContain(
         "::error::Refusing stale generated output because generator inputs changed on main.",
       );

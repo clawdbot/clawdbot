@@ -37,6 +37,8 @@ export type McpLoopbackRequestContext = {
   modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
+  /** Host-selected pinned authoring capability; never sourced from MCP request headers. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;

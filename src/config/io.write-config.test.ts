@@ -717,7 +717,84 @@ describe("config io write", () => {
     ]);
   });
 
-  itWithHome("warns when prefix recovery cannot tighten config permissions", async (home) => {
+  for (const failure of ["write", "chmod", "rename"] as const) {
+    itWithHome(`prefix recovery preserves the config after a failed ${failure}`, async (home) => {
+      const configPath = configPathForHome(home);
+      const configBasename = path.basename(configPath);
+      const cleanRaw = formatConfig({ gateway: { mode: "local" } });
+      const pollutedRaw = `Found and updated: False\n${cleanRaw}`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, pollutedRaw, "utf-8");
+      const originalMode = (await fs.stat(configPath)).mode & 0o777;
+
+      const writeError = Object.assign(new Error(`failed recovery ${failure}`), {
+        code: failure === "write" ? "EIO" : "EPERM",
+      });
+      // Fail publication of the recovered bytes, leaving the original snapshot write intact.
+      const stagedHandles = new WeakSet<object>();
+      const isStagedConfigTemp = (file: fsNode.PathLike) => {
+        const name = path.basename(String(file));
+        return name.startsWith(`${configBasename}.`) && name.endsWith(".tmp");
+      };
+      const crashingFs: typeof fsNode = {
+        ...fsNode,
+        promises: {
+          ...fsNode.promises,
+          open: async (file, ...rest) => {
+            const handle = await fsNode.promises.open(file, ...rest);
+            if (isStagedConfigTemp(file)) {
+              stagedHandles.add(handle);
+              if (failure === "chmod") {
+                handle.chmod = async () => {
+                  throw writeError;
+                };
+              }
+            }
+            return handle;
+          },
+          writeFile: async (target, data, options) => {
+            const isRecovery =
+              typeof target === "string" ? target === configPath : stagedHandles.has(target);
+            if (failure === "write" && isRecovery) {
+              await fsNode.promises.writeFile(target, "", options);
+              throw writeError;
+            }
+            return fsNode.promises.writeFile(target, data, options);
+          },
+          rename: async (source, destination) => {
+            if (failure === "rename" && destination === configPath) {
+              throw writeError;
+            }
+            return fsNode.promises.rename(source, destination);
+          },
+        },
+      };
+      const warn = vi.fn();
+      const io = createHomeConfigIO(home, {
+        fs: crashingFs,
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        logger: { warn, error: vi.fn() },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).rejects.toThrow(writeError);
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(pollutedRaw);
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(originalMode);
+      expect(warnMessages(warn).join("\n")).not.toContain("Config auto-stripped");
+      const files = await fs.readdir(path.dirname(configPath));
+      const snapshots = files.filter((file) => file.includes(".clobbered."));
+      expect(snapshots).toHaveLength(1);
+      await expect(
+        fs.readFile(path.join(path.dirname(configPath), snapshots[0] ?? ""), "utf-8"),
+      ).resolves.toBe(pollutedRaw);
+      expect(files.filter((file) => file.endsWith(".tmp"))).toEqual([]);
+    });
+  }
+
+  itWithHome("prefix recovery publishes private config without pathname chmod", async (home) => {
     const configPath = configPathForHome(home);
     const cleanConfig = {
       gateway: { mode: "local" },
@@ -726,6 +803,7 @@ describe("config io write", () => {
     const cleanRaw = formatConfig(cleanConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
+    await fs.chmod(configPath, 0o644);
     const chmodError = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" });
     const warn = vi.fn();
     const chmod = fsNode.promises.chmod.bind(fsNode.promises);
@@ -751,9 +829,10 @@ describe("config io write", () => {
 
     await expect(io.recoverConfigFromJsonRootSuffix(initialSnapshot)).resolves.toBe(true);
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
-    expect(warnMessages(warn)).toContain(
-      `Config permission hardening failed (prefix recovery): ${configPath}: EPERM: chmod denied`,
-    );
+    if (process.platform !== "win32") {
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+    }
+    expect(warnMessages(warn).join("\n")).not.toContain("permission hardening failed");
     expectWarnContaining(warn, `Config auto-stripped non-JSON prefix: ${configPath}`);
   });
 
