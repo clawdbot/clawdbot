@@ -418,14 +418,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       text: {
         idLabel: "imessageSenderId",
         message: "OpenClaw: your access has been approved.",
-        notify: async ({ id, cfg, accountId }) =>
+        notify: async (params) => {
           await (
             await loadIMessageChannelRuntime()
-          ).notifyIMessageApproval({
-            id,
-            cfg,
-            accountId,
-          }),
+          ).sendIMessageOutbound({
+            ...params,
+            to: params.id,
+            text: params.message,
+          });
+        },
       },
     },
     security: imessageSecurityAdapter,
