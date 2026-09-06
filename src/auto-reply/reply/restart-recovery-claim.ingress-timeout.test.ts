@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
   createTestIngressQueue,
@@ -16,6 +17,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -38,9 +40,9 @@ describe("durable admission after an ingress processing timeout", () => {
     await withTempState(async (stateDir) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      const resolvingHeldInput = Promise.withResolvers<void>();
-      const releaseHeldInput = Promise.withResolvers<void>();
-      const siblingCompleted = Promise.withResolvers<void>();
+      const resolvingHeldInput = createDeferred<void>();
+      const releaseHeldInput = createDeferred<void>();
+      const siblingCompleted = createDeferred<void>();
       let heldWriter: Promise<void> | undefined;
 
       const createAdmission = async (
@@ -158,15 +160,14 @@ describe("durable admission after an ingress processing timeout", () => {
         });
         expect.soft(retiredEntry).not.toHaveProperty("restartRecoveryDeliveryRunId");
 
-        const siblingMessages = (await loadTranscriptEvents(sibling.target)).filter(
-          (event) => event.type === "message",
-        );
+        const siblingMessages = (await loadTranscriptEvents(sibling.target))
+          .map(readTranscriptEventMessage)
+          .filter((message) => message !== undefined);
         expect(siblingMessages).toEqual([
           expect.objectContaining({
-            message: expect.objectContaining({
-              content: "healthy input",
-              idempotencyKey: "sibling-source",
-            }),
+            role: "user",
+            content: "healthy input",
+            idempotencyKey: "sibling-source",
           }),
         ]);
         expect(loadSessionEntry(sibling.target)).toMatchObject({

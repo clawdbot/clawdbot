@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { compactWithSafetyTimeout } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { fanInChannelIngressLifecycles } from "../../plugin-sdk/channel-ingress-runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -37,7 +38,7 @@ describe("ingress processing timeout ownership", () => {
           return { kind: "deferred" };
         },
       });
-      const release = Promise.withResolvers<void>();
+      const release = createDeferred<void>();
       try {
         await drain.drainOnce();
         await drain.waitForIdle();
@@ -87,8 +88,8 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("cleanup-stall", { text: "hello" });
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
       const drain = createChannelIngressDrain({
         queue,
         adoptionStallTimeoutMs: 100,
@@ -129,8 +130,8 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("successor", { text: "hello" });
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
       let memory: ReturnType<typeof captureIngressProcessingDeadline>;
       const drain = createChannelIngressDrain({
         queue,
@@ -175,9 +176,9 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("prepared", { text: "hello" });
-      const preparation = Promise.withResolvers<void>();
-      const engineStarted = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const preparation = createDeferred<void>();
+      const engineStarted = createDeferred<void>();
+      const release = createDeferred<void>();
       const drain = createChannelIngressDrain({
         queue,
         adoptionStallTimeoutMs: 100,

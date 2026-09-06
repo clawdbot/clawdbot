@@ -1,5 +1,6 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { MsgContext } from "../templating.js";
@@ -44,8 +45,8 @@ describe("dispatchReplyFromConfig", () => {
     async (route) => {
       setNoAbort();
       installThreadingTestPlugin({ id: "telegram" });
-      const preparationEntered = Promise.withResolvers<void>();
-      const releasePreparation = Promise.withResolvers<void>();
+      const preparationEntered = createDeferred<void>();
+      const releasePreparation = createDeferred<void>();
       const expiredPhase = new AbortController();
       const healthyPhase = new AbortController();
       const expiredNotice: ReplyPayload = {
@@ -86,7 +87,8 @@ describe("dispatchReplyFromConfig", () => {
         await dispatch;
 
         if (route === "local") {
-          expect(dispatcher.sendBlockReply.mock.calls).toEqual([[healthyNotice]]);
+          expect(dispatcher.sendBlockReply).toHaveBeenCalledOnce();
+          expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(healthyNotice);
           expect(mocks.routeReply).not.toHaveBeenCalled();
         } else {
           expect(mocks.routeReply.mock.calls.map(([params]) => params.payload)).toEqual([
