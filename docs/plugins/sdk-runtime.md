@@ -516,6 +516,11 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       message: "Summarize the new email and identify any requested actions.",
       externalContentSource: "email",
       deliver: true,
+      delivery: { // optional; required to disambiguate multi-channel delivery
+        channel: "telegram",
+        to: "chat-123",
+        accountId: "default", // optional
+      },
       thinking: "low", // optional
       timeoutSeconds: 60, // optional
       idempotencyKey: "account:123:456", // optional
@@ -529,9 +534,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `agentId` is required, and `sessionKey` must begin with `hook:` and contain
     no whitespace or control characters. `externalContentSource` currently
     accepts only `"email"`; external-content wrapping cannot be disabled. Set
-    `deliver` to `false` to record completion without announcing it. Successful
-    admission returns `{ ok: true, runId }`; rejected admission returns
-    `{ ok: false, reason }`.
+    `deliver` to `false` to record completion without announcing it. When
+    `delivery` is provided, `channel` and `to` must both be non-empty and
+    `channel` must identify a concrete configured channel; `accountId` is
+    optional and otherwise resolves to the channel default. Omitting `delivery`
+    preserves last-channel routing. Successful admission returns
+    `{ ok: true, runId }`; rejected admission returns `{ ok: false, reason }`.
 
     This capability is available only to bundled plugins and trusted official
     plugin installations. It does not require enabling or configuring the HTTP

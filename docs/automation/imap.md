@@ -81,6 +81,23 @@ openclaw agent --agent mail_reader --message "Reply exactly MAIL_READER_OK" --js
 openclaw sandbox explain --agent mail_reader
 ```
 
+## Deliver processed results
+
+Set `deliver: true` to announce the isolated reader's result. In a multi-channel setup, configure a complete destination on the IMAP account so delivery does not depend on an ambiguous previous channel:
+
+```json5 validate=false
+{
+  deliver: true,
+  delivery: {
+    channel: "telegram",
+    to: "chat-123",
+    accountId: "default", // optional; omitted uses the channel default
+  },
+}
+```
+
+`delivery.channel` must name a concrete configured channel and `delivery.to` must name its recipient. Set both together. IMAP accounts with `deliver: true` require this explicit route so an isolated email run can never fall back to an unrelated session's previous recipient.
+
 ## Sender authentication
 
 The plugin checks the parsed `From` address against `allowedSenders` before any message reaches a model. Entries can be complete email addresses or `@domain` entries. Display names and `Reply-To` do not grant access, messages with multiple `From` addresses are rejected, and an empty allowlist disables that account.

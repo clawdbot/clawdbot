@@ -374,7 +374,7 @@ export function resolveHookDeliver(raw: unknown): boolean {
   return raw !== false;
 }
 
-/** Normalize webhook delivery intent before any isolated cron work is scheduled. */
+/** Normalize hook delivery intent before any isolated cron work is scheduled. */
 function normalizeHookAgentDelivery(params: {
   deliver: unknown;
   channel: unknown;
@@ -461,6 +461,34 @@ function normalizeHookAgentDelivery(params: {
         to,
         ...(accountId ? { accountId } : {}),
       },
+    },
+  };
+}
+
+/** Preserve legacy last-channel routing unless a trusted plugin supplies a complete target. */
+export function normalizePluginHookAgentDelivery(params: {
+  deliver: boolean;
+  delivery?: { channel: string; to: string; accountId?: string };
+}): Result<
+  Pick<HookAgentPayload, "deliver" | "channel" | "to" | "accountId" | "delivery">,
+  string
+> {
+  if (params.delivery) {
+    return normalizeHookAgentDelivery({
+      deliver: params.deliver,
+      channel: params.delivery.channel,
+      to: params.delivery.to,
+      accountId: params.delivery.accountId,
+    });
+  }
+  return {
+    ok: true,
+    value: {
+      deliver: params.deliver,
+      channel: "last",
+      to: undefined,
+      accountId: undefined,
+      delivery: params.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
     },
   };
 }

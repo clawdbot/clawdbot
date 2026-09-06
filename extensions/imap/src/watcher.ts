@@ -349,6 +349,7 @@ export class ImapAccountWatcher {
         message: renderImapPrompt(mail, account, (message.size ?? 0) > MAX_SOURCE_BYTES),
         externalContentSource: "email",
         deliver: account.deliver,
+        ...(account.delivery ? { delivery: account.delivery } : {}),
         idempotencyKey: sessionKey,
         ...(account.model ? { model: account.model } : {}),
         ...(account.thinking ? { thinking: account.thinking } : {}),

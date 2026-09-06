@@ -36,6 +36,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
+  normalizePluginHookAgentDelivery,
   normalizeHookDispatchSessionKey,
 } from "../hooks.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
@@ -664,6 +665,10 @@ export function createGatewayHookDispatcher(params: {
     if (value.externalContentSource !== "email") {
       return { ok: false, reason: "externalContentSource must be email" };
     }
+    const deliveryFields = normalizePluginHookAgentDelivery(value);
+    if (!deliveryFields.ok) {
+      return { ok: false, reason: deliveryFields.error };
+    }
     const run = async (): Promise<PluginHookDispatchResult> => {
       const result = await dispatchAgentHook(
         {
@@ -672,7 +677,7 @@ export function createGatewayHookDispatcher(params: {
           effectiveAgentId: agentId,
           sessionKey,
           message: value.message,
-          deliver: value.deliver,
+          ...deliveryFields.value,
           model: value.model,
           thinking: value.thinking,
           timeoutSeconds: value.timeoutSeconds,
@@ -680,8 +685,6 @@ export function createGatewayHookDispatcher(params: {
           sessionMode: "isolated",
           sourcePath: `plugin:${pluginId}`,
           wakeMode: "now",
-          channel: "last",
-          delivery: value.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
           externalContentSource: "email",
         },
         pluginId,
@@ -707,6 +710,7 @@ export function createGatewayHookDispatcher(params: {
       message: value.message,
       externalContentSource: value.externalContentSource,
       deliver: value.deliver,
+      delivery: value.delivery,
       model: value.model,
       thinking: value.thinking,
       timeoutSeconds: value.timeoutSeconds,
