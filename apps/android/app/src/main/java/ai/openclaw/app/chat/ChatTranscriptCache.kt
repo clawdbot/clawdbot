@@ -446,7 +446,10 @@ class RoomChatTranscriptCache internal constructor(
           val hasPersistedMetadata =
             message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
               message.usage != null || message.cost != null
-          if (content.isEmpty() && !hasPersistedMetadata) return@mapNotNull null
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
           val payload =
             CachedMessagePayload(
               content = content,
@@ -485,7 +488,7 @@ class RoomChatTranscriptCache internal constructor(
       // row while preserving list metadata when that session was already cached.
       // Persist the accepted history row with its transcript, including cleared usage.
       // Otherwise a failed list refresh resurrects the previous run on offline reopen.
-      val session = sessionInfo ?: ChatSessionEntry(key = key, updatedAtMs = null)
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
           if (sessionInfo != null || currentSession == null) {

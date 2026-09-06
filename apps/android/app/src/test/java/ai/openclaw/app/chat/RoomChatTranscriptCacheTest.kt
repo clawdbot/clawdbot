@@ -120,6 +120,68 @@ class RoomChatTranscriptCacheTest {
   }
 
   @Test
+  fun toolOnlyAssistantKeepsUnknownUsageAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","sessionInfo":{"key":"main"},"messages":[{"role":"assistant","content":"older","usage":{"output":123}},{"role":"assistant","provider":"openai","model":"gpt-5.2","content":[{"type":"toolCall","id":"read-1","name":"read","arguments":{}}],"__openclaw":{"id":"entry-2"}}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(2, controller.messages.value.size)
+      assertTrue(
+        controller.messages.value
+          .last()
+          .content
+          .isEmpty(),
+      )
+      assertEquals(
+        "entry-2",
+        controller.messages.value
+          .last()
+          .entryId,
+      )
+      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+
+      val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      offline.load("main")
+      advanceUntilIdle()
+      assertTrue(offline.messagesFromCache.value)
+      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(2, offline.messages.value.size)
+    }
+
+  @Test
+  fun canonicalSessionInfoKeepsRequestedAliasTranscriptReachable() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"alias-session","sessionInfo":{"key":"agent:main:review-alias"},"messages":[{"role":"assistant","content":"alias transcript"}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("review-alias", "main")
+      advanceUntilIdle()
+      assertEquals(
+        "alias transcript",
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .text,
+      )
+      assertEquals(listOf("alias transcript"), loadTranscript(sessionKey = "review-alias").map { it.content.single().text })
+      assertEquals(listOf("review-alias"), loadSessions().map { it.key })
+      assertTrue(loadTranscript(sessionKey = "agent:main:review-alias").isEmpty())
+    }
+
+  @Test
   fun fullHistoryUsageClearSurvivesOfflineReopenWithoutAListResponse() =
     runTest {
       saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, outputTokens = 840L)))

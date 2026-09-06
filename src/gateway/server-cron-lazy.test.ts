@@ -389,11 +389,10 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(state);
 
     const lazy = createLazyGatewayCronState(createParams());
-    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
-    await lazy.reconcileSystemJobs(cfg);
+    await lazy.reconcileSystemJobs();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(state.reconcileSystemJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(state.reconcileSystemJobs).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {

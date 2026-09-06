@@ -17,7 +17,7 @@ import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.j
 
 type LabelSet = Record<string, string>;
 
-type CounterSample = {
+type ScalarSample = {
   help: string;
   labels: LabelSet;
   value: number;
@@ -30,18 +30,6 @@ type HistogramSample = {
   help: string;
   labels: LabelSet;
   sum: number;
-};
-
-type GaugeSample = {
-  help: string;
-  labels: LabelSet;
-  value: number;
-};
-
-type MetricSnapshot = {
-  counters: Map<string, CounterSample>;
-  gauges: Map<string, GaugeSample>;
-  histograms: Map<string, HistogramSample>;
 };
 
 type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
@@ -64,7 +52,9 @@ function seconds(ms: number | undefined): number | undefined {
 }
 
 function sortedLabels(labels: LabelSet): [string, string][] {
-  return Object.entries(labels).toSorted(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(labels);
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  return entries;
 }
 
 function metricKey(name: string, labels: LabelSet): string {
@@ -79,12 +69,16 @@ function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
 }
 
+function formatLabelEntry([key, value]: [string, string]): string {
+  return `${key}="${escapeLabelValue(value)}"`;
+}
+
 function formatLabels(labels: LabelSet): string {
   const entries = sortedLabels(labels);
   if (entries.length === 0) {
     return "";
   }
-  return `{${entries.map(([key, value]) => `${key}="${escapeLabelValue(value)}"`).join(",")}}`;
+  return `{${entries.map(formatLabelEntry).join(",")}}`;
 }
 
 function formatPrometheusNumber(value: number): string {
@@ -95,8 +89,8 @@ function formatPrometheusNumber(value: number): string {
 }
 
 function createPrometheusMetricStore() {
-  const counters = new Map<string, CounterSample>();
-  const gauges = new Map<string, GaugeSample>();
+  const counters = new Map<string, ScalarSample>();
+  const gauges = new Map<string, ScalarSample>();
   const histograms = new Map<string, HistogramSample>();
   let droppedSeries = 0;
 
@@ -177,19 +171,22 @@ function createPrometheusMetricStore() {
     }
   };
 
-  const snapshot = (): MetricSnapshot => {
-    const counterSnapshot = new Map(counters);
+  const snapshot = () => {
+    const counterSnapshot = [...counters];
     if (droppedSeries > 0) {
-      counterSnapshot.set(metricKey(DROPPED_SERIES_COUNTER_NAME, {}), {
-        help: "Prometheus metric series dropped because the exporter series cap was reached.",
-        labels: {},
-        value: droppedSeries,
-      });
+      counterSnapshot.push([
+        metricKey(DROPPED_SERIES_COUNTER_NAME, {}),
+        {
+          help: "Prometheus metric series dropped because the exporter series cap was reached.",
+          labels: {},
+          value: droppedSeries,
+        },
+      ]);
     }
     return {
       counters: counterSnapshot,
-      gauges: new Map(gauges),
-      histograms: new Map(histograms),
+      gauges: [...gauges],
+      histograms: [...histograms],
     };
   };
 
@@ -231,46 +228,43 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
     lines.push(`# TYPE ${name} ${type}`);
   };
 
-  const counterEntries = [...snapshot.counters.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of counterEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "counter", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+  for (const [type, entries] of [
+    ["counter", snapshot.counters],
+    ["gauge", snapshot.gauges],
+  ] as const) {
+    entries.sort(([left], [right]) => left.localeCompare(right));
+    for (const [key, sample] of entries) {
+      const name = key.split("|", 1)[0] ?? "";
+      emitHeader(name, type, sample.help);
+      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+    }
   }
 
-  const gaugeEntries = [...snapshot.gauges.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of gaugeEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "gauge", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
-  }
-
-  const histogramEntries = [...snapshot.histograms.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of histogramEntries) {
+  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
+  for (const [key, sample] of snapshot.histograms) {
     const name = key.split("|", 1)[0] ?? "";
     emitHeader(name, "histogram", sample.help);
+    const labels = formatLabels(sample.labels);
+    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
+    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
+    const bucketFragments = bucketLabels.map(formatLabelEntry);
+    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket === undefined) {
         continue;
       }
+      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
       lines.push(
-        `${name}_bucket${formatLabels({ ...sample.labels, le: String(bucket) })} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
       );
     }
+    bucketFragments[boundIndex] = 'le="+Inf"';
     lines.push(
-      `${name}_bucket${formatLabels({ ...sample.labels, le: "+Inf" })} ${formatPrometheusNumber(sample.count)}`,
+      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
     );
-    lines.push(`${name}_sum${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(
-      `${name}_count${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.count)}`,
-    );
+    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
   }
 
   lines.push("");

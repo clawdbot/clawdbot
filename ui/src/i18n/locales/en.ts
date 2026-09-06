@@ -4650,6 +4650,12 @@ export const en: TranslationMap & {
       startingModel: "Waiting for a response…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    subagentViewOnly: "View-only subagent",
+    subagentSessionDisabled:
+      "This is a subagent of {parent}. Continue the conversation in its parent session.",
+    parentSession: "the parent session",
+    openParentSession: "Open parent session",
+    parentSessionUnavailable: "Parent session information is unavailable.",
     sessionRoute: {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",

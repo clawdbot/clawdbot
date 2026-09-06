@@ -1392,16 +1392,21 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
-      expect(sessionEntries).toEqual({});
-      return {
-        ok: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      };
-    });
+    const created = await createSessionEntryWithTranscript(
+      scope,
+      ({ existingEntry, targetEntry, isLabelInUse }) => {
+        expect(existingEntry).toBeUndefined();
+        expect(targetEntry).toBeUndefined();
+        expect(isLabelInUse("unused")).toBe(false);
+        return {
+          ok: true,
+          entry: {
+            sessionId: "session-1",
+            updatedAt: 10,
+          },
+        };
+      },
+    );
 
     expect(created.ok).toBe(true);
     if (!created.ok) {
