@@ -406,7 +406,9 @@ async function followChannelLogs(
         checkpointPrefix,
         previousCheckpoint?.cursor,
       );
-      let checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      let checkpointValid =
+        tail.generationStable !== false &&
+        isSameTailGeneration(tail.file, tail.generation, checkpoint);
       if (!checkpointValid) {
         tail = await readConfiguredParsedLogTail({
           limit: readLimit,
@@ -419,7 +421,9 @@ async function followChannelLogs(
           tail.cursor,
           checkpointPrefixLength(tail.size),
         );
-        checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
+        checkpointValid =
+          tail.generationStable !== false &&
+          isSameTailGeneration(tail.file, tail.generation, checkpoint);
       }
       if (
         checkpointValid &&
@@ -439,7 +443,9 @@ async function followChannelLogs(
           tail.cursor,
           checkpointPrefixLength(tail.size),
         );
-        checkpointValid = isSameTailGeneration(tail.file, tail.generation, checkpoint);
+        checkpointValid =
+          tail.generationStable !== false &&
+          isSameTailGeneration(tail.file, tail.generation, checkpoint);
       }
       if (!checkpointValid) {
         try {

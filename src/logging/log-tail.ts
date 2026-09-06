@@ -73,10 +73,14 @@ export type LogFileGeneration = {
 };
 
 /** Redacted configured log tail with only parseable structured records. */
-type LogTailReadPayload = LogTailPayload & { generation?: LogFileGeneration };
+type LogTailReadPayload = LogTailPayload & {
+  generation?: LogFileGeneration;
+  generationStable?: boolean;
+};
 type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
   generation?: LogFileGeneration;
+  generationStable?: boolean;
 };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
@@ -137,7 +141,10 @@ async function readLogSlice(params: LogSliceParams): Promise<Omit<LogTailReadPay
         retryParams = { ...params, cursor: undefined, forceReset: true };
       }
     }
-    return lastResult as Omit<LogTailReadPayload, "file">;
+    return {
+      ...(lastResult as Omit<LogTailReadPayload, "file">),
+      generationStable: false,
+    };
   } finally {
     await handle.close();
   }
@@ -301,7 +308,7 @@ export async function readConfiguredLogTail(
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
   const tail = await readConfiguredLogTailInternal(params, filter);
-  const { generation: _generation, ...publicTail } = tail;
+  const { generation: _generation, generationStable: _generationStable, ...publicTail } = tail;
   return publicTail;
 }
 
