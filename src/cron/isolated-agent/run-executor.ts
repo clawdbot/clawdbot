@@ -573,6 +573,7 @@ function createCronPromptExecutor(
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
           });
@@ -595,6 +596,7 @@ function createCronPromptExecutor(
           candidateConfiguredThinkLevel ??
           resolveThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
             catalog: thinkingCatalog,

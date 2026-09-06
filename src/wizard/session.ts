@@ -264,6 +264,7 @@ export class WizardSession {
   private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private cancellationLocked = false;
+  private inputClosedError: Error | undefined;
   private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
@@ -395,7 +396,7 @@ export class WizardSession {
   }
 
   cancel(): boolean {
-    if (this.status !== "running" || this.cancellationLocked) {
+    if (this.status !== "running" || this.cancellationLocked || this.inputClosedError) {
       return false;
     }
     this.status = "cancelled";
@@ -406,6 +407,18 @@ export class WizardSession {
     this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
+  }
+
+  /** Close client input without interrupting an operation past its commit point. */
+  close(error: Error): void {
+    if (this.status !== "running") {
+      return;
+    }
+    this.inputClosedError ??= error;
+    if (!this.cancellationLocked) {
+      this.abortController.abort(this.inputClosedError);
+    }
+    this.rejectPendingAnswers(this.inputClosedError);
   }
 
   /** The underlying mutation crossed its durable commit point and must finish. */
@@ -478,12 +491,15 @@ export class WizardSession {
       if (this.status !== "running") {
         return;
       }
-      if (err instanceof WizardCancelledError) {
+      // A provider may translate an aborted prompt into user cancellation.
+      // The recorded host closure still owns that outcome, including after writes.
+      const error = err instanceof WizardCancelledError ? (this.inputClosedError ?? err) : err;
+      if (error instanceof WizardCancelledError) {
         this.status = "cancelled";
-        this.error = err.message;
+        this.error = error.message;
       } else {
         this.status = "error";
-        this.error = String(err);
+        this.error = String(error);
       }
     } finally {
       this.settled = true;
@@ -497,10 +513,10 @@ export class WizardSession {
     }
   }
 
-  private rejectPendingAnswers() {
+  private rejectPendingAnswers(error: Error = new WizardCancelledError()) {
     this.currentStep = null;
     for (const pending of this.answerDeferred.values()) {
-      pending.deferred.reject(new WizardCancelledError());
+      pending.deferred.reject(error);
     }
     this.answerDeferred.clear();
   }
@@ -512,6 +528,9 @@ export class WizardSession {
   ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
+    }
+    if (this.inputClosedError) {
+      throw this.inputClosedError;
     }
     signal?.throwIfAborted();
     const deferred = createDeferredCore<unknown>();

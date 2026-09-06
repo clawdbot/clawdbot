@@ -147,7 +147,7 @@ export async function beginDoctorMaintenance(params: {
       try {
         await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
       } finally {
-        recovery?.complete();
+        await recovery?.complete();
       }
     }
   };
