@@ -29,6 +29,12 @@ const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
+// Cumulative disconnect cap: the watchdog may be rearmed for each scheduled
+// retry, but the total time since the initial disconnect cannot exceed this.
+// Prevents a gateway that keeps scheduling retries without reaching READY from
+// deferring the watchdog indefinitely. 5x the runtime-ready timeout (150s at
+// the default 30s) allows several backoff cycles while still catching stalls.
+const CUMULATIVE_DISCONNECT_CAP_MULTIPLIER = 5;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
@@ -183,7 +189,7 @@ function resolveTransportActivityAt(event: unknown): number {
 }
 
 function createGatewayStatusObserver(params: {
-  gateway?: Pick<MutableDiscordGateway, "isConnected">;
+  gateway?: Pick<MutableDiscordGateway, "isConnected" | "ws">;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
@@ -194,6 +200,12 @@ function createGatewayStatusObserver(params: {
   let queuedForceStopError: unknown;
   let readyPollId: ReturnType<typeof setInterval> | undefined;
   let readyTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let disconnectWatchdogId: ReturnType<typeof setTimeout> | undefined;
+  let disconnectWatchdogPollId: ReturnType<typeof setInterval> | undefined;
+  let disconnectedAt: number | undefined;
+  let runtimeReady = false;
+  let graceCount = 0;
+  const MAX_GRACE_PERIODS = 2;
 
   const shouldStop = () => params.abortSignal?.aborted || params.isLifecycleStopping();
   const clearReadyWatch = () => {
@@ -205,6 +217,107 @@ function createGatewayStatusObserver(params: {
       clearTimeout(readyTimeoutId);
       readyTimeoutId = undefined;
     }
+  };
+  const clearDisconnectWatchdog = () => {
+    if (disconnectWatchdogId) {
+      clearTimeout(disconnectWatchdogId);
+      disconnectWatchdogId = undefined;
+    }
+    if (disconnectWatchdogPollId) {
+      clearInterval(disconnectWatchdogPollId);
+      disconnectWatchdogPollId = undefined;
+    }
+    disconnectedAt = undefined;
+  };
+  // Start a disconnection watchdog that force-stops the lifecycle if the
+  // gateway stays disconnected longer than the ready timeout. This catches
+  // event-loop stalls that delay reconnect timers past their useful window,
+  // leaving the gateway in "reconnect scheduled" state indefinitely.
+  // The watchdog polls isConnected so it self-clears when the gateway recovers.
+  const armWatchdog = (threshold: number) => {
+    disconnectWatchdogPollId = setInterval(() => {
+      if (shouldStop()) {
+        clearDisconnectWatchdog();
+        graceCount = 0;
+        return;
+      }
+      if (params.gateway?.isConnected) {
+        clearDisconnectWatchdog();
+        graceCount = 0;
+      }
+    }, DISCORD_GATEWAY_READY_POLL_MS);
+    disconnectWatchdogPollId.unref?.();
+    disconnectWatchdogId = setTimeout(() => {
+      const elapsed = disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+      const preservedDisconnectedAt = disconnectedAt;
+      clearDisconnectWatchdog();
+      if (shouldStop() || params.gateway?.isConnected) {
+        return;
+      }
+      // SAFETY: ws is a DiscordGatewaySocket whose readyState matches the standard WebSocket readyState constants (0=CONNECTING, 1=OPEN).
+      const ws = params.gateway?.ws as { readyState?: number } | null | undefined;
+      if (
+        ws &&
+        ws.readyState !== undefined &&
+        ws.readyState <= 1 &&
+        graceCount < MAX_GRACE_PERIODS
+      ) {
+        graceCount += 1;
+        params.runtime.log?.(
+          `discord gateway: watchdog deferred — reconnect in progress (readyState=${ws.readyState}), grace ${graceCount}/${MAX_GRACE_PERIODS}`,
+        );
+        // Preserve the original disconnect epoch through grace re-arms so the
+        // cumulative cap is measured from the initial disconnect, not reset.
+        disconnectedAt = preservedDisconnectedAt;
+        // Cap the grace timeout to the remaining cumulative disconnect budget
+        // so a CONNECTING/OPEN socket near the cap boundary cannot receive a
+        // full new grace window that exceeds the stated recovery deadline.
+        const cumulativeCap = params.runtimeReadyTimeoutMs * CUMULATIVE_DISCONNECT_CAP_MULTIPLIER;
+        const elapsedSinceGraceDisconnect =
+          disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+        const remainingToGraceCap = Math.max(0, cumulativeCap - elapsedSinceGraceDisconnect);
+        const graceThreshold = Math.min(params.runtimeReadyTimeoutMs, remainingToGraceCap);
+        armWatchdog(graceThreshold);
+        return;
+      }
+      params.runtime.error?.(
+        danger(
+          `discord gateway: disconnection watchdog fired after ${elapsed}ms — force-stopping lifecycle`,
+        ),
+      );
+      triggerForceStop(
+        new Error(`discord gateway stayed disconnected for ${elapsed}ms; force-stopping lifecycle`),
+      );
+    }, threshold);
+    disconnectWatchdogId.unref?.();
+  };
+  const startDisconnectWatchdog = (extraDelayMs = 0) => {
+    if (disconnectWatchdogId) {
+      // Rearm on every observed reconnect schedule so the watchdog deadline
+      // always covers the latest pending retry. Discord's backoff can schedule
+      // 2s, 4s, 8s, 16s, then 30s; accepting only the first delay would let the
+      // watchdog fire while a legitimate later retry is still pending.
+      if (extraDelayMs > 0) {
+        const preservedGraceCount = graceCount;
+        const preservedDisconnectedAt = disconnectedAt;
+        clearDisconnectWatchdog();
+        graceCount = preservedGraceCount;
+        disconnectedAt = preservedDisconnectedAt ?? Date.now();
+        // Cap the threshold so repeated retries cannot defer the watchdog
+        // indefinitely. The cumulative disconnect duration is capped at
+        // CUMULATIVE_DISCONNECT_CAP_MULTIPLIER × runtimeReadyTimeoutMs.
+        const cumulativeCap = params.runtimeReadyTimeoutMs * CUMULATIVE_DISCONNECT_CAP_MULTIPLIER;
+        const elapsedSinceDisconnect =
+          disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+        const remainingToCap = Math.max(0, cumulativeCap - elapsedSinceDisconnect);
+        const requestedThreshold = params.runtimeReadyTimeoutMs + extraDelayMs;
+        const cappedThreshold = Math.min(requestedThreshold, remainingToCap);
+        armWatchdog(cappedThreshold);
+      }
+      return;
+    }
+    disconnectedAt = Date.now();
+    armWatchdog(params.runtimeReadyTimeoutMs + extraDelayMs);
   };
   const triggerForceStop = (err: unknown) => {
     if (forceStopHandler) {
@@ -267,12 +380,20 @@ function createGatewayStatusObserver(params: {
     const at = Date.now();
     const message = String(msg);
     if (message.includes("Gateway websocket opened")) {
+      // Don't clear the disconnect watchdog here — the gateway isn't connected
+      // until READY/RESUMED. The watchdog's poll self-clears when isConnected
+      // becomes true, preserving the deadline across pre-ready reconnect cycles.
       params.pushStatus({ connected: false, lastEventAt: at });
       startReadyWatch();
       return;
     }
     if (message.includes("Gateway websocket closed")) {
       clearReadyWatch();
+      // Only arm the disconnection watchdog after initial runtime readiness.
+      // During startup, waitForGatewayReady handles close/retry cycles.
+      if (runtimeReady) {
+        startDisconnectWatchdog();
+      }
       const code = parseGatewayCloseCode(message);
       // Fatal gateway closes require operator repair. Keep the outer channel supervisor from
       // turning an invalid credential or configuration into an automatic restart loop.
@@ -292,6 +413,9 @@ function createGatewayStatusObserver(params: {
     }
     if (message.includes("Gateway reconnect scheduled in")) {
       clearReadyWatch();
+      // The watchdog deadline extension is handled by onReconnectScheduled,
+      // which receives the delay as a structured number from the gateway's
+      // "reconnect-scheduled" emitter event — not parsed from this debug string.
       params.pushStatus({
         connected: false,
         lifecycle: "recovering",
@@ -314,8 +438,18 @@ function createGatewayStatusObserver(params: {
     },
     dispose: () => {
       clearReadyWatch();
+      clearDisconnectWatchdog();
+      graceCount = 0;
       forceStopHandler = undefined;
       queuedForceStopError = undefined;
+    },
+    markRuntimeReady: () => {
+      runtimeReady = true;
+    },
+    onReconnectScheduled: (delay: number) => {
+      if (runtimeReady) {
+        startDisconnectWatchdog(delay);
+      }
     },
   };
 }
@@ -445,6 +579,10 @@ export async function runDiscordGatewayLifecycle(params: {
     runtimeReadyTimeoutMs: gatewayRuntimeReadyTimeoutMs,
   });
   gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
+  const onReconnectScheduled = (delay: number) => {
+    statusObserver.onReconnectScheduled?.(delay);
+  };
+  gatewayEmitter?.on("reconnect-scheduled", onReconnectScheduled);
   let lastTransportActivityStatusAt: number | undefined;
   const onGatewayTransportActivity = (event: unknown) => {
     if (lifecycleStopping || params.abortSignal?.aborted) {
@@ -532,6 +670,8 @@ export async function runDiscordGatewayLifecycle(params: {
       readyTimeoutMs: gatewayReadyTimeoutMs,
     });
 
+    statusObserver.markRuntimeReady();
+
     if (drainPendingGatewayErrors() === "stop") {
       return;
     }
@@ -558,6 +698,7 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     statusObserver.dispose();
     gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
+    gatewayEmitter?.removeListener("reconnect-scheduled", onReconnectScheduled);
     gatewayEmitter?.removeListener(
       DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
       onGatewayTransportActivity,

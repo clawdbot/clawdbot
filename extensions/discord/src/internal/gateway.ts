@@ -470,6 +470,7 @@ export class GatewayPlugin extends Plugin {
     this.reconnectAttempts += 1;
     if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
       const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
+      this.shouldReconnect = false;
       this.emitter.emit(
         "error",
         new Error(
@@ -502,6 +503,7 @@ export class GatewayPlugin extends Plugin {
       "debug",
       `Gateway reconnect scheduled in ${delay}ms (${options.reason}, resume=${String(shouldResume)})`,
     );
+    this.emitter.emit("reconnect-scheduled", delay);
     this.reconnectTimer.schedule(delay, () => {
       this.connect(shouldResume);
     });

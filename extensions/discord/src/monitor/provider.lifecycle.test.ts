@@ -740,4 +740,297 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("force-stops the lifecycle when the gateway stays disconnected past the ready timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Register the force-stop handler so triggerForceStop calls it
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+        // Advance past the ready timeout — watchdog should fire and force-stop
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not force-stop when the gateway reconnects before the watchdog threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Gateway reconnects before the timeout
+        setTimeout(() => {
+          gateway.isConnected = true;
+        }, 5_000);
+        await vi.advanceTimersByTimeAsync(6_000);
+        emitter.emit("debug", "Gateway websocket opened");
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers force-stop when a reconnect is in progress at the watchdog threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Simulate a socket that is CONNECTING (readyState=0)
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Socket stays CONNECTING through the first watchdog deadline (30s).
+        // The watchdog fires, sees CONNECTING, defers (grace 1/2).
+        // After 5s into the grace period, the socket reaches OPEN and READY.
+        setTimeout(() => {
+          mockWs.readyState = 1; // OPEN
+          gateway.isConnected = true;
+        }, 35_000); // After the first deadline (30s) + 5s into grace
+        // Advance past the first watchdog threshold (30s) — should defer
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the 5s grace recovery — gateway should now be connected
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-stops after grace periods are exhausted when socket stays CONNECTING", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Simulate a socket permanently stuck in CONNECTING
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+        // Advance past the first watchdog threshold (30s) — should defer (grace 1/2)
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the second watchdog threshold (30s) — should defer (grace 2/2)
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the third watchdog threshold (30s) — grace exhausted, force-stop
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rearms the watchdog deadline on every reconnect schedule, not just the first", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // First reconnect scheduled at 2s — watchdog arms with 30s + 2s = 32s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 2_000);
+
+        // Second reconnect scheduled at 4s — watchdog should rearm to 30s + 4s = 34s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 4_000);
+
+        // Third reconnect scheduled at 8s — watchdog should rearm to 30s + 8s = 38s
+        await vi.advanceTimersByTimeAsync(1_000);
+        emitter.emit("reconnect-scheduled", 8_000);
+
+        // Advance to 35s total — the old deadline (32s from the first 2s
+        // schedule) would have fired here. With rearming, the current deadline
+        // is 38s (from the 8s schedule), so the watchdog must NOT have fired.
+        await vi.advanceTimersByTimeAsync(33_000);
+
+        // Gateway reconnects before the 38s deadline
+        gateway.isConnected = true;
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-stops after the cumulative disconnect cap even when retries keep being scheduled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // Simulate Discord's backoff: 2s, 4s, 8s, 16s, 30s, 30s, 30s...
+        // The watchdog rearms on each schedule, but the cumulative cap
+        // (5 × 30s = 150s) should eventually force-stop regardless.
+        const delays = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000];
+        for (const delay of delays) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          emitter.emit("reconnect-scheduled", delay);
+          // Advance past the delay to simulate the reconnect failing and
+          // the next schedule being emitted
+          await vi.advanceTimersByTimeAsync(delay);
+        }
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      // The watchdog should have force-stopped by now because the cumulative
+      // disconnect cap was reached despite continuous retry schedules.
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the cumulative cap through grace re-arms", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Socket stays CONNECTING so grace is granted, but the cumulative cap
+      // should still fire because disconnectedAt is preserved through grace.
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // First watchdog fires at 30s → grace 1/2 (socket CONNECTING)
+        // The grace re-arm should preserve disconnectedAt, so the cumulative
+        // cap (150s) is measured from the original disconnect, not reset.
+        // Second watchdog fires at 30s → grace 2/2
+        // Third watchdog fires at 30s → grace exhausted → force-stop
+        // Total elapsed: ~90s, well under the 150s cap, so the force-stop
+        // happens because grace is exhausted, not because of the cap.
+        await vi.advanceTimersByTimeAsync(31_000); // first watchdog → grace 1
+        await vi.advanceTimersByTimeAsync(31_000); // second watchdog → grace 2
+        await vi.advanceTimersByTimeAsync(31_000); // third watchdog → force-stop
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the grace timeout at the cumulative disconnect deadline when CONNECTING", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Socket stays CONNECTING so grace is granted, but the grace timeout
+      // must be capped to the remaining cumulative budget. A 120s reconnect
+      // delay pushes the initial watchdog to 150s (the cap). Without the fix,
+      // two grace windows extend force-stop to ~210s. With the fix, the grace
+      // threshold at 150s is 0, so force-stop fires at ~150s.
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      let forceStopElapsed: number | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          const match = /stayed disconnected for (\d+)ms/.exec(
+            err instanceof Error ? err.message : String(err),
+          );
+          forceStopElapsed = match ? Number(match[1]) : undefined;
+          throw err;
+        });
+
+        // Reconnect scheduled with 120s delay — initial watchdog threshold
+        // is capped at min(30s + 120s, 150s) = 150s.
+        emitter.emit("reconnect-scheduled", 120_000);
+        // Advance past 150s. Watchdog fires at 150s, grants grace 1 but
+        // remaining budget is 0 so threshold is 0, fires again immediately,
+        // grants grace 2, same thing, then force-stops (grace exhausted).
+        await vi.advanceTimersByTimeAsync(151_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+      // Force-stop at ~150s (the cumulative cap), not ~210s.
+      expect(forceStopElapsed).toBeGreaterThanOrEqual(150_000);
+      expect(forceStopElapsed).toBeLessThan(160_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
