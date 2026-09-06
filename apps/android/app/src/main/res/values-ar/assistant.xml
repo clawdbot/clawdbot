@@ -2,6 +2,6 @@
     <string-array name="ask_openclaw_query_patterns">
         <item>"اسأل OpenClaw %1$s"</item>
         <item>"اطلب من OpenClaw أن %1$s"</item>
-        <item>"افتح OpenClaw واسأل %1$s"</item>
+        <item>"افتح OpenClaw واطرح %1$s"</item>
     </string-array>
 </resources>
