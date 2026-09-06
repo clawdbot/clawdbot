@@ -176,7 +176,10 @@ function deliveredCallArg(): Record<string, unknown> {
 
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   beforeEach(() => {
-    deliverSpy.mockClear();
+    deliverSpy.mockReset().mockImplementation(async () => ({
+      delivered: true,
+      path: "direct",
+    }));
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
     sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
@@ -825,6 +828,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         status: "dispatching",
         attemptCount: 1,
         nextAttemptAt: 30_000,
+        deadlineAt: 1_800_000,
         lastError: "completion_handoff_pending",
       });
       expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
@@ -870,6 +874,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         status: "dispatching",
         attemptCount: 1,
         nextAttemptAt: 30_000,
+        deadlineAt: 1_800_000,
         lastError: "completion_handoff_pending",
       });
       expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
@@ -883,6 +888,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         status: "dispatching",
         attemptCount: 1,
         nextAttemptAt: 150_000,
+        deadlineAt: 1_800_000,
         lastError: "completion_handoff_pending",
       });
       expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
@@ -896,6 +902,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         status: "dispatching",
         attemptCount: 1,
         nextAttemptAt: 270_000,
+        deadlineAt: 1_800_000,
         lastError: "completion_handoff_pending",
       });
       expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
@@ -916,6 +923,122 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         delivered: true,
         path: "direct",
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires pending settle observations past the announce lifecycle deadline", async () => {
+    const firstChild = makeSettledChild({ runId: "run-a" });
+    const secondChild = makeSettledChild({ runId: "run-b" });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
+    const pending = {
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+    } as const;
+    deliverSpy.mockResolvedValue(pending);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        nextAttemptAt: 30_000,
+        deadlineAt: 1_800_000,
+        lastError: "completion_handoff_pending",
+      });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+
+      // Stay within the failure budget: pending observations keep the same key.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake?.attemptCount).toBe(1);
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+
+      // Cross the announce hard-expiry bound; the wake must terminalize.
+      await vi.advanceTimersByTimeAsync(1_770_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-a", "run-b"], undefined, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake expired",
+      });
+      expect(firstChild.requesterSettleWake).toBeUndefined();
+      // Two pending observations only; expiry retires without another delivery call.
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
+      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
+        requesterSettleKey("run-a,run-b"),
+        requesterSettleKey("run-a,run-b"),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors an inherited delivery.deadlineAt for pending settle expiry", async () => {
+    const firstChild = makeSettledChild({
+      runId: "run-a",
+      delivery: { status: "delivered", deadlineAt: 90_000 },
+    });
+    const secondChild = makeSettledChild({
+      runId: "run-b",
+      delivery: { status: "delivered", deadlineAt: 120_000 },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
+    deliverSpy.mockResolvedValue({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        nextAttemptAt: 30_000,
+        deadlineAt: 90_000,
+        lastError: "completion_handoff_pending",
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(firstChild.requesterSettleWake).toMatchObject({
+        nextAttemptAt: 90_000,
+        deadlineAt: 90_000,
+        attemptCount: 1,
+      });
+      expect(firstChild.requesterSettleWake?.replayCount).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
+      ).toBe(false);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-a", "run-b"], undefined, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake expired",
+      });
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

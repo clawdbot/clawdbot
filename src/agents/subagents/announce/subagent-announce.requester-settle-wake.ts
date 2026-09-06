@@ -23,6 +23,7 @@ import {
   buildRequesterSettleAnnounceId,
 } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
 import {
   countActiveDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -69,6 +70,35 @@ const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+
+function resolveRequesterSettleObservationDeadline(
+  batch: readonly SubagentRunRecord[],
+  state: RequesterSettleWakeBatchState,
+  now: number,
+): number {
+  if (typeof state.deadlineAt === "number") {
+    return state.deadlineAt;
+  }
+  // Prefer the existing announce delivery deadline when the batch still owns one.
+  const inherited = batch
+    .map((entry) =>
+      entry.expectsCompletionMessage === true && typeof entry.delivery?.deadlineAt === "number"
+        ? entry.delivery.deadlineAt
+        : undefined,
+    )
+    .filter((value): value is number => typeof value === "number");
+  if (inherited.length > 0) {
+    return Math.min(...inherited);
+  }
+  // Same hard expiry clock as completion announce cleanup.
+  return now + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+}
+
+function withWakeDeadline(
+  deadlineAt: number | undefined,
+): Pick<RequesterSettleWakeBatchState, "deadlineAt"> {
+  return typeof deadlineAt === "number" ? { deadlineAt } : {};
+}
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -167,6 +197,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
+    ...(source?.deadlineAt !== undefined ? { deadlineAt: source.deadlineAt } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
@@ -312,6 +343,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         state.nextAttemptAt ?? 0,
         now + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
       ),
+      ...withWakeDeadline(state.deadlineAt),
       batchRunIds: [...batchRunIds],
       ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
       ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
@@ -431,6 +463,16 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // Returning here keeps restart/suspend drains free during backoff.
       return false;
     }
+    if (typeof state.deadlineAt === "number" && Date.now() >= state.deadlineAt) {
+      // Pending observations share the announce hard-expiry clock; retire with a
+      // terminal blocked outcome so the batch/handoff identity cannot stick forever.
+      completeBatch(settledBatch, state.rearmGeneration, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake expired",
+      });
+      return false;
+    }
     // A requester may spawn more work while this durable batch is waiting
     // or replaying. Keep the frozen batch pending until the new work drains.
     if (requesterHasUnsettledDescendants()) {
@@ -465,6 +507,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         attemptCount: state.attemptCount,
         replayCount,
         nextAttemptAt,
+        ...withWakeDeadline(state.deadlineAt),
         batchRunIds,
         ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
@@ -497,6 +540,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         status: "dispatching",
         attemptCount: state.attemptCount + 1,
         batchRunIds,
+        ...withWakeDeadline(state.deadlineAt),
         ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
         ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
@@ -558,19 +602,30 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     // backoffs without spending the failure replay budget; retire only on
     // terminal evidence or the owning lifecycle deadline.
     if (delivery.reason === "completion_handoff_pending") {
+      const now = Date.now();
       const lastError = delivery.error ?? delivery.reason ?? "completion_handoff_pending";
+      const deadlineAt = resolveRequesterSettleObservationDeadline(settledBatch, state, now);
+      if (now >= deadlineAt) {
+        completeBatch(settledBatch, state.rearmGeneration, {
+          delivered: false,
+          path: "none",
+          error: "requester settle wake expired",
+        });
+        return false;
+      }
       const alreadyPending =
         state.lastError === "completion_handoff_pending" || state.lastError === lastError;
       const retryDelayMs = alreadyPending
         ? REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS.length - 1]
         : REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0];
-      const nextAttemptAt = Date.now() + retryDelayMs;
+      const nextAttemptAt = Math.min(now + retryDelayMs, deadlineAt);
       state = {
         status: "dispatching",
         attemptCount: state.attemptCount,
         // Preserve any prior transport-failure replayCount; do not increment it.
         ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
         nextAttemptAt,
+        deadlineAt,
         batchRunIds,
         ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
@@ -579,7 +634,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       };
       params.transitionBatch(settledBatch, state);
       logWarn(
-        `requester settle wake pending handoff observation scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+        `requester settle wake pending handoff observation scheduled in ${Math.round((nextAttemptAt - now) / 1000)}s: ${lastError}`,
       );
       return false;
     }
@@ -596,6 +651,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       status: "pending",
       attemptCount,
       nextAttemptAt,
+      ...withWakeDeadline(state.deadlineAt),
       batchRunIds,
       ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
       ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
