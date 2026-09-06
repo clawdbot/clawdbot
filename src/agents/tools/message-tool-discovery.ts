@@ -16,7 +16,9 @@ import {
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -48,6 +50,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 
 type MessageToolCurrentContextOptions = {
   agentSessionKey?: string;
+  config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentChatType?: ChatType;
@@ -78,8 +81,44 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
   return undefined;
 }
 
+/**
+ * Session keys fold peer ids for channels outside the case-preservation
+ * registry, so a delivery target rebuilt from the key reaches the wire
+ * lowercased. Channels that compare target ids byte-exactly then reject it. The
+ * same session's stored delivery metadata still holds the casing the channel
+ * sent inbound, so recover it from there.
+ *
+ * Three gates keep this a case-only repair of one conversation: the channel
+ * must declare case-sensitive target ids, the stored route must name the same
+ * channel, and the stored id must match the folded one case-insensitively. The
+ * last mirrors the stored-key guard in src/config/sessions/store-entry.ts, and
+ * means the substitution can never select a different space or account.
+ */
+function recoverSessionCanonicalPeerId(params: {
+  cfg?: OpenClawConfig;
+  channel: string;
+  peerId: string;
+  sessionKey?: string;
+}): string {
+  if (getChannelPlugin(params.channel)?.messaging?.targetIdComparison !== "case-sensitive") {
+    return params.peerId;
+  }
+  const { deliveryContext } = extractDeliveryInfo(params.sessionKey, { cfg: params.cfg });
+  const storedTo = normalizeOptionalString(deliveryContext?.to);
+  if (!storedTo || normalizeMessageChannel(deliveryContext?.channel) !== params.channel) {
+    return params.peerId;
+  }
+  const canonical = normalizeOptionalString(
+    stripTargetProviderPrefix(storedTo, params.channel, deliveryContext?.channel ?? ""),
+  );
+  return canonical && canonical.toLowerCase() === params.peerId.toLowerCase()
+    ? canonical
+    : params.peerId;
+}
+
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
+  cfg?: OpenClawConfig,
 ): InferredSessionDelivery | null {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -90,12 +129,13 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
+  const peerId = recoverSessionCanonicalPeerId({ cfg, channel, peerId: route.peerId, sessionKey });
   return {
     accountId,
     channel,
     chatType: resolveSessionDeliveryChatType(route.peerKind),
     threadId: route.threadId,
-    to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
+    to: formatSessionDeliveryTarget(channel, route.peerKind, peerId),
   };
 }
 
@@ -111,7 +151,7 @@ export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurre
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =
     normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-      ? inferDeliveryFromSessionKey(options?.agentSessionKey)
+      ? inferDeliveryFromSessionKey(options?.agentSessionKey, options?.config)
       : null;
 
   if (!sessionDelivery?.to) {
