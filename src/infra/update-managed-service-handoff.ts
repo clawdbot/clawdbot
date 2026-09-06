@@ -36,6 +36,7 @@ import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+  readControlPlaneUpdateSentinelMeta,
   UPDATE_RUN_ID_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
@@ -804,18 +805,18 @@ let finishBeforeParkNotice;
 
 function recordServiceStop() {
   serviceStoppedAtMs ??= Date.now();
-  // Native completion owns this step even when the handoff is cancelled before activation.
+  // Both native stop observations retain the updater phase; they do not own activation.
   pendingServiceStop?.then((stopped) => {
-    runLedger?.recordUpdateRunPhase(params.runId, "activating", {
-      step: { step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now() },
+    runLedger?.recordUpdateRunStep(params.runId, {
+      step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now(),
     });
   }).catch((error) => appendLog("could not record service stop completion: " + String(error)));
   try {
     const metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
     metaFile.meta.serviceStoppedAtMs ??= serviceStoppedAtMs;
     fs.writeFileSync(params.metaPath, JSON.stringify(metaFile), { mode: 0o600 });
-    runLedger?.recordUpdateRunPhase(params.runId, "activating", {
-      step: { step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs },
+    runLedger?.recordUpdateRunStep(params.runId, {
+      step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs,
     });
   } catch (error) {
     appendLog("could not record service stop time: " + String(error));
@@ -1341,7 +1342,7 @@ async function collectUpdateFailureTriage() {
       // Admission and stop recording use the serving runtime. Terminal writes after
       // the updater starts must load the installed runtime in a fresh process.
       runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
-      for (const name of ["finishUpdateRun", "getUpdateRun", "recordUpdateRunPhase", "recordUpdateRunVerification"]) {
+      for (const name of ["finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
     }
@@ -2113,6 +2114,34 @@ export function claimManagedServiceUpdateHandoff(
   }
   active.claimed = true;
   return true;
+}
+
+/** A transferred updater may inspect its serving ancestor only under its current lease. */
+export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
+  root: string;
+  runId: string | undefined;
+}): Promise<boolean> {
+  if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" || !params.runId) {
+    return false;
+  }
+  const meta = await readControlPlaneUpdateSentinelMeta();
+  const root = resolveUpdateInstallRoot(params.root);
+  if (
+    meta?.runId !== params.runId ||
+    !meta.handoffId ||
+    !meta.root ||
+    resolveUpdateInstallRoot(meta.root) !== root
+  ) {
+    return false;
+  }
+  const lease = readManagedServiceUpdateHandoffLease(root);
+  const startIdentity = getFileLockProcessStartTime(process.pid);
+  return (
+    lease?.owner === meta.handoffId &&
+    lease.pid === process.pid &&
+    startIdentity !== null &&
+    lease.startIdentity === String(startIdentity)
+  );
 }
 
 function readManagedServiceUpdateHandoffLease(

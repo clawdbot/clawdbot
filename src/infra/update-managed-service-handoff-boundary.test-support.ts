@@ -261,6 +261,14 @@ export function createManagedServiceManagerBoundary({
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
+      if (run) {
+        updaterScript = `void (async () => {
+          ${ledgerRuntimeImport}
+          ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "staging");
+          ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "validating");
+          ${updaterScript}
+        })().catch((error) => { console.error(error); process.exit(18); });`;
+      }
       if (options?.replaceLedgerWriter) {
         const installedLedgerModule = `${ledgerRuntimeImport}
         export const { finishUpdateRun } = ledger;

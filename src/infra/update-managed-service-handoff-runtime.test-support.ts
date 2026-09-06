@@ -42,7 +42,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
       recoveryModulePath,
       `
       ${ledgerRuntimeImport}
-      export const { getUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+      export const { getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
       ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
     `,
     );

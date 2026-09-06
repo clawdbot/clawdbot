@@ -240,8 +240,6 @@ it.each(["linux", "win32"] as const)(
       runId: "rejected-construction",
       mode: "anchored-shell",
       command: "synthetic-command",
-      sessionId: "rejected-construction",
-      backendId: "test",
       scopeKey,
     });
     await nextTurn();
@@ -274,8 +272,6 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
   const run = await supervisor.spawn({
     mode: "anchored-shell",
     command: "synthetic-command",
-    sessionId: "windows-job-output",
-    backendId: "windows-job-output",
     noOutputTimeoutMs: 1_000,
   });
   try {

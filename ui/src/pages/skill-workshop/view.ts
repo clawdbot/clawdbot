@@ -13,21 +13,10 @@ import "../../styles/skill-workshop.css";
 import "../../styles/sidebar-markdown.css";
 import {
   filterSkillWorkshopProposals,
-  filterWorkshopSection,
   type SkillWorkshopActionNotice,
-  type SkillWorkshopAppliedDiffMode,
-  type SkillWorkshopAppliedSkill,
   type SkillWorkshopProposal,
   type SkillWorkshopProposalDecision,
-  type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import {
-  renderLazyAppliedHistory,
-  renderLazyAppliedRevisionDiff,
-  resolveAppliedBodyView,
-  resolveAppliedHistory,
-  type SkillWorkshopBodyView,
-} from "./applied-history.ts";
 import { renderSkillDocument, renderSkillWorkshopCollection } from "./collection-view.ts";
 import { renderSkillWorkshopEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
 import { renderSkillWorkshopEvaluation } from "./evaluation-view.ts";
@@ -35,24 +24,6 @@ import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
 import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
 import { renderSelfLearningError } from "./self-learning.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
-
-// History is a record of outcomes, so it never offers the pending filter.
-const RECORD_STATUS_TABS: SkillWorkshopStatusFilter[] = [
-  "all",
-  "applied",
-  "rejected",
-  "quarantined",
-  "stale",
-];
-
-const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
-  all: "skillWorkshop.records.all",
-  pending: "skillWorkshop.status.pending",
-  applied: "skillWorkshop.status.applied",
-  rejected: "skillWorkshop.status.rejected",
-  quarantined: "skillWorkshop.status.quarantined",
-  stale: "skillWorkshop.status.stale",
-};
 
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "skillWorkshop.recency.today",
@@ -63,30 +34,13 @@ const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
 type SkillWorkshopSection = {
   groups: Array<{ label: string; items: SkillWorkshopProposal[] }>;
   selected: SkillWorkshopProposal | undefined;
-  appliedSkills: SkillWorkshopAppliedSkill[];
-  selectedAppliedSkill: SkillWorkshopAppliedSkill | undefined;
 };
 
-// Scope the records before filtering so a retained filter cannot show pending
-// suggestions as history after a section switch.
 function resolveSection(props: SkillWorkshopProps): SkillWorkshopSection {
-  const records = filterWorkshopSection(props.proposals, props.mode);
-  const status = props.mode === "suggestions" ? "pending" : props.statusFilter;
-  const appliedHistory =
-    status === "applied"
-      ? resolveAppliedHistory(records, props.query, props.selectedKey)
-      : undefined;
-  const filtered = appliedHistory
-    ? appliedHistory.skills.map((skill) => skill.latest)
-    : filterSkillWorkshopProposals(records, status, props.query);
+  const filtered = filterSkillWorkshopProposals(props.proposals, props.query);
   return {
     groups: groupByRecency(filtered),
-    selected:
-      appliedHistory?.selectedProposal ??
-      filtered.find((proposal) => proposal.key === props.selectedKey) ??
-      filtered[0],
-    appliedSkills: appliedHistory?.skills ?? [],
-    selectedAppliedSkill: appliedHistory?.selectedSkill,
+    selected: filtered.find((proposal) => proposal.key === props.selectedKey) ?? filtered[0],
   };
 }
 
@@ -104,9 +58,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const body =
     props.mode === "skills"
       ? renderSkillWorkshopCollection(props)
-      : props.mode === "suggestions"
-        ? renderSuggestions(props, section)
-        : renderHistory(props, section);
+      : renderSuggestions(props, section);
 
   return html`
     <section class="skill-workshop sw-mode-${props.mode}">
@@ -249,47 +201,16 @@ function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSect
         props,
         groups: section.groups,
         selected: section.selected,
-        appliedSkills: section.appliedSkills,
-        emptyText: queueEmptyText(props, "suggestions"),
+        emptyText: queueEmptyText(props),
         searchLabel: t("skillWorkshop.queue.suggestionsLabel"),
         searchPlaceholder: t("skillWorkshop.queue.searchSuggestions"),
       })}
       ${renderQueueResizer(props)}
       ${
         section.selected
-          ? renderDetail(props, section.selected, section.selectedAppliedSkill)
+          ? renderDetail(props, section.selected)
           : renderSkillWorkshopEmptyDetail({
-              section: "suggestions",
               query: props.query,
-              statusFilter: "pending",
-            })
-      }
-    </div>
-  `;
-}
-
-function renderHistory(props: SkillWorkshopProps, section: SkillWorkshopSection) {
-  return html`
-    <p class="sw-records__note">${t("skillWorkshop.records.note")}</p>
-    ${renderRecordTabs(props)}
-    <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
-      ${renderSkillWorkshopProposalList({
-        props,
-        groups: section.groups,
-        selected: section.selected,
-        appliedSkills: section.appliedSkills,
-        emptyText: queueEmptyText(props, "history"),
-        searchLabel: t("skillWorkshop.queue.historyLabel"),
-        searchPlaceholder: t("skillWorkshop.queue.searchHistory"),
-      })}
-      ${renderQueueResizer(props)}
-      ${
-        section.selected
-          ? renderDetail(props, section.selected, section.selectedAppliedSkill)
-          : renderSkillWorkshopEmptyDetail({
-              section: "history",
-              query: props.query,
-              statusFilter: props.statusFilter,
             })
       }
     </div>
@@ -317,82 +238,7 @@ function renderQueueResizer(props: SkillWorkshopProps) {
   ></resizable-divider>`;
 }
 
-function renderRecordTabs(props: SkillWorkshopProps) {
-  // `counts.all` spans every proposal, so the record total subtracts the
-  // pending drafts that History deliberately never shows.
-  const recordTotal = (props.counts.all ?? 0) - (props.counts.pending ?? 0);
-  return html`
-    <div class="sw-lifecycle-tabs" role="group" aria-label=${t("skillWorkshop.records.filterAria")}>
-      ${RECORD_STATUS_TABS.map((status) => {
-        const isActive = props.statusFilter === status;
-        const count = status === "all" ? recordTotal : (props.counts[status] ?? 0);
-        return html`
-          <button
-            type="button"
-            class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
-            aria-pressed=${isActive ? "true" : "false"}
-            @click=${() => props.onStatusFilterChange(status)}
-          >
-            ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-function renderBodyModeButton(
-  props: SkillWorkshopProps,
-  mode: SkillWorkshopAppliedDiffMode,
-  label: string,
-) {
-  const active = props.appliedDiffMode === mode;
-  return html`
-    <button
-      class="sw-body-mode__button ${active ? "is-active" : ""}"
-      aria-pressed=${active ? "true" : "false"}
-      @click=${() => props.onAppliedDiffModeChange(mode)}
-    >
-      ${label}
-    </button>
-  `;
-}
-
-function renderBodyModeToggle(props: SkillWorkshopProps) {
-  return html`
-    <div class="sw-body-mode" role="group" aria-label=${t("skillWorkshop.diff.viewLabel")}>
-      ${renderBodyModeButton(props, "changes", t("skillWorkshop.diff.changes"))}
-      ${renderBodyModeButton(props, "full", t("skillWorkshop.diff.fullBody"))}
-    </div>
-  `;
-}
-
-function renderRevisionBody(view: SkillWorkshopBodyView, proposal: SkillWorkshopProposal) {
-  if (view.kind === "diff") {
-    return renderLazyAppliedRevisionDiff(view.previous.body, proposal.body);
-  }
-  if (view.kind === "loadingPrevious") {
-    return html`<p class="sw-muted" aria-busy="true">
-      ${t("skillWorkshop.diff.loadingPrevious")}
-    </p>`;
-  }
-  if (view.kind === "previousUnavailable") {
-    return html`
-      <p class="sw-muted">${t("skillWorkshop.diff.previousUnavailable")}</p>
-      ${renderSkillDocument(proposal.body)}
-    `;
-  }
-  if (view.kind === "tooLarge") {
-    return html`<p class="sw-muted">${t("skillWorkshop.diff.tooLarge")}</p>`;
-  }
-  return renderSkillDocument(proposal.body);
-}
-
-function renderDetail(
-  props: SkillWorkshopProps,
-  proposal: SkillWorkshopProposal,
-  appliedSkill: SkillWorkshopAppliedSkill | undefined,
-) {
+function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
   const createdLabel = editedAt
@@ -400,11 +246,6 @@ function renderDetail(
     : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
-  const previousRevision =
-    appliedSkill?.revisions.find(({ proposal: revision }) => revision.key === proposal.key)
-      ?.previous ?? null;
-  const bodyView = resolveAppliedBodyView(props, proposal, previousRevision);
-
   return html`
     <div class="sw-detail">
       <div class="sw-detail__head">
@@ -412,15 +253,6 @@ function renderDetail(
           <h1 class="sw-detail__title">${proposal.name}</h1>
           <div class="sw-detail__one-line">${proposal.oneLine}</div>
           <div class="sw-detail__meta">
-            ${
-              // A decided record names its outcome; every suggestion is pending
-              // by construction, so the chip would only repeat the section.
-              proposal.status === "pending"
-                ? nothing
-                : html`<span class="sw-detail__status is-${proposal.status}">
-                    ${t(STATUS_LABEL[proposal.status])}
-                  </span>`
-            }
             <span>${createdLabel}</span>
             <span>·</span>
             <span>v${proposal.version}</span>
@@ -455,16 +287,14 @@ function renderDetail(
         <div class="sw-body-card">
           <div class="sw-body-card__head">
             <h1>${proposal.slug}</h1>
-            ${previousRevision ? renderBodyModeToggle(props) : nothing}
           </div>
           ${
             detailLoading
               ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
-              : renderRevisionBody(bodyView, proposal)
+              : renderSkillDocument(proposal.body)
           }
         </div>
 
-        ${appliedSkill ? renderLazyAppliedHistory(props, appliedSkill) : nothing}
         ${
           proposal.supportFiles.length > 0
             ? html`
@@ -496,7 +326,7 @@ function renderDetail(
         ${proposal.evaluation ? renderSkillWorkshopEvaluation(proposal.evaluation) : nothing}
       </div>
 
-      ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
+      ${renderPendingActions(props, proposal)}
     </div>
   `;
 }
@@ -584,7 +414,7 @@ function groupByRecency(
     .map((key) => ({ label: GROUP_LABEL[key], items: buckets.get(key) ?? [] }));
 }
 
-function queueEmptyText(props: SkillWorkshopProps, section: "suggestions" | "history"): string {
+function queueEmptyText(props: SkillWorkshopProps): string {
   if (props.error) {
     return t("skillWorkshop.queue.loadError");
   }
@@ -594,15 +424,7 @@ function queueEmptyText(props: SkillWorkshopProps, section: "suggestions" | "his
   if (props.query.trim()) {
     return t("skillWorkshop.queue.noMatch");
   }
-  if (section === "suggestions") {
-    return t("skillWorkshop.queue.noSuggestions");
-  }
-  if (props.statusFilter !== "all") {
-    return t("skillWorkshop.queue.noRecordsStatus", {
-      status: t(STATUS_LABEL[props.statusFilter]).toLocaleLowerCase(),
-    });
-  }
-  return t("skillWorkshop.queue.noRecords");
+  return t("skillWorkshop.queue.noSuggestions");
 }
 
 function formatRelative(ms: number): string {

@@ -524,7 +524,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           onVerified: recordVerifiedDowntime,
         }),
       );
-      if (restarted) {
+      if (restarted === "ok") {
         return;
       }
       const failure: UpdateRunResult = {

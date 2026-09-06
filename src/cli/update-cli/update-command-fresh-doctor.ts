@@ -140,6 +140,10 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           allowGatewayServiceRepair: false,
           allowGatewayActivation: false,
           deferConfiguredPluginInstallRepair: true,
+          serviceRepairPolicy:
+            process.env.OPENCLAW_SERVICE_REPAIR_POLICY?.trim().toLowerCase() === "external"
+              ? "external"
+              : undefined,
         }),
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },

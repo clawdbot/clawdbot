@@ -53,6 +53,7 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -164,8 +165,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
-      | { status: "already-running"; command: string; message: string }
-      | { status: "unavailable"; command: string; message: string }
+      | { status: "already-running" | "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
     let ackDelivered = false;
@@ -399,8 +399,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               runId,
               beforePark: async () => {
-                const activating = recordUpdateRunPhase(runId, "activating");
-                await notify(activating, "activating");
+                // Parking and stop completion preserve the phase so the updater can record staging/validation.
+                const current = getUpdateRun(runId);
+                if (!current) {
+                  throw new Error("Update run disappeared before managed Gateway parking.");
+                }
+                await notify(current, current.phase === "requested" ? "parking" : "activating");
               },
               requester: params.requester,
               root: installRoot,
@@ -684,12 +688,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
-    if (
-      (ackDelivered || ackQueued) &&
-      result.status !== "ok" &&
-      handoff?.status !== "started" &&
-      !restart
-    ) {
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(

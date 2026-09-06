@@ -52,6 +52,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private dismissed: SidebarAttentionDismissals = {};
   private loadGeneration = 0;
   private cronRefresh: { generation: number; requested: boolean } | null = null;
+  private cronRefreshNeeded = false;
   private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
   private readonly stopGateway: () => void;
   private readonly stopEvents: () => void;
@@ -214,9 +215,13 @@ export class SidebarAttentionStoreController implements StoreController {
       this.reconcileDismissals(scope);
       this.onChange();
     };
+    // Deferring dispatch still invalidates the pending inventory: its stale
+    // response must not retire dismissals saved since the request began.
     if (this.cronRefresh?.generation === generation) {
       this.cronRefresh.requested = true;
-    } else {
+    }
+    this.cronRefreshNeeded = document.visibilityState === "hidden";
+    if (!this.cronRefreshNeeded && this.cronRefresh?.generation !== generation) {
       const refresh = { generation, requested: true };
       this.cronRefresh = refresh;
       void (async () => {
@@ -224,6 +229,10 @@ export class SidebarAttentionStoreController implements StoreController {
           // One scope owns both reads. Events during either read request one
           // trailing inventory; retired scopes never drain queued network work.
           while (refresh.requested && current()) {
+            if (document.visibilityState === "hidden") {
+              this.cronRefreshNeeded = true;
+              break;
+            }
             refresh.requested = false;
             const cron = createInitialCronState({ client, connected: true });
             cron.cronAgentId = agentScope.scopeId;
@@ -343,11 +352,11 @@ export class SidebarAttentionStoreController implements StoreController {
     const loadedAtMs = this.sources.agentSelection.state.selectedId
       ? Math.min(this.cronLoadedAtMs, this.modelAuthLoadedAtMs)
       : this.cronLoadedAtMs;
-    if (
-      document.visibilityState === "visible" &&
-      Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
-    ) {
-      this.load();
+    const stale = Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS;
+    if (document.visibilityState === "visible" && (this.cronRefreshNeeded || stale)) {
+      // Hidden cron events need an immediate catch-up even inside the freshness
+      // window, without refreshing independently current model authentication.
+      this.load(stale);
     }
   };
 

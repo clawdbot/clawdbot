@@ -171,6 +171,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     }
     const { route, modelFallbacks } = selected;
     params.onEvent?.({ type: "route-selected", model: route.model, provider: route.provider });
+    let remainingToolCalls = budget.maxToolCalls;
     for (let turn = 1; turn <= budget.maxTurns; turn += 1) {
       assertCurrent();
       const previousScore = finalValidation.score;
@@ -200,7 +201,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
             modelFallbacks,
             prompt: repairPrompt(params, finalValidation),
             timeoutMs,
-            maxToolCalls: budget.maxToolCalls,
+            maxToolCalls: remainingToolCalls,
             signal: turnSignal,
             isCurrent: () => {
               assertCurrent();
@@ -231,6 +232,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
         },
       };
       attempts.push(attempt);
+      remainingToolCalls -= outcome.toolCalls;
       finalValidation = attempt.validation;
       // Even failed/timed-out turns may have changed files. Validate after the
       // runner has drained; never infer repair from its self-reported result.
@@ -265,7 +267,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       if (turnController.signal.aborted || outcome.envelope.status === "timeout") {
         return stop("aborted", "per-turn-budget");
       }
-      if (outcome.toolCalls >= budget.maxToolCalls) {
+      if (remainingToolCalls <= 0) {
         return stop("aborted", "tool-call-budget");
       }
       if (finalValidation.score === previousScore) {

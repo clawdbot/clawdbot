@@ -117,7 +117,7 @@ describe("Workshop current collection", () => {
   );
 
   it.each([1280, 390])(
-    "separates five current skills from thirty-one history records at %spx",
+    "opens Skills from retired History preferences and shows only pending suggestions at %spx",
     async (width) => {
       const fixture = createSkillWorkshopCollectionFixture();
       const proof = createControlUiE2eArtifactDir(`workshop-collection-${width}`);
@@ -127,6 +127,9 @@ describe("Workshop current collection", () => {
         serviceWorkers: "block",
       });
       const page = await context.newPage();
+      await page.addInitScript(() => {
+        localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "history");
+      });
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, ...fixture.featureMethods],
         methodResponses: fixture.responses,
@@ -137,30 +140,42 @@ describe("Workshop current collection", () => {
         await expect.poll(() => skills.getAttribute("aria-selected")).toBe("true");
         await expect.poll(() => page.locator(".sw-installed-skill").count()).toBe(5);
         await expect.poll(() => skills.textContent()).toContain("5");
+        expect(await page.locator('[id^="skill-workshop-mode-tab-"]').count()).toBe(2);
+        expect(await page.locator("#skill-workshop-mode-tab-history").count()).toBe(0);
         await page
           .getByText("Current instructions after collection review.", { exact: true })
           .waitFor();
+        expect(await page.getByRole("button", { name: "View history", exact: true }).count()).toBe(
+          0,
+        );
+        expect(await page.getByRole("link", { name: "View history", exact: true }).count()).toBe(0);
         expect(await page.getByRole("heading", { name: /^name:/ }).count()).toBe(0);
         expect(await page.getByRole("cell", { name: "Stop", exact: true }).count()).toBe(1);
         await page.getByText("End of current instructions.", { exact: true }).waitFor();
-        expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(0);
+        const savedReadCount = (await gateway.getRequests("skills.proposals.inspect")).length;
+        await page
+          .getByRole("searchbox", { name: "Search installed skills" })
+          .fill("release-review");
+        await expect.poll(() => page.locator(".sw-installed-skill").count()).toBe(1);
+        expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(savedReadCount);
         await page
           .getByRole("searchbox", { name: "Search installed skills" })
           .fill("no matching skill");
         await page.getByText("No skills match that search", { exact: true }).waitFor();
         expect(await page.locator(".sw-installed-skill").count()).toBe(0);
         await page.getByRole("button", { name: "Clear search", exact: true }).click();
-        expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(0);
+        expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(savedReadCount);
         await page.screenshot({
           animations: "disabled",
           path: path.join(proof, "01-current.png"),
           fullPage: true,
         });
 
-        await page.locator("#skill-workshop-mode-tab-history").click();
-        await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
         await page.locator("#skill-workshop-mode-tab-suggestions").click();
         await expect.poll(() => page.locator(".sw-row").count()).toBe(1);
+        expect(await page.locator("#skill-workshop-mode-tab-suggestions").textContent()).toContain(
+          "1",
+        );
         await page.locator(".sw-row").click();
         await page.getByText("Improve release review", { exact: true }).first().waitFor();
         await page.getByText("Pending instructions waiting for review.", { exact: true }).waitFor();
@@ -186,36 +201,25 @@ describe("Workshop current collection", () => {
             fullPage: true,
           });
         }
-        await page.locator("#skill-workshop-mode-tab-history").click();
-        await expect.poll(() => page.locator(".sw-row").count()).toBe(31);
-        expect(await page.getByRole("heading", { name: /^name:/ }).count()).toBe(0);
-        expect(await page.locator("#skill-workshop-mode-tab-history").textContent()).toContain(
-          "31",
-        );
-        expect(await page.getByRole("button", { name: "Apply", exact: true }).count()).toBe(0);
-        expect(await page.getByRole("button", { name: /Restore|Reinstall/ }).count()).toBe(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proof, "02-history.png"),
-          fullPage: true,
-        });
-        await page.locator(".sw-lifecycle-tab", { hasText: "Stale" }).click();
-        await expect.poll(() => page.locator(".sw-row").count()).toBe(9);
-        await page.locator(".sw-lifecycle-tab", { hasText: "All records" }).click();
-        await expect.poll(() => page.locator(".sw-row").count()).toBe(31);
-
         await gateway.setMethodResponse("skills.proposals.list", {
           ...fixture.manifest,
-          installedSkills: fixture.manifest.installedSkills.slice(1),
+          installedSkills: [],
         });
+        const listsBeforeScan = (await gateway.getRequests("skills.proposals.list")).length;
+        await page.locator(".sw-history").getByRole("button").click();
+        await gateway.waitForRequest("skills.proposals.list", { after: listsBeforeScan });
+        await expect.poll(() => skills.textContent()).toContain("0");
         await page.locator("#skill-workshop-mode-tab-skills").click();
-        await page.getByRole("button", { name: "Refresh skills", exact: true }).click();
-        await expect.poll(() => page.locator(".sw-installed-skill").count()).toBe(4);
+        await page.getByText("No skills installed yet", { exact: true }).waitFor();
+        expect(await page.locator(".sw-installed-skill").count()).toBe(0);
         expect(
-          await page.locator(".sw-installed-skill").filter({ hasText: "release-review" }).count(),
+          await page
+            .getByText("Current instructions after collection review.", { exact: true })
+            .count(),
         ).toBe(0);
-        await page.locator("#skill-workshop-mode-tab-history").click();
-        await expect.poll(() => page.locator(".sw-row").count()).toBe(31);
+        await page.locator("#skill-workshop-mode-tab-suggestions").click();
+        await expect.poll(() => page.locator(".sw-row").count()).toBe(1);
+        await page.getByText("Pending instructions waiting for review.", { exact: true }).waitFor();
 
         const overflow = await page.evaluate(() => ({
           width: window.innerWidth,
@@ -247,11 +251,16 @@ describe("Workshop current collection", () => {
       await page
         .getByText("Current instructions after collection review.", { exact: true })
         .waitFor();
-      const initialReadCount = (await gateway.getRequests("skills.workshop.read")).length;
-      await gateway.deferNext("skills.workshop.read", { name: "log-search" });
+      const readMatch = { name: "log-search" };
+      const initialReadCount = (await gateway.getRequests("skills.workshop.read", readMatch))
+        .length;
       await page.locator(".sw-installed-skill", { hasText: "log-search" }).click();
-      await gateway.waitForRequest("skills.workshop.read", { after: initialReadCount });
-      await page.locator(".sw-collection__reader [aria-busy='true']").waitFor();
+      await gateway.deferNext("skills.workshop.read", { name: "log-search" });
+      await page.getByRole("button", { name: "Refresh skills", exact: true }).click();
+      await gateway.waitForRequest("skills.workshop.read", {
+        after: initialReadCount,
+        match: readMatch,
+      });
       await gateway.rejectDeferred("skills.workshop.read", {
         code: "UNAVAILABLE",
         message: "Current skill cannot be read.",
@@ -263,8 +272,11 @@ describe("Workshop current collection", () => {
         fullPage: true,
       });
       await gateway.deferNext("skills.workshop.read", { name: "log-search" });
-      await page.getByRole("button", { name: /Try again|Retry/ }).click();
-      await gateway.waitForRequest("skills.workshop.read", { after: initialReadCount + 1 });
+      await page.getByRole("button", { name: "Refresh skills", exact: true }).click();
+      await gateway.waitForRequest("skills.workshop.read", {
+        after: initialReadCount + 1,
+        match: readMatch,
+      });
       await gateway.resolveDeferred("skills.workshop.read", {
         ...fixture.manifest.installedSkills[1],
         content: "# Recovered\n\nCurrent content is readable again.",
@@ -336,7 +348,9 @@ describe("Workshop current collection", () => {
       await page.locator(".sw-error").getByRole("button", { name: "Try again" }).click();
       await page.getByText("No skills installed yet", { exact: true }).waitFor();
       expect(await page.locator(".sw-installed-skill").count()).toBe(0);
-      expect(await page.locator("#skill-workshop-mode-tab-history").textContent()).toContain("31");
+      await page.getByRole("button", { name: "See suggestions", exact: true }).click();
+      await expect.poll(() => page.locator(".sw-row").count()).toBe(1);
+      await page.getByText("Pending instructions waiting for review.", { exact: true }).waitFor();
     } catch (error) {
       await reportWorkshopFailure(page, error);
     } finally {

@@ -1938,6 +1938,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
+      "src/gateway/gateway-route-model-reuse.test.ts",
       "src/gateway/server.config-patch.test.ts",
     ];
     const full = defaultShards;
@@ -2736,6 +2737,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "src/gateway/gateway-auth-rewarm.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
+          "src/gateway/gateway-route-model-reuse.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,

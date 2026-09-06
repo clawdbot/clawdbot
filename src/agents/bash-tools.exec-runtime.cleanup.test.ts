@@ -24,6 +24,7 @@ afterEach(() => {
 
 function runtimeManagedRun(input: SpawnInput): ManagedRun {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "test-run",
     pid: 1234,
     startedAtMs: Date.now(),

@@ -887,6 +887,11 @@ alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.
 
+Triage keeps the failed update's report intact. An update started during repair
+creates its own history entry. After package replacement, restart commands run
+from the updated installation. A restart accepted by the service owner can still
+fail readiness checks; inspect `openclaw gateway status --deep` before retrying.
+
 Keep a stopped, unverified Gateway stopped and preserve migrated state during
 repair. A reachable candidate retained after a schema migration can continue
 serving while you diagnose it.

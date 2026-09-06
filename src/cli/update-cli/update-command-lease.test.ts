@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   entrypoint: vi.fn(),
   root: vi.fn(),
   plugins: vi.fn<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>(),
-  restart: vi.fn(async () => true),
+  restart: vi.fn(async () => "ok"),
   print: vi.fn(),
 }));
 

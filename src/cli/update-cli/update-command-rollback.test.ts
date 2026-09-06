@@ -15,7 +15,7 @@ import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-tas
 
 const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
-  restart: vi.fn(),
+  restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   reachable: vi.fn(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
@@ -26,7 +26,7 @@ vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => true,
+  runUpdatedInstallGatewayCommand: async () => "accepted",
 }));
 vi.mock("./update-command-service.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
@@ -96,7 +96,7 @@ describe("verified package rollback", () => {
     });
     mocks.restart.mockImplementation(async ({ onVerified }) => {
       onVerified?.(125);
-      return true;
+      return "ok";
     });
   });
   it.each([
@@ -249,7 +249,7 @@ describe("verified package rollback", () => {
         if (running.code !== 0) {
           throw new Error(running.stderr);
         }
-        return healthy;
+        return healthy ? "ok" : "restart-health-failed";
       });
       try {
         const outcome = await rollbackFailedUpdate({
@@ -466,10 +466,11 @@ describe("verified package rollback", () => {
     "restored-shims-failed",
     "partial-restore",
     "restart-unhealthy",
+    "restart-refused",
     "restart-threw",
   ] as const)("retains active installation identity after %s", async (failure) => {
     const restoredPackage = failure !== "source-failed" && failure !== "partial-restore";
-    const rollbackSucceeded = failure === "restart-unhealthy" || failure === "restart-threw";
+    const rollbackSucceeded = failure.startsWith("restart-");
     const activePackageRoot =
       failure === "partial-restore" ? null : restoredPackage ? previousRoot : candidateRoot;
     const stateDir = dirs.make("rollback-source-failed-");
@@ -489,7 +490,9 @@ describe("verified package rollback", () => {
     if (failure === "restart-threw") {
       mocks.restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
     } else {
-      mocks.restart.mockResolvedValueOnce(false);
+      mocks.restart.mockResolvedValueOnce(
+        failure === "restart-unhealthy" ? "restart-health-failed" : "failed",
+      );
     }
     const outcome = await rollbackFailedUpdate({
       result,
