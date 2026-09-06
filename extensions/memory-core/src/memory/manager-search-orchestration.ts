@@ -62,11 +62,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const candidateMaxResults = hasActiveProject
       ? Math.min(200, Math.max(maxResults, maxResults * 4))
       : maxResults;
-    const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
+    // Retrieval owners apply project scores before selection; use the final threshold
+    // so ineligible exact hits cannot fill the bounded candidate window.
     const results = await this.searchCandidates(normalizedQuery, {
       ...opts,
       maxResults: candidateMaxResults,
-      minScore: candidateMinScore,
+      minScore,
     });
     return hasActiveProject
       ? results.filter((entry) => entry.score >= minScore).slice(0, maxResults)
@@ -442,7 +443,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         // Decay and importance can reverse the order returned by vector retrieval.
         return applyProjectRanking(applyImportanceMultiplier(decayed), opts?.activeProjectKeys)
           .filter((entry) => entry.score >= minScore)
-          .toSorted((left, right) => right.score - left.score)
+          .toSorted(
+            (left, right) =>
+              right.score - left.score ||
+              left.path.localeCompare(right.path) ||
+              left.startLine - right.startLine ||
+              left.endLine - right.endLine,
+          )
           .slice(0, maxResults);
       }
 
