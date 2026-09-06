@@ -17,7 +17,7 @@ import {
   buildRestartRecoveryIdempotencyKey,
   buildRestartRecoveryResumeMessage,
   getRestartRecoveryReplayError,
-  isRetiredRunningSubagent,
+  isRetiredSubagentExecution,
   isRestartRecoveryLifecycleCurrent,
 } from "./subagent-registry-restart-recovery-helpers.js";
 import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
@@ -29,11 +29,10 @@ import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
-import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 const MAX_RECOVERY_ATTEMPTS = 2;
 const RECOVERY_ATTEMPT_WINDOW_MS = 2 * 60_000;
+const MAX_INTERRUPTION_AGE_MS = 2 * 60 * 60_000;
 const TERMINAL_RESUMPTION_NOTICE_RETRY_WINDOW_MS = 2 * 60_000;
 export type { RestartRecoveryParams, RestartRecoveryResult };
 
@@ -98,10 +97,10 @@ export async function recoverInterruptedSubagentRow(
           ? { status: "accepted" }
           : { status: "deferred" };
       }
-    } else if (!isRetiredRunningSubagent(params.entry)) {
+    } else if (!isRetiredSubagentExecution(params.entry)) {
       return { status: "deferred" };
     }
-    if (!isRetiredRunningSubagent(params.entry)) {
+    if (!isRetiredSubagentExecution(params.entry)) {
       return { status: "handled" };
     }
   }
@@ -233,13 +232,14 @@ export async function recoverInterruptedSubagentRow(
       params.entry.endedReason = undefined;
       params.entry.terminalOwner = undefined;
     }
-    if (isStaleUnendedSubagentRun(params.entry, params.now)) {
-      const age = Math.round(
-        (params.now - (getSubagentSessionStartedAt(params.entry) ?? params.now)) / 1_000,
-      );
+    // The abort marker records the interruption, not the age of useful work.
+    // A long-running child must survive a brief planned Gateway update.
+    const interruptedForMs =
+      params.now - (params.entry.execution.interruptedAt ?? sessionEntry.updatedAt);
+    if (interruptedForMs > MAX_INTERRUPTION_AGE_MS) {
       return {
         status: "terminal",
-        error: `stale aborted subagent run not resumed (${age}s old, exceeds stale-run window)`,
+        error: `stale aborted subagent run not resumed (${Math.round(interruptedForMs / 1_000)}s interrupted, exceeds stale-run window)`,
       };
     }
 

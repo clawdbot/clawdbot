@@ -154,6 +154,9 @@ export function resolveAgentRunErrorLifecycleFields(
   if (isAgentRunDirectAbortReason(error)) {
     return { aborted: true, stopReason: "aborted" };
   }
+  if (isAgentRunRestartAbortReason(error)) {
+    return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
+  }
   const timeout = resolveRunErrorTimeout(error);
   return timeout ? { stopReason: "timeout", ...timeout } : {};
 }
