@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import {
@@ -24,7 +24,6 @@ import {
   persistQueuedCronRunReservations,
   reserveQueuedCronRun,
 } from "./run-admission.js";
-import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-admission-conflict-" });
@@ -50,13 +49,9 @@ it("recovers an ownerless queued lease on a live sibling without restart", async
   const now = Date.parse("2026-08-13T15:30:00.000Z");
   const job = createDueIsolatedJob({ id: "queued-owner-exit", nowMs: now, nextRunAtMs: now });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const owner = createCronServiceState({
-    cronEnabled: true,
+  const owner = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(owner);
@@ -72,13 +67,9 @@ it("recovers an ownerless queued lease on a live sibling without restart", async
   releaseLocalCronRunReceiptOwnership(reserved.runReceipt);
 
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-  const sibling = createCronServiceState({
-    cronEnabled: true,
+  const sibling = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
   await onTimer(sibling);
@@ -101,13 +92,9 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   const receipt = claimReceipt(store.storePath, job, now);
   releaseLocalCronRunReceiptOwnership(receipt);
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-  const sibling = createCronServiceState({
-    cronEnabled: true,
+  const sibling = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
 
@@ -154,13 +141,9 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [foreignJob, pendingJob] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(state);
@@ -238,13 +221,9 @@ it("rejects a stale reservation plan after the job already finalized", async () 
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [planned] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(state);
@@ -280,13 +259,9 @@ it("terminalizes an owned reservation after another gateway deletes the job", as
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   await list(state);
@@ -326,13 +301,9 @@ it("retires a reservation when its row disappears during the post-commit reload"
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   await list(state);
