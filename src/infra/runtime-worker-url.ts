@@ -1,6 +1,9 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
+
+const requireFromHere = createRequire(import.meta.url);
 
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
@@ -26,5 +29,13 @@ export function resolveRuntimeWorkerUrl(params: {
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
-  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
+  if (/\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath)) {
+    // Pin the tsx loader to an absolute file:// URL so worker spawns resolve
+    // the package from the OpenClaw root, not the child process cwd. A bare
+    // "tsx" specifier fails with ERR_MODULE_NOT_FOUND when the worker's cwd
+    // is outside a package root containing tsx. (#140416)
+    const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
+    return [`--import=${tsxUrl}`, entry];
+  }
+  return [entry];
 }
