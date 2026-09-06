@@ -103,9 +103,10 @@ Side-effecting methods require idempotency keys (see schema).
 ## Gateway-controlled WebRTC Talk
 
 `talk.client.create` accepts the additive capability `gateway-control-v1`.
-OpenAI GA Realtime requires resolvable Platform API-key authentication for this
-mode. Native GPT-Live also requires resolvable Platform API-key
-authentication. A successful result includes
+The released browser/Gateway-owned WebRTC route tries OAuth first and falls
+back to Platform API-key authentication. Direct backend sockets and unlisted
+or private realtime routes require Platform API-key authentication. A
+successful result includes
 `clientControl: { owner: "gateway" }`, a 60-second single-use Gateway broker
 token in `clientSecret`, and the relative
 `offerUrl: "/plugins/openai/realtime/calls"`.
