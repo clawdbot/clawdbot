@@ -1414,8 +1414,7 @@ class GatewayBootstrapAuthTest {
     val prefs = testPrefs(app)
     val runtime = trackRuntime(NodeRuntime(app, prefs))
     neutralizeColdStartAutoConnect(runtime)
-    // Store startup has a separate IO scope. Finish it before arming a saved endpoint so
-    // lifecycle assertions do not race the real database-readiness gate added to connect.
+    // Finish real IO initialization before arming the saved endpoint for lifecycle assertions.
     runBlocking { readField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase() }
     return runtime to prefs
   }
@@ -1587,12 +1586,6 @@ class GatewayBootstrapAuthTest {
       agentId: String,
     ): List<ChatSessionEntry> = emptyList()
 
-    override suspend fun loadSessionId(
-      gatewayId: String,
-      agentId: String,
-      sessionKey: String,
-    ): String? = null
-
     override suspend fun loadTranscript(
       gatewayId: String,
       agentId: String,
@@ -1612,14 +1605,12 @@ class GatewayBootstrapAuthTest {
       sessionKey: String,
       messages: List<ChatMessage>,
       sessionInfo: ChatSessionEntry?,
-      sessionId: String?,
     ) = Unit
 
     override suspend fun deleteSession(
       gatewayId: String,
       agentId: String,
       sessionKey: String,
-      expectedSessionId: String?,
     ) = Unit
 
     override suspend fun clearGateway(gatewayId: String) {

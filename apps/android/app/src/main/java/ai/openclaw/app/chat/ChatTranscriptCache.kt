@@ -70,13 +70,6 @@ interface ChatTranscriptCache {
     agentId: String,
   ): List<ChatSessionEntry>
 
-  /** Persisted identity for cache cleanup only; it does not grant live session actions. */
-  suspend fun loadSessionId(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-  ): String?
-
   suspend fun loadTranscript(
     gatewayId: String,
     agentId: String,
@@ -96,15 +89,13 @@ interface ChatTranscriptCache {
     sessionKey: String,
     messages: List<ChatMessage>,
     sessionInfo: ChatSessionEntry? = null,
-    sessionId: String? = null,
   )
 
-  /** Removes only the observed instance; null matches an unidentified row, never every instance. */
+  /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
   suspend fun deleteSession(
     gatewayId: String,
     agentId: String,
     sessionKey: String,
-    expectedSessionId: String? = null,
   )
 
   /** Removes every cached transcript row owned by one gateway identity. */
@@ -127,8 +118,6 @@ internal data class CachedSessionEntity(
   val hasRunMetadata: Boolean,
   // Preserves gateway list order so offline session rows render in the familiar order.
   val rowOrder: Int,
-  // Identifies the transcript stored under this key, including when its row is off-screen.
-  val sessionId: String? = null,
 )
 
 @Entity(tableName = "cached_messages", primaryKeys = ["gatewayId", "agentId", "sessionKey", "rowOrder"])
@@ -323,17 +312,6 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  override suspend fun loadSessionId(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-  ): String? {
-    val gateway = scopedGatewayId(gatewayId) ?: return null
-    val agent = scopedAgentId(agentId) ?: return null
-    val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return null
-    return database.dao().session(gateway, agent, key)?.sessionId
-  }
-
   override suspend fun loadTranscript(
     gatewayId: String,
     agentId: String,
@@ -394,34 +372,20 @@ class RoomChatTranscriptCache internal constructor(
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
     database.withWriteTransaction {
-      val previousRows = dao.sessions(gateway, agent).associateBy { it.sessionKey }
-
-      suspend fun rowFor(
-        session: ChatSessionEntry,
-        order: Int,
-      ): CachedSessionEntity {
-        val row = session.toCachedSession(gateway, agent, rowOrder = order)
-        val previous = previousRows[session.key]
-        // A new listed instance must never inherit its predecessor's cached messages.
-        if (row.sessionId != null && previous != null && row.sessionId != previous.sessionId) {
-          dao.deleteTranscript(gateway, agent, session.key)
-        }
-        return row.copy(sessionId = row.sessionId ?: previous?.sessionId)
-      }
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
       val retainedRow =
         if (needsRetainedRow) {
-          retainedEntry?.let { rowFor(it, 0) }
-            ?: previousRows[retainedKey]
+          retainedEntry?.toCachedSession(gateway, agent, rowOrder = 0)
+            ?: dao.session(gateway, agent, retainedKey)
         } else {
           null
         }
       val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
       val rows =
         sessions.take(listedSessionLimit).mapIndexed { index, session ->
-          rowFor(session, index)
+          session.toCachedSession(gateway, agent, rowOrder = index)
         }
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
@@ -438,7 +402,6 @@ class RoomChatTranscriptCache internal constructor(
     sessionKey: String,
     messages: List<ChatMessage>,
     sessionInfo: ChatSessionEntry?,
-    sessionId: String?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
@@ -528,13 +491,11 @@ class RoomChatTranscriptCache internal constructor(
       val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          (
-            if (sessionInfo != null || currentSession == null) {
-              session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
-            } else {
-              currentSession
-            }
-          ).copy(sessionId = sessionId?.trim()?.takeIf(String::isNotEmpty)),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
@@ -558,15 +519,12 @@ class RoomChatTranscriptCache internal constructor(
     gatewayId: String,
     agentId: String,
     sessionKey: String,
-    expectedSessionId: String?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
     database.withWriteTransaction {
-      // Recheck in the transaction: a second facade can replace the cache after a caller reads it.
-      if (dao.session(gateway, agent, key)?.sessionId != expectedSessionId) return@withWriteTransaction
       dao.deleteSessionRow(gateway, agent, key)
       dao.deleteTranscript(gateway, agent, key)
     }
@@ -609,5 +567,4 @@ private fun ChatSessionEntry.toCachedSession(
     outputTokens = outputTokens,
     hasRunMetadata = hasRunMetadata,
     rowOrder = rowOrder,
-    sessionId = sessionId?.trim()?.takeIf(String::isNotEmpty),
   )

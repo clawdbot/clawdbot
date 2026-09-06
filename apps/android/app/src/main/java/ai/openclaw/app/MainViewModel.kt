@@ -671,7 +671,7 @@ class MainViewModel private constructor(
   internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
     runtimeState(initial = null) { it.messageSpeechState }
 
-  internal suspend fun loadChatReaderPosition(scope: ChatReaderPositionScope): ChatReaderPositionBinding = ensureRuntime().loadChatReaderPosition(scope)
+  internal suspend fun loadChatReaderPosition(scope: ChatReaderPositionScope): ChatReaderPositionBinding? = ensureRuntime().loadChatReaderPosition(scope)
 
   internal suspend fun saveChatReaderPosition(
     binding: ChatReaderPositionBinding,
@@ -1607,9 +1607,15 @@ class MainViewModel private constructor(
     key: String,
     ownerAgentId: String?,
   ) {
-    // The controller-owned callback retires only input still covered by this deletion.
-    // A successful RPC alone must not clear a replacement draft after navigation or refresh.
-    ensureRuntime().deleteChatSession(key, ownerAgentId)
+    val deleted = ensureRuntime().deleteChatSession(key, ownerAgentId) ?: return
+    deleted.gatewayId?.let { gatewayId ->
+      clearChatComposerSession(
+        gatewayStableId = gatewayId,
+        agentId = deleted.agentId,
+        sessionKey = deleted.sessionKey,
+        mainSessionKey = deleted.mainSessionKey,
+      )
+    }
   }
 
   /** Remembers a custom session group locally so it renders as an empty section. */

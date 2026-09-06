@@ -1344,7 +1344,7 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
-  loadReaderPosition: suspend (ChatReaderPositionScope) -> ChatReaderPositionBinding,
+  loadReaderPosition: suspend (ChatReaderPositionScope) -> ChatReaderPositionBinding?,
   saveReaderPosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit,
   clearReaderPosition: suspend (ChatReaderPositionBinding) -> Unit,
   activeRunCount: Int,

@@ -125,7 +125,7 @@ class ChatReaderScrollOwnershipLayoutTest {
             historyLoading = false,
             historyResolved = historyResolved,
             loadPosition = { scope ->
-              ChatReaderPositionBinding(scope, ChatReaderPosition("assistant 10", 23), generation = 1)
+              ChatReaderPositionBinding(scope, ChatReaderPosition("assistant 10", 23))
             },
           )
         SideEffect { reader = current }

@@ -527,7 +527,6 @@ class NodeRuntimeAgentSelectionTest {
               gatewayId = GatewayEndpoint.manual("127.0.0.1", 18789).stableId,
               agentId = "scout",
               sessionKey = "agent:scout:deleted",
-              sessionId = null,
               mainSessionKey = scoutMain,
             ),
           ),

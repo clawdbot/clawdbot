@@ -81,21 +81,13 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 4,
+  version = 3,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
   abstract fun dao(): ChatCacheDao
 
   companion object {
-    internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          // Old rows remain readable; a live response must establish their instance identity.
-          connection.execSQL("ALTER TABLE cached_sessions ADD COLUMN sessionId TEXT")
-        }
-      }
-
     suspend fun open(
       context: Context,
       name: String = GATEWAY_CACHE_DB_NAME,
@@ -105,7 +97,6 @@ internal abstract class GatewayCacheDatabase : RoomDatabase() {
       fun build(): GatewayCacheDatabase =
         Room
           .databaseBuilder(appContext, GatewayCacheDatabase::class.java, name)
-          .addMigrations(MIGRATION_3_4)
           // Cache rows are gateway-owned projections. A missing migration means rebuild, and
           // dropAllTables also removes obsolete cache tables left by older formats.
           .fallbackToDestructiveMigration(true)
@@ -343,18 +334,14 @@ private class OpenedAndroidClientDatabases private constructor(
   private val context: Context,
   val gatewayCache: GatewayCacheDatabase,
   val clientState: ClientStateDatabase,
-  readerPositionFence: ChatReaderPositionFence,
 ) : AutoCloseable {
   companion object {
-    suspend fun inMemory(
-      context: Context,
-      readerPositionFence: ChatReaderPositionFence,
-    ): OpenedAndroidClientDatabases {
+    suspend fun inMemory(context: Context): OpenedAndroidClientDatabases {
       val appContext = context.applicationContext
       val state = Room.inMemoryDatabaseBuilder(appContext, ClientStateDatabase::class.java).build().openValidated()
       return try {
         val cache = Room.inMemoryDatabaseBuilder(appContext, GatewayCacheDatabase::class.java).build().openValidated()
-        OpenedAndroidClientDatabases(appContext, cache, state, readerPositionFence)
+        OpenedAndroidClientDatabases(appContext, cache, state)
       } catch (error: Throwable) {
         state.close()
         throw error
@@ -367,14 +354,13 @@ private class OpenedAndroidClientDatabases private constructor(
       clientStateName: String = CLIENT_STATE_DB_NAME,
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
-      readerPositionFence: ChatReaderPositionFence,
     ): OpenedAndroidClientDatabases {
       val appContext = context.applicationContext
       val state = ClientStateDatabase.open(appContext, clientStateName)
       var cache: GatewayCacheDatabase? = null
       return try {
         cache = GatewayCacheDatabase.open(appContext, gatewayCacheName)
-        OpenedAndroidClientDatabases(appContext, cache, state, readerPositionFence).also { databases ->
+        OpenedAndroidClientDatabases(appContext, cache, state).also { databases ->
           databases.importLegacyStateIfNeeded(legacyName)
           databases.resolvePendingGatewayRemovals(registeredGatewayIds)
         }
@@ -390,7 +376,7 @@ private class OpenedAndroidClientDatabases private constructor(
 
   val commandOutbox = RoomChatCommandOutbox(clientState)
 
-  val readerPositionStore = ChatReaderPositionStore({ clientState }, readerPositionFence)
+  val readerPositionStore = ChatReaderPositionStore(clientState)
 
   suspend fun stageGatewayRemoval(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
@@ -413,16 +399,14 @@ private class OpenedAndroidClientDatabases private constructor(
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     withContext(NonCancellable) {
-      // Fence reader writes before acquiring Room's writer. Every save uses the same
-      // fence-before-database order, so an active viewport save cannot deadlock removal.
-      readerPositionStore.clearGateway(gateway) { state ->
-        // State deletion and its phase advance are atomic. A rollback leaves no irreversible marker;
-        // after commit, startup may clear only disposable cache and must preserve any newer outbox rows.
-        state.withWriteTransaction {
-          state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
+      // State deletion and its phase advance are atomic. A rollback leaves no irreversible marker;
+      // after commit, startup may clear only disposable cache and must preserve any newer outbox rows.
+      readerPositionStore.clearGateway(gateway) {
+        clientState.withWriteTransaction {
+          clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
           commandOutbox.clearGateway(gateway)
-          state.controlDao().deleteMetadata(chatReaderPositionMetadataKey(gateway))
-          state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
+          clientState.controlDao().deleteMetadata(chatReaderPositionMetadataKey(gateway))
+          clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
         }
       }
       completeCacheRemoval(gateway, propagateFailure = requireCacheRemoval)
@@ -532,7 +516,6 @@ internal class AndroidClientDatabases private constructor(
   private val initialization: Deferred<OpenedAndroidClientDatabases>,
   private val openedReference: AtomicReference<OpenedAndroidClientDatabases?>,
   private val closed: AtomicBoolean,
-  readerPositionFence: ChatReaderPositionFence,
 ) : AutoCloseable {
   companion object {
     fun start(
@@ -542,27 +525,25 @@ internal class AndroidClientDatabases private constructor(
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
     ): AndroidClientDatabases =
-      start { readerPositionFence ->
+      start {
         OpenedAndroidClientDatabases.open(
           context = context.applicationContext,
           gatewayCacheName = gatewayCacheName,
           clientStateName = clientStateName,
           legacyName = legacyName,
           registeredGatewayIds = registeredGatewayIds,
-          readerPositionFence = readerPositionFence,
         )
       }
 
-    fun inMemory(context: Context): AndroidClientDatabases = start { readerPositionFence -> OpenedAndroidClientDatabases.inMemory(context, readerPositionFence) }
+    fun inMemory(context: Context): AndroidClientDatabases = start { OpenedAndroidClientDatabases.inMemory(context) }
 
-    private fun start(open: suspend (ChatReaderPositionFence) -> OpenedAndroidClientDatabases): AndroidClientDatabases {
+    private fun start(open: suspend () -> OpenedAndroidClientDatabases): AndroidClientDatabases {
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-      val readerPositionFence = ChatReaderPositionFence()
       val openedReference = AtomicReference<OpenedAndroidClientDatabases?>()
       val closed = AtomicBoolean(false)
       val initialization =
         scope.async {
-          val opened = open(readerPositionFence)
+          val opened = open()
           if (closed.get()) {
             opened.close()
             throw CancellationException("Android client databases closed during initialization")
@@ -574,19 +555,19 @@ internal class AndroidClientDatabases private constructor(
           }
           opened
         }
-      return AndroidClientDatabases(scope, initialization, openedReference, closed, readerPositionFence)
+      return AndroidClientDatabases(scope, initialization, openedReference, closed)
     }
   }
 
   private val transcriptCache = DeferredChatTranscriptCache(::ready)
   private val commandOutbox = DeferredChatCommandOutbox(::ready)
-  private val readerPositionStore = ChatReaderPositionStore({ ready().clientState }, readerPositionFence)
 
   fun transcriptCache(): ChatTranscriptCache = transcriptCache
 
   fun commandOutbox(): ChatCommandOutbox = commandOutbox
 
-  fun readerPositionStore(): ChatReaderPositionStore = readerPositionStore
+  // One owner, published only after startup recovery. No pre-initialization store facade.
+  suspend fun readerPositionStore(): ChatReaderPositionStore = ready().readerPositionStore
 
   suspend fun stageGatewayRemoval(gatewayId: String) = ready().stageGatewayRemoval(gatewayId)
 
@@ -630,12 +611,6 @@ private class DeferredChatTranscriptCache(
     agentId: String,
   ): List<ChatSessionEntry> = ready().transcriptCache.loadSessions(gatewayId, agentId)
 
-  override suspend fun loadSessionId(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-  ): String? = ready().transcriptCache.loadSessionId(gatewayId, agentId, sessionKey)
-
   override suspend fun loadTranscript(
     gatewayId: String,
     agentId: String,
@@ -655,15 +630,13 @@ private class DeferredChatTranscriptCache(
     sessionKey: String,
     messages: List<ChatMessage>,
     sessionInfo: ChatSessionEntry?,
-    sessionId: String?,
-  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages, sessionInfo, sessionId)
+  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages, sessionInfo)
 
   override suspend fun deleteSession(
     gatewayId: String,
     agentId: String,
     sessionKey: String,
-    expectedSessionId: String?,
-  ) = ready().transcriptCache.deleteSession(gatewayId, agentId, sessionKey, expectedSessionId)
+  ) = ready().transcriptCache.deleteSession(gatewayId, agentId, sessionKey)
 
   override suspend fun clearGateway(gatewayId: String) = ready().transcriptCache.clearGateway(gatewayId)
 }

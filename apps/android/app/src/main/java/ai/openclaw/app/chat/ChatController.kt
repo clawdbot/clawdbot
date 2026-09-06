@@ -148,10 +148,8 @@ internal data class ChatSessionDeletion(
   val gatewayId: String?,
   val agentId: String,
   val sessionKey: String,
-  val sessionId: String?,
   val mainSessionKey: String,
-  // Cache identity identifies a transcript, not generation-unbound composer/outbox input.
-  val clearLocalInput: Boolean = true,
+  val sessionId: String? = null,
 )
 
 private class MainSessionReadiness(
@@ -1429,12 +1427,6 @@ class ChatController internal constructor(
     return members.values.toList()
   }
 
-  private data class SessionDeletionRequest(
-    val historyGeneration: Long,
-    val listedEntry: ChatSessionEntry?,
-    val inputIds: Set<String>,
-  )
-
   internal suspend fun deleteSession(
     key: String,
     ownerAgentId: String? = null,
@@ -1446,27 +1438,14 @@ class ChatController internal constructor(
         ?: return null
     val requestCacheScope = currentCacheScope()
     val requestMainSessionKey = appliedMainSessionKey
-    val requestHistoryGeneration = historyLoadGeneration.get()
-    val requestEntry =
-      _sessions.value.firstOrNull { entry ->
-        entry.key == sessionKey && (entry.ownerAgentId == null || entry.ownerAgentId == capturedOwnerAgentId)
-      }
+    // Capture bookmark identity before the RPC can change selection or history.
     val requestSessionId =
-      requestEntry?.sessionId
+      _sessions.value.firstOrNull { it.key == sessionKey && it.ownerAgentId == capturedOwnerAgentId }?.sessionId
         ?: _sessionId.value.takeIf {
           _sessionKey.value == sessionKey && resolveAgentIdForSessionKey(sessionKey) == capturedOwnerAgentId
         }
-    val (deleted, requestState) =
+    val deleted =
       try {
-        val inputIds =
-          requestCacheScope
-            ?.let { gateway ->
-              commandOutbox
-                .load(gateway.gatewayId)
-                .filter { it.sessionKey == sessionKey && it.ownerAgentId == capturedOwnerAgentId }
-                .mapTo(mutableSetOf()) { it.id }
-            }.orEmpty()
-        val requestState = SessionDeletionRequest(requestHistoryGeneration, requestEntry, inputIds)
         val params =
           buildJsonObject {
             put("key", JsonPrimitive(sessionKey))
@@ -1477,26 +1456,18 @@ class ChatController internal constructor(
             put("archivedOnly", JsonPrimitive(true))
           }
         val response = requestGatewayBound(requestCacheScope?.gatewayId, "sessions.delete", params.toString())
-        val deleted =
-          json
-            .parseToJsonElement(response)
-            .asObjectOrNull()
-            ?.get("deleted")
-            .asBooleanOrNull() == true
-        deleted to requestState
+        json
+          .parseToJsonElement(response)
+          .asObjectOrNull()
+          ?.get("deleted")
+          .asBooleanOrNull() == true
       } catch (err: Throwable) {
         updateErrorText(err.message)
         return null
       }
     try {
       if (deleted) {
-        removeSessionEntry(
-          sessionKey,
-          ownerAgentId = capturedOwnerAgentId,
-          sessionId = requestSessionId,
-          cacheScope = requestCacheScope,
-          confirmedRequest = requestState,
-        )
+        removeSessionEntry(sessionKey, ownerAgentId = capturedOwnerAgentId, cacheScope = requestCacheScope, sessionId = requestSessionId)
       }
       fetchSessionsForCurrentWindow()
     } catch (err: Throwable) {
@@ -1507,10 +1478,8 @@ class ChatController internal constructor(
         gatewayId = requestCacheScope?.gatewayId,
         agentId = capturedOwnerAgentId,
         sessionKey = sessionKey,
-        sessionId = requestSessionId,
         mainSessionKey = requestMainSessionKey,
-        // This is the RPC receipt; only the accepted callback may authorize local cleanup.
-        clearLocalInput = false,
+        sessionId = requestSessionId,
       )
     } else {
       null
@@ -4799,12 +4768,7 @@ class ChatController internal constructor(
               _messages.value = nextMessages
               val previousAnchor =
                 _transcriptAnchor.value?.takeIf {
-                  it.resolvesReaderHistory(
-                    gatewayId = requestCacheScope?.gatewayId,
-                    ownerAgentId = requestAgentId,
-                    sessionKey = sessionKey,
-                    sessionId = history.sessionId,
-                  )
+                  it.resolvesReaderHistory(requestCacheScope?.gatewayId, requestAgentId, sessionKey, history.sessionId)
                 }
               val completionSettled =
                 markCompletedTranscript &&
@@ -4852,7 +4816,6 @@ class ChatController internal constructor(
                 sessionKey,
                 history.messages,
                 appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
-                history.sessionId,
               )
               HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
             }
@@ -5012,7 +4975,6 @@ class ChatController internal constructor(
     sessionKey: String,
     messages: List<ChatMessage>,
     sessionInfo: ChatSessionEntry?,
-    sessionId: String?,
   ) {
     val cache = transcriptCache ?: return
     val capturedScope = requestCacheScope ?: return
@@ -5021,7 +4983,7 @@ class ChatController internal constructor(
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       cacheMutationMutex.withLock {
         if (capturedScope != currentCacheScope()) return@withLock
-        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages, sessionInfo, sessionId) }
+        runCatching { cache.saveTranscript(capturedScope.gatewayId, agentId, sessionKey, messages, sessionInfo) }
       }
     }
   }
@@ -6592,18 +6554,16 @@ class ChatController internal constructor(
     }
     if (reason == "delete") {
       val sessionKey = payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull()
-      val sessionId = payload["sessionId"].asStringOrNull()
       val ownerAgentId = payload["agentId"].asStringOrNull()
-      val eventScope = currentCacheScope()
-      scope.launch(start = CoroutineStart.UNDISPATCHED) {
-        if (!removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId, sessionId = sessionId, cacheScope = eventScope)) {
-          // An unidentifiable delete still invalidates membership. Refresh the visible
-          // transcript too; a filtered drawer page cannot prove a current instance was deleted.
-          refreshSessionsForCurrentWindow()
-          if (eventScope == currentCacheScope() && sessionKey == _sessionKey.value) {
-            refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
-          }
-        }
+      if (
+        !removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId, sessionId = payload["sessionId"].asStringOrNull()) &&
+        sessionKey != null &&
+        resolveAgentIdFromMainSessionKey(sessionKey) == null &&
+        ownerAgentId == null
+      ) {
+        // Legacy ownerless hints cannot authorize deleting an agent's local state:
+        // absence from a filtered drawer page is not proof that its session was deleted.
+        refreshSessionsForCurrentWindow()
       }
       return
     }
@@ -8201,118 +8161,59 @@ class ChatController internal constructor(
     }
   }
 
-  private suspend fun removeSessionEntry(
+  private fun removeSessionEntry(
     sessionKey: String?,
     ownerAgentId: String? = null,
-    sessionId: String? = null,
     cacheScope: ChatCacheScope? = currentCacheScope(),
-    confirmedRequest: SessionDeletionRequest? = null,
+    sessionId: String? = null,
   ): Boolean {
     val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-    val owner = resolveAgentIdFromMainSessionKey(key) ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-    val deletedSessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() }
-    // The Gateway contract makes key-only events invalidations, not instance deletions.
-    if (deletedSessionId == null && confirmedRequest == null) return false
-    // An accepted deletion owns cleanup even if its UI waiter leaves. Lock in publication ->
-    // cache order so replacement history and durable admission cannot overtake the purge.
-    return withContext(NonCancellable) {
-      val removed =
-        historyPublicationMutex.withLock {
-          cacheMutationMutex.withLock purge@{
-            val cachedSessionId =
-              cacheScope?.let { gateway ->
-                runCatching { transcriptCache?.loadSessionId(gateway.gatewayId, owner, key) }.getOrNull()
-              }
-            val localInput =
-              cacheScope
-                ?.let { gateway ->
-                  commandOutbox.load(gateway.gatewayId).filter { it.sessionKey == key && it.ownerAgentId == owner }
-                }.orEmpty()
-            val removal =
-              synchronized(gatewayScopeApplyLock) {
-                val sameGateway = cacheScope?.gatewayId == currentCacheScope()?.gatewayId
-                val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
-                val activeSessionIds =
-                  if (sameGateway && _sessionKey.value == key && owner == visibleOwner) listOf(_sessionId.value) else emptyList()
-                val listedSessionIds =
-                  _sessions.value
-                    .filter { entry ->
-                      sameGateway && entry.key == key && (resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId) == owner
-                    }.mapNotNull { it.sessionId }
-                // An unidentified drawer projection does not contradict a proven instance.
-                // Keep active nulls: a newly selected replacement may still be hydrating.
-                // Reconnects preserve gateway identity; another gateway cannot veto this purge.
-                val observedSessionIds = activeSessionIds + listedSessionIds
-                val cachedInstanceMatches = deletedSessionId != null && cachedSessionId == deletedSessionId
-                // A successful local delete can cover older rows without instance IDs, but
-                // only while its captured selection, row and input still belong to that request.
-                // Unsolicited events cannot borrow this authority, nor can replacement input.
-                val confirmedRequestCurrent =
-                  confirmedRequest != null && cacheScope == currentCacheScope() &&
-                    confirmedRequest.historyGeneration == historyLoadGeneration.get() &&
-                    confirmedRequest.listedEntry ===
-                    _sessions.value.firstOrNull { entry ->
-                      entry.key == key && (resolveAgentIdFromMainSessionKey(key) ?: entry.ownerAgentId) == owner
-                    } && localInput.all { it.id in confirmedRequest.inputIds }
-                if (
-                  observedSessionIds.any { if (it == null) !confirmedRequestCurrent else it != deletedSessionId } ||
-                  (deletedSessionId != null && cachedSessionId != null && !cachedInstanceMatches) ||
-                  (
-                    observedSessionIds.isEmpty() && !cachedInstanceMatches &&
-                      (confirmedRequest == null || (localInput.isNotEmpty() && !confirmedRequestCurrent))
-                  )
-                ) {
-                  // Unknown/replaced instances must reconcile before queued input can run.
-                  markOutboxBranchUnreconciled(cacheScope, ChatOutboxScope(key, owner))
-                  return@synchronized null
-                }
-                val clearLocalInput =
-                  confirmedRequestCurrent || activeSessionIds.any { it != null && it == deletedSessionId }
-                if (!clearLocalInput && localInput.isNotEmpty()) {
-                  markOutboxBranchUnreconciled(cacheScope, ChatOutboxScope(key, owner))
-                }
-                val retired =
-                  retireSessionSettingsLanes { settingsKey, _ ->
-                    settingsKey.gatewayScope?.gatewayId == cacheScope?.gatewayId &&
-                      settingsKey.sessionKey == key && settingsKey.ownerAgentId == owner
-                  }
-                val rememberedOwner = ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, owner)
-                if (lastSelectedChatSessionByOwner[rememberedOwner]?.key == key) lastSelectedChatSessionByOwner.remove(rememberedOwner)
-                val removesVisibleEntry = sameGateway && owner == visibleOwner
-                if (removesVisibleEntry) {
-                  _sessions.value = _sessions.value.filterNot { it.key == key }
-                  // Navigate before I/O; a later explicit re-selection belongs to the user.
-                  fallBackFromRetiredActiveSession(key)
-                }
-                Triple(removesVisibleEntry, retired, clearLocalInput)
-              }
-            // A stale event may still retire its exact cached transcript/bookmark, but cannot
-            // retire the replacement UI, composer, or input that has no persisted instance ID.
-            val removesCachedInstance = deletedSessionId != null && cachedSessionId == deletedSessionId
-            if (removal == null && deletedSessionId == null) return@purge false
-            val clearLocalInput = removal?.third == true
-            removal?.second?.forEach { it.complete(false) }
-            if (cacheScope != null) {
-              onSessionDeleted(
-                ChatSessionDeletion(
-                  cacheScope.gatewayId,
-                  owner,
-                  key,
-                  deletedSessionId ?: cachedSessionId,
-                  appliedMainSessionKey,
-                  clearLocalInput = clearLocalInput,
-                ),
-              )
-              if (removal != null || removesCachedInstance) {
-                transcriptCache?.let { runCatching { it.deleteSession(cacheScope.gatewayId, owner, key, expectedSessionId = cachedSessionId) } }
-              }
-              if (clearLocalInput) runCatching { commandOutbox.deleteForSession(cacheScope.gatewayId, key, owner) }
-            }
-            removal?.first == true
+    val owner = resolveAgentIdFromMainSessionKey(key) ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
+    val (removesVisibleEntry, retiredSettings) =
+      synchronized(gatewayScopeApplyLock) {
+        val retired =
+          retireSessionSettingsLanes { settingsKey, _ ->
+            owner != null && settingsKey == SessionSettingsKey(cacheScope, key, owner)
           }
-        }
+        val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
+        val removesVisibleEntry = cacheScope == currentCacheScope() && owner != null && owner == visibleOwner
+        if (removesVisibleEntry) _sessions.value = _sessions.value.filterNot { it.key == key }
+        removesVisibleEntry to retired
+      }
+    retiredSettings.forEach { it.complete(false) }
+    // Gateway-side deletes must also purge the offline copy, or the deleted transcript would
+    // reappear on the next offline cold open. Queued commands for the session die with it too.
+    if (owner != null) purgeSessionOwnedState(key, owner, cacheScope, sessionId)
+    if (removesVisibleEntry) fallBackFromRetiredActiveSession(key)
+    return removesVisibleEntry
+  }
+
+  private fun purgeSessionOwnedState(
+    sessionKey: String,
+    ownerAgentId: String,
+    cacheScope: ChatCacheScope?,
+    sessionId: String?,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      val owner = ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, ownerAgentId)
+      if (lastSelectedChatSessionByOwner[owner]?.key == sessionKey) lastSelectedChatSessionByOwner.remove(owner)
+    }
+    if (cacheScope == null) return
+    onSessionDeleted(
+      ChatSessionDeletion(
+        gatewayId = cacheScope.gatewayId,
+        agentId = ownerAgentId,
+        sessionKey = sessionKey,
+        mainSessionKey = appliedMainSessionKey,
+        sessionId = sessionId,
+      ),
+    )
+    scope.launch {
+      cacheMutationMutex.withLock {
+        transcriptCache?.let { runCatching { it.deleteSession(cacheScope.gatewayId, ownerAgentId, sessionKey) } }
+        runCatching { commandOutbox.deleteForSession(cacheScope.gatewayId, sessionKey, ownerAgentId) }
+      }
       publishOutbox()
-      removed
     }
   }
 

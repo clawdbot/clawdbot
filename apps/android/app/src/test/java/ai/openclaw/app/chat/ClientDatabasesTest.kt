@@ -4,7 +4,6 @@ import ai.openclaw.app.ui.chat.buildChatTimeline
 import ai.openclaw.app.ui.chat.readerPosition
 import ai.openclaw.app.ui.chat.restoredChatReaderTransition
 import android.database.sqlite.SQLiteDatabase
-import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.room3.executeSQL
 import androidx.room3.useReaderConnection
@@ -15,16 +14,12 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,701 +31,205 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
   @Test
-  fun readerPositionSurvivesLargeMessagesAcrossReopen() =
+  fun readerBookmarksReopenWithV1StateAndQueuedInputIntact() =
     runTest {
-      val contents =
-        listOf(
-          listOf(ChatMessageContent(text = "x".repeat(20_000))),
-          List(256) { index -> ChatMessageContent(text = "part-$index") },
-        )
-      for ((content, entryId) in contents.flatMap { content -> listOf(content to "canonical-entry", content to null) }) {
-        val names = databaseNames()
-        val message =
-          ChatMessage(
-            id = "display-before",
-            role = "assistant",
-            content = content,
-            timestampMs = 1,
-            entryId = entryId,
-          )
-        val before = buildChatTimeline(listOf(message), 0, emptyList(), null)
-        val position = requireNotNull(before.readerPosition(index = 0, offset = 73))
-        val scope = readerScope("gateway-a", "main")
-        withDatabases(names) { databases ->
-          val store = databases.readerPositionStore()
-          store.save(store.bind(scope), position)
+      val names = databaseNames()
+      val original = ChatReaderPositionScope("gateway-a", "main", "main", "session-a")
+      val scopes = listOf(original, original.copy(gatewayId = "gateway-b"), original.copy(ownerAgentId = "other"), original.copy(sessionKey = "side"))
+      val largeMessages =
+        (0..1).map { index ->
+          ChatMessage(id = "before-$index", role = "assistant", content = listOf(ChatMessageContent(text = "x".repeat(20_000))), timestampMs = 1, entryId = if (index == 0) "canonical" else null)
         }
-
-        withCleanDatabases(names) { databases ->
-          val saved = databases.readerPositionStore().bind(scope).position
-          assertNotNull("content parts: ${content.size}, entryId: $entryId", saved)
-          assertEquals(entryId, saved?.entryId)
-          val after = buildChatTimeline(listOf(message.copy(id = "display-after")), 0, emptyList(), null)
-          val restored = requireNotNull(restoredChatReaderTransition(after, requireNotNull(saved)))
-          assertEquals(0, restored.scrollIndex)
-          assertEquals(73, restored.scrollOffset)
-        }
-      }
-    }
-
-  @Test
-  fun sessionDeleteRemovesSavedReaderPosition() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val scope = readerScope("gateway-a", "main")
-        val binding = store.bind(scope)
-        store.save(binding, ChatReaderPosition("message-a", 37))
-
-        store.deleteSession(scope)
-
-        assertNull(store.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun sessionDeleteFencesLateReaderPositionSave() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val scope = readerScope("gateway-a", "main")
-        val binding = store.bind(scope)
-        store.deleteSession(scope)
-
-        store.save(binding, ChatReaderPosition("message-a", 37))
-
-        assertNull(store.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun gatewayDeleteRemovesSavedReaderPosition() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val scope = readerScope("gateway-a", "main")
-        val binding = store.bind(scope)
-        store.save(binding, ChatReaderPosition("message-a", 37))
-
-        databases.commitGatewayRemoval("gateway-a")
-
-        assertNull(store.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun sessionRetirementWaitsForInFlightSaveThenWins() =
-    runTest {
-      val fence = ChatReaderPositionFence()
-      val scope = readerScope("gateway-a", "main")
-      val binding = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
-      val saveStarted = CompletableDeferred<Unit>()
-      val releaseSave = CompletableDeferred<Unit>()
-      var stored = false
-
-      withContext(Dispatchers.IO) {
-        val save =
-          async(start = CoroutineStart.UNDISPATCHED) {
-            fence.save(binding) {
-              saveStarted.complete(Unit)
-              releaseSave.await()
-              stored = true
-            }
-          }
-        saveStarted.await()
-        val retirement =
-          async(start = CoroutineStart.UNDISPATCHED) {
-            fence.retireSession(scope)
-          }
-        assertFalse(retirement.isCompleted)
-
-        releaseSave.complete(Unit)
-        save.await()
-        val owner = retirement.await()
-        check(owner is ChatReaderPositionRetirement.Owner)
-        fence.deleteSession(owner) { stored = false }
-      }
-
-      assertFalse(stored)
-    }
-
-  @Test
-  fun gatewayRetirementWaitsForInFlightSaveThenWins() =
-    runTest {
-      val fence = ChatReaderPositionFence()
-      val scope = readerScope("gateway-a", "main")
-      val binding = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
-      val saveStarted = CompletableDeferred<Unit>()
-      val releaseSave = CompletableDeferred<Unit>()
-      var stored = false
-
-      withContext(Dispatchers.IO) {
-        val save =
-          async(start = CoroutineStart.UNDISPATCHED) {
-            fence.save(binding) {
-              saveStarted.complete(Unit)
-              releaseSave.await()
-              stored = true
-            }
-          }
-        saveStarted.await()
-        val retirement =
-          async(start = CoroutineStart.UNDISPATCHED) {
-            fence.clearGateway(scope.gatewayId) { stored = false }
-          }
-        assertFalse(retirement.isCompleted)
-        val queuedBinding = async { fence.bind(scope) }
-        assertFalse(queuedBinding.isCompleted)
-
-        releaseSave.complete(Unit)
-        save.await()
-        retirement.await()
-        val retiredBinding = ChatReaderPositionBinding(scope, position = null, generation = queuedBinding.await())
-        fence.save(retiredBinding) { stored = true }
-      }
-
-      assertFalse(stored)
-    }
-
-  @Test
-  fun gatewayRetirementQueuedDuringActivationRemainsClosed() =
-    runTest {
-      val fence = ChatReaderPositionFence()
-      val scope = readerScope("gateway-a", "main")
-      val retired = CompletableDeferred<Unit>()
-      fence.activateGateway(scope.gatewayId) {
-        // Queue removal while activation still owns the fence, before it updates the marker.
-        launch(start = CoroutineStart.UNDISPATCHED) {
-          fence.clearGateway(scope.gatewayId) { }
-          retired.complete(Unit)
-        }
-        true
-      }
-      retired.await()
-      val binding = ChatReaderPositionBinding(scope, null, fence.bind(scope))
-      var stored = false
-      fence.save(binding) { stored = true }
-      assertFalse(stored)
-    }
-
-  @Test
-  fun gatewayActivationStartsANewReaderPositionLifecycle() =
-    runTest {
-      val fence = ChatReaderPositionFence()
-      val scope = readerScope("gateway-a", "main")
-      var stored = false
-      fence.clearGateway(scope.gatewayId) { }
-
-      val retired = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
-      fence.save(retired) { stored = true }
-      assertFalse(stored)
-
-      fence.activateGateway(scope.gatewayId)
-      val replacement = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
-      fence.save(replacement) { stored = true }
-
-      assertTrue(stored)
-    }
-
-  @Test
-  fun staleGatewayActivationCannotOpenARetiredLifecycle() =
-    runTest {
-      val fence = ChatReaderPositionFence()
-      val scope = readerScope("gateway-a", "main")
-      fence.clearGateway(scope.gatewayId) { }
-
-      assertFalse(fence.activateGateway(scope.gatewayId) { false })
-      val stale = ChatReaderPositionBinding(scope, position = null, generation = fence.bind(scope))
-      var stored = false
-      fence.save(stale) { stored = true }
-
-      assertFalse(stored)
-      assertTrue(fence.activateGateway(scope.gatewayId) { true })
-    }
-
-  @Test
-  fun gatewayDeleteFencesLateReaderPositionSave() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val scope = readerScope("gateway-a", "main")
-        val binding = store.bind(scope)
-        databases.commitGatewayRemoval("gateway-a")
-
-        store.save(binding, ChatReaderPosition("message-a", 37))
-
-        assertNull(store.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun clearingCurrentReaderBindingKeepsItActiveForLaterSaves() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val scope = readerScope("gateway-a", "main")
-        val binding = store.bind(scope)
-        store.save(binding, ChatReaderPosition("message-a", 37))
-
-        store.clear(binding)
-        assertNull(
-          databases
-            .clientStateDatabase()
-            .controlDao()
-            .metadataValue(chatReaderPositionMetadataKey("gateway-a")),
-        )
-        val latest = ChatReaderPosition("message-b", 11)
-        store.save(binding, latest)
-        assertEquals(latest, store.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun pendingInitializationDoesNotHoldReaderFenceAgainstRecovery() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val state = databases.clientStateDatabase()
-        val fence = ChatReaderPositionFence()
-        val recoveryComplete = CompletableDeferred<Unit>()
-        val deferredStore =
-          ChatReaderPositionStore(
-            database = {
-              recoveryComplete.await()
-              state
-            },
-            fence = fence,
-          )
-        val recoveryStore = ChatReaderPositionStore({ state }, fence)
-
-        withContext(Dispatchers.IO) {
-          val binding = async { deferredStore.bind(readerScope("gateway-a", "main")) }
-          val recovery =
-            async {
-              recoveryStore.clearGateway("gateway-a") { database ->
-                database.controlDao().deleteMetadata(chatReaderPositionMetadataKey("gateway-a"))
-              }
-              recoveryComplete.complete(Unit)
-            }
-
-          withTimeout(5_000) {
-            recovery.await()
-            binding.await()
+      val positions =
+        scopes.indices.map { index ->
+          if (index < 2) {
+            requireNotNull(buildChatTimeline(listOf(largeMessages[index]), 0, emptyList(), null).readerPosition(0, index + 17))
+          } else {
+            ChatReaderPosition("message-$index", index + 17, entryId = "entry-$index")
           }
         }
-      }
-    }
-
-  @Test
-  fun gatewayActivationWaitsForStartupRecoveryBeforeOpeningCurrentLifecycle() = runTest { assertGatewayActivationAfterRecovery(keepCurrent = true) }
-
-  @Test
-  fun gatewayActivationRechecksIntentAfterStartupRecovery() = runTest { assertGatewayActivationAfterRecovery(keepCurrent = false) }
-
-  private suspend fun assertGatewayActivationAfterRecovery(keepCurrent: Boolean) =
-    coroutineScope {
-      withCleanDatabases(databaseNames()) { databases ->
-        val state = databases.clientStateDatabase()
-        val fence = ChatReaderPositionFence()
-        val ready = CompletableDeferred<Unit>()
-        val deferredStore =
-          ChatReaderPositionStore({
-            ready.await()
-            state
-          }, fence)
-        val recoveryStore = ChatReaderPositionStore({ state }, fence)
-        var current = true
-        val activation = async(start = CoroutineStart.UNDISPATCHED) { deferredStore.activateGateway("gateway-a") { current } }
-        val returnedBeforeRecovery = activation.isCompleted
-        try {
-          recoveryStore.clearGateway("gateway-a") { database ->
-            database.controlDao().deleteMetadata(chatReaderPositionMetadataKey("gateway-a"))
-          }
-          current = keepCurrent
-        } finally {
-          ready.complete(Unit)
-        }
-        assertEquals(keepCurrent, activation.await())
-        assertFalse("Activation must await initialization outside the fence", returnedBeforeRecovery)
-        val scope = readerScope("gateway-a", "main")
-        val binding = deferredStore.bind(scope)
-        val position = ChatReaderPosition("after-recovery", 23)
-        deferredStore.save(binding, position)
-        assertEquals(if (keepCurrent) position else null, deferredStore.bind(scope).position)
-      }
-    }
-
-  @Test
-  fun replacementBindingWaitsForPendingSessionRetirement() =
-    runTest {
-      val names = databaseNames()
       withDatabases(names) { databases ->
-        val state = databases.clientStateDatabase()
-        val fence = ChatReaderPositionFence()
-        val databaseReady = CompletableDeferred<Unit>()
-        val retiringStore =
-          ChatReaderPositionStore(
-            database = {
-              databaseReady.await()
-              state
-            },
-            fence = fence,
-          )
-        val replacementStore = ChatReaderPositionStore({ state }, fence)
-        val scope = readerScope("gateway-a", "main")
-
-        withContext(Dispatchers.IO) {
-          val deletion =
-            async(start = CoroutineStart.UNDISPATCHED) {
-              retiringStore.deleteSession(scope)
-            }
-          val replacement =
-            async(start = CoroutineStart.UNDISPATCHED) {
-              replacementStore.bind(scope)
-            }
-          assertFalse(replacement.isCompleted)
-
-          databaseReady.complete(Unit)
-          deletion.await()
-          val binding = replacement.await()
-          val position = ChatReaderPosition("message-new", 17)
-          replacementStore.save(binding, position)
-          assertEquals(position, replacementStore.bind(scope).position)
-        }
-      }
-    }
-
-  @Test
-  fun duplicateSessionDeleteDoesNotRemoveReplacementBookmark() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val state = databases.clientStateDatabase()
-        val fence = ChatReaderPositionFence()
-        val firstDatabaseReady = CompletableDeferred<Unit>()
-        val secondDatabaseReady = CompletableDeferred<Unit>()
-        val firstStore =
-          ChatReaderPositionStore(
-            database = {
-              firstDatabaseReady.await()
-              state
-            },
-            fence = fence,
-          )
-        val secondStore =
-          ChatReaderPositionStore(
-            database = {
-              secondDatabaseReady.await()
-              state
-            },
-            fence = fence,
-          )
-        val replacementStore = ChatReaderPositionStore({ state }, fence)
-        val deletedScope = readerScope("gateway-a", "main", sessionId = "deleted-session")
-        val replacementScope = readerScope("gateway-a", "main", sessionId = "replacement-session")
-
-        withContext(Dispatchers.IO) {
-          val firstDelete =
-            async(start = CoroutineStart.UNDISPATCHED) {
-              firstStore.deleteSession(deletedScope)
-            }
-          val duplicateDelete =
-            async(start = CoroutineStart.UNDISPATCHED) {
-              secondStore.deleteSession(deletedScope)
-            }
-
-          firstDatabaseReady.complete(Unit)
-          firstDelete.await()
-          val replacement = replacementStore.bind(replacementScope)
-          val position = ChatReaderPosition("message-new", 17)
-          replacementStore.save(replacement, position)
-
-          secondDatabaseReady.complete(Unit)
-          duplicateDelete.await()
-          assertEquals(position, replacementStore.bind(replacementScope).position)
-        }
-      }
-    }
-
-  @Test
-  fun lateDeleteForRetiredSessionDoesNotRemoveReplacementBookmark() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val retired = readerScope("gateway-a", "main", sessionId = "retired-session")
-        val replacement = readerScope("gateway-a", "main", sessionId = "replacement-session")
-        store.save(store.bind(retired), ChatReaderPosition("message-old", 7))
-        store.deleteSession(retired)
-        val position = ChatReaderPosition("message-new", 17)
-        store.save(store.bind(replacement), position)
-
-        store.deleteSession(retired)
-
-        assertEquals(position, store.bind(replacement).position)
-      }
-    }
-
-  @Test
-  fun readerPositionScopeSeparatesOwnersAndSessionInstances() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        val ownerA = readerScope("gateway-a", "global", ownerAgentId = "owner-a", sessionId = "owner-a-old")
-        val ownerB = readerScope("gateway-a", "global", ownerAgentId = "owner-b", sessionId = "owner-b-current")
-        store.save(store.bind(ownerA), ChatReaderPosition("message-a", 7))
-        store.save(store.bind(ownerB), ChatReaderPosition("message-b", 11))
-
-        assertEquals(ChatReaderPosition("message-a", 7), store.bind(ownerA).position)
-        assertEquals(ChatReaderPosition("message-b", 11), store.bind(ownerB).position)
-        assertNull(store.bind(ownerA.copy(sessionId = "owner-a-replacement")).position)
-      }
-    }
-
-  @Test
-  fun readerPositionPersistsPerGatewayAndSessionAcrossReopen() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names, setOf("gateway-a", "gateway-b")) { databases ->
-        val store = databases.readerPositionStore()
-        store.save(
-          store.bind(readerScope("gateway-a", "main")),
-          ChatReaderPosition("message-a", 37, entryId = "entry-a"),
-        )
-        store.save(store.bind(readerScope("gateway-a", "agent:main:side")), ChatReaderPosition("message-side", 12))
-        store.save(store.bind(readerScope("gateway-b", "main")), ChatReaderPosition("message-b", 5))
-      }
-
-      withCleanDatabases(names, setOf("gateway-a", "gateway-b")) { reopened ->
-        val store = reopened.readerPositionStore()
-        assertEquals(
-          ChatReaderPosition("message-a", 37, entryId = "entry-a"),
-          store.bind(readerScope("gateway-a", "main")).position,
-        )
-        assertEquals(
-          ChatReaderPosition("message-side", 12),
-          store.bind(readerScope("gateway-a", "agent:main:side")).position,
-        )
-        assertEquals(ChatReaderPosition("message-b", 5), store.bind(readerScope("gateway-b", "main")).position)
-        store.deleteSession(readerScope("gateway-a", "main"))
-        assertNull(store.bind(readerScope("gateway-a", "main")).position)
-        assertEquals(ChatReaderPosition("message-b", 5), store.bind(readerScope("gateway-b", "main")).position)
-      }
-    }
-
-  @Test
-  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-  fun exactDeletionRetiresUncachedBookmarkWithoutRetiringOtherSessions() =
-    runTest {
-      val names = databaseNames()
-      withCleanDatabases(names) { databases ->
         val readers = databases.readerPositionStore()
-        val oldScope = readerScope("gateway-a", "older-chat", sessionId = "retired-id")
-        val replacement = readerScope("gateway-a", "other-chat", sessionId = "replacement-id")
-        readers.save(readers.bind(oldScope), ChatReaderPosition("old-entry", 17))
-        readers.save(readers.bind(replacement), ChatReaderPosition("replacement-entry", 23))
-        assertEquals(ChatReaderPosition("old-entry", 17), readers.bind(oldScope).position)
+        for ((index, scope) in scopes.withIndex()) {
+          readers.save(requireNotNull(readers.bind(scope)), positions[index])
+        }
+        databases.enqueue("gateway-a", "keep queued input")
+      }
+      val file = RuntimeEnvironment.getApplication().getDatabasePath(names.state)
+      SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { oldReader ->
+        assertEquals(1, oldReader.version)
+        oldReader.rawQuery("SELECT identity_hash FROM room_master_table WHERE id = 42", null).use { rows ->
+          assertTrue(rows.moveToFirst())
+          assertEquals("924cec9afdb455dced2592399a08f5da", rows.getString(0))
+        }
+        oldReader.execSQL("INSERT INTO client_state_metadata VALUES ('old-reader', 'still writable')")
+      }
+      withCleanDatabases(names) { databases ->
+        assertEquals(3, databases.gatewayCacheDatabase().userVersion())
+        assertEquals("still writable", databases.clientStateDatabase().controlDao().metadataValue("old-reader"))
+        assertEquals(listOf("keep queued input"), databases.commandOutbox().load("gateway-a").map { it.text })
+        for ((index, scope) in scopes.withIndex()) {
+          val saved = requireNotNull(databases.readerPositionStore().bind(scope)?.position)
+          assertEquals(positions[index], saved)
+          if (index < 2) {
+            val timeline = buildChatTimeline(listOf(largeMessages[index].copy(id = "after-$index")), 0, emptyList(), null)
+            assertEquals(index + 17, requireNotNull(restoredChatReaderTransition(timeline, saved)).scrollOffset)
+          }
+        }
+        assertNull(databases.readerPositionStore().bind(original.copy(sessionId = "replacement"))?.position)
+      }
+    }
+
+  @Test
+  fun reboundAndDeletedReadersCannotOverwriteTheCurrentBookmark() =
+    runTest {
+      withCleanDatabases(databaseNames()) { databases ->
+        val readers = databases.readerPositionStore()
+        val oldScope = ChatReaderPositionScope("gateway-a", "main", "main", "old")
+        val old = requireNotNull(readers.bind(oldScope))
+        readers.save(old, ChatReaderPosition("old-message", 17))
+        val currentScope = oldScope.copy(sessionId = "new")
+        val current = requireNotNull(readers.bind(currentScope))
+        assertNull(current.position)
+        val expected = ChatReaderPosition("new-message", 23)
+        readers.save(current, expected)
+        readers.save(old, null)
+        readers.save(old, ChatReaderPosition("late-old-message", 2))
+        readers.deleteSession(oldScope)
+        assertEquals(expected, readers.bind(currentScope)?.position)
+
+        val rebound = requireNotNull(readers.bind(currentScope))
+        readers.save(current, null)
+        readers.save(rebound, null)
+        assertNull(databases.clientStateDatabase().controlDao().metadataValue(chatReaderPositionMetadataKey("gateway-a")))
+        readers.save(rebound, expected)
+        readers.deleteSession(currentScope)
+        readers.save(rebound, ChatReaderPosition("after-delete", 1))
+        assertNull(readers.bind(currentScope)?.position)
+      }
+    }
+
+  @Test
+  fun readerRetirementWaitsForTheInFlightSaveAndRejectsLateWrites() =
+    runTest {
+      for (wholeGateway in listOf(false, true)) {
+        withCleanDatabases(databaseNames()) { databases ->
+          val readers = databases.readerPositionStore()
+          val scope = ChatReaderPositionScope("gateway-a", "main", "main", "session-a")
+          val binding = requireNotNull(readers.bind(scope))
+          val other = scope.copy(gatewayId = "gateway-b")
+          val preserved = ChatReaderPosition("other-gateway", 11)
+          readers.save(requireNotNull(readers.bind(other)), preserved)
+          val writerEntered = CompletableDeferred<Unit>()
+          val releaseWriter = CompletableDeferred<Unit>()
+          withContext(Dispatchers.IO) {
+            val writer =
+              async {
+                databases.clientStateDatabase().withWriteTransaction {
+                  writerEntered.complete(Unit)
+                  releaseWriter.await()
+                }
+              }
+            writerEntered.await()
+            val save = async(start = CoroutineStart.UNDISPATCHED) { readers.save(binding, ChatReaderPosition("in-flight", 7)) }
+            val retire =
+              async(start = CoroutineStart.UNDISPATCHED) {
+                if (wholeGateway) databases.commitGatewayRemoval("gateway-a") else readers.deleteSession(scope)
+              }
+            val rebound = async(start = CoroutineStart.UNDISPATCHED) { readers.bind(scope) }
+            try {
+              assertFalse(save.isCompleted)
+              assertFalse(retire.isCompleted)
+              assertFalse(rebound.isCompleted)
+            } finally {
+              releaseWriter.complete(Unit)
+            }
+            writer.await()
+            save.await()
+            retire.await()
+            assertNull(rebound.await()?.position)
+          }
+          readers.save(binding, ChatReaderPosition("late", 3))
+          assertNull(readers.bind(scope)?.position)
+          assertEquals(preserved, readers.bind(other)?.position)
+          if (wholeGateway) {
+            assertNull(readers.bind(scope))
+            assertFalse(readers.activateGateway("gateway-a") { false })
+            assertNull(readers.bind(scope))
+            assertTrue(readers.activateGateway("gateway-a") { true })
+            readers.save(requireNotNull(readers.bind(scope)), preserved)
+            assertEquals(preserved, readers.bind(scope)?.position)
+          }
+        }
+      }
+    }
+
+  @Test
+  fun startupRemovalCompletesBeforeTheSingleReaderStoreIsPublished() =
+    runTest {
+      val names = databaseNames()
+      val scope = ChatReaderPositionScope("gateway-a", "main", "main", "session-a")
+      withDatabases(names) { databases ->
+        val readers = databases.readerPositionStore()
+        readers.save(requireNotNull(readers.bind(scope)), ChatReaderPosition("before-removal", 12))
+        databases.stageGatewayRemoval("gateway-a")
+      }
+      withCleanDatabases(names, registeredGatewayIds = emptySet()) { databases ->
+        val readers = databases.readerPositionStore()
+        assertNull(readers.bind(scope))
+        assertFalse(readers.activateGateway("gateway-a") { false })
+        assertTrue(readers.activateGateway("gateway-a") { true })
+        assertNull(readers.bind(scope)?.position)
+      }
+    }
+
+  @Test
+  fun readerMetadataIsBoundedAndMalformedDataDoesNotPreventBinding() =
+    runTest {
+      withCleanDatabases(databaseNames()) { databases ->
+        val readers = databases.readerPositionStore()
+        val scope = ChatReaderPositionScope("gateway-a", "main", "session-0", "session-a")
+        repeat(MAX_CACHED_SESSIONS + 1) { index ->
+          readers.save(requireNotNull(readers.bind(scope.copy(sessionKey = "session-$index"))), ChatReaderPosition("entry", index))
+        }
+        assertNull(readers.bind(scope)?.position)
+        assertEquals(ChatReaderPosition("entry", MAX_CACHED_SESSIONS), readers.bind(scope.copy(sessionKey = "session-$MAX_CACHED_SESSIONS"))?.position)
+        val control = databases.clientStateDatabase().controlDao()
+        for (invalid in listOf("not json", "{}", "x".repeat(256 * 1_024 + 1))) {
+          control.upsertMetadata(ClientStateMetadataEntity(chatReaderPositionMetadataKey("gateway-a"), invalid))
+          assertNull(readers.bind(scope)?.position)
+        }
+      }
+    }
+
+  @Test
+  fun exactDeletionRetiresAnUncachedBookmarkWithoutTouchingOtherReaders() =
+    runTest {
+      withCleanDatabases(databaseNames()) { databases ->
+        val readers = databases.readerPositionStore()
+        val old = ChatReaderPositionScope("gateway-a", "main", "older-chat", "old-instance")
+        val other = old.copy(sessionKey = "other-chat", sessionId = "other-instance")
+        readers.save(requireNotNull(readers.bind(old)), ChatReaderPosition("old-entry", 17))
+        readers.save(requireNotNull(readers.bind(other)), ChatReaderPosition("other-entry", 23))
         assertTrue(databases.transcriptCache().loadSessions("gateway-a", "main").isEmpty())
-        val callbacks = mutableListOf<ChatSessionDeletion>()
+        val deletionFinished = CompletableDeferred<Unit>()
         val controller =
           createChatController(
             transcriptCache = databases.transcriptCache(),
             cacheScope = { ChatCacheScope("gateway-a", 1) },
             onSessionDeleted = { deletion ->
-              callbacks += deletion
-              val id = requireNotNull(deletion.sessionId)
-              launch { readers.deleteSession(oldScope.copy(sessionId = id)) }
+              launch {
+                readers.deleteSession(ChatReaderPositionScope(requireNotNull(deletion.gatewayId), deletion.agentId, deletion.sessionKey, requireNotNull(deletion.sessionId)))
+                deletionFinished.complete(Unit)
+              }
             },
           )
-        controller.handleGatewayEvent(
-          "sessions.changed",
-          """{"reason":"delete","sessionKey":"older-chat","agentId":"main","sessionId":"retired-id"}""",
-        )
-        advanceUntilIdle()
-
-        assertNull(readers.bind(oldScope).position)
-        assertEquals(ChatReaderPosition("replacement-entry", 23), readers.bind(replacement).position)
-        assertEquals(listOf(false), callbacks.map { it.clearLocalInput })
+        controller.handleGatewayEvent("sessions.changed", """{"reason":"delete","sessionKey":"older-chat","agentId":"main","sessionId":"old-instance"}""")
+        // Room runs on IO: draining only the test scheduler is not completion of the deletion.
+        deletionFinished.await()
+        assertNull(readers.bind(old)?.position)
+        assertEquals(ChatReaderPosition("other-entry", 23), readers.bind(other)?.position)
       }
-    }
-
-  @Test
-  fun readerMetadataKeepsV1SchemaAndKnownStateWritable() =
-    runTest {
-      val names = databaseNames()
-      val context = RuntimeEnvironment.getApplication()
-      createClientStateV1Fixture(context.getDatabasePath(names.state).path)
-      SQLiteDatabase.openDatabase(context.getDatabasePath(names.state).path, null, SQLiteDatabase.OPEN_READWRITE).use {
-        it.execSQL(
-          "INSERT INTO client_state_metadata (`key`, value) VALUES (?, ?)",
-          arrayOf<Any>("v1-proof", "preserved"),
-        )
-      }
-
-      withDatabases(names) { candidate ->
-        assertEquals(1, candidate.clientStateDatabase().userVersion())
-        assertEquals("preserved", candidate.clientStateDatabase().controlDao().metadataValue("v1-proof"))
-        val position = ChatReaderPosition("message-1", 19)
-        val store = candidate.readerPositionStore()
-        store.save(store.bind(readerScope("gateway-a", "main")), position)
-        assertEquals(position, store.bind(readerScope("gateway-a", "main")).position)
-        candidate.enqueue("gateway-a", "preserve outbox")
-      }
-
-      SQLiteDatabase
-        .openDatabase(
-          context.getDatabasePath(names.state).path,
-          null,
-          SQLiteDatabase.OPEN_READWRITE,
-        ).use { rollback ->
-          assertEquals(1, rollback.version)
-          rollback.rawQuery("SELECT identity_hash FROM room_master_table WHERE id = 42", null).use { rows ->
-            assertTrue(rows.moveToFirst())
-            assertEquals("924cec9afdb455dced2592399a08f5da", rows.getString(0))
-          }
-          rollback.rawQuery("SELECT text FROM outbox_commands WHERE gatewayId = ?", arrayOf("gateway-a")).use { rows ->
-            assertTrue(rows.moveToFirst())
-            assertEquals("preserve outbox", rows.getString(0))
-          }
-          rollback.execSQL(
-            "INSERT OR REPLACE INTO client_state_metadata (`key`, value) VALUES (?, ?)",
-            arrayOf<Any>("rollback-proof", "preserved"),
-          )
-        }
-
-      withCleanDatabases(names) { reopened ->
-        assertEquals(1, reopened.clientStateDatabase().userVersion())
-        assertEquals("preserved", reopened.clientStateDatabase().controlDao().metadataValue("rollback-proof"))
-        assertEquals(
-          ChatReaderPosition("message-1", 19),
-          reopened.readerPositionStore().bind(readerScope("gateway-a", "main")).position,
-        )
-        assertEquals(listOf("preserve outbox"), reopened.commandOutbox().load("gateway-a").map { it.text })
-      }
-    }
-
-  @Test
-  fun cacheV3UpgradeAndRollbackPreserveDurableStateAndBindNewTranscripts() =
-    runTest {
-      val names = databaseNames()
-      val context = RuntimeEnvironment.getApplication()
-
-      suspend fun withV3(block: suspend (GatewayCacheV3Fixture) -> Unit) {
-        val database =
-          Room
-            .databaseBuilder(context, GatewayCacheV3Fixture::class.java, names.cache)
-            .fallbackToDestructiveMigration(true)
-            .build()
-        try {
-          assertEquals(3, database.userVersion())
-          database.useReaderConnection { connection ->
-            connection.usePrepared("SELECT identity_hash FROM room_master_table WHERE id = 42") { statement ->
-              assertTrue(statement.step())
-              assertEquals("91c4751bb9eea08d40d3322e5af1c1ab", statement.getText(0))
-            }
-          }
-          block(database)
-        } finally {
-          database.close()
-        }
-      }
-
-      suspend fun GatewayCacheV3Fixture.seed(text: String) {
-        useWriterConnection { connection ->
-          connection.executeSQL(
-            "INSERT INTO cached_sessions (gatewayId, agentId, sessionKey, displayName, hasRunMetadata, rowOrder) " +
-              "VALUES ('gateway-a', 'main', 'main', 'Offline session', 0, 0)",
-          )
-          connection.usePrepared(
-            "INSERT INTO cached_messages (gatewayId, agentId, sessionKey, rowOrder, role, textPartsJson) " +
-              "VALUES ('gateway-a', 'main', 'main', 0, 'assistant', ?)",
-          ) { statement ->
-            statement.bindText(1, "[\"$text\"]")
-            statement.step()
-          }
-          connection.executeSQL("INSERT INTO cached_gateway_owners (gatewayId, agentId) VALUES ('gateway-a', 'main')")
-        }
-      }
-      try {
-        withV3 { it.seed("before upgrade") }
-        withDatabases(names) { upgraded ->
-          val cache = upgraded.transcriptCache()
-          assertEquals(4, upgraded.gatewayCacheDatabase().userVersion())
-          assertEquals("main", cache.loadLastDefaultAgentId("gateway-a"))
-          assertEquals("Offline session", cache.loadSessions("gateway-a", "main").single().displayName)
-          assertNull(cache.loadSessionId("gateway-a", "main", "main"))
-          // A migrated, unidentified projection cannot be assigned to a deletion by its key.
-          cache.deleteSession("gateway-a", "main", "main", expectedSessionId = "live-id")
-          assertEquals(listOf("before upgrade"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
-          cache.saveTranscript("gateway-a", "main", "main", listOf(cachedMessage("live transcript")), sessionId = "live-id")
-          upgraded.enqueue("gateway-a", "preserve input")
-          val readers = upgraded.readerPositionStore()
-          readers.save(readers.bind(readerScope("gateway-a", "main")), ChatReaderPosition("saved-row", 23))
-        }
-        withDatabases(names) { reopened ->
-          val cache = reopened.transcriptCache()
-          assertEquals("live-id", cache.loadSessionId("gateway-a", "main", "main"))
-          assertNull(cache.loadSessions("gateway-a", "main").single().sessionId)
-          assertEquals(listOf("live transcript"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
-        }
-        withV3 { rollback ->
-          // The previous opener rebuilds only the disposable cache on downgrade.
-          rollback.useReaderConnection { connection ->
-            connection.usePrepared("SELECT COUNT(*) FROM cached_messages") { statement ->
-              assertTrue(statement.step())
-              assertEquals(0L, statement.getLong(0))
-            }
-          }
-          rollback.seed("after rollback")
-        }
-        withDatabases(names) { upgradedAgain ->
-          val cache = upgradedAgain.transcriptCache()
-          assertEquals(4, upgradedAgain.gatewayCacheDatabase().userVersion())
-          assertNull(cache.loadSessionId("gateway-a", "main", "main"))
-          assertEquals(listOf("after rollback"), cache.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
-          assertEquals(1, upgradedAgain.clientStateDatabase().userVersion())
-          assertEquals(listOf("preserve input"), upgradedAgain.commandOutbox().load("gateway-a").map { it.text })
-          assertEquals(
-            ChatReaderPosition("saved-row", 23),
-            upgradedAgain.readerPositionStore().bind(readerScope("gateway-a", "main")).position,
-          )
-        }
-      } finally {
-        delete(names)
-      }
-    }
-
-  @Test
-  fun readerMetadataIsBoundedAndMalformedValuesFailToNoBookmark() =
-    runTest {
-      val names = databaseNames()
-      withDatabases(names) { databases ->
-        val store = databases.readerPositionStore()
-        repeat(MAX_CACHED_SESSIONS + 1) { index ->
-          val sessionKey = "session-$index"
-          store.save(store.bind(readerScope("gateway-a", sessionKey)), ChatReaderPosition("message-$index", index))
-        }
-
-        assertNull(store.bind(readerScope("gateway-a", "session-0")).position)
-        assertEquals(
-          ChatReaderPosition("message-$MAX_CACHED_SESSIONS", MAX_CACHED_SESSIONS),
-          store.bind(readerScope("gateway-a", "session-$MAX_CACHED_SESSIONS")).position,
-        )
-        databases
-          .clientStateDatabase()
-          .controlDao()
-          .upsertMetadata(
-            ClientStateMetadataEntity(chatReaderPositionMetadataKey("gateway-b"), "{\"version\":2}"),
-          )
-        assertNull(store.bind(readerScope("gateway-b", "main")).position)
-      }
-      delete(names)
     }
 
   @Test
@@ -762,7 +261,7 @@ class ClientDatabasesTest {
       createV2Fixture(context.getDatabasePath(names.legacy).path)
 
       withCleanDatabases(names, setOf("gateway-test")) { databases ->
-        assertEquals(4, databases.gatewayCacheDatabase().userVersion())
+        assertEquals(3, databases.gatewayCacheDatabase().userVersion())
         assertEquals(1, databases.clientStateDatabase().userVersion())
 
         val rows = databases.commandOutbox().load("gateway-test").associateBy { it.id }
@@ -978,22 +477,14 @@ class ClientDatabasesTest {
       withDatabases(names, setOf("gateway-a", "gateway-b")) { first ->
         seedGateway(first, "gateway-a", "remove")
         seedGateway(first, "gateway-b", "keep")
-        val readerStore = first.readerPositionStore()
-        readerStore.save(readerStore.bind(readerScope("gateway-a", "main")), ChatReaderPosition("remove", 3))
-        readerStore.save(readerStore.bind(readerScope("gateway-b", "main")), ChatReaderPosition("keep", 5))
         first.stageGatewayRemoval("gateway-a")
       }
 
       withCleanDatabases(names, setOf("gateway-b")) { reopened ->
         assertTrue(reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").isEmpty())
         assertTrue(reopened.commandOutbox().load("gateway-a").isEmpty())
-        assertNull(reopened.readerPositionStore().bind(readerScope("gateway-a", "main")).position)
         assertEquals(listOf("keep"), reopened.transcriptCache().loadTranscript("gateway-b", "main", "main").map { it.content.single().text })
         assertEquals(listOf("keep"), reopened.commandOutbox().load("gateway-b").map { it.text })
-        assertEquals(
-          ChatReaderPosition("keep", 5),
-          reopened.readerPositionStore().bind(readerScope("gateway-b", "main")).position,
-        )
       }
     }
 
@@ -1178,13 +669,6 @@ class ClientDatabasesTest {
     )
   }
 
-  private fun readerScope(
-    gatewayId: String,
-    sessionKey: String,
-    ownerAgentId: String = "main",
-    sessionId: String = "$ownerAgentId:$sessionKey",
-  ) = ChatReaderPositionScope(gatewayId, ownerAgentId, sessionKey, sessionId)
-
   private fun delete(names: DatabaseNames) {
     val context = RuntimeEnvironment.getApplication()
     context.deleteDatabase(names.cache)
@@ -1197,26 +681,6 @@ class ClientDatabasesTest {
     val state: String,
     val legacy: String,
   )
-
-  private fun createClientStateV1Fixture(path: String) {
-    SQLiteDatabase.openOrCreateDatabase(path, null).use { database ->
-      listOf(
-        "CREATE TABLE IF NOT EXISTS `outbox_commands` (`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, `text` TEXT NOT NULL, `thinkingLevel` TEXT NOT NULL, `createdAtMs` INTEGER NOT NULL, `status` TEXT NOT NULL, `retryCount` INTEGER NOT NULL, `lastError` TEXT, `gatedEpoch` INTEGER, `ownerAgentId` TEXT, PRIMARY KEY(`id`))",
-        "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, `position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, `durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-        "CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)",
-        "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-        "CREATE TABLE IF NOT EXISTS `composer_send_admissions` (`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
-        "CREATE TABLE IF NOT EXISTS `client_state_metadata` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))",
-        "CREATE TABLE IF NOT EXISTS `gateway_removals` (`gatewayId` TEXT NOT NULL, `phase` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
-        "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)",
-      ).forEach(database::execSQL)
-      database.execSQL(
-        "INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES(42, ?)",
-        arrayOf<Any>("924cec9afdb455dced2592399a08f5da"),
-      )
-      database.version = 1
-    }
-  }
 
   private fun createV2Fixture(path: String) {
     SQLiteDatabase.openOrCreateDatabase(path, null).use { database ->
