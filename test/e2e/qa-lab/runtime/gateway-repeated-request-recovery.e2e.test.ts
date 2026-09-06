@@ -27,6 +27,7 @@ type GatewayChatRun = {
   runId?: unknown;
   status?: unknown;
   stopReason?: unknown;
+  endedAt?: unknown;
 };
 
 type GatewayChatMessage = {
@@ -41,12 +42,16 @@ type GatewayChatHistory = {
 type MockRequestSnapshot = {
   cursor?: unknown;
   prompt?: unknown;
+  allInputText?: unknown;
+  model?: unknown;
   outcome?: unknown;
   errorCode?: unknown;
 };
 
 type ClassifiedMockRequest = {
   cursor: unknown;
+  model: unknown;
+  continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
   outcome: unknown;
   errorCode: unknown;
@@ -228,13 +233,20 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
   return fetch(`${mockBaseUrl}/debug/requests`)
     .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
     .then((records) =>
-      records.map(({ cursor, prompt, outcome, errorCode }) => ({
+      records.map(({ cursor, prompt, allInputText, model, outcome, errorCode }) => ({
         cursor,
+        model,
+        continuation:
+          typeof prompt === "string" &&
+          !prompt.includes(RECOVERY_PROMPT) &&
+          !prompt.includes(QUEUED_PROMPT) &&
+          typeof allInputText === "string" &&
+          allInputText.includes(RECOVERY_PROMPT),
         prompt:
           typeof prompt === "string"
             ? prompt.includes(QUEUED_PROMPT)
               ? "queued"
-              : prompt.includes(RECOVERY_PROMPT)
+              : typeof allInputText === "string" && allInputText.includes(RECOVERY_PROMPT)
                 ? "recovery"
                 : "other"
             : "missing",
@@ -286,7 +298,7 @@ async function readFailureEvidence(params: {
 
 describe("Gateway repeated-request provider timeout", () => {
   it(
-    "lets the provider timeout terminate the stalled attempt before draining one queued followup",
+    "continues after a provider timeout and settles failure before draining one queued followup",
     { timeout: 510_000 },
     async () => {
       gatewayOwner = createQaLiveLaneGateway();
@@ -364,16 +376,14 @@ describe("Gateway repeated-request provider timeout", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
+      // The provider deadline starts before model-call observation, so its diagnostic
+      // duration can be shorter than timeoutSeconds. The failure kind owns timeout evidence.
       const events = await waitForStability(
         gateway,
         baselineSeq,
         (records) =>
           records.some(
-            (event) =>
-              event.type === "model.call.error" &&
-              event.failureKind === "timeout" &&
-              typeof event.durationMs === "number" &&
-              event.durationMs >= MODEL_REQUEST_ALLOWANCE_SECONDS * 1_000,
+            (event) => event.type === "model.call.error" && event.failureKind === "timeout",
           ),
         350_000,
       );
@@ -399,7 +409,10 @@ describe("Gateway repeated-request provider timeout", () => {
         { runId: active.runId, timeoutMs: 30_000 },
         { timeoutMs: 35_000 },
       )) as GatewayChatRun;
-      expect(activeTerminal.status).not.toBe("ok");
+      expect(activeTerminal).toMatchObject({
+        status: "error",
+        endedAt: expect.any(Number),
+      });
 
       const history = await waitForQueuedReply(gateway, sessionKey).catch(
         async (error: unknown) => {
@@ -423,9 +436,19 @@ describe("Gateway repeated-request provider timeout", () => {
         throw new Error("mock provider request evidence unavailable");
       }
       const requests = await readClassifiedMockRequests(mockBaseUrl);
-      expect(
-        requests.filter((request) => request.prompt === "recovery").length,
-      ).toBeGreaterThanOrEqual(5);
+      const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
+      expect(recoveryRequests.length).toBeGreaterThanOrEqual(5);
+      expect(recoveryRequests[0]?.model).toBe("gpt-5.6-luna");
+      expect(recoveryRequests[1]?.model).toBe(recoveryRequests[0]?.model);
+      expect(recoveryRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            continuation: true,
+            outcome: "error",
+            errorCode: "response_failed_no_details",
+          }),
+        ]),
+      );
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
         expect.objectContaining({ outcome: "success" }),
       ]);
