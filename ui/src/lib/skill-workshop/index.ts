@@ -109,8 +109,13 @@ export type SkillWorkshopInstalledSelection =
 
 export function changedSkillWorkshopVersion(read: SkillWorkshopInstalledSelection | undefined) {
   return read?.status === "ready"
-    ? read.savedVersions.find((version) =>
-        version.diff.lines.some((line) => line.kind === "add" || line.kind === "del"),
+    ? read.savedVersions.find(
+        (version) =>
+          // computeLineDiff marks unequal full inputs as truncated even when its
+          // bounded preview contains none of the edits.
+          version.diff.kind === "truncated" ||
+          version.diff.stat.added > 0 ||
+          version.diff.stat.removed > 0,
       )
     : undefined;
 }

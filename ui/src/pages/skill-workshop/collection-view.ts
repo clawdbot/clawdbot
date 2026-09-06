@@ -283,6 +283,12 @@ function renderReader(props: SkillWorkshopProps) {
                   `
             }
           </div>
+          ${
+            changed &&
+            !changed.diff.lines.some((line) => line.kind === "add" || line.kind === "del")
+              ? renderSkillDocument(selection.content)
+              : nothing
+          }
         `,
       )}
     </div>

@@ -14,23 +14,56 @@ afterEach(() => {
 
 describe("Workshop installed comparisons", () => {
   it.each([
-    { current: "Keep the existing check.\nCheck rollback before release.", shortened: false },
     {
+      previous: "Keep the existing check.",
+      current: "Keep the existing check.\nCheck rollback before release.",
+      shortened: false,
+      lateOnly: false,
+    },
+    {
+      previous: "Keep the existing check.",
       current: [
         "Keep the existing check.",
         ...Array.from({ length: 450 }, (_, index) => `Check release item ${index + 1}.`),
       ].join("\n"),
       shortened: true,
+      lateOnly: false,
+    },
+    {
+      previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(
+        "\n",
+      ),
+      current: Array.from({ length: 700 }, (_, index) =>
+        index === 649 ? "Late-only instruction change." : `Check release item ${index + 1}.`,
+      ).join("\n"),
+      shortened: true,
+      lateOnly: true,
     },
   ])(
-    "opens the differing saved comparison and labels shortening: $shortened",
-    async ({ current, shortened }) => {
+    "opens the differing saved comparison (shortened=$shortened, lateOnly=$lateOnly)",
+    async ({ previous, current, shortened, lateOnly }) => {
       localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "skills");
       const state = createSkillWorkshopState();
       state.skillWorkshopAgentId = "research";
       state.skillWorkshopLoaded = true;
       state.skillWorkshopInstalledName = "release-review";
       state.skillWorkshopInstalledSkills = [
+        {
+          name: "unchanged-skill",
+          skillKey: "unchanged-skill",
+          description: "No changes",
+          read: {
+            status: "ready",
+            name: "unchanged-skill",
+            content: "Keep this instruction.",
+            savedVersions: [
+              {
+                key: "unchanged",
+                diff: computeLineDiff("Keep this instruction.", "Keep this instruction."),
+              },
+            ],
+          },
+        },
         {
           name: "release-review",
           skillKey: "release-review",
@@ -48,7 +81,7 @@ describe("Workshop installed comparisons", () => {
               {
                 key: "older",
                 appliedAt: "2026-08-16T10:00:00.000Z",
-                diff: computeLineDiff("Keep the existing check.", current, {
+                diff: computeLineDiff(previous, current, {
                   compactUnchanged: true,
                 }),
               },
@@ -65,13 +98,21 @@ describe("Workshop installed comparisons", () => {
       await page.updateComplete;
 
       const reader = page.querySelector(".sw-collection__reader");
+      expect(page.querySelector(".sw-installed-skill__name")?.textContent).toBe("release-review");
+      expect(page.querySelector(".sw-installed-skill__change")?.textContent).toContain(
+        "Changed since",
+      );
       const versions = reader?.querySelectorAll("details");
       expect(versions?.[0]?.open).toBe(false);
       expect(versions?.[1]?.open).toBe(true);
-      expect(versions?.[1]?.textContent).toContain(
-        shortened ? "Check release item 1." : "Check rollback before release.",
+      expect(reader?.textContent).toContain(
+        lateOnly
+          ? "Late-only instruction change."
+          : shortened
+            ? "Check release item 1."
+            : "Check rollback before release.",
       );
-      expect(reader?.querySelector(".sidebar-markdown")).toBeNull();
+      expect(reader?.querySelector(".sidebar-markdown") !== null).toBe(lateOnly);
       expect(
         reader?.textContent?.includes("This diff is shortened. Some changes may not be shown."),
       ).toBe(shortened);
