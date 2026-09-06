@@ -1,5 +1,5 @@
 // Covers shell environment fallback loading.
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -678,13 +678,21 @@ describe("shell env fallback", () => {
     "runs the login-shell probe in its own session",
     () => {
       const shell = "/bin/bash";
-      const home = tempDirs.make("openclaw-shell-session-");
-      fs.writeFileSync(
-        path.join(home, ".bash_profile"),
-        'export OPENCLAW_PROBE_PID=$$\nexport OPENCLAW_PROBE_SID="$(ps -o sid= -p $$)"\n',
-      );
       const env: NodeJS.ProcessEnv = { SHELL: shell };
-      const homedir = vi.spyOn(os, "homedir").mockReturnValue(home);
+      const realExec = execFileSync;
+      const probe = vi
+        .spyOn(childProcess, "execFileSync")
+        .mockImplementation((file, args, options) => {
+          expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
+          return realExec(
+            file,
+            [
+              "-lic",
+              'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0',
+            ],
+            options,
+          );
+        });
       try {
         withEtcShells([shell], () => {
           expect(
@@ -692,12 +700,13 @@ describe("shell env fallback", () => {
               enabled: true,
               env,
               expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
+              exec: childProcess.execFileSync,
             }),
           ).toEqual({ ok: true, applied: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"] });
         });
         expect(env.OPENCLAW_PROBE_SID?.trim()).toBe(env.OPENCLAW_PROBE_PID);
       } finally {
-        homedir.mockRestore();
+        probe.mockRestore();
       }
     },
   );
