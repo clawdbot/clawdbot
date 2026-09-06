@@ -2330,7 +2330,6 @@ src/cli/pairing-cli.ts	1
 src/cli/parse-duration.ts	2
 src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
-src/cli/plugins-cli.runtime.ts	2
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-install-config.ts	2
 src/cli/plugins-uninstall-command.ts	4
