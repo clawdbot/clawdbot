@@ -40,9 +40,9 @@ describe("durable admission after an ingress processing timeout", () => {
     await withTempState(async (stateDir) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      const resolvingHeldInput = createDeferred<void>();
-      const releaseHeldInput = createDeferred<void>();
-      const siblingCompleted = createDeferred<void>();
+      const resolvingHeldInput = createDeferred();
+      const releaseHeldInput = createDeferred();
+      const siblingCompleted = createDeferred();
       let heldWriter: Promise<void> | undefined;
 
       const createAdmission = async (

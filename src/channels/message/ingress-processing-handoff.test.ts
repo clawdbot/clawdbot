@@ -38,7 +38,7 @@ describe("ingress processing timeout ownership", () => {
           return { kind: "deferred" };
         },
       });
-      const release = createDeferred<void>();
+      const release = createDeferred();
       try {
         await drain.drainOnce();
         await drain.waitForIdle();
@@ -88,8 +88,8 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("cleanup-stall", { text: "hello" });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
+      const entered = createDeferred();
+      const release = createDeferred();
       const drain = createChannelIngressDrain({
         queue,
         adoptionStallTimeoutMs: 100,
@@ -130,8 +130,8 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("successor", { text: "hello" });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
+      const entered = createDeferred();
+      const release = createDeferred();
       let memory: ReturnType<typeof captureIngressProcessingDeadline>;
       const drain = createChannelIngressDrain({
         queue,
@@ -176,9 +176,9 @@ describe("ingress processing timeout ownership", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("prepared", { text: "hello" });
-      const preparation = createDeferred<void>();
-      const engineStarted = createDeferred<void>();
-      const release = createDeferred<void>();
+      const preparation = createDeferred();
+      const engineStarted = createDeferred();
+      const release = createDeferred();
       const drain = createChannelIngressDrain({
         queue,
         adoptionStallTimeoutMs: 100,

@@ -45,8 +45,8 @@ describe("dispatchReplyFromConfig", () => {
     async (route) => {
       setNoAbort();
       installThreadingTestPlugin({ id: "telegram" });
-      const preparationEntered = createDeferred<void>();
-      const releasePreparation = createDeferred<void>();
+      const preparationEntered = createDeferred();
+      const releasePreparation = createDeferred();
       const expiredPhase = new AbortController();
       const healthyPhase = new AbortController();
       const expiredNotice: ReplyPayload = {
