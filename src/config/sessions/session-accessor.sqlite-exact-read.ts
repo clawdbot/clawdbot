@@ -1,5 +1,8 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnlyScope,
+} from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -12,6 +15,14 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
+type SessionEntryCandidateScope = Omit<SessionEntryReadScope, "sessionKey"> & {
+  sessionKeys: readonly string[];
+};
+
+export type ExactSessionEntryReadOnlyReader = (
+  scope: SessionEntryCandidateScope,
+) => ExactSessionEntry[];
+
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
 export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {
   return loadExactSessionEntryCandidates({
@@ -23,10 +34,23 @@ export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessio
 
 /** Reads exact candidates for one logical session through a single store admission. */
 export function loadExactSessionEntryCandidates(
-  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
-    sessionKeys: readonly string[];
-    readOnly: boolean;
-  },
+  scope: SessionEntryCandidateScope & { readOnly: boolean },
+): ExactSessionEntry[] {
+  return readSessionEntryCandidates(scope, withOpenClawAgentDatabaseReadOnly);
+}
+
+/** Reuse admissions within one synchronous operation, while reading every requested row anew. */
+export function withExactSessionEntryCandidatesReadOnly<T>(
+  operation: (read: ExactSessionEntryReadOnlyReader) => T,
+): T {
+  return withOpenClawAgentDatabaseReadOnlyScope((readDatabase) =>
+    operation((scope) => readSessionEntryCandidates({ ...scope, readOnly: true }, readDatabase)),
+  );
+}
+
+function readSessionEntryCandidates(
+  scope: SessionEntryCandidateScope & { readOnly: boolean },
+  readDatabase: typeof withOpenClawAgentDatabaseReadOnly,
 ): ExactSessionEntry[] {
   const sessionKeys = scope.sessionKeys.map((key) => key.trim()).filter(Boolean);
   const [sessionKey] = sessionKeys;
@@ -43,7 +67,7 @@ export function loadExactSessionEntryCandidates(
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(read, toDatabaseOptions(resolved));
+  const result = readDatabase(read, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }
 

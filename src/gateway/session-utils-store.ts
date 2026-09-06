@@ -30,7 +30,11 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
+import {
+  withExactSessionEntryCandidatesReadOnly,
+  type ExactSessionEntryReadOnlyReader,
+  type SessionEntryListScope,
+} from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
@@ -145,6 +149,7 @@ function loadSessionEntryWithMode(
     | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+        readExactCandidates?: ExactSessionEntryReadOnlyReader;
       })
     | undefined,
   readOnly: boolean,
@@ -158,6 +163,7 @@ function loadSessionEntryWithMode(
     readOnly,
     projection: opts?.projection,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
+    readExactCandidates: opts?.readExactCandidates,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
@@ -204,6 +210,17 @@ export function loadGatewaySessionEntryReadOnly(
   } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
+}
+
+/** Keep each lookup fresh and ordered, sharing only a synchronous connection lifetime. */
+export function withGatewaySessionEntryReadOnlyScope<T>(
+  operation: (read: typeof loadGatewaySessionEntryReadOnly) => T,
+): T {
+  return withExactSessionEntryCandidatesReadOnly((readExactCandidates) =>
+    operation((sessionKey, opts) =>
+      loadSessionEntryWithMode(sessionKey, { ...opts, readExactCandidates }, true),
+    ),
+  );
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */

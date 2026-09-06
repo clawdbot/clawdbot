@@ -87,6 +87,9 @@ vi.mock("../../config/config.js", async () => {
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: loadGatewaySessionEntry,
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
+  withGatewaySessionEntryReadOnlyScope: <T>(
+    operation: (read: typeof loadGatewaySessionEntry) => T,
+  ): T => operation(loadGatewaySessionEntry),
 }));
 
 vi.mock("../../cron/delivery-preview.js", () => ({
