@@ -23,10 +23,11 @@ export function sha256HexPrefixCore(input: DigestInput, length: number): string 
   return sha256Hex(input).slice(0, length);
 }
 
-export async function sha256File(filePath: string): Promise<string> {
+/** Streams a file, optionally stopping at an inclusive byte offset. */
+export async function sha256File(filePath: string, end?: number): Promise<string> {
   const digest = createHash("sha256");
   try {
-    for await (const chunk of createReadStream(filePath)) {
+    for await (const chunk of createReadStream(filePath, { end })) {
       digest.update(chunk);
     }
   } catch (err) {

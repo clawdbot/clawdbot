@@ -3,7 +3,7 @@ import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../a
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
@@ -22,6 +22,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatSubmissions?: ApplicationChatSubmissions;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
+  /** Config changes retire preview tickets even when session permissions stay inherited. */
+  mediaPolicyEpoch?: number;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
@@ -39,6 +41,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatSending: boolean;
   chatMessage: string;
+  chatMentions?: readonly HumanMention[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
@@ -74,4 +77,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
+  /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
+  transcriptLoadingChanged?: () => void;
 };

@@ -95,6 +95,8 @@ describe("models.list provider catalog outcomes", () => {
       catalogComplete: true,
       workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
       config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       authStore: emptyAuthStore,
       metadataSnapshot,

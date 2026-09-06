@@ -12,15 +12,13 @@ repair/cloud PR creation, comment commands, automerge, permissions, or gates.
 
 ## Start
 
-```bash
-cd ~/Projects/clawsweeper
-git status --short --branch
-git pull --ff-only
-pnpm run build:all
-```
+Inspect `git status --short --branch` in the ClawSweeper checkout. Status and
+report requests stay read-only: use current reports and live read APIs when
+freshness matters, without pulling or building just to inspect them.
 
-Do not overwrite unrelated edits. If the tree is dirty, inspect first and keep
-read-only report work read-only unless the requester asked to commit.
+For authorized implementation or execution, update a clean task-owned checkout
+and build only when the selected command needs it. Preserve unrelated edits
+and other operators' active workflows.
 
 ## One Bot, One App
 
@@ -72,14 +70,14 @@ short `Review findings:` list when findings exist; full review comments,
 evidence links, likely owners, and runtime details stay inside the collapsed
 `Review details` block.
 
-Useful commands:
+For a simple status request, read existing reports and bounded live workflow
+state. Use `pnpm run audit` only for a requested full audit.
 
-```bash
-pnpm run status
-pnpm run audit
-pnpm run reconcile
-pnpm run apply-decisions -- --dry-run
-```
+Reconciliation is a separate authorized mutation: bare `pnpm run reconcile`
+moves/deletes report and work-plan files. Inspect its dry-run only when that
+maintenance task is requested; do not run reconciliation during status/report
+reads. Likewise, `apply-decisions` belongs to an explicitly authorized apply
+workflow, beginning with its dry-run.
 
 ## Create One Repair Job
 
@@ -137,7 +135,8 @@ trailers, and closes superseded source PRs only after replacement exists.
 
 ## Gates
 
-Open execution windows intentionally and close them after the run:
+Change execution gates only under explicit authority for that window. Record
+the original state and any agreed restoration before changing it:
 
 ```bash
 gh variable set CLAWSWEEPER_ALLOW_EXECUTE --repo openclaw/clawsweeper --body 1
@@ -146,8 +145,10 @@ gh variable set CLAWSWEEPER_ALLOW_MERGE --repo openclaw/clawsweeper --body 1
 gh variable set CLAWSWEEPER_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 1
 ```
 
-Reset gates only when explicitly requested; the active maintainer window may intentionally
-leave them at `1`.
+Restore a gate only when the authorized window includes that restoration and
+its ownership/state still match. Otherwise leave it unchanged; another active
+maintainer window may intentionally keep it at `1`. Never reset all gates as
+generic cleanup.
 
 Important gates:
 

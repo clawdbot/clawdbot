@@ -2,6 +2,7 @@ import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics"
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
   classifyAgentRunTerminalOutcome,
+  projectAgentRunAttemptTerminal,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
@@ -37,6 +38,21 @@ export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
         : params.assistant,
     abortSignal: params.abortSignal,
   });
+}
+
+/** Owner-recorded timeout failure cannot be inferred away from partial or completed-looking output. */
+export function isEmbeddedRunTimeoutFinal(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "terminal" | "promptTimeoutOutcome" | "codexAppServerFailure"
+  >,
+): boolean {
+  return (
+    projectAgentRunAttemptTerminal(attempt.terminal).timedOut &&
+    (attempt.promptTimeoutOutcome?.replayInvalid === true ||
+      // Published older harnesses reported this failure before the generic replay-invalid fact.
+      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout")
+  );
 }
 
 export function isEmbeddedRunTerminalTimeout(outcome: AgentRunTerminalOutcome): boolean {

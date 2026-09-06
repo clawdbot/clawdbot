@@ -67,7 +67,7 @@ describe("post-core bundled plugin retirement", () => {
     const bundledRoot = tempDirs.make("openclaw-post-core-bundled-");
     const cfg = {
       update: { channel: "beta" as const },
-      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+      plugins: { allow: ["bundleddemo"], entries: { bundleddemo: { enabled: true } } },
     };
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
@@ -75,14 +75,14 @@ describe("post-core bundled plugin retirement", () => {
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       VITEST: "true",
     };
-    const bundledDir = path.join(bundledRoot, "codex");
+    const bundledDir = path.join(bundledRoot, "bundleddemo");
     fs.mkdirSync(bundledDir, { recursive: true });
     fs.writeFileSync(path.join(bundledDir, "index.js"), "export default {};\n", "utf8");
     fs.writeFileSync(
       path.join(bundledDir, "openclaw.plugin.json"),
       JSON.stringify({
-        id: "codex",
-        name: "codex",
+        id: "bundleddemo",
+        name: "bundleddemo",
         version: VERSION,
         configSchema: { type: "object" },
       }),
@@ -90,40 +90,40 @@ describe("post-core bundled plugin retirement", () => {
     );
     fs.writeFileSync(
       path.join(bundledDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+      JSON.stringify({ name: "@openclaw/bundleddemo", version: VERSION }),
       "utf8",
     );
     const npmRoot = resolvePluginNpmGenerationProjectDir({
       npmDir: path.join(stateDir, "npm"),
-      packageName: "@openclaw/codex",
-      generationKey: "@openclaw/codex@2026.7.2-beta.7",
+      packageName: "@openclaw/bundleddemo",
+      generationKey: "@openclaw/bundleddemo@2026.7.2-beta.7",
     });
-    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "codex");
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "bundleddemo");
     fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(
       path.join(npmRoot, "package.json"),
-      JSON.stringify({ dependencies: { "@openclaw/codex": "2026.7.2-beta.7" } }),
+      JSON.stringify({ dependencies: { "@openclaw/bundleddemo": "2026.7.2-beta.7" } }),
       "utf8",
     );
     fs.writeFileSync(
       path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/codex", version: "2026.7.2-beta.7" }),
+      JSON.stringify({ name: "@openclaw/bundleddemo", version: "2026.7.2-beta.7" }),
       "utf8",
     );
     fs.writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "codex", name: "codex", configSchema: { type: "object" } }),
+      JSON.stringify({ id: "bundleddemo", name: "bundleddemo", configSchema: { type: "object" } }),
       "utf8",
     );
     await writePersistedInstalledPluginIndexInstallRecords(
       {
-        codex: {
+        bundleddemo: {
           source: "npm",
-          spec: "@openclaw/codex@beta",
+          spec: "@openclaw/bundleddemo@beta",
           installPath: packageDir,
           version: "2026.7.2-beta.7",
-          resolvedName: "@openclaw/codex",
-          resolvedSpec: "@openclaw/codex@2026.7.2-beta.7",
+          resolvedName: "@openclaw/bundleddemo",
+          resolvedSpec: "@openclaw/bundleddemo@2026.7.2-beta.7",
           resolvedVersion: "2026.7.2-beta.7",
         },
       },
@@ -140,26 +140,28 @@ describe("post-core bundled plugin retirement", () => {
       const records =
         params.baselineRecords ??
         (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
-      const codexRecord = records.codex;
-      if (codexRecord) {
+      const bundleddemoRecord = records.bundleddemo;
+      if (bundleddemoRecord) {
         installAttempts += 1;
         const retryRoot = resolvePluginNpmGenerationProjectDir({
           npmDir: path.join(stateDir, "npm"),
-          packageName: "@openclaw/codex",
-          generationKey: `@openclaw/codex@retry-${installAttempts}`,
+          packageName: "@openclaw/bundleddemo",
+          generationKey: `@openclaw/bundleddemo@retry-${installAttempts}`,
         });
-        const retryPackageDir = path.join(retryRoot, "node_modules", "@openclaw", "codex");
+        const retryPackageDir = path.join(retryRoot, "node_modules", "@openclaw", "bundleddemo");
         fs.mkdirSync(retryPackageDir, { recursive: true });
         const nextRecords = {
           ...records,
-          codex: { ...codexRecord, installPath: retryPackageDir },
+          bundleddemo: { ...bundleddemoRecord, installPath: retryPackageDir },
         };
         await writePersistedInstalledPluginIndexInstallRecords(nextRecords, {
           config: cfg,
           env: params.env,
         });
         return {
-          changes: ['Refreshed stale configured plugin "codex" from @openclaw/codex@beta.'],
+          changes: [
+            'Refreshed stale configured plugin "bundleddemo" from @openclaw/bundleddemo@beta.',
+          ],
           warnings: [],
           records: nextRecords,
         };
@@ -182,12 +184,12 @@ describe("post-core bundled plugin retirement", () => {
     expect(projectsAfterFirst).toHaveLength(1);
     expect(fs.readdirSync(path.join(stateDir, "npm", "projects"))).toEqual(projectsAfterFirst);
     expect(await readPersistedInstalledPluginIndexInstallRecords({ env })).not.toHaveProperty(
-      "codex",
+      "bundleddemo",
     );
-    expect(first.installRecords).not.toHaveProperty("codex");
-    expect(second.installRecords).not.toHaveProperty("codex");
+    expect(first.installRecords).not.toHaveProperty("bundleddemo");
+    expect(second.installRecords).not.toHaveProperty("bundleddemo");
     expect(first.changes).toContain(
-      'Removed stale managed install record for bundled plugin "codex".',
+      'Removed stale managed install record for bundled plugin "bundleddemo".',
     );
     expect(second.changes).toEqual([]);
   });

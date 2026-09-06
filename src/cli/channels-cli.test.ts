@@ -20,6 +20,14 @@ const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
 );
+const channelsDeadLettersMocks = vi.hoisted(() => ({
+  channelsDeadLettersListCommand: vi.fn(
+    async (_options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+  channelsDeadLettersResubmitCommand: vi.fn(
+    async (_eventId: string, _options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+}));
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsCapabilitiesCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsRemoveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -48,6 +56,8 @@ vi.mock("../commands/channels.js", () => ({
   channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
   channelsRemoveCommand: channelsRemoveCommandMock,
 }));
+
+vi.mock("../commands/channels/dead-letters.js", () => channelsDeadLettersMocks);
 
 vi.mock("./channel-auth.js", () => channelAuthMocks);
 
@@ -104,6 +114,45 @@ describe("registerChannelsCli", () => {
 
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
   });
+
+  it.each(
+    [
+      { expected: "ops", label: "parent", leafAccount: undefined, parentAccount: "ops" },
+      { expected: "ops", label: "leaf", leafAccount: "ops", parentAccount: undefined },
+      { expected: "leaf", label: "leaf precedence", leafAccount: "leaf", parentAccount: "parent" },
+      { expected: "", label: "blank parent", leafAccount: undefined, parentAccount: "" },
+      { expected: "", label: "blank leaf", leafAccount: "", parentAccount: undefined },
+    ].flatMap((accountCase) => [
+      { ...accountCase, leaf: "list" as const },
+      { ...accountCase, leaf: "resubmit" as const },
+    ]),
+  )(
+    "passes a $label --account to dead-letters $leaf",
+    async ({ expected, leaf, leafAccount, parentAccount }) => {
+      const args = ["channels", "dead-letters"];
+      if (parentAccount !== undefined) {
+        args.push("--account", parentAccount);
+      }
+      args.push(leaf);
+      if (leaf === "resubmit") {
+        args.push("event-1");
+      }
+      args.push("--channel", "telegram");
+      if (leafAccount !== undefined) {
+        args.push("--account", leafAccount);
+      }
+      const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+
+      await registerChannelsCli(program, ["node", "openclaw", ...args]);
+      await program.parseAsync(args, { from: "user" });
+
+      const options =
+        leaf === "list"
+          ? channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0]?.[0]
+          : channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0]?.[1];
+      expect(options?.account).toBe(expected);
+    },
+  );
 
   it.each([
     ["omitted", ["channels", "logs"], undefined],

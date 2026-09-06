@@ -98,6 +98,7 @@ export async function runCliRecovery<TAttempt>(params: {
     if (deliveredFailure) {
       return deliveredFailure;
     }
+    runParams.assertCurrent?.();
     let recoveryError = err;
     if (isFailoverError(recoveryError)) {
       if (
@@ -141,6 +142,7 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
+          runParams.assertCurrent?.();
           recoveryError =
             isFailoverError(forkError) && forkError.code === "cli_resume_at_unsupported"
               ? err

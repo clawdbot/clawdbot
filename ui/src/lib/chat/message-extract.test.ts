@@ -140,4 +140,25 @@ describe("nullish messages", () => {
       expect(extractThinkingCached(message)).toBeNull();
     }
   });
+
+  it.each(["user", "assistant", "toolResult"])(
+    "preserves %s text and thinking around malformed content blocks",
+    (role) => {
+      const message = {
+        role,
+        content: [
+          null,
+          { type: "text", text: "Visible reply" },
+          undefined,
+          { type: "thinking", thinking: "Plan A" },
+          [],
+        ],
+      };
+      expect(extractText(message)).toBe("Visible reply");
+      expect(extractTextCached(message)).toBe("Visible reply");
+      expect(extractThinkingCached(message)).toBe("Plan A");
+      expect(extractText({ role, content: [null], text: "Fallback text" })).toBe("Fallback text");
+      expect(extractText({ role, content: [null] })).toBeNull();
+    },
+  );
 });

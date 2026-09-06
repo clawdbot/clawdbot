@@ -192,7 +192,7 @@ type McpDoctorServerResult = {
 
 const MCP_DOCTOR_CONCURRENCY = 4;
 const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
-  "tools have no safety annotations; calls will require interactive approval";
+  "tools have no safety annotations; calls require approval in prompting session postures";
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",

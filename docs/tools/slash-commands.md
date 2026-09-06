@@ -42,6 +42,7 @@ command handling is enabled for the surface.
       including code indentation. Only the recognized directive, its arguments,
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
+      Added prompt context is not scanned for text commands or stripped as directives.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
       `/exec security=... ask=...` is the exception: these options apply only
@@ -74,7 +75,7 @@ command handling is enabled for the surface.
     mcp: false,
     plugins: false,
     debug: false,
-    restart: true,
+    restart: true, // enables /restart and /update
     ownerAllowFrom: ["discord:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
@@ -130,12 +131,18 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart` and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
   Explicit owner allowlist for owner-only command surfaces. Separate from
-  `commands.allowFrom` and DM pairing access.
+  `commands.allowFrom` and DM pairing access. CLI pairing approval records the
+  first owner; Control UI pairing has an explicit owner checkbox. Authorized
+  non-owners receive a refusal with the exact configuration command for their
+  sender ID when using an owner-only command such as `/restart` or `/update`.
+  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
+  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`;
+  Doctor rewrites recognized channel entries and reports their list positions.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
@@ -239,7 +246,7 @@ plugins.
       <Accordion title="Model switching details">
         - Prefer choosing the model when creating a session. Changing it in an established session is an advanced operation because model context limits, prompt/tool behavior, and prompt-cache behavior can differ. See [Choose a model for a session](/concepts/models#choose-a-model-for-a-session).
 
-        **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set; omission preserves existing behavior.
+        **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set; omission changes only this session.
 
         Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
 
@@ -250,7 +257,7 @@ plugins.
         | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
         | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        With `modelSelectionScope` unset, a direct owner/admin `/model <model>` also requests an update to the agent's existing explicit primary, or to the shared global fallback if there is none. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
+        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
@@ -269,6 +276,7 @@ plugins.
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
+    | `/dashboard [request]` | Create or update the current session's dashboard using the Control UI dashboard workflow |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
@@ -276,6 +284,11 @@ plugins.
     | `/whoami` | Show your sender id. Alias: `/id` |
     | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
   </Accordion>
+
+`/dashboard` is reserved as a built-in command. If an existing user skill is
+named `dashboard`, skill discovery exposes its generated slash alias as
+`/dashboard_2`; `$dashboard` and `/skill dashboard` continue to select that
+user skill directly.
 
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |
@@ -307,6 +320,7 @@ plugins.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw and restart; receive a completion or failure notice in the same chat |
     | `/send on\|off\|inherit` | owner | Set send policy |
   </Accordion>
 
@@ -316,7 +330,7 @@ plugins.
     | `/tts on\|off\|status\|chat\|latest\|provider\|limit\|summary\|audio\|help` | Control TTS. See [TTS](/tools/tts) |
     | `/activation mention\|always` | Set group activation mode |
     | `/bash <command>` | Run a host shell command. Alias: `! <command>`. Requires `commands.bash: true` |
-    | `!poll [sessionId]` | Check a background bash job |
+    | `!poll [sessionId]` | Check a background bash job; acknowledge its pending completion notice only after the terminal reply is delivered. Failed or suppressed replies retain the notice |
     | `!stop [sessionId]` | Stop a background bash job |
   </Accordion>
 </AccordionGroup>
@@ -382,15 +396,7 @@ use the Control UI Tools panel or config surfaces.
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`; an explicit scope overrides `agents.defaults.modelSelectionScope`.
 
-Without a flag or that optional setting, direct owner/admin `/model <model>` commands keep their existing behavior: change the session and request a best-effort update of the agent's explicit primary, or the shared global fallback when the agent has none. To make unqualified selections session-only, opt in with:
-
-```json5
-{
-  agents: { defaults: { modelSelectionScope: "session" } },
-}
-```
-
-The setting also accepts `"agent"` and `"global"`; it does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+Without a flag or that optional setting, `/model <model>` changes only the current session, including for owners/admins. Set `agents.defaults.modelSelectionScope` to `"agent"` or `"global"` only when you want unqualified selections to update that default. The setting does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
 In text commands, select a model by `provider/model` or a configured alias.
 Numeric selections such as `/model 3` are not supported.
@@ -399,7 +405,7 @@ Numeric selections such as `/model 3` are not supported.
 /model             # show current model and usage guidance
 /model list        # browse providers (same as /models)
 /models openai     # list models from a provider
-/model openai/gpt-5.4    # configured scope, or existing behavior when unset
+/model openai/gpt-5.4    # configured scope, or session-only when unset
 /model openai/gpt-5.4 -s # explicit session scope
 /model openai/gpt-5.4 -a # session + agent default update request
 /model openai/gpt-5.4 -g # session + global default update request
@@ -460,9 +466,10 @@ updates persist across restarts.
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
 `/mcp show` redacts credential-bearing fields, recognized credential flag
 values, and known secret-shaped arguments. When run from a group, the
-configuration is sent to the owner privately; if no private owner route is
-available, the command fails closed and asks the owner to retry from a direct
-chat.
+configuration is routed privately to the owner. The group notice distinguishes
+confirmed, pending, and suppressed delivery. An unconfirmed send stays pending
+without trying another private recipient. If no private owner route is available,
+the command asks the owner to retry from a direct chat.
 
 ## `/debug`: runtime-only overrides
 
@@ -580,7 +587,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
-    - On external channels, unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Reset denials show a permission reply only when the request and reply stay in WebChat.
+    - On external channels, unauthorized text command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.
 
   </Accordion>
   <Accordion title="Argument notes">
@@ -613,5 +620,8 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Card>
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
+  </Card>
+  <Card title="OpenProse migration" href="/prose" icon="pen-nib">
+    Where the removed `/prose` command went.
   </Card>
 </CardGroup>

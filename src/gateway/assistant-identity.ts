@@ -4,8 +4,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import { loadAgentIdentity } from "../commands/agents.config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -117,7 +117,7 @@ export function resolveAssistantIdentity(params: {
   const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
-  const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;
+  const fileIdentity = workspaceDir ? loadAgentIdentityFromWorkspace(workspaceDir) : null;
 
   const agentName = normalizeIdentityValue("name", agentIdentity?.name);
   const fileName = normalizeIdentityValue("name", fileIdentity?.name);

@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -10,7 +11,6 @@ import type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -194,7 +194,7 @@ function readRawDeltaInTransaction(
       .limit(1),
   );
   const maxSeq = Math.min(
-    frontier ? coerceSqliteNumber(frontier.seq) : -1,
+    frontier ? sqliteNumber(frontier.seq) : -1,
     beforeEventSeq === undefined ? Number.POSITIVE_INFINITY : beforeEventSeq - 1,
   );
   if (cursor.lastSeq > maxSeq) {
@@ -221,8 +221,8 @@ function readRawDeltaInTransaction(
       .orderBy("seq", "asc")
       .limit(maxEvents + 1),
   ).rows.map((row) => ({
-    seq: coerceSqliteNumber(row.seq),
-    serializedBytes: coerceSqliteNumber(row.serialized_bytes),
+    seq: sqliteNumber(row.seq),
+    serializedBytes: sqliteNumber(row.serialized_bytes),
   }));
 
   let serializedBytes = 0;
@@ -250,7 +250,7 @@ function readRawDeltaInTransaction(
             .orderBy("seq", "asc"),
         ).rows.map((row) => ({
           event: JSON.parse(row.event_json),
-          seq: coerceSqliteNumber(row.seq),
+          seq: sqliteNumber(row.seq),
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =

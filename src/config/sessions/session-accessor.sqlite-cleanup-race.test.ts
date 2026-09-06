@@ -862,20 +862,20 @@ describe("SQLite lifecycle cleanup races", () => {
       ids.toSorted((left, right) => left.localeCompare(right)).map((id) => [id]),
     );
   });
-  it("commits large maintenance cleanup in bounded retry-safe batches", async () => {
+  it("continues a maintenance batch after one entry changes", async () => {
     const entryCount = 66;
     const historicalSessionId = "maintenance-batch-historical-session";
     const sessionKeyById = new Map<string, string>();
     const sessionKeys = Array.from(
       { length: entryCount },
-      (_, index) => `agent:main:maintenance-batch-${String(index).padStart(2, "0")}`,
+      (_, index) => `agent:main:subagent:maintenance-batch-${String(index).padStart(2, "0")}`,
     );
     for (const [index, sessionKey] of sessionKeys.entries()) {
       const sessionId = `maintenance-batch-session-${String(index).padStart(2, "0")}`;
       sessionKeyById.set(sessionId, sessionKey);
       await replaceSessionEntry(
         { sessionKey, storePath },
-        { sessionId, updatedAt: Date.now() + index },
+        { sessionId, updatedAt: index === entryCount - 1 ? Date.now() : index + 1 },
       );
       await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
         { type: "session", id: sessionId, content: `batch transcript ${index}` },
@@ -918,18 +918,18 @@ describe("SQLite lifecycle cleanup races", () => {
       storePath,
       maintenanceOverride: {
         mode: "enforce",
-        maxEntries: 1,
-        pruneAfterMs: Number.MAX_SAFE_INTEGER,
+        maxEntries: entryCount,
+        pruneAfterMs: 60_000,
       },
     });
 
     expect(batchSizes).toEqual([64, 2]);
     expect(result).toMatchObject({
       beforeCount: entryCount,
-      afterCount: 3,
+      afterCount: 2,
       modelRunPruned: 0,
-      pruned: 0,
-      capped: 63,
+      pruned: 64,
+      capped: 0,
     });
     expect(loadSessionEntry({ sessionKey: racedKey ?? "", storePath })).toMatchObject({
       label: "changed during batch materialization",
@@ -941,7 +941,7 @@ describe("SQLite lifecycle cleanup races", () => {
         sessionId: historicalSessionId,
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(0);
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -953,7 +953,7 @@ describe("SQLite lifecycle cleanup races", () => {
       database.db
         .prepare("SELECT 1 AS present FROM session_nodes WHERE session_key = ?")
         .get(historicalOwnerKey),
-    ).toBeUndefined();
+    ).toBeDefined();
   });
 
   it("retains unplanned historical windows behind a placeholder node", async () => {

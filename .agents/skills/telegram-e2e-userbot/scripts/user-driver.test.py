@@ -124,6 +124,7 @@ class PhotoContentTest(unittest.TestCase):
         self.assertEqual(created["senderUsername"], "sut_bot")
         self.assertEqual(created["replyToMessageId"], 7)
         self.assertEqual(created["timestamp"], 123000)
+        self.assertEqual(created["contentType"], "messageText")
         self.assertEqual(created["text"], text)
         self.assertEqual(created["entities"], entities)
 
@@ -151,12 +152,13 @@ class PhotoContentTest(unittest.TestCase):
                     known,
                 )
                 self.assertEqual(edited["kind"], "edit")
+                self.assertEqual(edited["contentType"], "messageText")
                 self.assertEqual(edited["text"], edited_text)
                 self.assertEqual(edited["entities"], edited_entities)
                 self.assertEqual(edited["senderId"], 101)
                 self.assertEqual(known[message_id]["entities"], edited_entities)
 
-    def test_preserves_caption_entities_in_messages_and_edits(self):
+    def test_preserves_native_content_type_and_caption_entities_in_messages_and_edits(self):
         entities = [{"offset": 3, "length": 5, "type": {"@type": "textEntityTypeCode"}}]
         message = {
             "id": 43 << 20,
@@ -173,6 +175,7 @@ class PhotoContentTest(unittest.TestCase):
             {"@type": "updateNewMessage", "message": message}, {}, known
         )
         normalized = driver.normalize_message(message)
+        self.assertEqual(created["contentType"], "messagePhoto")
         self.assertEqual(created["text"], "😀 a   b")
         self.assertEqual(created["entities"], entities)
         self.assertEqual(normalized["entities"], entities)
@@ -182,13 +185,15 @@ class PhotoContentTest(unittest.TestCase):
                 "@type": "updateMessageContent",
                 "message_id": message["id"],
                 "new_content": {
-                    "@type": "messagePhoto",
+                    "@type": "messageVideo",
                     "caption": {"@type": "formattedText", "text": "😀 a   b", "entities": []},
                 },
             },
             {},
             known,
         )
+        self.assertEqual(edited["contentType"], "messageVideo")
+        self.assertEqual(known[message["id"]]["contentType"], "messageVideo")
         self.assertEqual(edited["text"], "😀 a   b")
         self.assertEqual(edited["entities"], [])
 

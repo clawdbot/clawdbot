@@ -9,7 +9,3 @@ export const loadPreflightAudioRuntime = createLazyRuntimeModule(
 export const loadSystemEventsRuntime = createLazyRuntimeModule(() => import("./system-events.js"));
 
 export const loadDiscordThreadingRuntime = createLazyRuntimeModule(() => import("./threading.js"));
-
-export function isPreflightAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}

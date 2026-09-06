@@ -197,6 +197,18 @@ describe("formatAssistantErrorText", () => {
     },
   );
 
+  it.each([
+    "Session transcript projection is rebuilding: private-session",
+    "opaque-private-provider-detail",
+  ])("keeps model context without assigning an unclassified failure: %s", (raw) => {
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+        provider: "openai",
+        model: "test-model",
+      }),
+    ).toBe("⚠️ Agent run failed (model: openai/test-model).");
+  });
+
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
     const msg = makeAssistantMessageFixture({

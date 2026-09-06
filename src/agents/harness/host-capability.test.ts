@@ -12,10 +12,12 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -28,6 +30,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -37,10 +40,8 @@ import type { AnyAgentTool } from "../tools/common.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
-import {
-  createAgentHarnessHostCapabilities,
-  retainBeforeToolCallForNativeHookRelay,
-} from "./host-capability.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-tools.before-tool-call.js")>()),
@@ -155,6 +156,43 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each(["restart", "unrelated scope", "user abort", "timeout"] as const)(
+    "preserves the original cancellation when a startup capability closes: %s",
+    async (reason) => {
+      const work = new AsyncWorkScope();
+      const otherWork = new AsyncWorkScope();
+      const controller = new AbortController();
+      const { attempt } = await admittedAttempt("run-startup-close", {
+        abortSignal: controller.signal,
+      });
+      const context = {} as GatewayRequestContext;
+      let current: GatewayRequestContext | undefined = context;
+      bindGatewayContextResolver(attempt.admittedRunContext, () => current);
+      const host = await work.track(() =>
+        createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
+      );
+      const restart = createAgentRunRestartAbortError();
+      try {
+        expect(host.capabilities.preparedEnvironment?.()).toBeDefined();
+        if (reason === "user abort") {
+          controller.abort();
+        } else if (reason === "timeout") {
+          controller.abort(new DOMException("deadline elapsed", "TimeoutError"));
+        }
+        current = undefined;
+        (reason === "unrelated scope" ? otherWork : work).beginClose(restart);
+        await otherWork.track(() => {
+          expect(() => host.capabilities.preparedEnvironment?.()).toThrow(
+            reason === "restart" ? restart : "host capability is no longer active",
+          );
+        });
+      } finally {
+        host.close();
+        await Promise.all([work.drain(), otherWork.drain()]);
+      }
+    },
+  );
+
   beforeEach(() => {
     mockRewrap.mockClear();
     mockRunBefore.mockClear();
@@ -686,6 +724,48 @@ describe("agent harness host capability", () => {
     expect(scopes.every((signal) => signal.aborted)).toBe(true);
     expect(() => host.capabilities.assertActive()).not.toThrow();
     host.close();
+  });
+
+  it("hands off MCP persistence proof once without serializing the callback", async () => {
+    const { attempt } = await admittedAttempt("mcp-persistence-proof");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const authority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)!;
+    const scope = {
+      authority,
+      agentId: "main",
+      toolCallId: "item-1",
+      server: "docs",
+      tool: "write_note",
+    };
+    let active = true;
+    let proof: (() => boolean) | undefined;
+    mockCallGatewayTool.mockImplementationOnce(async (_method, _opts, payload) => {
+      expect(payload).toMatchObject({
+        mcpTool: { server: "docs", tool: "write_note" },
+        toolCallId: "item-1",
+      });
+      expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
+      expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
+      proof = takeMcpToolApprovalBinding(scope);
+      expect(takeMcpToolApprovalBinding(scope)).toBeUndefined();
+      return { id: "approval-1" };
+    });
+    await host.capabilities.requestApproval({
+      title: "MCP approval",
+      description: "Write a note",
+      severity: "warning",
+      toolName: "codex_mcp_tool_approval",
+      toolCallId: "item-1",
+      timeoutMs: 1_000,
+      mcpTool: { server: "docs", tool: "write_note" },
+      isMcpToolApprovalActive: () => active,
+    });
+    expect(proof?.()).toBe(true);
+    active = false;
+    expect(proof?.()).toBe(false);
+    active = true;
+    host.close();
+    expect(proof?.()).toBe(false);
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {

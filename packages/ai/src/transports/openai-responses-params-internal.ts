@@ -6,9 +6,11 @@ import type {
   ResponseInput,
 } from "openai/resources/responses/responses.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveOpenAIResponsesCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
+  supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
 import {
@@ -82,16 +84,6 @@ function convertResponsesTools(
       return result;
     }),
   };
-}
-
-function getPromptCacheRetention(
-  baseUrl: string | undefined,
-  cacheRetention: "short" | "long" | "none",
-) {
-  if (cacheRetention !== "long") {
-    return undefined;
-  }
-  return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
 }
 
 function resolveOpenAIReasoningEffort(
@@ -317,18 +309,24 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...resolveOpenAIResponsesCacheParams(
+      model,
+      cacheRetention,
+      model.baseUrl?.includes("api.openai.com"),
+    ),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
-    params.max_output_tokens = effectiveMaxTokens;
+    // Responses rejects output budgets below 16 tokens.
+    params.max_output_tokens = Math.max(effectiveMaxTokens, 16);
   }
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  if (options?.topP !== undefined) {
+  // Astra rejects top_p independently of the temperature compatibility setting.
+  if (options?.topP !== undefined && model.id !== "gpt-6-astra") {
     params.top_p = options.topP;
   }
   if (options?.responseFormat !== undefined) {

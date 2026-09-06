@@ -16,6 +16,7 @@ import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
 } from "../infra/approval-resolution-ref.js";
+import { mintMcpToolGrantLocked } from "../infra/exec-approvals-sqlite.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -1682,6 +1683,7 @@ export function resolveOperatorApproval(params: {
   runtimeEpoch?: string;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
+  mcpToolGrant?: { agentId: string; server: string; tool: string };
   /** Cron-context allow-always mints this scoped grant in the same transaction. */
   standingGrant?: { kind: "cron" } & CronStandingGrantMintSpec & {
       expiresAtMs: number | null;
@@ -1755,6 +1757,14 @@ export function resolveOperatorApproval(params: {
     }
     record = requireDecodedRecord(row);
     if (result.numAffectedRows === 1n) {
+      if (
+        params.decision === "allow-always" &&
+        params.mcpToolGrant &&
+        record.kind === "plugin" &&
+        record.source.agentId === params.mcpToolGrant.agentId
+      ) {
+        mintMcpToolGrantLocked(database.db, params.mcpToolGrant, auditTimestampMs);
+      }
       if (params.decision === "allow-always" && params.standingGrant) {
         // Same-transaction mint: the just-resolved approval row is the sole
         // authorization owner; the grant is its derivative cron re-execution scope.

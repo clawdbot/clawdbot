@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
+  resolveDynamicToolServerRequestTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   shouldReleaseTurnAfterTerminalDynamicTool,
@@ -412,6 +413,7 @@ describe("dynamic tool execution helpers", () => {
   it.each([
     { tool: "session_status", deadlineMs: 600_000 },
     { tool: "agents_wait", deadlineMs: 630_000 },
+    { tool: "openclaw", deadlineMs: 930_000 },
   ])("enforces the resolved $tool cap at $deadlineMs ms", async ({ tool, deadlineMs }) => {
     vi.useFakeTimers();
     const call = {
@@ -420,6 +422,7 @@ describe("dynamic tool execution helpers", () => {
       tool,
       arguments: { timeoutSeconds: 1_000 },
     };
+    expect(resolveDynamicToolServerRequestTimeoutMs(call)).toBeGreaterThan(deadlineMs);
     const onTimeout = vi.fn();
     const response = handleDynamicToolCallWithTimeout({
       call,
@@ -561,6 +564,7 @@ describe("dynamic tool execution helpers", () => {
     { tool: "sessions_send", timeoutSeconds: 1, completionMs: 6_000 },
     { tool: "agents_wait", timeoutSeconds: 600, completionMs: 600_000 },
     { tool: "agents_wait", timeoutSeconds: 600, completionMs: 605_000 },
+    { tool: "openclaw", timeoutSeconds: 1, completionMs: 600_000 },
   ])(
     "preserves the $tool result after $completionMs ms",
     async ({ tool, timeoutSeconds, completionMs }) => {
@@ -694,26 +698,29 @@ describe("dynamic tool execution helpers", () => {
     expect(result.diagnosticTerminalReason).toBe("failed");
   });
 
-  it("preserves enclosing timeout provenance for active tool aborts", async () => {
-    const controller = new AbortController();
-    const resultPromise = handleDynamicToolCallWithTimeout({
-      call: {
-        ...dynamicCallContext,
-        callId: "call-active-timeout-abort",
-        tool: "memory_search",
-        arguments: {},
-      },
-      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
-      signal: controller.signal,
-      timeoutMs: 1_000,
-    });
-    controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
+  it.each(["memory_search", "openclaw"])(
+    "preserves enclosing timeout provenance for active %s aborts",
+    async (tool) => {
+      const controller = new AbortController();
+      const resultPromise = handleDynamicToolCallWithTimeout({
+        call: {
+          ...dynamicCallContext,
+          callId: "call-active-timeout-abort",
+          tool,
+          arguments: {},
+        },
+        toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+        signal: controller.signal,
+        timeoutMs: 1_000,
+      });
+      controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
 
-    await expect(resultPromise).resolves.toMatchObject({
-      success: false,
-      diagnosticTerminalReason: "timed_out",
-    });
-  });
+      await expect(resultPromise).resolves.toMatchObject({
+        success: false,
+        diagnosticTerminalReason: "timed_out",
+      });
+    },
+  );
 
   it("preserves timeout provenance when the dynamic tool bridge rejects", async () => {
     const timeoutError = Object.assign(new Error("tool deadline elapsed"), {

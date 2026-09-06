@@ -44,6 +44,7 @@ type KnownNodeApprovedSource = {
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
+  lastHostStats?: PairedDeviceNode["lastHostStats"];
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -137,6 +138,7 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
     lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
+    lastHostStats: entry.lastHostStats,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -249,6 +251,7 @@ function buildEffectiveKnownNode(entry: {
     live?.connectedAtMs,
   );
   const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
+  const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -312,6 +315,7 @@ function buildEffectiveKnownNode(entry: {
     ),
     computerUse: live?.computerUse,
     sessionHost,
+    ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
     ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
     ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
     ...(issues?.length ? { issues: [...issues] } : {}),

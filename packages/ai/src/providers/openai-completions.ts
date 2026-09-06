@@ -23,6 +23,7 @@ import {
   isOpenAICompletionsThinkingEnabled,
   resolveOpenAIClientBaseUrl,
 } from "../transports/openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
   assignTransportErrorDetails,
   transportAbortError,
@@ -122,7 +123,14 @@ export const streamOpenAICompletions: StreamFunction<
       );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+      const client = createClient(
+        model,
+        context,
+        apiKey,
+        resolveOpencodeSessionHeaders(model, options),
+        cacheSessionId,
+        compat,
+      );
       let params = buildParams(model, context, options, compat, cacheRetention);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
@@ -480,14 +488,14 @@ function buildParams(
   const thinkingLevelMap = model.thinkingLevelMap as
     | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
     | undefined;
+  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
   const reasoningEffort =
     options?.reasoningEffort === undefined
-      ? undefined
+      ? (offReasoningEffort ?? undefined)
       : (reasoningEffortMap[options.reasoningEffort] ??
         thinkingLevelMap?.[options.reasoningEffort] ??
         options.reasoningEffort);
   const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
-  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = reasoningEnabled

@@ -710,6 +710,7 @@ describe("reconcileSessionChanged", () => {
         archived: true,
         archivedAt: 1,
         archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        archiveReason: "manual",
       },
     ]);
 
@@ -724,12 +725,15 @@ describe("reconcileSessionChanged", () => {
         archived: false,
         archivedAt: null,
         archivedBy: null,
+        archiveReason: null,
       },
       { archivedFilter: "all" },
     );
 
     expect(next.row?.archivedBy).toBeUndefined();
+    expect(next.row?.archiveReason).toBeUndefined();
     expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
+    expect(next.result?.sessions[0]?.archiveReason).toBeUndefined();
   });
 });
 

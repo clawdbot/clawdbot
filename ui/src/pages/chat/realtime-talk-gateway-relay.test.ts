@@ -1129,7 +1129,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("releases delayed final tool results on provider barge-in clears", async () => {
+  it("releases delayed final tool results on unkeyed provider barge-in clears", async () => {
     vi.useFakeTimers();
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
@@ -1167,7 +1167,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
     await Promise.resolve();
 
-    emitTalkEvent({ relaySessionId: "relay-1", type: "clear", reason: "barge-in" });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: { relaySessionId: "relay-1", type: "clear", reason: "barge-in" },
+    });
+    expect(createdSources[0]?.stop).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toEqual([

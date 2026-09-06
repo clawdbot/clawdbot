@@ -23,12 +23,13 @@ policy. OpenClaw caches a runtime-and-workspace-scoped `plugin/installed`
 snapshot, reads exact configured plugin details, provisionally admits only
 explicitly allowed, ownership-proven apps, and creates a deny-by-default
 native thread. One `app/installed` request verifies the actual thread ID
-without forcing an inventory refresh. Native app execution begins only after
-Codex confirms the app is enabled and callable for that thread.
+without forcing an inventory refresh. Missing, disabled, or non-callable apps
+produce one warning; the conversation continues with the remaining tools.
+Codex still enforces app and tool permissions for the actual thread.
 
 This check finishes before OpenClaw injects history, starts a turn, or commits a
-thread binding. Failed persistent provisional threads are deleted; ephemeral
-threads are unsubscribed. OpenClaw retires the app-server connection when safe
+thread binding. If the snapshot request fails, persistent provisional threads
+are deleted and ephemeral threads are unsubscribed. OpenClaw retires the app-server connection when safe
 cleanup cannot be confirmed. Supervised branches also clean up their temporary
 probe and preserve recovery state if cleanup fails.
 
@@ -58,6 +59,14 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+Delivery mode and the current message target requirement arrive as compact
+application context before each user turn. They explicitly supersede earlier
+delivery guidance while preserving permission and temporal context. With the
+same available tools, switching between automatic replies and message-tool-only
+replies keeps the static instructions and message tool definition unchanged.
+If the message tool is unavailable on a message-tool-only turn, final text stays
+private to the invoking workflow; it is not delivered to the source conversation.
+
 When `openclaw_direct.sessions_yield` is available, those instructions also
 tell a native Codex parent to end the current turn when a child's result should
 arrive in a later turn. Native `wait_agent` remains for an intentional same-turn
@@ -69,7 +78,11 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
-For a [managed GitHub identity](/gateway/config-tools#toolsgithub), `gateway_exec` uses OpenClaw's private local process-launch credential binding. Native Codex shell instead receives only the non-secret `GH_CONFIG_DIR` and token-clearing overlay; a missing or tokenless profile can still let GitHub CLI fall back to the OS keyring. Status and Gateway-owned publication guarantees do not cover that native shell path. Use `gateway_exec` when launch-bound managed GitHub credentials are required.
+Tool-schema repairs preserve literal property and definition names, including
+`__proto__`. The schema advertised to Codex and the schema used to validate
+OpenClaw tool calls retain the same required fields and constraints.
+
+For a [managed GitHub identity](/gateway/config-tools#tools.github), `gateway_exec` uses OpenClaw's private local process-launch credential binding. Native Codex shell instead receives only the non-secret `GH_CONFIG_DIR` and token-clearing overlay; a missing or tokenless profile can still let GitHub CLI fall back to the OS keyring. Status and Gateway-owned publication guarantees do not cover that native shell path. Use `gateway_exec` when launch-bound managed GitHub credentials are required.
 
 ## Recovery after a hard Gateway stop
 
@@ -94,8 +107,9 @@ or discover descendants that independently reparented before inspection.
 
 Linux reads process identities directly from `/proc`, including the boot ID
 and process start ticks, so Alpine/BusyBox installations do not need `procps`.
-During Linux startup, an empty command line waits within the existing inspection
-deadline while the same live process identity remains valid. Registration still
+Startup identity and command inspection share a 10-second deadline. During Linux
+startup, an empty command line waits within that deadline while the same live
+process identity remains valid. Registration still
 requires a usable command fingerprint; unreadable or changed identities fail.
 macOS uses its native `ps` with a fixed locale and timezone. Registration checks
 inspect only the observer and the relevant parent and child processes; an
@@ -207,6 +221,31 @@ catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat turns use the same Codex Default collaboration mode as
 ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
 scheduled heartbeat user message when present.
+
+## Final answers after settled tool work
+
+For ordinary host-authenticated Codex turns that finish tool work without a
+visible answer, OpenClaw can request a bounded final-answer turn in a private
+temporary home. It uses the completed thread's model selection and the original
+host auth route or resolved profile, rather than selecting a model from outer
+request metadata. The existing environment, dynamic-tool, MCP, and native-hook
+restrictions remain. Completed actions are transcript evidence, not instructions
+to replay. Preserving a native model does not, by itself, disable host-authenticated
+finalization.
+
+A Chat created through Codex Sessions is different: its private supervision
+connection owns native authentication. Stock Codex does not expose a generic
+tool-free summary operation that preserves that connection's account. OpenClaw
+marks this finalization context unavailable instead of choosing host credentials,
+copying native credentials, or starting another native turn. If a final reply is
+required, the host delivers its existing fallback:
+
+> The tool run finished, but no final summary was produced. I did not repeat any completed actions.
+
+The original completed outcome, native binding, and tool receipts remain intact.
+Native turns that return a final answer are delivered normally. The ordinary
+`homeScope: "user"` opt-in retains its documented private host-auth finalization;
+see [Auth and environment isolation](/plugins/codex-harness-reference#auth-and-environment-isolation).
 
 ## Hook boundaries
 
@@ -478,12 +517,20 @@ bundle.
 
 ## Compaction and transcript mirror
 
-When the selected model uses the Codex harness, native thread compaction
-belongs to Codex app-server. OpenClaw does not run preflight compaction for
-Codex turns, replace Codex compaction with context-engine compaction, or fall
-back to OpenClaw or public OpenAI summarization when native compaction cannot
-be started. OpenClaw keeps a transcript mirror for channel history, search,
-`/new`, `/reset`, and future model or harness switching.
+When the selected model uses the Codex harness, Codex app-server owns native
+token-pressure and manual thread compaction. OpenClaw separately owns its
+transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
+is set to a positive value, OpenClaw checks that mirror before ordinary and
+heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+compaction through its selected host context engine before admitting the turn.
+This host compaction does not itself replace or rewrite Codex's canonical
+native thread.
+
+After host mirror compaction commits, OpenClaw may request
+`thread/compact/start` to synchronize an eligible native thread. This request
+is secondary: OpenClaw does not send it for host-isolated operations or
+bindings with restricted native authority, and unavailable or failed native
+synchronization does not roll back committed host compaction.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -497,15 +544,22 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic context-pressure
-compaction is Codex's job; OpenClaw only starts native compaction for manually
-requested triggers.
+failed compaction turn returns a failed operation. Automatic native
+token-pressure compaction remains Codex's job. Outside the secondary
+synchronization described above, OpenClaw starts native compaction only for
+explicit manual requests.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;
 the next ordinary turn verifies configuration and refreshes generic policy through
 the normal resume path. Warm compaction returns only the configuration ownership
 it actually acquired.
+
+If context-engine compaction rotates the OpenClaw session generation, the next
+Codex turn, compaction, or side question continues the same native thread even if the Gateway stopped
+immediately after committing the new generation. Only the recorded predecessor
+under that session key can be adopted. Native tool catalogs, connection ownership,
+and supervision checks still apply before the resumed thread executes.
 
 When OpenClaw projects an existing session's continuity into a fresh Codex
 thread, it includes saved compaction and branch summaries, even when no
@@ -521,8 +575,10 @@ content into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight
-Codex reasoning or plan records when the app-server emits them. OpenClaw
-records the native compaction start and terminal status, but it does not
+Codex reasoning records when the app-server emits them. Reasoning retains
+typed `thinking` content rather than ordinary final-answer text, so OpenClaw's
+existing reasoning visibility and history controls apply. OpenClaw records
+the native compaction start and terminal status, but it does not
 expose a human-readable compaction summary or an auditable list of which
 entries Codex kept after compaction.
 

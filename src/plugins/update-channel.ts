@@ -22,6 +22,7 @@ import {
 import {
   installWithChannelFallback,
   installWithSourceFallback,
+  NpmChannelResolutionError,
   resolvePluginInstallSources,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -161,15 +162,27 @@ export async function syncPluginsForUpdateChannel(params: {
         targetPluginId,
         npmSpec,
       });
-      const channelNpmSpecs =
-        npmSpec && trustedSourceLinkedOfficialInstall
-          ? resolveNpmInstallSpecsForUpdateChannel({
-              spec: npmSpec,
-              updateChannel: params.channel,
-              officialPackageName: resolveNpmSpecPackageName(npmSpec),
-              coreVersion: params.coreVersion,
-            })
-          : null;
+      let channelNpmSpecs: Awaited<
+        ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>
+      > | null;
+      try {
+        channelNpmSpecs =
+          npmSpec && trustedSourceLinkedOfficialInstall
+            ? await resolveNpmInstallSpecsForUpdateChannel({
+                spec: npmSpec,
+                updateChannel: params.channel,
+                officialPackageName: resolveNpmSpecPackageName(npmSpec),
+                coreVersion: params.coreVersion,
+              })
+            : null;
+      } catch (error) {
+        if (!(error instanceof NpmChannelResolutionError)) {
+          throw error;
+        }
+        summary.errors.push({ pluginId: targetPluginId, message: error.message, code: error.code });
+        logger.warn?.(error.message);
+        continue;
+      }
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
       const channelClawHubSpecs = clawhubSpec
         ? resolveClawHubInstallSpecsForUpdateChannel({
@@ -283,7 +296,7 @@ export async function syncPluginsForUpdateChannel(params: {
         if (clawHubTrustWarning) {
           summary.warnings.push(clawHubTrustWarning);
         }
-        const message =
+        const failure =
           installSource === "clawhub"
             ? formatClawHubInstallFailure({
                 pluginId: targetPluginId,
@@ -297,6 +310,7 @@ export async function syncPluginsForUpdateChannel(params: {
                 phase: "update",
                 result,
               });
+        const message = `${failure}\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".`;
         summary.errors.push({ pluginId: targetPluginId, message, code: result.code });
         logger.error?.(message);
         continue;

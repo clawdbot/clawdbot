@@ -6,7 +6,6 @@ export {
 } from "../../agents/agent-scope-config.js";
 export { resolveCronStyleNow } from "../../agents/current-time.js";
 export { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
 export { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 export { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";

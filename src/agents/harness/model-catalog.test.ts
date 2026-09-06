@@ -212,6 +212,50 @@ describe("agent harness model catalog", () => {
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
+      configuredModelRefs: [
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "gpt-5.6-sol" },
+      ],
+    });
+  });
+
+  it("prepares configured refs for the selected agent without including other agents", async () => {
+    const selectedConfig: OpenClawConfig = {
+      agents: {
+        defaults: cfg.agents?.defaults,
+        entries: {
+          main: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              "openai/synthetic-configured": {},
+            },
+          },
+          another: { model: { primary: "openai/synthetic-other-agent" } },
+        },
+      },
+    };
+    const loadModelCatalog = vi.fn(async () => []);
+    await augmentModelCatalogWithAgentHarness({
+      cfg: selectedConfig,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/workspace",
+      defaultProvider: "anthropic",
+      defaultModel: "openai/gpt-5.6-sol",
+      snapshot,
+      pluginRegistry: registryWithCatalog(loadModelCatalog),
+    });
+
+    expect(loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+      config: selectedConfig,
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/workspace",
+      configuredModelRefs: [
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "gpt-5.6-sol" },
+        { provider: "openai", model: "synthetic-configured" },
+      ],
     });
   });
 

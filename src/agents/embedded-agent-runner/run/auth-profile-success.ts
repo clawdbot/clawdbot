@@ -38,11 +38,8 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   }
   const successProfileId = input.profileId;
   const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
-  const successProvider = resolveAuthProfileStateProvider(
-    input.profileStore,
-    successProfileId,
-    input.provider,
-  );
+  const successProvider =
+    input.profileStore.profiles[successProfileId]?.provider.trim() || input.provider;
   const successStarted = Date.now();
   void markAuthProfileSuccess({
     store: input.profileStore,
@@ -265,16 +262,4 @@ function resolvePluginHarnessApiKeyInfo(input: {
   }
   const resolvedApiKey = resolveSecretSentinel(apiKey);
   return resolvedApiKey ? { ...apiKeyInfo, apiKey: resolvedApiKey } : null;
-}
-
-function resolveAuthProfileStateProvider(
-  store: AuthProfileStore,
-  profileId: string,
-  fallbackProvider: string,
-): string {
-  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
-  if (profileProvider) {
-    return profileProvider;
-  }
-  return profileId.split(":", 1)[0]?.trim() || fallbackProvider;
 }

@@ -7,7 +7,7 @@ import { createBeamStore } from "./src/store.js";
 export default definePluginEntry({
   id: "beam",
   name: "Beam",
-  description: "Receive redacted local coding sessions as a read-only catalog",
+  description: "Receive redacted coding-session snapshots for review or Team continuation",
   register(api) {
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));

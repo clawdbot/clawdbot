@@ -8,7 +8,7 @@ export type FormatErrorMessageOptions = {
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
-function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
+function readProperty(value: object, key: "cause" | "code" | "status" | "errors"): unknown {
   try {
     return (value as Record<string, unknown>)[key];
   } catch {
@@ -72,13 +72,11 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-/** Formats unknown errors with cause details, structured codes, and secret redaction. */
+/** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
 export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
   let formatted: string;
   if (value instanceof Error) {
     formatted = value.message || value.name || "Error";
-    let cause = readProperty(value, "cause");
-    const seen = new Set<unknown>([value]);
     const seenMessages = new Set<string>([formatted]);
     const appendCauseMessage = (message: string | undefined): void => {
       if (!message || seenMessages.has(message)) {
@@ -104,24 +102,29 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(String(code));
       }
     }
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
+    const causes = collectErrorGraphCandidates(value, (current) => {
+      if (!(current instanceof Error)) {
+        return [];
+      }
+      const cause = readProperty(current, "cause");
+      const errors =
+        current instanceof AggregateError ? readProperty(current, "errors") : undefined;
+      return [cause || undefined, ...(Array.isArray(errors) ? errors : [])];
+    });
+    for (const cause of causes.slice(1)) {
       if (cause instanceof Error) {
         appendCauseErrorMessage(cause.message);
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
         }
-        cause = readProperty(cause, "cause");
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
-        break;
       } else {
         // Mirror the top-level branch: an object cause with keys beyond
         // status/code makes formatStatusAndCode return undefined, so fall
         // back to stringifyUnknown rather than dropping the cause entirely.
         appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
-        break;
       }
     }
   } else {

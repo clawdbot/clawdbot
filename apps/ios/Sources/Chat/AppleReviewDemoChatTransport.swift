@@ -653,6 +653,16 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
+            return [
+                self.message(role: "user", text: "Prepare a detailed project review.", timestamp: now),
+                self.message(
+                    role: "assistant",
+                    text: String(repeating: "Earlier response context. ", count: 120),
+                    timestamp: now + 1),
+                self.message(role: "assistant", text: "OPENCLAW_LONG_CHAT_LATEST", timestamp: now + 2),
+            ]
+        }
         return fixture.seedMessages.enumerated().map { index, text in
             self.message(role: "assistant", text: text, timestamp: now + Double(index))
         }

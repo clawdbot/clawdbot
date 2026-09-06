@@ -36,8 +36,9 @@ import {
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
   replaceAssistantContentTextBlocks,
+  sanitizeAssistantDisplayText,
 } from "./chat-assistant-content.js";
-import { isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
+import { isBtwReplyPayload, isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
@@ -107,8 +108,10 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
   isAgentRunStarted: () => boolean;
+  onCommandBlock?: (text: string) => void;
   isRunCurrent?: () => boolean;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: Pick<
     PreparedChatSendSession,
@@ -161,7 +164,11 @@ export function createChatSendReplyDispatch(params: {
     }
     // Record delivery ownership before publication, while preserving raw refs for
     // the exact-row materializer. This is display provenance, never local-file trust.
-    return recordAssistantManagedMediaUrls(message, splitMediaFromOutput(sourceText).mediaUrls);
+    const prepared = recordAssistantManagedMediaUrls(
+      message,
+      splitMediaFromOutput(sourceText).mediaUrls,
+    );
+    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
   };
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
     isMediaBearingPayload(payload) ||
@@ -422,6 +429,23 @@ export function createChatSendReplyDispatch(params: {
         case "block":
         case "final":
           deliveredReplies.push({ payload, kind: info.kind });
+          if (
+            info.kind === "block" &&
+            params.onCommandBlock &&
+            !isAgentRunStarted() &&
+            params.isRunCurrent?.()
+          ) {
+            const parts = deliveredReplies.map(({ payload: reply, kind }) => {
+              if (kind !== "block" || reply.isReasoning === true || isBtwReplyPayload(reply)) {
+                return "";
+              }
+              const text = sanitizeAssistantDisplayText(reply.text, { preserveBoundaries: true });
+              return text && !isSuppressedControlReplyText(text) ? text : "";
+            });
+            if (parts.at(-1)) {
+              params.onCommandBlock(combineNonStreamingReplyParts(parts));
+            }
+          }
           break;
         case "tool":
           // TTS tool media becomes a final payload so downstream audio extraction sees it.

@@ -6,7 +6,6 @@
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { normalizeHostname } from "../sdk-security-runtime.js";
-import { CHROME_MCP_ENDPOINT_FLAGS } from "./chrome-mcp-contracts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -66,13 +65,6 @@ function requiresPinnedChromeMcpCdpTransport(
   );
 }
 
-function hasChromeMcpEndpointArg(args?: string[]): boolean {
-  return (args ?? []).some((arg) => {
-    const [name] = arg.split("=", 1);
-    return CHROME_MCP_ENDPOINT_FLAGS.has(name ?? arg);
-  });
-}
-
 export function resolveCdpReachabilityPolicy(
   profile: ResolvedBrowserProfile,
   ssrfPolicy?: SsrFPolicy,
@@ -97,8 +89,7 @@ export function assertChromeMcpCdpTransportAllowed(
   profile: ResolvedBrowserProfile,
   cdpPolicy?: SsrFPolicy,
 ): void {
-  const hasExplicitEndpoint = Boolean(profile.cdpUrl) || hasChromeMcpEndpointArg(profile.mcpArgs);
-  if (profile.driver !== "existing-session" || !hasExplicitEndpoint) {
+  if (profile.driver !== "existing-session" || !profile.cdpUrl) {
     return;
   }
   if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy, profile.cdpHost)) {

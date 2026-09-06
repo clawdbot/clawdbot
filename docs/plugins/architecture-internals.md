@@ -249,6 +249,12 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
+Hook lookup uses the prepared generation or a matching loaded registry first.
+On a miss, provider/model-scoped discovery reuses the loader's registry cache;
+explicit runtime-discovery invalidation clears that lookup rather than leaving
+another provider cache holding old hooks. Attempt-prepared provider handles
+retain their selected plugin, while each hook receives the current call context.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -293,6 +299,7 @@ listed here.
 | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
 | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| `reconcileLocalService`           | Reconcile provider-owned state after local-service health and before every request                             | A managed local router must reload durable provider state without moving provider policy into core                                            |
 | `resolveTransportTurnState`       | Attach native per-turn headers, metadata, or WebSocket policy                                                  | Provider wants generic transports to send provider-native turn identity or tune WebSocket headers and fallback cool-down                      |
 | `resolveWebSocketSessionPolicy`   | Deprecated compatibility hook for WebSocket policy                                                             | Existing plugins migrate WebSocket fields into `resolveTransportTurnState`                                                                    |
 | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
@@ -316,6 +323,11 @@ listed here.
 | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
+
+`reconcileLocalService` runs only for configured local services, including a
+healthy process reused from outside the current Gateway process. Keep it cheap,
+idempotent, and abort-aware. A rejection blocks the provider request and
+releases its lease without classifying the healthy process as a startup failure.
 
 Normalization dispatch is hook-specific:
 
@@ -1043,6 +1055,13 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
+When an official package is renamed, the catalog entry may declare
+`legacyNpmPackageNames` with the former package names. Trusted update rewrites
+matching npm records to the current `npmSpec`, and migrates a catalog lookup
+alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
+records drop only when the canonical install is also trusted official.
+`legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
+aliases.
 When onboarding installs from a local catalog path, it records a managed plugin
 plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in

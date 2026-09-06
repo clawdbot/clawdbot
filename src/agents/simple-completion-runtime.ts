@@ -1,35 +1,19 @@
-import {
-  reasoningTagTextPolicy,
-  supportsOpenAIReasoningEffort,
-} from "@openclaw/ai/internal/openai";
-import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-import {
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
  * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
  */
-import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  bindModelLlmRuntime,
-  getModelCompletionTransport,
-  getModelLlmRuntime,
-} from "../llm/model-runtime-binding.js";
-import { completeSimple } from "../llm/stream.js";
-import type {
-  AssistantMessage,
-  Model,
-  ModelThinkingLevel,
-  ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "../llm/types.js";
+import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  attachModelProviderRuntimePluginHandle,
+  resolveProviderRuntimePluginHandle,
+} from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
@@ -38,7 +22,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
@@ -64,7 +48,6 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
-import { isOpenAIProvider } from "./openai-routing.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -85,14 +68,6 @@ import {
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
-
-type SimpleCompletionModelOptions = {
-  maxTokens?: number;
-  temperature?: number;
-  reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
-  strictReasoningTags?: boolean;
-  signal?: AbortSignal;
-};
 
 export type PreparedSimpleCompletionModel =
   | {
@@ -286,6 +261,7 @@ async function prepareSimpleCompletionModelCore(
         readOnly: true,
         allowKeychainPrompt: false,
         config: params.cfg,
+        profileId: params.profileId,
       })
     : undefined;
   try {
@@ -372,6 +348,8 @@ async function prepareSimpleCompletionModelCore(
           provider: initialModel.provider,
           modelId: initialModel.id,
           config: params.cfg,
+          workspaceDir,
+          metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
           model: initialModel,
           resolveModel: ({ config, authProfileId, authProfileMode }) =>
             modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
@@ -455,16 +433,28 @@ async function prepareSimpleCompletionModelCore(
     applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
     params.cfg,
   );
+  const providerRuntimeHandle = resolveProviderRuntimePluginHandle({
+    provider: model.provider,
+    modelId: model.id,
+    config: params.cfg,
+    workspaceDir,
+    env: process.env,
+    pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+  });
+  const preparedModel = attachModelProviderRuntimePluginHandle(model, providerRuntimeHandle);
   // Select transport hooks before releasing this generation. Keep the logical
   // model API visible to callers that build prompts before dispatch.
-  const completionTransport = prepareModelForSimpleCompletion({
-    apiRegistry: modelRuntime.apiRegistry,
-    model,
-    cfg: params.cfg,
-  });
+  const completionTransport = attachModelProviderRuntimePluginHandle(
+    prepareModelForSimpleCompletion({
+      apiRegistry: modelRuntime.apiRegistry,
+      model: preparedModel,
+      cfg: params.cfg,
+    }),
+    providerRuntimeHandle,
+  );
 
   return {
-    model: bindModelLlmRuntime(model, modelRuntime.llmRuntime, completionTransport),
+    model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
@@ -646,58 +636,4 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   );
 }
 
-export async function completeWithPreparedSimpleCompletionModel(params: {
-  model: Model;
-  auth: ResolvedProviderAuth;
-  context: Parameters<typeof completeSimple>[1];
-  cfg?: OpenClawConfig;
-  options?: SimpleCompletionModelOptions;
-}): Promise<AssistantMessage> {
-  const runtime = getModelLlmRuntime(params.model);
-  let completionModel =
-    getModelCompletionTransport(params.model) ??
-    prepareModelForSimpleCompletion({
-      // Direct SDK callers that did not use the preparation helper keep the shipped
-      // process-default behavior; all prepared host paths carry their lifecycle owner.
-      apiRegistry: runtime?.registry ?? defaultApiRegistry,
-      model: params.model,
-      cfg: params.cfg,
-    });
-  if (runtime) {
-    completionModel = bindModelLlmRuntime(completionModel, runtime);
-  }
-  const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
-  const completionOptions = {
-    ...options,
-    ...(reasoning ? { reasoning } : {}),
-    apiKey: params.auth.apiKey,
-  };
-  if (strictReasoningTags) {
-    reasoningTagTextPolicy.markStrict(completionOptions);
-  }
-  return await completeSimple(completionModel, params.context, completionOptions);
-}
-
-function normalizeSimpleCompletionReasoning(
-  reasoning: SimpleCompletionModelOptions["reasoning"],
-  model: Model,
-): ModelThinkingLevel | undefined {
-  switch (reasoning) {
-    case undefined:
-      return undefined;
-    case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)
-        ? "off"
-        : undefined;
-    case "adaptive":
-      return "medium";
-    case "ultra":
-    case "max":
-      return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
-        ? "max"
-        : "xhigh";
-    default:
-      return reasoning;
-  }
-}
+export { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";

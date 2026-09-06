@@ -418,6 +418,55 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it("selects an explicitly allowlisted file URL", () => {
+    const url = "file:///tmp/selected.png";
+    expectParsedMediaOutputCase(
+      `Before ![selected](${url}) after`,
+      { text: "Before after", mediaUrls: [url] },
+      { markdownImageAllowlist: [url] },
+    );
+  });
+
+  it("preserves blockquote inline semantics when locating an image", () => {
+    const url = "https://example.com/chart.png";
+    expectParsedMediaOutputCase(
+      `> <span title="![chart](${url})"\n> caption`,
+      { text: '> <span title=""\n> caption', mediaUrls: [url] },
+      extractMarkdownImages,
+    );
+  });
+
+  it("does not recursively parse nested image labels", () => {
+    const nested = "![".repeat(4_000) + "x" + "](x)".repeat(4_000);
+    const url = "https://example.com/chart.png";
+    const startedAt = performance.now();
+    expectParsedMediaOutputCase(
+      `${nested}\n![chart](${url})`,
+      { text: nested, mediaUrls: [url] },
+      extractMarkdownImages,
+    );
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("locates quoted images after an identical code example", () => {
+    const image = "![chart](https://example.com/chart.png)";
+    expectParsedMediaOutputCase(
+      `> \`${image}\` ${image}`,
+      { text: `> \`${image}\``, mediaUrls: ["https://example.com/chart.png"] },
+      extractMarkdownImages,
+    );
+  });
+
+  it("keeps nested labels within reference images literal", () => {
+    const input =
+      "![![nested](https://example.com/nested.png)][outer]\n\n[outer]: https://example.com/outer.png";
+    expectParsedMediaOutputCase(
+      input,
+      { text: input, mediaUrls: undefined },
+      extractMarkdownImages,
+    );
+  });
+
   it("extracts multiple markdown image urls in order", () => {
     expectParsedMediaOutputCase(
       "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",
@@ -447,6 +496,37 @@ describe("splitMediaFromOutput", () => {
         text: "Chart now",
         mediaUrls: ["https://example.com/a_(1).png"],
       },
+      extractMarkdownImages,
+    );
+  });
+
+  it.each([
+    ["inline code", "Use `![chart](https://example.com/chart.png)` as an example."],
+    ["escaped syntax", "\\![chart](https://example.com/chart.png)"],
+    ["indented code", "    ![chart](https://example.com/chart.png)"],
+    ["multiline inline code", "``example\n![chart](https://example.com/chart.png)\n``"],
+  ])("keeps Markdown image syntax literal in %s", (_name, input) => {
+    expectParsedMediaOutputCase(
+      input,
+      { text: input, mediaUrls: undefined },
+      extractMarkdownImages,
+    );
+  });
+
+  it("preserves balanced punctuation at the end of a Markdown image destination", () => {
+    const url = "https://example.com/render?label=(chart)";
+    expectParsedMediaOutputCase(
+      `![chart](${url})`,
+      { text: "", mediaUrls: [url] },
+      extractMarkdownImages,
+    );
+  });
+
+  it.each(["\n", "\r\n", "\r"])("keeps image offsets across %j line endings", (newline) => {
+    const url = "https://example.com/chart.png";
+    expectParsedMediaOutputCase(
+      `before${newline}${newline}![chart](${url})`,
+      { text: "before", mediaUrls: [url] },
       extractMarkdownImages,
     );
   });
@@ -493,6 +573,22 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  it.each(["a* ", "] "])(
+    "extracts images after oversized delimiter-heavy prose (%s)",
+    (delimiter) => {
+      const prose = delimiter.repeat(40_000);
+      const url = "https://example.com/image.png";
+      const startedAt = performance.now();
+      expectParsedMediaOutputCase(
+        `${prose}\n![image](${url})`,
+        { text: prose.trimEnd(), mediaUrls: [url] },
+        extractMarkdownImages,
+      );
+      // Quadratic delimiter scans take seconds; normal parsing stays well below this margin.
+      expect(performance.now() - startedAt).toBeLessThan(2_000);
+    },
+  );
 
   it.each([
     "![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)",

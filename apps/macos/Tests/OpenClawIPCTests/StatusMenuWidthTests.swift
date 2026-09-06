@@ -25,13 +25,8 @@ struct StatusMenuWidthTests {
         let previousError = healthStore.lastError
         healthStore.__setSnapshotForTest(nil, lastError: "\(Self.workerFailure)\n\(Self.workerDiagnostic)")
 
-        let cronStore = CronJobsStore.shared
-        let previousJobs = cronStore.jobs
-        let nextRun = Date().addingTimeInterval(3600)
-        cronStore.jobs = (1...5).map { Self.cronJob(index: $0, nextRun: nextRun) }
         defer {
             healthStore.__setSnapshotForTest(previousSnapshot, lastError: previousError)
-            cronStore.jobs = previousJobs
         }
 
         let session = Self.session(
@@ -161,33 +156,6 @@ struct StatusMenuWidthTests {
             sessionId: nil,
             thinkingLevel: nil,
             verboseLevel: nil,
-            systemSent: false,
-            abortedLastRun: false,
-            tokens: SessionTokenStats(input: 10000, output: 10000, total: 20000, contextTokens: 200_000),
-            model: nil)
-    }
-
-    private static func cronJob(index: Int, nextRun: Date) -> CronJob {
-        CronJob(
-            id: "menu-job-\(index)",
-            agentId: nil,
-            name: "Automation \(index)",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: .every(everyMs: 3_600_000, anchorMs: nil),
-            sessionTarget: .isolated,
-            wakeMode: .now,
-            payload: .systemEvent(text: "test"),
-            delivery: nil,
-            state: CronJobState(
-                nextRunAtMs: Int(nextRun.timeIntervalSince1970 * 1000),
-                runningAtMs: nil,
-                lastRunAtMs: nil,
-                lastStatus: nil,
-                lastError: nil,
-                lastDurationMs: nil))
+            tokens: SessionTokenStats(total: 20000, contextTokens: 200_000))
     }
 }

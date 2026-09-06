@@ -126,7 +126,7 @@ flow:
               expr: "`recovery must not loop: expected one marker reply after settling, saw ${settledOutbound.length}`"
         - set: privateFinalLog
           value:
-            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+            expr: "String(readGatewayLogs(logCursor) ?? '')"
         - set: privateFinalLine
           value:
             expr: "(privateFinalLog.split('\\n').find((line) => line.includes(config.privateFinalLogNeedle)) ?? '').trim()"

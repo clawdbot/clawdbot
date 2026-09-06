@@ -62,6 +62,7 @@ function createContext(
     chatAbortControllers,
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => receivers,
+    mentionInbox: { invalidate: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
@@ -327,6 +328,10 @@ describe("sessions.changed coalescing", () => {
 
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
     expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+    );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });

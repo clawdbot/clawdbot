@@ -19,7 +19,7 @@ type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { compat?: unknown };
+  model?: { compat?: unknown; toolSearchMode?: "tools" | false };
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
@@ -28,10 +28,15 @@ type AgentToolSurfacePlanParams = {
   isRawModelRun: boolean;
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
-  forceDirectTools?: boolean;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
+  // Private completion replies have one message capability. Ordinary forced
+  // delivery keeps message direct while other tools can still use discovery.
+  const completionPrivateMessageOnly =
+    params.forceDirectMessageTool &&
+    params.toolsAllow?.length === 1 &&
+    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message";
   const codeModeConfig = resolveCodeModeConfig(
     params.config,
     params.agentId,
@@ -44,7 +49,8 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    forceDirectMessageTool: params.forceDirectMessageTool,
+    completionPrivateMessageOnly,
+    model: params.model,
   });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
@@ -53,25 +59,15 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     params.disableTools !== true &&
     !params.isRawModelRun &&
     params.toolsAllow?.length !== 0 &&
-    // Completion-private replies must never expose catalog controls that can
-    // invoke tools beyond their single directly visible message capability.
-    !(
-      params.forceDirectMessageTool &&
-      params.toolsAllow?.length === 1 &&
-      normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message"
-    );
+    !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
     toolsAvailable &&
-    params.forceDirectTools !== true &&
     // Restart recovery continues one provider turn. Keep its original control
     // schema even when the reloaded config disables Code Mode for new turns.
     (params.forceCodeModeControls === true ||
       isCodeModeEngagedForModel(codeModeConfig, params.model));
   const toolSearchControlsEnabled =
-    toolsAvailable &&
-    params.forceDirectTools !== true &&
-    !codeModeControlsEnabled &&
-    toolSearchConfig.enabled;
+    toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {
     codeModeControlsEnabled,
     toolSearchControlsEnabled,

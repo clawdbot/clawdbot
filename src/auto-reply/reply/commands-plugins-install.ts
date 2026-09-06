@@ -12,8 +12,8 @@ import {
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
+import { installManagedPluginSource } from "../../plugins/management-install.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import { installManagedPluginSource } from "../../plugins/management-service.js";
 
 export function formatPluginCommandCapabilityConsentError(
   error: unknown,

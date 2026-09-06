@@ -35,7 +35,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
@@ -105,7 +105,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
-    getActiveReplyRunCount = replyRunRegistryModule.getActiveReplyRunCount;
+    ({ getActiveReplyRunCount } = await import("./reply-run-registry.registry.js"));
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     const { testing } = await import("./reply-run-registry.test-support.js");

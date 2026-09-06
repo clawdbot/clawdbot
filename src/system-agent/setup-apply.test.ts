@@ -288,7 +288,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
           }),
         );
 
-        expect(assertCommitPreconditions).toHaveBeenCalledOnce();
+        expect(assertCommitPreconditions).toHaveBeenCalledTimes(3);
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
           expect.objectContaining({ workspace: "/tmp/current-workspace" }),
         );
@@ -858,21 +858,17 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       };
       authorityValid = false;
     });
-    let guardCalls = 0;
     let authorityValid = true;
-    const authorityCommit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
-      guardCalls += 1;
+    const beforePersistentApply = () => {
       if (!authorityValid) {
         throw new Error("verified inference binding changed");
       }
-      return await effect();
     };
 
     await expect(
-      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { commit: authorityCommit }),
+      applySystemAgentSetup(baseParams({ expectedInferenceRoute }), { beforePersistentApply }),
     ).rejects.toThrow("verified inference binding changed");
 
-    expect(guardCalls).toBe(3);
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
     expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
@@ -958,11 +954,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it.each([
-    { reason: "explicit", installDaemon: false, line: "Gateway: will run in the foreground." },
+    {
+      reason: "explicit",
+      installDaemon: false,
+      line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+    },
     {
       reason: "systemd-unavailable",
       installDaemon: false,
-      line: "Gateway: will run in the foreground.",
+      line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
     },
     {
       reason: "explicit",

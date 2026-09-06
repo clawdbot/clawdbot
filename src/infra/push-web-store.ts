@@ -2,7 +2,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
-import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {

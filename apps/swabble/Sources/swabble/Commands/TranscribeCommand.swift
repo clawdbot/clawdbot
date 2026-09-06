@@ -28,7 +28,7 @@ struct TranscribeCommand: ParsableCommand {
         if let positional = parsed.positional.first { self.inputFile = positional }
         if let loc = parsed.options["locale"]?.last { self.locale = loc }
         if parsed.flags.contains("censor") { self.censor = true }
-        if let out = parsed.options["output"]?.last { self.outputFile = out }
+        if let out = parsed.options["outputFile"]?.last { self.outputFile = out }
         if let fmt = parsed.options["format"]?.last { self.format = fmt }
         if let len = parsed.options["maxLength"]?.last, let intVal = Int(len) { self.maxLength = intVal }
     }

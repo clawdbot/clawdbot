@@ -5,10 +5,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import "./test-runtime-mocks.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
@@ -42,7 +43,20 @@ describe("memory manager reindex recovery", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
-    resetEmbeddingMocks();
+    // Register the fixture at the same boundary used by config and provider creation.
+    registerEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "mock-embed",
+          maxInputTokens: 8192,
+          embed: async () => [0, 1, 0],
+          embedBatch: async (inputs) => inputs.map(() => [0, 1, 0]),
+        },
+      }),
+    });
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-reindex-recovery-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -455,7 +469,7 @@ describe("memory manager reindex recovery", () => {
     expect(harness.sessionsFullRetryDirty).toBe(false);
   });
 
-  it("closes the database after constructor schema failure", async () => {
+  it("requires doctor for legacy schemas before exposing a manager", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     const db = new DatabaseSync(databasePath);
@@ -469,9 +483,9 @@ describe("memory manager reindex recovery", () => {
     });
 
     expect(result.manager).toBeNull();
-    expect(result.error).toMatch(/no such column: path/);
+    expect(result.error).toContain("uses schema version 0; run openclaw doctor --fix");
     const reopened = new DatabaseSync(databasePath);
-    expect(reopened.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
     reopened.close();
   });
 
@@ -535,20 +549,16 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-    const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
+    const memorySync = vi.spyOn(harness, "syncMemoryFiles");
 
     harness.dirty = true;
     harness.memoryFullRetryDirty = true;
-    harness.syncMemoryFiles = async (params: { needsFullReindex: boolean }) => {
-      memorySyncCalls.push(params);
-      return emptySyncPlan;
-    };
 
     await harness.sync({ reason: "test" });
 
-    expect(memorySyncCalls).toHaveLength(1);
-    expect(memorySyncCalls[0]).toMatchObject({ needsFullReindex: true });
+    expect(memorySync).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ needsFullReindex: true }),
+    );
     expect(harness.dirty).toBe(false);
     expect(harness.memoryFullRetryDirty).toBe(false);
   });

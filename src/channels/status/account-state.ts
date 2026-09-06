@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
@@ -46,11 +47,12 @@ export function resolveUnavailableChannelAccountSnapshot(
     channelId: string;
     accountId: string;
     runtime?: ChannelAccountSnapshot;
+    registry?: PluginRegistry;
   },
 ): ChannelAccountSnapshot | undefined {
   const accountId = normalizeAccountId(params.accountId);
   const owner = findActiveDegradedSecretOwner("account", `${params.channelId}:${accountId}`);
-  const registry = getActivePluginRegistry();
+  const registry = params.registry ?? getActivePluginRegistry();
   const failedPlugin =
     !registry?.channels.some(({ plugin }) => plugin.id === params.channelId) &&
     registry?.plugins.find(

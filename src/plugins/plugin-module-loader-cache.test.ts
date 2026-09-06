@@ -614,9 +614,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport: { loadedFrom: target },
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (p: string) =>
-        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -657,9 +656,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport: { loadedFrom: target },
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (p: string) =>
-        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -709,8 +707,8 @@ describe("getCachedPluginModuleLoader", () => {
       ok: true as const,
       moduleExport,
     }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -790,8 +788,8 @@ describe("getCachedPluginModuleLoader", () => {
     const nativeStub = vi.fn(() => {
       throw missingDependency;
     });
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -824,8 +822,8 @@ describe("getCachedPluginModuleLoader", () => {
   it("falls back to source transform when the native-require helper declines", async () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -870,8 +868,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginSourceModuleLoader } = await importPluginModuleLoader(
@@ -900,8 +898,8 @@ describe("getCachedPluginModuleLoader", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
@@ -936,8 +934,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -982,8 +980,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => moduleExport);
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
@@ -1020,8 +1018,8 @@ describe("getCachedPluginModuleLoader", () => {
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
     const { getCachedPluginModuleLoader } = await importPluginModuleLoader(

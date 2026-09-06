@@ -68,7 +68,7 @@ export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
-  supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
+  supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   create(
     profileId: string,
@@ -96,6 +96,8 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Current dispatch caller's setup authority; never inherited by a new caller. */
+  runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;

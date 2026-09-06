@@ -415,6 +415,39 @@ struct OpenClawTypographyTests {
         #expect(menu.contains(".font(OpenClawType.caption)"))
     }
 
+    @Test func `chat copy and select text surfaces use branded typography`() throws {
+        let selectableTextSheet = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatSelectableTextSheet.swift"),
+            encoding: .utf8)
+        let chatView = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift"),
+            encoding: .utf8)
+        let markdownBlockViews = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift"),
+            encoding: .utf8)
+        let mermaidBlockView = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMermaidBlockView.swift"),
+            encoding: .utf8)
+
+        #expect(selectableTextSheet.contains("OpenClawChatTypography.bodyUIFont"))
+        #expect(selectableTextSheet.contains("Text(\"Close\")"))
+        #expect(selectableTextSheet.contains(".font(OpenClawChatTypography.body)"))
+        #expect(!selectableTextSheet.contains("Button(\""))
+        #expect(chatView.contains("Text(\"Select Text\")"))
+        #expect(!chatView.contains("copyToClipboard"))
+        #expect(markdownBlockViews.contains("ChatCopyButton("))
+        #expect(markdownBlockViews.contains("\"Copy code\""))
+        #expect(!mermaidBlockView.contains("UIPasteboard"))
+    }
+
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
         let offenders = try Self.unbrandedTextCallOffenders()
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
@@ -580,6 +613,7 @@ struct OpenClawTypographyTests {
     private static func swiftSourcesForTypographyAudit() throws -> [URL] {
         let roots = [
             self.sourceURL(""),
+            self.iosRootURL().appendingPathComponent("WatchApp/Sources"),
             self.iosRootURL()
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI"),
@@ -605,7 +639,7 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "typography."]
+        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
         let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))

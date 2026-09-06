@@ -120,7 +120,7 @@ describe("extra-params: provider runtime handoff", () => {
     },
   );
 
-  it("keeps provider-ready max stable through provider hooks and cache lookup", () => {
+  it("passes provider-ready max through preparation and stream wrapping", () => {
     const prepareProviderExtraParams = vi.fn(({ context }) => context.extraParams);
     const resolveProviderExtraParamsForTransport = vi.fn(() => undefined);
     const wrapProviderStreamFn = vi.fn(({ context }) => context.streamFn);
@@ -144,9 +144,9 @@ describe("extra-params: provider runtime handoff", () => {
       thinkingLevel: "max",
     });
 
-    expect(first).toBe(repeated);
-    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(repeated);
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(2);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(2);
     expect(prepareProviderExtraParams).toHaveBeenCalledWith(
       expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
     );

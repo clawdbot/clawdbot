@@ -30,6 +30,7 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
+  renderAccountControl?: (model: string) => unknown;
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;
@@ -40,7 +41,6 @@ type ChatModelControlsProps = {
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
-  modelSelectionRuntimeId?: string;
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
@@ -163,9 +163,25 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
+function resolveModelSelectionScopeDescription(
+  target: SessionsListResult["defaults"]["modelSelectionTarget"],
+): string | undefined {
+  switch (target) {
+    case "session":
+      return t("chat.modelControls.selectionScopeSession");
+    case "agent":
+      return t("chat.modelControls.selectionScopeAgent");
+    case "global":
+      return t("chat.modelControls.selectionScopeGlobal");
+    default:
+      return undefined;
+  }
+}
+
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
   optionCount: number,
+  selectionKnown: boolean,
 ): string | undefined {
   if (state.status === "offline") {
     return undefined;
@@ -174,7 +190,7 @@ function resolveCatalogTriggerStatus(
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
   if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
-    return t("chat.modelControls.loadingModels");
+    return selectionKnown ? undefined : t("chat.modelControls.loadingModels");
   }
   if (state.hasSnapshot && optionCount === 0) {
     return t("chat.modelControls.noModelsAvailable");
@@ -223,6 +239,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     : resolvedFastMode;
   const activeSession = props.selectedSession;
   const currentProviderHint = activeSession?.modelProvider ?? "";
+  const hasPendingModelSelection = Object.hasOwn(props.modelOverrides ?? {}, props.sessionKey);
+  const activeModelValue = hasPendingModelSelection
+    ? ""
+    : resolvePreferredServerChatModelValue(
+        activeSession?.activeModel,
+        activeSession?.activeModelProvider,
+        props.modelCatalog,
+      );
+  const triggerModelValue = activeModelValue || currentOverride;
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
   const defaultCatalogEntry = resolveChatModelCatalogEntry(defaultModel, props.modelCatalog);
   const canonicalDefaultLabel = resolveChatModelPickerLabel(
@@ -346,17 +371,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   ) {
     activeModelOption.contextTokens = activeSession.contextTokens;
   }
-  const lockedModelLabel =
-    props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
-      ? t("chat.selectors.nativeCodexModel")
-      : t("chat.selectors.lockedSessionModel");
+  // A lock prevents model changes; the concrete selection still owns its label.
+  // Without a selection, neither the runtime nor the agent default identifies it.
   const committedModelLabel =
-    props.modelSelectionLocked === true
-      ? lockedModelLabel
-      : (modelOptions.find((entry) => entry.value === currentOverride)?.label ??
+    props.modelSelectionLocked === true && !triggerModelValue
+      ? t("chat.selectors.lockedSessionModel")
+      : (modelOptions.find((entry) => entry.value === triggerModelValue)?.label ??
         resolveChatModelPickerLabel(
-          currentOverride,
-          currentOverride || pickerDefaultLabel,
+          triggerModelValue,
+          triggerModelValue || pickerDefaultLabel,
           props.modelCatalog,
         ));
   const managedCatalog = props.modelCatalogState ?? {
@@ -365,7 +388,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   };
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
-  const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
+  // The session owns the selected model; its account-scoped catalog only owns
+  // picker availability. Refreshing that catalog must not hide a known selection.
+  const selectionKnown = Boolean(currentOverride || (modelOverrideSource === null && defaultModel));
+  const catalogTriggerStatus = resolveCatalogTriggerStatus(
+    managedCatalog,
+    modelOptions.length,
+    selectionKnown,
+  );
   // A verified-empty catalog means there is nothing to reason about: the effort
   // picker would only steer a model that cannot be selected, so it hides with it.
   const hasResolvableModel =
@@ -407,6 +437,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        accountControl: props.renderAccountControl?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
             ? {
@@ -425,15 +456,19 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        modelSelectionTarget: props.modelSelectionTarget,
+        selectionScopeDescription: resolveModelSelectionScopeDescription(
+          props.modelSelectionTarget,
+        ),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
         sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
-        triggerStatusLabel: catalogTriggerStatus,
-        triggerLoading: catalogLoadingWithoutSnapshot,
+        triggerModelValue,
+        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerLoading:
+          !props.modelSelectionLocked && catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,
@@ -443,25 +478,27 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${!showEffortPicker
-        ? nothing
-        : renderChatEffortPicker({
-            disabled: effortDisabled,
-            disabledReason: props.effortMutationDisabledReason,
-            fastMode: {
-              ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-            },
-            sessionKey: props.sessionKey,
-            thinkingDisabled,
-            thinking,
-            onFastModeSelect: async (next, targetSessionKey) =>
-              props.onFastModeSelect?.(next, targetSessionKey),
-            onRequestUpdate: props.onRequestUpdate,
-            onThinkingSelect: async (next, targetSessionKey) =>
-              props.onThinkingSelect?.(next, targetSessionKey),
-            reserved: reserveEffortPicker,
-          })}
+      ${
+        !showEffortPicker
+          ? nothing
+          : renderChatEffortPicker({
+              disabled: effortDisabled,
+              disabledReason: props.effortMutationDisabledReason,
+              fastMode: {
+                ...fastMode,
+                disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+              },
+              sessionKey: props.sessionKey,
+              thinkingDisabled,
+              thinking,
+              onFastModeSelect: async (next, targetSessionKey) =>
+                props.onFastModeSelect?.(next, targetSessionKey),
+              onRequestUpdate: props.onRequestUpdate,
+              onThinkingSelect: async (next, targetSessionKey) =>
+                props.onThinkingSelect?.(next, targetSessionKey),
+              reserved: reserveEffortPicker,
+            })
+      }
     </div>
   `;
 }

@@ -4,6 +4,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   unsubscribeCodexThreadBestEffort,
+  terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
@@ -33,7 +34,7 @@ export async function cleanupCodexAttempt(
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
     connection;
-  const { state, steeringQueueRef, userInputBridgeRef, turnWatches } = turnRuntime;
+  const { state, steeringQueueRef, userInputBridgeRef, deadlines } = turnRuntime;
   const {
     maybeEmitFastModeAutoResetBestEffort,
     emitLifecycleTerminal,
@@ -47,9 +48,27 @@ export async function cleanupCodexAttempt(
   // Finalization can throw before freezing. Close cancellation admission before
   // any teardown await so it cannot replace the cleanup promise being joined.
   freezeRunTerminalOutcome();
+  // Finalization already owns the bounded checkpoint join. Exceptional exits
+  // still fence immediately, without restarting a timed-out settlement's wait.
+  const projectionClose = state.projectionClosed
+    ? undefined
+    : activeTurn.activeProjector.closeProjection();
+  state.projectionClosed = true;
+  const checkpointCleanup = projectionClose
+    ? runCleanupStep("codex-transcript-checkpoint", () => projectionClose)
+    : undefined;
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
-  await state.abortCleanup.catch(() => undefined);
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-abort-cleanup", () => state.abortCleanup);
+  } else {
+    await state.abortCleanup?.catch(() => {});
+  }
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-one-shot-terminals", () =>
+      terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId, true),
+    );
+  }
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -63,32 +82,33 @@ export async function cleanupCodexAttempt(
       error: "codex app-server run completed without lifecycle terminal event",
       ...buildLifecycleTerminalMeta({
         aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
-        timedOut: state.timedOut,
+        timedOut: state.timeout !== undefined,
       }),
     });
     if (trajectoryRecorder && !resourceState.trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
         status:
-          state.timedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
+          state.timeout || (runAbortController.signal.aborted && !state.clientClosedAbort)
             ? "interrupted"
             : "cleanup",
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
-        timedOut: state.timedOut,
+        timedOut: state.timeout !== undefined,
         aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
       });
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
-      (terminalState.turnSucceeded ||
+      (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
-    // Incognito uses the same generation owner but retains its creation policy
-    // without idle eviction. Native-preserved and supervised lifetimes stay separate.
+    // Incognito retains its creation policy without idle eviction; supervision stays separate.
+    // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
+    // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
-        (terminalState.turnSucceeded &&
+        (terminalState.settledTurnStatus !== undefined &&
           !isIncognitoSessionKey(params.sessionKey) &&
           params.cleanupBundleMcpOnRunEnd !== true &&
           resourceState.thread.liveThreadConfigFingerprint !== undefined &&
@@ -96,13 +116,11 @@ export async function cleanupCodexAttempt(
           resourceState.thread.connectionScope !== "supervision" &&
           !resourceState.thread.ringZeroConfigFingerprint)) &&
       resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client)
-        ? (await bindingStore.read(bindingIdentity))?.threadId === resourceState.thread.threadId &&
+        ? bindingStore.read(bindingIdentity)?.threadId === resourceState.thread.threadId &&
           (await bindingStore.withLease(bindingIdentity, async () => {
             // Reset/end uses this same generation lease. Never publish an old
             // active turn after its session binding has already been retired.
-            if (
-              (await bindingStore.read(bindingIdentity))?.threadId !== resourceState.thread.threadId
-            ) {
+            if (bindingStore.read(bindingIdentity)?.threadId !== resourceState.thread.threadId) {
               return false;
             }
             return await retainCodexAppServerBindingSubscription(
@@ -131,7 +149,7 @@ export async function cleanupCodexAttempt(
           })
         : true;
     // Only explicitly retained live threads may skip the next thread/resume.
-    if (!state.timedOut && !retainLiveThread) {
+    if (!retainLiveThread) {
       // Clear first: if a newer owner won the binding, its live subscription must remain intact.
       if (bindingReleased) {
         const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
@@ -141,6 +159,11 @@ export async function cleanupCodexAttempt(
         if (!released) {
           // Never reuse a client whose previous thread may still publish notifications.
           await closeCodexStartupClientBestEffort(resourceState.client);
+          if (params.oneShotCliRun) {
+            await runCleanupStep("codex-one-shot-unsubscribe", async () => {
+              throw new Error("Codex one-shot thread unsubscribe was not confirmed");
+            });
+          }
         }
       }
     }
@@ -148,22 +171,32 @@ export async function cleanupCodexAttempt(
     await runCleanupStep("codex-user-input-cancel", () =>
       userInputBridgeRef.current?.cancelPending(),
     );
-    await runCleanupStep("codex-turn-watch-clear", () => turnWatches.clearAllTimers());
+    await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
     await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason = terminalState.turnSucceeded
-        ? "completion"
-        : state.timedOut
-          ? "timeout"
-          : runAbortController.signal.aborted
-            ? "cancel"
-            : "error";
+      const cleanupReason =
+        terminalState.settledTurnStatus === "completed"
+          ? "completion"
+          : state.timeout
+            ? "timeout"
+            : runAbortController.signal.aborted
+              ? "cancel"
+              : "error";
       const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
-      await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
+      const settled = await Promise.allSettled(
+        cleanups.map(async (cleanup) => await cleanup(cleanupReason)),
+      );
+      const errors = settled.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (params.oneShotCliRun && errors.length) {
+        throw new AggregateError(
+          errors.map((result) => result.reason),
+          "Codex tool cleanup failed",
+        );
+      }
     });
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
-    await runCleanupStep("codex-transcript-checkpoint", () =>
-      activeTurn.activeProjector.transcriptCheckpoint.flush(true),
-    );
+    await checkpointCleanup;
     await runCleanupStep(
       "codex-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
@@ -174,7 +207,7 @@ export async function cleanupCodexAttempt(
       if (!nativeHookRelay) {
         return;
       }
-      if (state.shouldDelayNativeHookRelayUnregister) {
+      if (state.shouldDelayNativeHookRelayUnregister && !params.oneShotCliRun) {
         // Native hook subprocesses can finish shortly after turn completion.
         scheduleCodexNativeHookRelayUnregister({
           relay: nativeHookRelay,
@@ -185,12 +218,6 @@ export async function cleanupCodexAttempt(
       }
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
-    await runCleanupStep("codex-scoped-mcp-dispose", () =>
-      prompt.context.attemptTools.scopedMcpTools?.dispose(),
-    );
-    await runCleanupStep("codex-scheduled-mcp-dispose", () =>
-      prompt.context.attemptTools.scheduledConfiguredMcp?.dispose(),
-    );
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

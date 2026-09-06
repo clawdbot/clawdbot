@@ -19,7 +19,6 @@ export const WORKER_SESSION_TOOL_NAMES = [
   "skill_workshop",
   "sessions_spawn",
   "sessions_send",
-  "github_publish",
   "portal",
 ] as const;
 

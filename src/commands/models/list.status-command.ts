@@ -21,8 +21,8 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  getRuntimeAuthProfileStoreSnapshot,
-} from "../../agents/auth-profiles/store.js";
+} from "../../agents/auth-profiles/store-runtime.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -80,7 +80,7 @@ import {
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
-import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
+import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -779,9 +779,10 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = await prepareProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
+        workspaceDir,
         context: {
           config: cfg,
           provider: normalized,

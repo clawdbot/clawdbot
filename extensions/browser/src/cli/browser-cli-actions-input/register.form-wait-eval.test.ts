@@ -55,7 +55,7 @@ describe("browser action input fill command", () => {
         "browser",
         "fill",
         "--fields",
-        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true}]',
+        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true},{"ref":"omitted"},{"ref":"null","value":null},{"ref":"empty","value":""}]',
         "--target-id",
         "tab-1",
       ],
@@ -67,6 +67,9 @@ describe("browser action input fill command", () => {
       fields: [
         { ref: "name", type: "text", value: "Ada" },
         { ref: "enabled", type: "text", value: true },
+        { ref: "omitted", type: "text" },
+        { ref: "null", type: "text" },
+        { ref: "empty", type: "text", value: "" },
       ],
       targetId: "tab-1",
     });
@@ -82,6 +85,27 @@ describe("browser action input fill command", () => {
 
     expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
       "fields must be valid JSON.",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it("reports an unsupported field key without sending a browser request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "browser",
+          "fill",
+          "--fields",
+          '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true,"text":"unsupported"}]',
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      'fields[1] unsupported field key "text"',
     );
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });

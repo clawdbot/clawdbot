@@ -3,12 +3,8 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Service PATH policy keeps managed services away from user shell package-manager paths.
-function getPathModule(platform: NodeJS.Platform) {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
-  const pathModule = getPathModule(platform);
+  const pathModule = platform === "win32" ? path.win32 : path.posix;
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
   if (platform === "win32") {
     return normalizeLowercaseStringOrEmpty(normalized);

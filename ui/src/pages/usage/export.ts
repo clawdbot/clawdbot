@@ -1,11 +1,11 @@
 import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../../i18n/index.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { currentLocalDate, toUsageErrorMessage } from "./helpers.ts";
-import { downloadTextFile } from "./query.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
 
 function sessionIdentity({ agentId, key }: UsageSessionEntry): string {
@@ -58,7 +58,7 @@ export function createUsageJsonExportTask(
     },
     onComplete: ({ connection, filename, data }) => {
       if (gateway.isCurrent(connection)) {
-        downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json");
+        downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
       }
     },
     onError: (error) => {

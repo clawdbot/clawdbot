@@ -5,6 +5,7 @@ import {
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -21,9 +22,10 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
+import {
+  resolveGatewaySessionStoreTargetsReadOnly,
+  type GatewaySessionStoreCache,
+  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import {
   resolveCanonicalSessionStoreMatchFromStoreKeys,
@@ -82,9 +84,29 @@ export function resolveSessionSharingTarget(params: {
     clone: false,
     // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
     projection: "list",
+    // Batch callers reuse one store snapshot; single-target checks must not
+    // materialize unrelated sessions for every task or authorization recheck.
+    exactRead: !params.storeCache,
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
+  return toSessionSharingTarget(target);
+}
+
+/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
+export function resolveSessionSharingTargets(params: {
+  cfg: OpenClawConfig;
+  targets: readonly { sessionKey: string; agentId?: string }[];
+}): Array<SessionSharingTarget | null> {
+  return resolveGatewaySessionStoreTargetsReadOnly({
+    cfg: params.cfg,
+    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
+  }).map(toSessionSharingTarget);
+}
+
+function toSessionSharingTarget(
+  target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
+): SessionSharingTarget | null {
   const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {
@@ -111,7 +133,9 @@ export function sharingIdentity(
   actor: ReturnType<typeof resolveGatewayOperatorRoleActor>,
 ) {
   const operator = actor?.kind === "operator" ? { id: actor.profileId } : undefined;
-  return gatewayClientSessionCreator(client) ?? operator;
+  const identity = gatewayClientSessionCreator(client) ?? operator;
+  // Owner attribution never narrows sharing; solo deployments stay owner-equivalent.
+  return identity?.id === GATEWAY_OWNER_PROFILE_ID ? undefined : identity;
 }
 
 export function resolveSessionSharingRole(
@@ -124,7 +148,7 @@ export function resolveSessionSharingRole(
   }
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
-  // Shared-secret/no-auth solo deployments have no durable person identity.
+  // Solo ownership is independent of the shared-secret connection's attribution profile.
   if (!identity) {
     return params.client?.authenticatedGitHubIdentitySync ||
       (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
@@ -206,7 +230,7 @@ export function authorizeIncognitoSessionTarget(params: {
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
-  const identity = gatewayClientSessionCreator(params.client);
+  const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   if (!identity) {
     return null;
   }

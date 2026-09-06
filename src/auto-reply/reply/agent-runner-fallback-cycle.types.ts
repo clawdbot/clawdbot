@@ -38,6 +38,7 @@ export type AgentFallbackCandidateCommonParams = {
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
+  assistantErrorTranscript: RunEmbeddedAgentParams["assistantErrorTranscript"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -99,7 +100,7 @@ export type AgentFallbackCycleParams = {
   runtimeConfig: OpenClawConfig;
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
   runId: string;
   runAbortSignal?: AbortSignal;

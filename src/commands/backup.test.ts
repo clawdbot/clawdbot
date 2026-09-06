@@ -50,15 +50,6 @@ type CapturedBackupManifest = {
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
 
-  function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    const [arg] = call;
-    return expectDefined(arg, "arg test invariant");
-  }
-
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
     vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
       await resolveBackupPlanFromPaths({
@@ -67,8 +58,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceDir],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs,
       }),
     );
@@ -102,11 +91,14 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
+  async function withInvalidWorkspaceBackupConfig<T>(
+    raw: string,
+    fn: (runtime: RuntimeEnv) => Promise<T>,
+  ) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+    await fs.writeFile(configPath, raw, "utf8");
 
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -195,8 +187,6 @@ describe("backup commands", () => {
       oauthDir,
       workspaceDirs: [workspaceDir],
       includeWorkspace: true,
-      configInsideState: true,
-      oauthInsideState: true,
       nowMs: 123,
     });
     expectWorkspaceCoveredByState(plan);
@@ -221,8 +211,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceLink],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       });
       expectWorkspaceCoveredByState(plan);
@@ -266,8 +254,6 @@ describe("backup commands", () => {
           oauthDir: path.join(stateDir, "credentials"),
           workspaceDirs: [externalWorkspace],
           includeWorkspace: true,
-          configInsideState: false,
-          oauthInsideState: true,
           nowMs,
         }),
       );
@@ -398,13 +384,12 @@ describe("backup commands", () => {
 
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const payload = requireFirstMockArg(vi.mocked(runtime.log), "runtime log");
+      const [payload] = expectDefined(vi.mocked(runtime.log).mock.calls[0], "runtime log call");
       if (typeof payload !== "string") {
         throw new Error("backup test expected JSON string output");
       }
       expect(payload).not.toContain("Backup skipped");
-      const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
-      expect(parsedPayload.skippedVolatileCount).toBe(1);
+      expect(JSON.parse(payload)).toHaveProperty("skippedVolatileCount", 1);
     } finally {
       await fs.rm(backupDir, { recursive: true, force: true });
     }
@@ -579,8 +564,6 @@ describe("backup commands", () => {
         configPath: path.join(stateDir, "openclaw.json"),
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );
@@ -598,27 +581,40 @@ describe("backup commands", () => {
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 
-  it("handles invalid config according to backup scope", async () => {
-    await withInvalidWorkspaceBackupConfig(async (runtime) => {
-      await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
-        /--no-include-workspace/i,
-      );
+  it.each(["syntax", "workspace"])(
+    "handles invalid %s according to backup scope",
+    async (invalid) => {
+      const raw =
+        invalid === "syntax"
+          ? '{"agents": { defaults: { workspace: '
+          : JSON.stringify({
+              agents: {
+                ownership: "explicit",
+                defaults: { workspace: 42 },
+                entries: { main: { workspace: path.join(tempHome.home, "workspace") } },
+              },
+            });
+      await withInvalidWorkspaceBackupConfig(raw, async (runtime) => {
+        await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
+          /--no-include-workspace/i,
+        );
 
-      const result = await backupCreateCommand(runtime, {
-        dryRun: true,
-        includeWorkspace: false,
+        const result = await backupCreateCommand(runtime, {
+          dryRun: true,
+          includeWorkspace: false,
+        });
+
+        expect(result.includeWorkspace).toBe(false);
+        expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
+
+        const configOnly = await backupCreateCommand(runtime, {
+          dryRun: true,
+          onlyConfig: true,
+        });
+        expectOnlyAssetKind(configOnly.assets, "config");
       });
-
-      expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
-
-      const configOnly = await backupCreateCommand(runtime, {
-        dryRun: true,
-        onlyConfig: true,
-      });
-      expectOnlyAssetKind(configOnly.assets, "config");
-    });
-  });
+    },
+  );
 
   it("discovers workspaces through the stable upgrade compatibility view", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
@@ -671,8 +667,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
         onlyConfig: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );

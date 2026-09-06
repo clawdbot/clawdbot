@@ -111,7 +111,6 @@ vi.mock("../claws/update-apply.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
-const { waitUntilGatewayConfigApplied } = await import("./claws-cli.gateway-readiness.js");
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -326,49 +325,6 @@ describe("claws cli", () => {
     );
   });
 
-  it("accepts an already-applied Gateway config revision", async () => {
-    mocks.callGatewayFromCli.mockResolvedValue({
-      configRevisionHash: "revision-new",
-      appliedConfigHash: "revision-new",
-    });
-
-    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
-    expect(mocks.sleep).not.toHaveBeenCalled();
-  });
-
-  it("retries until the Gateway applies the persisted config revision", async () => {
-    mocks.callGatewayFromCli
-      .mockResolvedValueOnce({
-        configRevisionHash: "revision-new",
-        appliedConfigHash: "revision-old",
-      })
-      .mockResolvedValueOnce({
-        configRevisionHash: "revision-new",
-        appliedConfigHash: "revision-new",
-      });
-
-    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
-    expect(mocks.sleep).toHaveBeenCalledOnce();
-    expect(mocks.sleep).toHaveBeenCalledWith(100);
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-
-    await expect(waitUntilGatewayConfigApplied()).rejects.toThrow(
-      "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
-    );
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.sleep).toHaveBeenCalledOnce();
-  });
-
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -521,6 +477,16 @@ describe("claws cli", () => {
     );
     expect(mocks.logs).toContain("Added agent: demo-agent");
     expect(mocks.logs.some((line) => line.startsWith("Workspace: "))).toBe(true);
+    mocks.callGatewayFromCli.mockResolvedValue({
+      config: { agents: { entries: { "demo-agent": {} } } },
+      configRevisionHash: "applied",
+      appliedConfigHash: "applied",
+    });
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
+    const [, options] = mocks.applyClawAddPlan.mock.calls[0]!;
+    await expect(
+      options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId),
+    ).resolves.toBeUndefined();
   });
 
   it("resumes consented add with the matching in-flight workspace on disk", async () => {
@@ -757,6 +723,11 @@ describe("claws cli", () => {
     await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: { mode: "retain" },
     });
     expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
@@ -992,6 +963,16 @@ describe("claws cli", () => {
       status: "complete",
       agentId: "demo-agent",
     });
+    mocks.callGatewayFromCli.mockResolvedValue({
+      config: { agents: { entries: { "demo-agent": {} } } },
+      configRevisionHash: "applied",
+      appliedConfigHash: "applied",
+    });
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
+    const [plan, , options] = mocks.applyClawUpdatePlan.mock.calls[0]!;
+    await expect(
+      options.cronGateway.waitUntilAgentAvailable(plan.agentId),
+    ).resolves.toBeUndefined();
   });
 
   it("reports uncertain update mutations as partial JSON", async () => {
@@ -1068,6 +1049,11 @@ describe("claws cli", () => {
     ]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: {
         mode: "remove-selected",
         selected: ["plugin:@acme/audit@1.0.0"],

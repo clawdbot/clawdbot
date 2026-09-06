@@ -80,6 +80,7 @@ COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-
 COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -173,22 +174,25 @@ RUN if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
       cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist; \
     fi
 
-# Replace build dependencies without asking pnpm to mutate inherited directories.
-# Preserve compiled workspace output; copy all production workspace installs and
-# pnpm metadata together so nested dependencies and lifecycle outputs survive.
-FROM build AS runtime-assets
+# Keep compiled workspaces and generated plugin assets, but omit development
+# dependency trees before merging the build output into the production install.
+FROM build AS runtime-build-output
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN rm -rf node_modules ui/node_modules && \
     find packages "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -name node_modules -prune -exec rm -rf {} +
-COPY --from=production-deps /app/ ./
-# Production dependencies carry the base source version. Restore the release
-# manifest so every runtime surface keeps the version used during the build.
-COPY --from=build /app/package.json ./package.json
 
-# Prune omitted plugins and build metadata. Keep SDK-native binaries only for
+# Inherit production dependencies instead of copying their full tree again.
+# The build overlay also carries the stamped release package.json.
+FROM production-deps AS runtime-assets
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY --from=runtime-build-output /app/ ./
+
+# Prune omitted plugins and build metadata, then link the selected plugins'
+# plugin-local dependencies under dist/extensions/<id> after package lifecycle
+# cleanup so the packaged roots keep them. Keep SDK-native binaries only for
 # selected plugins that explicitly require them.
-RUN OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
-    node scripts/postinstall-bundled-plugins.mjs && \
+RUN node scripts/postinstall-bundled-plugins.mjs && \
+    OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     if [ -L /app/node_modules/@openclaw/ai ]; then \
       ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
@@ -273,6 +277,8 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+RUN --mount=from=dependency-inputs,source=/app/scripts/docker/verify-fs-safe-native.mjs,target=/tmp/verify-fs-safe-native.mjs \
+    node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require
 
 # Validate the three version surfaces in every release-built runtime variant.
 ARG OPENCLAW_DOCKER_BUILD_VERSION
@@ -341,6 +347,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+      install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \

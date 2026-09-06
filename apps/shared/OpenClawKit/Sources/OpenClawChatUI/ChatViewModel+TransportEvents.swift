@@ -23,6 +23,7 @@ extension OpenClawChatViewModel {
     }
 
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
+        guard !self.isTransportDetached else { return }
         switch evt {
         case let .health(ok):
             let reconnected = ok && !self.healthOK
@@ -44,6 +45,7 @@ extension OpenClawChatViewModel {
         case .chatMetadataChanged:
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
         case let .sessionsChanged(change):
             self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -67,22 +69,14 @@ extension OpenClawChatViewModel {
         case let .questionResolved(resolved):
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
-        case .routeChanged:
-            // A replacement route may be a different Gateway, so a cached
-            // known-absent store must not authorize the legacy plan fallback
-            // against a new Gateway that dual-emits both sources.
+        case .routeChanged, .seqGap:
+            if case .routeChanged = evt {
+                self.applyProgressCard(nil)
+            }
+            // Apple transports publish replacement sockets through either event.
+            // Old known-absent state must not authorize legacy plans on the new Gateway.
             self.progressCardStoreAvailable = nil
-            self.clearProgressCard()
-            self.swarmEnabled = false
-            self.modelAvailabilityIsSessionScoped = false
-            self.resetSwarmProgress()
-            Task { [weak self] in await self?.refreshSwarmCapability() }
-            self.invalidateComposerCapabilities()
-            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
-            let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
-        case .seqGap:
+            self.invalidateProgressCardTarget()
             self.modelAvailabilityIsSessionScoped = false
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
@@ -647,6 +641,7 @@ extension OpenClawChatViewModel {
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
             transcriptMessageID: message.transcriptMessageID,
+            transcriptRunID: message.transcriptRunID,
             isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
@@ -690,6 +685,7 @@ extension OpenClawChatViewModel {
         switch evt.stream {
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
+                self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.updateStreamingAssistantText(text)
             }
@@ -918,8 +914,12 @@ extension OpenClawChatViewModel {
             sessionSnapshot: sessionSnapshot,
             armID: armID)
         else { return false }
+        // Live events advance ownership while history is in flight. A superseded snapshot
+        // must not let message shape retire a run the gateway still reports in flight.
+        if refresh.applied, !refresh.runSnapshotApplied { return true }
         if case let .failed(message)? = terminalState {
             if refresh.applied,
+               !refresh.hasInFlightRun,
                let timestamp,
                self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
             {
@@ -931,7 +931,7 @@ extension OpenClawChatViewModel {
             self.updateStreamingAssistantText(nil)
             return false
         }
-        if refresh.applied, refresh.runSnapshotApplied, refresh.supportsInFlightRunState {
+        if refresh.applied, refresh.supportsInFlightRunState {
             if refresh.hasInFlightRun {
                 return true
             }
@@ -964,7 +964,7 @@ extension OpenClawChatViewModel {
             self.finishPendingRun(runId: runId, terminalState: .completed)
             return false
         }
-        guard let timestamp else { return true }
+        guard !refresh.hasInFlightRun, let timestamp else { return true }
         return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
     }
 

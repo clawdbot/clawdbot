@@ -2,7 +2,10 @@
  * Prepares transport before streaming and settles the completed stream afterward.
  * It may assume session runtime ownership and provider inputs are established.
  */
-import { resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
+import {
+  isAnthropicServerToolClearingEnabled,
+  resolveCompactionReplayEligibility,
+} from "@openclaw/ai/transports";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -17,6 +20,7 @@ import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -37,11 +41,11 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStream,
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -102,6 +106,7 @@ export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   subscription: EmbeddedAttemptSubscription;
   state: {
@@ -116,7 +121,7 @@ export async function settleEmbeddedAttemptStream(input: {
     timedOutDuringCompaction: boolean;
   };
   markTimedOutDuringCompaction: () => void;
-  runAbortDeadlineAtMs: number;
+  getRunAbortDeadlineAtMs: () => number | undefined;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -161,16 +166,16 @@ export async function settleEmbeddedAttemptStream(input: {
           asyncTaskRunId: entry.asyncTaskRunId,
           asyncTaskId: entry.asyncTaskId,
         }));
-    const completionRequiredAsyncDeadlineAtMs = Math.max(
-      Date.now(),
-      input.runAbortDeadlineAtMs - 500,
-    );
+    const getAsyncTaskDeadlineAtMs = () => {
+      const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+      return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+    };
     let asyncTaskWait: CompletionRequiredAsyncTaskWaitResult;
     try {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: completionRequiredAsyncDeadlineAtMs,
+        getDeadlineAtMs: getAsyncTaskDeadlineAtMs,
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
@@ -185,7 +190,7 @@ export async function settleEmbeddedAttemptStream(input: {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: Date.now(),
+        getDeadlineAtMs: Date.now,
       });
     }
     // An aborted run legitimately leaves async tasks unfinished; stamping a
@@ -294,6 +299,7 @@ export async function settleEmbeddedAttemptStream(input: {
       modelId: attempt.modelId,
       modelApi: attempt.model.api,
       isCacheTtlEligibleProvider,
+      toolResultPromptProjectionState: input.toolResultPromptProjectionState,
     });
 
     if (timedOutDuringCompaction) {
@@ -324,9 +330,7 @@ export async function settleEmbeddedAttemptStream(input: {
     }
     messagesSnapshot = snapshotSelection.messagesSnapshot;
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    lastAssistant = messagesSnapshot
-      .toReversed()
-      .find((message): message is AssistantMessage => message.role === "assistant");
+    lastAssistant = messagesSnapshot.findLast((message) => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
@@ -486,6 +490,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       cfg: attempt.config,
       provider: attempt.provider,
       modelId: attempt.modelId,
+      providerRuntimeHandle: input.getProviderRuntimeHandle(),
       extraParamsOverride: streamExtraParamsOverride,
       thinkingLevel: input.providerThinkingLevel,
       agentId: input.sessionAgentId,
@@ -526,13 +531,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
-  const streamStrategy = describeEmbeddedAgentStreamStrategy({
-    currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
-    model: attempt.model,
-    resolvedApiKey: transportApiKey,
-  });
-  session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  const { streamFn, strategy: streamStrategy } = resolveEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
@@ -544,6 +543,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
@@ -564,7 +564,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    webSearchEnabled: attempt.disableTools !== true && attempt.toolOverrides?.webSearch !== false,
+    // Provider-hosted search bypasses local execute hooks, so its request must
+    // honor the same execution cap without changing foreground function schemas.
+    webSearchEnabled:
+      attempt.disableTools !== true &&
+      attempt.toolOverrides?.webSearch !== false &&
+      (!attempt.toolExecutionAllow ||
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
@@ -580,7 +586,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  applyExtraParamsToAgent(
+  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
     session.agent,
     attempt.config,
     attempt.provider,
@@ -603,6 +609,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentDir: input.agentDir,
       agentId: input.sessionAgentId,
       ...nativeWebSearchPolicyContext,
+      nativeWebSearchAllowedByToolPolicy,
       codeModeToolSurfaceEnabled: true,
     });
   }
@@ -625,7 +632,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     );
   }
   session.agent.transport = effectiveAgentTransport;
+  const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
+  const serverToolClearingEnabled =
+    contextPruning?.mode === "cache-ttl" &&
+    isAnthropicServerToolClearingEnabled(attempt.model, transportApiKey);
+  if (serverToolClearingEnabled) {
+    // One owner: the decision that suspends client-side pruning also hands the
+    // clearing request to the transport, so neither can happen without the other.
+    const baseStreamFn = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      const requestOptions = { ...options, cacheTtlPruning: { tools: contextPruning?.tools } };
+      return baseStreamFn(model, context, requestOptions);
+    };
+  }
   return {
+    serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
       extraParams: effectiveExtraParams,
       apiKey: transportApiKey,

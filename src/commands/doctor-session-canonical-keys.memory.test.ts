@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -91,7 +92,9 @@ describe("canonical SQLite session repair memory", () => {
       outExtension: { ".js": ".mjs" },
       // Preserve lazy runtime imports so unused provider SDKs do not consume the child heap.
       splitting: true,
-      packages: "external",
+      external: Object.entries(packageJson.dependencies)
+        .filter(([, version]) => !version.startsWith("workspace:"))
+        .map(([name]) => name),
       platform: "node",
       target: "node22",
     });

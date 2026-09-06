@@ -7,7 +7,6 @@ import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.design.ClawPanel
-import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawStatusRow
@@ -56,9 +55,7 @@ internal fun HealthLogsSettingsScreen(
   val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
-  val logsSummary by viewModel.healthLogsSummary.collectAsState()
-  val logsRefreshing by viewModel.healthLogsRefreshing.collectAsState()
-  val logsErrorText by viewModel.healthLogsErrorText.collectAsState()
+  val logsState by viewModel.healthLogsState.collectAsState()
   var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
 
   LaunchedEffect(isConnected) {
@@ -86,7 +83,13 @@ internal fun HealthLogsSettingsScreen(
           SettingsMetric(nativeString("Gateway"), if (isConnected) nativeString("Online") else nativeString("Offline")),
           SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Waiting")),
           SettingsMetric(nativeString("Models"), modelCount.size.toString()),
-          SettingsMetric(nativeString("Logs"), logsSummary.entries.size.toString()),
+          SettingsMetric(
+            nativeString("Logs"),
+            logsState.summary
+              ?.entries
+              ?.size
+              ?.toString() ?: "—",
+          ),
         ),
     )
     HealthStatusPanel(
@@ -109,20 +112,10 @@ internal fun HealthLogsSettingsScreen(
           talkAwaitingAgent = talkAwaitingAgent,
         ),
     )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(
-        text = if (logsRefreshing) nativeString("Refreshing") else nativeString("Refresh Logs"),
-        onClick = viewModel::refreshHealthLogs,
-        enabled = isConnected && !logsRefreshing,
-        modifier = Modifier.weight(1f),
-      )
+    SettingsRefreshControls(isConnected, logsState.refreshing, logsState.errorText, viewModel::refreshHealthLogs, label = nativeString("Refresh Logs"))
+    SettingsSummaryContent(logsState, isConnected, nativeString("Connect the gateway to load recent logs.")) { summary ->
+      GatewayLogsPanel(summary = summary, onLogClick = { selectedLogEntry = it })
     }
-    logsErrorText?.let { error ->
-      ClawPanel {
-        Text(text = error, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
-    GatewayLogsPanel(isConnected = isConnected, summary = logsSummary, onLogClick = { selectedLogEntry = it })
   }
 }
 
@@ -211,7 +204,6 @@ private fun HealthStatusPanel(
 
 @Composable
 private fun GatewayLogsPanel(
-  isConnected: Boolean,
   summary: GatewayHealthLogsSummary,
   onLogClick: (GatewayLogEntry) -> Unit,
 ) {
@@ -222,28 +214,18 @@ private fun GatewayLogsPanel(
         Text(text = fileName, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load recent logs."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+    if (summary.entries.isEmpty()) {
+      ClawPanel {
+        Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-
-      summary.entries.isEmpty() -> {
-        ClawPanel {
-          Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      else -> {
-        ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-          val entries = summary.entries.takeLast(12)
-          Column {
-            entries.forEachIndexed { index, entry ->
-              GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
-              if (index != entries.lastIndex) {
-                HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-              }
+    } else {
+      ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+        val entries = summary.entries.takeLast(12)
+        Column {
+          entries.forEachIndexed { index, entry ->
+            GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
+            if (index != entries.lastIndex) {
+              HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
             }
           }
         }

@@ -48,7 +48,7 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
@@ -107,6 +107,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "deepseek-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "xai-native" ||
     isXiaomi ||
     isZai ||

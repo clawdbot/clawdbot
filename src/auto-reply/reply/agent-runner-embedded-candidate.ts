@@ -15,6 +15,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -30,7 +31,6 @@ import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
@@ -43,8 +43,6 @@ export async function runEmbeddedFallbackCandidate(
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
     allowTransientCooldownProbe?: boolean;
-    suppressAssistantErrorPersistenceForCandidate: boolean;
-    onAssistantErrorMessagePersisted: () => void;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     githubPublicationAvailable: boolean;
@@ -147,8 +145,6 @@ export async function runEmbeddedFallbackCandidate(
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
-  const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -180,7 +176,7 @@ export async function runEmbeddedFallbackCandidate(
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         lane: params.runLane,
         provider: embeddedRunProvider,
-        agentHarnessId: embeddedRunHarnessOverride,
+        agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
@@ -208,8 +204,7 @@ export async function runEmbeddedFallbackCandidate(
         onUserMessagePersisted: params.notifyUserMessagePersisted,
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
-        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
-        onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        assistantErrorTranscript: params.assistantErrorTranscript,
         prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
@@ -219,13 +214,10 @@ export async function runEmbeddedFallbackCandidate(
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        suppressToolErrorWarnings: turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-          turn.followupRun,
-          toolAuthorityRoute,
-        ),
+        // Marks reply-owned policy; final attempt preparation binds its concrete route.
+        toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
@@ -280,33 +272,14 @@ export async function runEmbeddedFallbackCandidate(
             mediaUrls: payload.mediaUrls,
           };
           const onPartialReply = turn.opts?.onPartialReply;
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            if (!onPartialReply) {
-              return false;
-            }
-            return await onPartialReply(partialPayload);
-          }
-          if (!onPartialReply) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            return false;
-          }
-          return await params.presentation.startPresentationWhileTyping(
+          return await params.presentation.presentWithTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () => onPartialReply(partialPayload),
+            () => (onPartialReply ? onPartialReply(partialPayload) : false),
           );
         },
         onAssistantMessageStart: async () => {
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalMessageStart();
-            await turn.opts?.onAssistantMessageStart?.();
-            return;
-          }
-          await params.presentation.startPresentationWhileTyping(
-            turn.typingSignals.signalMessageStart(),
-            async () => {
-              await turn.opts?.onAssistantMessageStart?.();
-            },
+          await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
+            turn.opts?.onAssistantMessageStart?.(),
           );
         },
         onReasoningStream:
@@ -315,26 +288,15 @@ export async function runEmbeddedFallbackCandidate(
                 if (turn.followupRun.run.silentExpected) {
                   return;
                 }
-                if (!params.preserveProgressCallbackStartOrder) {
-                  await turn.typingSignals.signalReasoningDelta();
-                  await turn.opts?.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                    isReasoningSnapshot: payload.isReasoningSnapshot,
-                    requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                  });
-                  return;
-                }
-                await params.presentation.startPresentationWhileTyping(
+                await params.presentation.presentWithTyping(
                   turn.typingSignals.signalReasoningDelta(),
-                  async () => {
-                    await turn.opts?.onReasoningStream?.({
+                  () =>
+                    turn.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
                       isReasoningSnapshot: payload.isReasoningSnapshot,
                       requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                    });
-                  },
+                    }),
                 );
               }
             : undefined,

@@ -147,7 +147,8 @@ export async function maybeRepairSkillReadiness(params: {
     return params.cfg;
   }
 
-  const shouldDisable = await params.prompter.confirmAutoFix({
+  // Updating may migrate required state, but must not disable optional skills for this environment.
+  const shouldDisable = await params.prompter.confirmRuntimeRepair({
     message:
       agentIds.length === 1
         ? `Disable ${fleetUnavailable.length} unavailable skill${fleetUnavailable.length === 1 ? "" : "s"} in config?`

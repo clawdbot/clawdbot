@@ -15,6 +15,7 @@ import { getSessionBindingService } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export async function bindThreadForSubagentSpawn(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   childSessionKey: string;
   agentId: string;
@@ -53,6 +54,7 @@ export async function bindThreadForSubagentSpawn(params: {
   }
 
   try {
+    params.assertActive?.();
     const binding = await getSessionBindingService().bind({
       targetSessionKey: params.childSessionKey,
       targetKind: "subagent",

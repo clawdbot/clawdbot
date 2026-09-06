@@ -61,12 +61,43 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  resolve_target:
+    name: Resolve target ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      checkout_revision: ${{ steps.resolve.outputs.sha }}
+    steps:
+      # Candidate planning executes repository code; admission must own a separate runner.
+      - name: Checkout trusted ref resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          sparse-checkout: scripts/github/resolve-openclaw-ref.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve target SHA
+        id: resolve
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          OPENCLAW_REF_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref "$TARGET_REF" \
+            --expected-sha "$EXPECTED_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
   preflight:
     name: Build plugin prerelease plan
+    needs: [resolve_target]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
-      checkout_revision: ${{ steps.manifest.outputs.checkout_revision }}
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
       run_plugin_prerelease_static: ${{ steps.manifest.outputs.run_plugin_prerelease_static }}
       plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
@@ -190,7 +221,7 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -213,29 +244,17 @@ jobs:
       - name: Build plugin prerelease manifest
         id: manifest
         env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
           PHASE: ${{ inputs.phase }}
         run: |
           node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, globSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
           import path from "node:path";
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
-          const checkoutRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-            encoding: "utf8",
-          }).trim();
-          const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
           const phase = process.env.PHASE ?? "all";
-          if (expectedSha && expectedSha !== checkoutRevision) {
-            console.error(
-              `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
-            );
-            process.exit(1);
-          }
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           let extensionShards = [];
@@ -419,7 +438,6 @@ jobs:
           const runSuite = runStatic || runNode || runExtensions || runInspector || runDocker;
 
           const manifest = {
-            checkout_revision: checkoutRevision,
             run_plugin_prerelease_suite: runSuite,
             run_plugin_prerelease_static: runStatic,
             plugin_prerelease_static_matrix: createMatrix(staticChecks),
@@ -445,7 +463,7 @@ jobs:
     permissions:
       contents: read
     name: Plan plugin npm security artifacts
-    needs: [preflight]
+    needs: [resolve_target]
     if: inputs.phase != 'candidate'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -478,7 +496,7 @@ jobs:
       - name: Checkout candidate as inert data
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate
           fetch-depth: 1
           fetch-tags: false
@@ -496,8 +514,8 @@ jobs:
     permissions:
       contents: read
     name: plugin-npm-security-scan
-    needs: [preflight, plugin-npm-security-plan]
-    if: ${{ !cancelled() && always() && needs.preflight.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
+    needs: [resolve_target, plugin-npm-security-plan]
+    if: ${{ !cancelled() && always() && needs.resolve_target.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -527,7 +545,7 @@ jobs:
       - name: Checkout candidate as inert package input
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate
           fetch-depth: 1
           fetch-tags: false
@@ -536,7 +554,7 @@ jobs:
 
       - name: Pack supplemental inert plugin inputs
         env:
-          CANDIDATE_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
           EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
           TOOLING_SHA: ${{ github.sha }}
         shell: bash
@@ -560,7 +578,7 @@ jobs:
 
       - name: Scan supplemental inert plugin inputs
         env:
-          CANDIDATE_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
           EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TOOLING_SHA: ${{ github.sha }}
@@ -592,7 +610,7 @@ jobs:
       contents: read
     # Job-level skips happen before matrix expansion; retain a unique owner name.
     name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
@@ -603,7 +621,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -629,7 +647,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -640,7 +658,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -713,7 +731,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 60
@@ -725,7 +743,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -781,7 +799,7 @@ jobs:
     permissions:
       contents: read
     name: plugin-prerelease-inspector
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
@@ -790,7 +808,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -959,7 +977,7 @@ jobs:
 
   plugin-prerelease-docker-suite:
     name: plugin-prerelease-docker-suite
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: ${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}
     permissions:
       actions: read
@@ -968,7 +986,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      ref: ${{ needs.preflight.outputs.checkout_revision }}
+      ref: ${{ needs.resolve_target.outputs.checkout_revision }}
       include_repo_e2e: false
       include_release_path_suites: false
       include_openwebui: false

@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
-  buildDelegatedApprovalPendingReply,
   buildSystemAgentChatResult,
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
@@ -142,36 +139,21 @@ describe("system-agent chat input", () => {
     });
   });
 
-  it("omits the delegated approval link when the Control UI is disabled", async () => {
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-    });
-    const record = manager.create(
-      {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "a".repeat(64),
-        allowedDecisions: ["allow-once", "deny"],
-        sessionId: "delegation-disabled-ui",
-      },
-      60_000,
-      "system-agent:disabled-ui",
-    );
-    await manager.register(record, 60_000);
-
+  it("projects a personal-account handoff without claiming a mutation or changing action", () => {
     expect(
-      buildDelegatedApprovalPendingReply({
-        cfg: {
-          gateway: {
-            publicOrigin: "https://control.example.com",
-            controlUi: { enabled: false },
-          },
+      buildSystemAgentChatResult({
+        sessionId: "s1",
+        reply: {
+          text: "Open your account controls; nothing has changed.",
+          action: "none",
+          handoff: { kind: "model-accounts" },
         },
-        manager,
-        approvalId: record.id,
       }),
-    ).not.toContain("Review:");
+    ).toEqual({
+      sessionId: "s1",
+      reply: "Open your account controls; nothing has changed.",
+      action: "none",
+      handoff: { kind: "model-accounts" },
+    });
   });
 });

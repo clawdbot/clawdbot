@@ -45,9 +45,23 @@ We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` 
 
 For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
+## Source dependencies
+
+Run `pnpm install --frozen-lockfile` from the workspace root. Source checkouts use
+pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and links
+them into each workspace package. On supported macOS volumes, this also lets pnpm
+reuse whole-package APFS clones instead of importing every file separately.
+
+When updating a checkout that used the hoisted layout, stop builds, tests, and
+watchers using that checkout's dependencies before running the install command.
+Do not change the linker while other jobs are using the same `node_modules`.
+Declare dependencies in the package that imports them; root tooling and tests
+must declare their own development dependencies rather than rely on hoisting.
+
 ## Before You PR
 
 - Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Run the Vitest 5 suite on Node 22.22.3+, Node 24.15+, or Node 26+. Node 25 remains supported for the packaged OpenClaw runtime, but is outside Vitest 5's declared engine range.
 - Test locally with your OpenClaw instance
 - Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and get the design accepted. See the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
@@ -81,8 +95,15 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 ## Local commit hook
 
-The normal `pnpm install` setup automatically enables the repository's pre-commit
-formatting hook. Its optional content guard reads a private UTF-8 file selected by
+The normal `pnpm install` setup enables the repository's pre-commit formatting hook
+when `core.hooksPath` is unset. Existing hook selections, including an explicitly
+empty value, are preserved. Git scopes initialization to the current checkout.
+With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
+otherwise Git reports a warning and installation continues without changing hook
+settings. The repository owner can enable per-worktree configuration following
+[Git's configuration guidance](https://git-scm.com/docs/git-worktree#_configuration_file).
+
+The hook's optional content guard reads a private UTF-8 file selected by
 the native Git setting `hooks.blockedLiteralsFile`. Keep one literal per nonempty
 line in a file outside the checkout, such as
 `~/.config/openclaw/blocked-literals.txt`, then configure this checkout:
