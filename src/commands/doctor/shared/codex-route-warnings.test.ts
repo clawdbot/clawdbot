@@ -1554,6 +1554,36 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.list?.[0]?.agentRuntime).toEqual({ id: "codex" });
   });
 
+  it("does not clear active runtime pins for nested memory-flush-only legacy refs", () => {
+    // The flush override is the canonical selector, so the only retired refs can
+    // sit at `.model.primary` / `.model.fallbacks.N`. Repairing maintenance
+    // config must still not touch whole-agent runtime pins.
+    const result = maybeRepairCodexRoutes({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          compaction: {
+            memoryFlush: {
+              model: {
+                primary: "openai-codex/gpt-5.4-mini",
+                fallbacks: ["openai-codex/gpt-5.4"],
+              },
+            },
+          },
+        },
+        list: [
+          { id: "worker", model: "anthropic/claude-sonnet-4-6", agentRuntime: { id: "codex" } },
+        ],
+      },
+    });
+
+    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toEqual({
+      primary: "openai/gpt-5.4-mini",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+  });
+
   it("keeps active runtime pins when shared compaction-only refs are preserved", () => {
     const result = maybeRepairCodexRoutes({
       agents: {

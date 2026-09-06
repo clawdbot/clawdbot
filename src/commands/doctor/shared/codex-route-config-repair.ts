@@ -399,10 +399,16 @@ export function rewriteConfigModelRefs(params: {
 }
 
 function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
+  if (!hit.path.startsWith("agents.")) {
+    return false;
+  }
+  // The flush override is the canonical selector, so a hit can land on the bare
+  // path or inside it (`.model.primary`, `.model.fallbacks.0`). All of them are
+  // maintenance-only: repairing them must not clear whole-agent runtime pins.
+  const flushModelPath = ".compaction.memoryFlush.model";
   return (
-    hit.path.startsWith("agents.") &&
-    (hit.path.endsWith(".compaction.model") ||
-      hit.path.endsWith(".compaction.memoryFlush.model") ||
-      hit.path.includes(".compaction.memoryFlush.fallbacks."))
+    hit.path.endsWith(".compaction.model") ||
+    hit.path.endsWith(flushModelPath) ||
+    hit.path.includes(`${flushModelPath}.`)
   );
 }
