@@ -39,6 +39,8 @@ type ClawAgentConfigRemovalParams = {
   stateDatabase?: OpenClawStateDatabaseOptions;
   trashPath?: ClawTrashPath;
   onModified: () => Error;
+  quiesceMonitors?: (operationId: string) => Promise<void>;
+  drainMonitors?: (operationId: string) => Promise<void>;
 };
 
 type ClawAgentConfigRemovalResult = {
@@ -65,10 +67,12 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
 
 async function commitClawAgentConfigRemoval(
   params: ClawAgentConfigRemovalParams,
+  assertCurrent: () => void,
 ): Promise<ClawAgentConfigRemovalResult> {
   if (params.commitConfig) {
     let result: ClawAgentConfigRemovalResult | undefined;
     await params.commitConfig((config) => {
+      assertCurrent();
       const effects = deletionEffects(
         config,
         params.agentId,
@@ -113,6 +117,7 @@ async function commitClawAgentConfigRemoval(
       allowMissing: params.expectedState === "missing",
       fallbackWorkspace: params.fallbackWorkspace,
       validateConfig: (config) => {
+        assertCurrent();
         if (
           digestClawAgentRemovalSurface(config, params.agentId) !==
           params.expectedRemovalSurfaceDigest
@@ -173,6 +178,8 @@ async function commitClawAgentConfigRemoval(
 }
 
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
+  assertCurrent: () => void;
+  drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
   runDatabaseCleanup: ReturnType<typeof beginAgentDeletion>["runDatabaseCleanup"];
 };
@@ -204,18 +211,38 @@ export async function withClawAgentConfigRemoval<T>(
     params.stateDatabase,
   );
   let committed = false;
+  let monitorEffectsStarted = false;
+  const assertCurrent = () => {
+    const current = readAgentDeletionJournal(params.agentId, params.stateDatabase);
+    if (current?.operationId !== deletion.entry.operationId || current.cleanupCompleted) {
+      throw new Error(`Claw removal no longer owns agent ${params.agentId}.`);
+    }
+  };
   try {
     // Fence new claims and drain existing owners before any external or local removal effect.
+    if (params.quiesceMonitors) {
+      // A lost RPC response can hide accepted cancellation. Keep the durable fence
+      // until a retry has observed the serving owner and completed cleanup.
+      monitorEffectsStarted = true;
+      await params.quiesceMonitors(deletion.entry.operationId);
+    }
+    assertCurrent();
     prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, params.stateDatabase);
     return await apply(async () => {
+      assertCurrent();
       const result = await withAgentExecApprovalsRemoved(
         params.agentId,
-        async () => commitClawAgentConfigRemoval({ ...params, config }),
+        async () => commitClawAgentConfigRemoval({ ...params, config }, assertCurrent),
         params.stateDatabase,
       );
       committed = true;
+      assertCurrent();
       return {
         ...result,
+        assertCurrent,
+        drainMonitors: async () => {
+          await params.drainMonitors?.(deletion.entry.operationId);
+        },
         runDatabaseCleanup: deletion.runDatabaseCleanup,
         completeDeletion: (database: OpenClawStateDatabase) => {
           if (
@@ -232,7 +259,7 @@ export async function withClawAgentConfigRemoval<T>(
     });
   } finally {
     // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
-    if (!committed && !existingJournal) {
+    if (!committed && !monitorEffectsStarted && !existingJournal) {
       deletion.rollback();
     }
   }

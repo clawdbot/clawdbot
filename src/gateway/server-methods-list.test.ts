@@ -92,6 +92,7 @@ describe("listGatewayMethods", () => {
       "update.runs.list",
       "gateway.suspend.handoff",
       "update.report",
+      "claws.monitors",
     ]);
   });
 
@@ -153,7 +154,7 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run", "claws.monitors"]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",

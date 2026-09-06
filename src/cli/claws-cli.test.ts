@@ -723,6 +723,11 @@ describe("claws cli", () => {
     await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: { mode: "retain" },
     });
     expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
@@ -1044,6 +1049,11 @@ describe("claws cli", () => {
     ]);
 
     expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      monitorGateway: expect.objectContaining({
+        inspect: expect.any(Function),
+        quiesce: expect.any(Function),
+        drain: expect.any(Function),
+      }),
       referencedCleanup: {
         mode: "remove-selected",
         selected: ["plugin:@acme/audit@1.0.0"],

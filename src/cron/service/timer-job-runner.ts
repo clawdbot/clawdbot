@@ -314,7 +314,11 @@ async function executeJobCoreWithTimeoutUnfinalized(
         settlement: runPromise,
       });
     }
-    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
+    trackActiveCronTaskRunSettlement(
+      runPromise,
+      runAbortController.signal,
+      opts?.runReceipt?.agentId ?? opts?.activeJobMarker?.agentId,
+    );
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
