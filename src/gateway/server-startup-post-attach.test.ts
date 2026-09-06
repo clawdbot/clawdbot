@@ -1256,6 +1256,38 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(updateCheck.stop).toHaveBeenCalledOnce();
   });
 
+  it("joins update notices before releasing the update-check shutdown owner", async () => {
+    const notices = createDeferred();
+    const stopWatcher = vi.fn(() => notices.promise);
+    const watcherModule = await import("./update-run-watcher.js");
+    const startWatcher = vi
+      .spyOn(watcherModule, "startUpdateRunWatcher")
+      .mockReturnValue({ stop: stopWatcher });
+    const result = await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps(),
+    );
+    let stopped = false;
+    const stopping = result.stopGatewayUpdateCheck().then(() => {
+      stopped = true;
+    });
+    try {
+      expect(stopWatcher).toHaveBeenCalledOnce();
+      expect(hoisted.updateCheck.stop).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopped).toBe(false);
+      notices.resolve();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      notices.resolve();
+      await stopping;
+      startWatcher.mockRestore();
+    }
+  });
+
   it("fences update discovery immediately and joins its pending initialization", async () => {
     const initialization = createDeferred<Awaited<ReturnType<UpdateCheck["initialize"]>>>();
     const cleanup = createDeferred();

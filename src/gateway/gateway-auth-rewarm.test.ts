@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
@@ -22,6 +25,21 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 const REWARM_MESSAGE = "provider auth state re-warmed (auth-profile-failure)";
 const RATE_OBSERVATION_MS = 5_000;
 
+async function verifyBuiltGatewayHead(repoRoot: string) {
+  const head = resolveGitHead({ cwd: repoRoot });
+  expect(head).toMatch(/^[0-9a-f]{40}$/u);
+  await fs.access(path.join(repoRoot, "dist/index.js"));
+  for (const [file, field] of [
+    [BUILD_STAMP_FILE, "head"],
+    [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
+    ["build-info.json", "commit"],
+  ] as const) {
+    const metadata = JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"));
+    expect(metadata[field], file).toBe(head);
+  }
+  return head;
+}
+
 // Unit regressions prove the immediate no-invalidation decision. This smoke
 // preserves the real HTTP -> persisted profile -> Gateway subscriber composition.
 describe("Gateway profile failure recovery", () => {
@@ -32,17 +50,7 @@ describe("Gateway profile failure recovery", () => {
     },
     async () => {
       const repoRoot = process.cwd();
-      const head = resolveGitHead({ cwd: repoRoot });
-      expect(head).toMatch(/^[0-9a-f]{40}$/u);
-      await fs.access(path.join(repoRoot, "dist/index.js"));
-      for (const [file, field] of [
-        [BUILD_STAMP_FILE, "head"],
-        [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-        ["build-info.json", "commit"],
-      ] as const) {
-        const metadata = JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"));
-        expect(metadata[field], file).toBe(head);
-      }
+      const head = await verifyBuiltGatewayHead(repoRoot);
 
       const credentials = { rate: "qa-rate-profile-key", auth: "qa-auth-profile-key" };
       const profileIds = { rate: "mock-openai:rate", auth: "mock-openai:auth" };
@@ -150,6 +158,10 @@ describe("Gateway profile failure recovery", () => {
             tools: { profile: "minimal" },
           } satisfies OpenClawConfig;
           await gateway.state.writeConfig(cfg);
+          // Exercise retry exhaustion without waiting through the default recovery window.
+          await gateway.state.writeJson("agents/rate/agent/settings.json", {
+            retry: { provider: { maxRetries: 1 } },
+          });
           for (const agentId of ["rate", "auth"] as const) {
             await gateway.state.writeAuthProfiles(
               {
@@ -212,6 +224,7 @@ describe("Gateway profile failure recovery", () => {
           };
           const rewarmCount = () => gateway.logs().split(REWARM_MESSAGE).length - 1;
           expect((await failTurn("rate"))?.cooldownReason).toBe("rate_limit");
+          expect(requests.rate).toBe(2);
           await sleep(RATE_OBSERVATION_MS);
           const afterRate = rewarmCount();
           expect(afterRate).toBe(0);
@@ -232,6 +245,173 @@ describe("Gateway profile failure recovery", () => {
               rateObservationMs: RATE_OBSERVATION_MS,
               afterRateRewarms: afterRate,
               afterAuthRewarms: rewarmCount(),
+            }),
+          );
+        },
+        async () => {
+          await client?.stopAndWait({ timeoutMs: 1_000 });
+        },
+        async () => {
+          await instance?.cleanup();
+        },
+        async () => {
+          providerServer.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            providerServer.close((error) => (error ? reject(error) : resolve()));
+          });
+        },
+      );
+    },
+  );
+});
+
+describe("Gateway configured catalog authentication", () => {
+  it(
+    "serves a large authenticated catalog for each agent through the built Gateway",
+    { timeout: 180_000 },
+    async () => {
+      const repoRoot = process.cwd();
+      const head = await verifyBuiltGatewayHead(repoRoot);
+      const agentIds = Array.from({ length: 11 }, (_, index) =>
+        index === 0 ? "main" : `catalog-${index}`,
+      );
+      const credential = "qa-configured-catalog-key";
+      let upstreamRequests = 0;
+      const providerServer = createServer((request, response) => {
+        request.resume();
+        upstreamRequests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [] }));
+      });
+      let instance: OpenClawTestInstance | undefined;
+      let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+      await runQaGatewayFixture(
+        async () => {
+          await new Promise<void>((resolve, reject) => {
+            providerServer.once("error", reject);
+            providerServer.listen(0, "127.0.0.1", resolve);
+          });
+          const address = providerServer.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Catalog provider did not expose its listening port");
+          }
+          const provider = buildMockOpenAiResponsesProvider(
+            `http://127.0.0.1:${address.port}/v1`,
+            "synthetic-0",
+          );
+          const models = Array.from({ length: 400 }, (_, index) => ({
+            ...provider.config.models[0],
+            id: `synthetic-${index}`,
+            name: `Synthetic ${index}`,
+          }));
+          instance = await createOpenClawTestInstance({
+            name: "configured-catalog-auth",
+            cwd: repoRoot,
+            stopTimeoutMs: 10_000,
+            env: {
+              VITEST: undefined,
+              NODE_ENV: "production",
+              OPENCLAW_TEST_CONSOLE: "1",
+              OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            },
+          });
+          const gateway = instance;
+          const cfg = {
+            gateway: {
+              port: gateway.port,
+              auth: { mode: "token", token: gateway.gatewayToken },
+              controlUi: { enabled: false },
+            },
+            hooks: { enabled: false },
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                workspace: gateway.state.workspaceDir,
+                skipBootstrap: true,
+                heartbeat: { every: "0m" },
+                model: { primary: provider.modelRef, fallbacks: [] },
+                models: Object.fromEntries(
+                  models.map((model) => [
+                    `${provider.providerId}/${model.id}`,
+                    { agentRuntime: { id: "openclaw" } },
+                  ]),
+                ),
+              },
+              entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+            },
+            models: {
+              mode: "replace",
+              providers: {
+                [provider.providerId]: {
+                  ...provider.config,
+                  apiKey: credential,
+                  models,
+                  request: { allowPrivateNetwork: true },
+                },
+              },
+            },
+            plugins: { slots: { memory: "none" } },
+            tools: { profile: "minimal" },
+          } satisfies OpenClawConfig;
+          await gateway.state.writeConfig(cfg);
+          expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
+          const startupStarted = performance.now();
+          await gateway.startGateway();
+          const startupMs = performance.now() - startupStarted;
+          client = await acquireGatewayTestClient(
+            {
+              url: gateway.url,
+              token: gateway.gatewayToken,
+              clientName: "cli",
+              mode: "cli",
+              role: "operator",
+              scopes: ["operator.admin", "operator.read", "operator.write"],
+            },
+            {
+              timeoutMs: 30_000,
+              timeoutMessage: "Catalog Gateway client did not connect",
+              closeMessage: "Catalog Gateway closed",
+            },
+          );
+          const expectedIds = new Set(models.map((model) => model.id));
+          let returnedRows = 0;
+          const rpcStarted = performance.now();
+          for (const agentId of agentIds) {
+            const result = await client.request<{ models: ModelChoice[] }>(
+              "models.list",
+              { agentId, view: "configured" },
+              { timeoutMs: 30_000 },
+            );
+            const configured = result.models.filter(
+              (model) => model.provider === provider.providerId,
+            );
+            expect(configured, agentId).toHaveLength(models.length);
+            expect(new Set(configured.map((model) => model.id)), agentId).toEqual(expectedIds);
+            expect(
+              configured.every((model) => model.available === true),
+              agentId,
+            ).toBe(true);
+            returnedRows += configured.length;
+          }
+          const rpcElapsedMs = performance.now() - rpcStarted;
+          const gatewayRssMb = readProcessRssMb(gateway.child?.pid);
+          expect(gatewayRssMb).toBeGreaterThan(0);
+          expect(returnedRows).toBe(4_400);
+          console.info(
+            "[configured-catalog-auth-runtime-proof]",
+            JSON.stringify({
+              head,
+              configuredModels: models.length,
+              agents: agentIds.length,
+              rpcRequests: agentIds.length,
+              returnedRows,
+              allAvailable: true,
+              startupMs,
+              rpcElapsedMs,
+              gatewayRssMb,
+              upstreamRequests,
             }),
           );
         },

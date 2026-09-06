@@ -9,6 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import { resolveSessionProgressCardTarget } from "../../session-progress-cards.ts";
+import { isSessionRunActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import type { BoardWidget } from "../types.ts";
 
@@ -104,6 +105,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       row?.status,
       row?.startedAt,
       row?.endedAt,
+      isSessionRunActive(row ?? {}),
     )}`;
   }
 }

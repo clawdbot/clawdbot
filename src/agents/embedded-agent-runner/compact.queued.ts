@@ -78,6 +78,7 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 
 type QueuedCompactionParams = CompactEmbeddedAgentSessionParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
+  sandbox?: SandboxContext | null;
 };
 
 function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
@@ -113,23 +114,6 @@ function resolveManualCompactionActiveRunSessionId(
     (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
     (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
     resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
-  );
-}
-
-function shouldDeferOwningContextEngineBudgetCompaction(params: {
-  compactParams: CompactEmbeddedAgentSessionParams;
-  contextEngine: ContextEngine;
-}): boolean {
-  // Request-time budget compaction for context-engine-owned transcripts can
-  // spend the whole reply preflight budget. Only defer engines that explicitly
-  // advertise background turn maintenance, leaving native/current-session
-  // harness compaction synchronous.
-  return (
-    params.compactParams.deferOwningContextEngineCompaction === true &&
-    params.compactParams.trigger === "budget" &&
-    params.contextEngine.info.ownsCompaction === true &&
-    params.contextEngine.info.turnMaintenanceMode === "background" &&
-    typeof params.contextEngine.maintain === "function"
   );
 }
 
@@ -345,11 +329,8 @@ async function compactEmbeddedAgentSessionImpl(
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-  const placementParams = params as CompactEmbeddedAgentSessionParams & {
-    sandbox?: SandboxContext | null;
-  };
   const placementSandbox =
-    placementParams.sandbox === undefined
+    params.sandbox === undefined
       ? await resolveSessionPlacementSandbox({
           agentId: runtimeTarget.agentId,
           config: params.config,
@@ -359,14 +340,14 @@ async function compactEmbeddedAgentSessionImpl(
         })
       : null;
   assertQueuedCompactionPreparationActive(params, host);
-  const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
-  const runtimeSelection = resolveCompactionRuntimeSelection({
-    ...preparedParams,
-    modelId: preparedParams.model,
-    boundHarnessRuntime: preparedParams.agentHarnessId,
-    preparedRuntimePlan: preparedParams.runtimePlan,
-    selectedHarnessRuntime: resolveSessionPinnedHarnessId(preparedParams.sessionEntry),
-  });
+  const requestedSelection = {
+    ...params,
+    modelId: params.model,
+    boundHarnessRuntime: params.agentHarnessId,
+    preparedRuntimePlan: params.runtimePlan,
+    selectedHarnessRuntime: resolveSessionPinnedHarnessId(params.sessionEntry),
+  };
+  const runtimeSelection = resolveCompactionRuntimeSelection(requestedSelection);
   // Native control operations reuse the backend's existing authenticated session.
   // Run them before generic model preparation so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
@@ -391,23 +372,44 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir,
       workspaceDir: resolvedWorkspaceDir,
       ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-      runtimePluginSelections: [
-        {
-          provider: runtimeSelection.provider,
-          modelId: runtimeSelection.modelId,
-          ...(runtimeSelection.selectedHarnessRuntime
-            ? { runtime: runtimeSelection.selectedHarnessRuntime }
-            : {}),
-          agentId: agentIds.sessionAgentId,
-        },
-      ],
     },
-    { abortSignal: params.abortSignal },
+    {
+      abortSignal: params.abortSignal,
+      deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
+        const selected = resolveCompactionRuntimeSelection({
+          ...requestedSelection,
+          config: projectCodexHostTranscriptBytePreflightConfig(
+            config,
+            Boolean(host.transcriptBytePreflightHarness),
+          ),
+          manifestPlugins: metadataSnapshot,
+          allowPluginNormalization: false,
+        });
+        return [
+          {
+            provider: selected.provider,
+            modelId: selected.modelId,
+            runtime: selected.selectedHarnessRuntime,
+            agentId: agentIds.sessionAgentId,
+          },
+        ];
+      },
+    },
   );
+  // Admission can replace config and agent storage while preserving the requested workspace.
+  const preparedParams = {
+    ...params,
+    ...(placementSandbox ? { sandbox: placementSandbox } : {}),
+    config: projectCodexHostTranscriptBytePreflightConfig(
+      lease.snapshot.config,
+      Boolean(host.transcriptBytePreflightHarness),
+    ),
+    agentDir: lease.snapshot.agentDir,
+  };
   const run = async () => {
     ensureContextEnginesInitialized();
-    const contextEngine = await resolveContextEngine(params.config, {
-      agentDir,
+    const contextEngine = await resolveContextEngine(preparedParams.config, {
+      agentDir: preparedParams.agentDir,
       workspaceDir: resolvedWorkspaceDir,
     });
     let disposeContextEngineOnExit = true;
@@ -420,7 +422,7 @@ async function compactEmbeddedAgentSessionImpl(
         expectedEntry,
         host,
         contextEngine,
-        agentDir,
+        preparedParams.agentDir,
         resolvedWorkspaceDir,
         lease.snapshot,
         contextEngineSessionKey,
@@ -667,11 +669,14 @@ async function compactResolvedContextEngine(
     return createQueuedCompactionAbortedResult();
   }
   host.assertActive?.();
+  // Budget maintenance may outlive reply preflight only when its engine owns
+  // the transcript and explicitly supports background turn maintenance.
   if (
-    shouldDeferOwningContextEngineBudgetCompaction({
-      compactParams: preparedParams,
-      contextEngine,
-    })
+    preparedParams.deferOwningContextEngineCompaction === true &&
+    preparedParams.trigger === "budget" &&
+    contextEngineOwnsCompaction &&
+    contextEngine.info.turnMaintenanceMode === "background" &&
+    typeof contextEngine.maintain === "function"
   ) {
     const deferredResult = await deferOwningContextEngineBudgetCompaction({
       compactParams: preparedParams,

@@ -5,7 +5,7 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
   type FailoverReason,
@@ -19,17 +19,17 @@ import {
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
 } from "../../session-suspension.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
-import { isShortWindowRateLimitMessage } from "./assistant-failover.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
+import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -68,26 +68,14 @@ export async function handleEmbeddedPromptFailure(input: {
   externalAbort: boolean;
   pluginHarnessOwnsTransport: boolean;
   timedOutByRunBudget: boolean;
-  resolveAuthProfileFailureReason: (
-    reason: FailoverReason | null,
-    options?: { providerStarted?: boolean; transientRateLimit?: boolean },
-  ) => AuthProfileFailureReason | null;
-  advanceAuthProfile: () => Promise<boolean>;
-  advanceRateLimitAuthProfile: (context: {
-    failoverProvider: string;
-    failoverModel: string;
-    logFallbackDecision: ReturnType<typeof createFailoverDecisionLogger>;
-  }) => Promise<boolean>;
-  maybeMarkAuthProfileFailure: (failure: {
-    profileId?: string;
-    reason?: AuthProfileFailureReason | null;
-    modelId?: string;
-  }) => Promise<void>;
-  maybeRetryTransient: (retry: {
-    reason: FailoverReason;
-    retryAfterMs?: number;
-  }) => Promise<boolean>;
-  getTransientRetryCount: () => number;
+  failover: Pick<
+    EmbeddedRunFailoverRetryController,
+    | "resolveAuthProfileFailureReason"
+    | "advanceAuthProfile"
+    | "advanceRateLimitAuthProfile"
+    | "maybeMarkAuthProfileFailure"
+    | "transientRetryCount"
+  >;
   attemptedThinking: Set<ThinkLevel>;
   thinkLevel: ThinkLevel;
   // Profile rotation resets thinking inside the runtime; read it after advancing.
@@ -167,11 +155,15 @@ export async function handleEmbeddedPromptFailure(input: {
 
   const promptFailoverReason =
     promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider: input.provider });
-  const promptProfileFailureReason = input.resolveAuthProfileFailureReason(promptFailoverReason, {
-    providerStarted: input.promptErrorSource === "prompt",
-    transientRateLimit:
-      promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
-  });
+  const promptProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
+    promptFailoverReason,
+    {
+      providerStarted: input.promptErrorSource === "prompt",
+      transientRateLimit:
+        promptFailoverReason === "rate_limit" &&
+        classifyRateLimitWindow(errorText).kind === "short",
+    },
+  );
   const promptTimeoutFallbackSafe =
     input.promptErrorSource === "prompt" &&
     promptFailoverReason === "timeout" &&
@@ -192,7 +184,7 @@ export async function handleEmbeddedPromptFailure(input: {
     profileId: failedProfileId,
     fallbackConfigured: input.fallbackConfigured,
     aborted: input.aborted,
-    retryCount: input.getTransientRetryCount(),
+    retryCount: input.failover.transientRetryCount,
     attemptCount: input.traceAttempts.length + 1,
   });
   const resolveDecision = (profileRotated: boolean) =>
@@ -209,48 +201,23 @@ export async function handleEmbeddedPromptFailure(input: {
       profileRotated,
     });
   let failoverDecision = resolveDecision(false);
-  const canRetryRateLimit =
-    promptFailoverReason !== "rate_limit" || isShortWindowRateLimitMessage(errorText);
-  if (
-    !recordedTerminalStop &&
-    !input.externalAbort &&
-    canRetryRateLimit &&
-    promptFailoverReason &&
-    (await input.maybeRetryTransient({
-      reason: promptFailoverReason,
-      retryAfterMs: resolveRetryAfterMs(errorText),
-    }))
-  ) {
-    logFailoverDecision("retry_same_model", {
-      retryCount: input.getTransientRetryCount(),
-    });
-    return {
-      action: "retry",
-      thinkLevel: input.thinkLevel,
-      authRetryPending: false,
-      lastRetryFailoverReason: mergeRetryFailoverReason({
-        previous: input.previousRetryFailoverReason,
-        failoverReason: promptFailoverReason,
-      }),
-    };
-  }
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
     if (promptFailoverReason === "rate_limit") {
-      rotated = await input.advanceRateLimitAuthProfile({
+      rotated = await input.failover.advanceRateLimitAuthProfile({
         failoverProvider: input.provider,
         failoverModel: input.modelId,
         logFallbackDecision: logFailoverDecision,
       });
     } else {
-      rotated = await input.advanceAuthProfile();
+      rotated = await input.failover.advanceAuthProfile();
     }
     if (!rotated) {
       failoverDecision = resolveDecision(true);
     }
   }
   const markFailedProfilePromise = promptProfileFailureReason
-    ? input
+    ? input.failover
         .maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
@@ -274,7 +241,7 @@ export async function handleEmbeddedPromptFailure(input: {
       failoverReason: promptFailoverReason,
     });
     logFailoverDecision("rotate_profile", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
       profileRotationCount: 1,
     });
     return {
@@ -295,7 +262,7 @@ export async function handleEmbeddedPromptFailure(input: {
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
     logFailoverDecision("retry_thinking_level", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
     });
     return {
       action: "retry",
@@ -317,7 +284,7 @@ export async function handleEmbeddedPromptFailure(input: {
     });
     logFailoverDecision("fallback_model", {
       status,
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
       profileRotationCount: 0,
     });
     throw (
@@ -340,7 +307,7 @@ export async function handleEmbeddedPromptFailure(input: {
       stage: "prompt",
     });
     logFailoverDecision("surface_error", {
-      retryCount: input.getTransientRetryCount(),
+      retryCount: input.failover.transientRetryCount,
       profileRotationCount: 0,
     });
   }

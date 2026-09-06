@@ -15,6 +15,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -807,6 +808,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
         "-r",
         ".",
         "--exclude=extensions/codex/src/app-server/client.test.ts",
+        "--exclude=",
+        "extensions/codex/src/app-server/stream.test.ts",
         "extensions/codex/src/app-server/models.test.ts",
         "--reporter=dot",
       ]),
@@ -820,28 +823,62 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       "-r",
       ".",
       "--exclude=codex/src/app-server/client.test.ts",
+      "--exclude=",
+      "codex/src/app-server/stream.test.ts",
       "codex/src/app-server/models.test.ts",
       "--reporter=dot",
     ]);
   });
 
-  it("relativizes absolute Vitest paths from extension cwd", () => {
-    const extensionCwd = path.join(process.cwd(), "extensions", "codex");
-    expect(
-      relativizeExtensionVitestArgs(
-        [
-          "--exclude",
-          path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
-          path.join(extensionCwd, "src", "app-server", "client.test.ts"),
-        ],
-        extensionCwd,
-      ),
-    ).toEqual([
-      "--exclude",
-      "codex/src/app-server/run-attempt.test.ts",
-      "codex/src/app-server/client.test.ts",
-    ]);
+  it.each([
+    ["--tagsFilter", "slow"],
+    ["--tagsFilter=", "slow"],
+    ["--fsModuleCachePath", "extensions/cache"],
+    ["--attachmentsDir", "extensions/artifacts"],
+    ["--max-workers", "2"],
+    ["--watch", "false"],
+    ["--no-file-parallelism"],
+    ["--retry.delay", "100"],
+  ])("preserves native Vitest option operands from a plugin cwd: %j", (...flags) => {
+    const target = "extensions/browser/src/example.test.ts";
+    const args = relativizeExtensionVitestArgs(
+      [...flags, target],
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(
+      parseCLI(["vitest", "run", ...flags, "browser/src/example.test.ts"]),
+    );
   });
+
+  it("preserves native separator tails without interpreting them as plugin paths", () => {
+    const tail = ["--", "extensions/browser/src/literal.test.ts", "--exclude="];
+    const args = relativizeExtensionVitestArgs(
+      tail,
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(parseCLI(["vitest", "run", ...tail]));
+  });
+
+  it.each(["--exclude", "--exclude="])(
+    "relativizes absolute %s paths from extension cwd",
+    (flag) => {
+      const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+      expect(
+        relativizeExtensionVitestArgs(
+          [
+            flag,
+            path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+            path.join(extensionCwd, "src", "app-server", "client.test.ts"),
+          ],
+          extensionCwd,
+        ),
+      ).toEqual([
+        flag,
+        "codex/src/app-server/run-attempt.test.ts",
+        "codex/src/app-server/client.test.ts",
+      ]);
+    },
+  );
 
   posixIt(
     "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",

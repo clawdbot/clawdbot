@@ -11,6 +11,7 @@ import {
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
@@ -42,6 +43,7 @@ type CliBootstrapCheckParams = {
   workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
+  legacyGatewayChunkDiscovery?: boolean;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
@@ -289,21 +291,33 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
   const fsImpl = params.fs ?? fs;
   const distDir = path.resolve(rootDir, params.distDir ?? "dist");
   const maxBytes = params.gatewayRunChunkMaxBytes ?? DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES;
-  const chunks = [];
+  let chunks: Array<{ filePath: string; source: string }> = [];
+  if (params.legacyGatewayChunkDiscovery) {
+    // Current release tooling also qualifies frozen targets predating build-owned locators.
+    // Only that explicit caller may retain the historical full-tree discovery contract.
 
-  for (const filePath of listJsFiles(distDir, fsImpl)) {
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    for (const filePath of listJsFiles(distDir, fsImpl)) {
+      let source;
+      try {
+        source = fsImpl.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      if (
+        GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
+          markers.every((marker) => source.includes(marker)),
+        )
+      ) {
+        chunks.push({ filePath, source });
+      }
     }
-    if (
-      GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
-        markers.every((marker) => source.includes(marker)),
-      )
-    ) {
-      chunks.push({ filePath, source });
+  } else {
+    try {
+      chunks = readGatewayRunChunks(distDir, fsImpl);
+    } catch (error) {
+      return [
+        `CLI bootstrap import guard could not read gateway run chunk metadata: ${error instanceof Error ? error.message : String(error)}. Run pnpm build first.`,
+      ];
     }
   }
 

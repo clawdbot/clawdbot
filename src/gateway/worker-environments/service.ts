@@ -588,6 +588,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const service = {
+    isStopping: () => stopping,
+    recordError: saveError,
     list: environmentAccess.list,
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {

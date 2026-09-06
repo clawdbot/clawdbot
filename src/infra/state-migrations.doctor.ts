@@ -1011,7 +1011,6 @@ function buildLegacyStateMigrationSteps(
 
   const doctorFinalSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
-        ownerStep(detected.workspace, migrateLegacyWorkspaceState),
         ownerStep(detected.webPush, migrateLegacyWebPush),
         ownerStep(detected.nodeHost, migrateLegacyNodeHostConfig),
         ownerStep(detected.subagentRegistry, migrateLegacySubagentRegistry),
@@ -1021,6 +1020,7 @@ function buildLegacyStateMigrationSteps(
 
   const finalSteps: LegacyStateMigrationStep[] = [
     ownerStep(detected.restartSentinel, migrateLegacyRestartSentinel),
+    ownerStep(detected.workspace, migrateLegacyWorkspaceState),
     ...doctorFinalSteps,
     {
       // Workspace evidence must be canonical before a Workshop move can retire

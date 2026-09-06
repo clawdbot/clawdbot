@@ -4,9 +4,26 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { isKnownWorkspacePath } from "./path.ts";
+import { isKnownWorkspacePath, sameAbsolutePath } from "./path.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("sameAbsolutePath", () => {
+  it.each([
+    ["/workspace/", "/workspace", true],
+    ["/", "///", true],
+    ["/workspace/./packages/..", "/workspace", true],
+    ["/Workspace", "/workspace", false],
+    ["C:\\Users\\Projects\\", "c:/users/projects", true],
+    ["C:\\", "c:/", true],
+    ["\\\\Server\\Share\\", "//server/share", true],
+    ["/workspace", "/workspace-other", false],
+    ["relative", "relative", false],
+    ["", "", false],
+  ])("compares %j and %j as %s", (a, b, expected) => {
+    expect(sameAbsolutePath(a, b)).toBe(expected);
+  });
+});
 
 describe("isKnownWorkspacePath", () => {
   it("accepts a canonical child after the Gateway approves a symlinked workspace root", async () => {
