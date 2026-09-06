@@ -149,6 +149,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
@@ -219,6 +220,97 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
+  it.each([false, true])(
+    "preserves runner progress through cleanup (failFast=%s)",
+    async (failFast) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
+      vi.setSystemTime(at(0));
+      const lab = makeRetryTestLab();
+      const context = makeRetryTestContext();
+      context.selectedScenarios = ["first", "second", "tail"].map((id) => {
+        const scenario = makeQaSuiteTestScenario(id);
+        scenario.title = `Catalog ${id}`;
+        if (scenario.execution.kind === "flow") {
+          scenario.execution.retryCount = 0;
+        }
+        return scenario;
+      });
+      const snapshots: Parameters<QaLabServerHandle["setScenarioRun"]>[0][] = [];
+      vi.mocked(lab.setScenarioRun).mockImplementation((next) =>
+        snapshots.push(structuredClone(next)),
+      );
+      const results: QaSuiteScenarioResult[] = [
+        {
+          name: "result first",
+          status: "pass",
+          details: "",
+          steps: [{ name: "check", status: "pass" }],
+        },
+        { name: "result second", status: "fail", steps: [] },
+        { name: "result tail", status: "skip", details: "not applicable", steps: [] },
+      ];
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
+        const index = runScenario.mock.calls.length - 1;
+        vi.setSystemTime(at(index + 1));
+        return results[index]!;
+      });
+      mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async () => {
+        expect(snapshots.every((snapshot) => snapshot?.status === "running")).toBe(true);
+        expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+        vi.setSystemTime(at(10));
+        return [];
+      });
+
+      await runQaFlowSuiteStandard({ lab, failFast }, context, runScenario);
+
+      const finishedCount = failFast ? 2 : 3;
+      const finalStatuses = failFast ? ["pass", "fail", "pending"] : ["pass", "fail", "skip"];
+      expect(
+        snapshots.map((snapshot) => snapshot?.scenarios.map((scenario) => scenario.status)),
+      ).toEqual([
+        ["pending", "pending", "pending"],
+        ["running", "pending", "pending"],
+        ["pass", "pending", "pending"],
+        ["pass", "running", "pending"],
+        ["pass", "fail", "pending"],
+        ...(failFast
+          ? []
+          : [
+              ["pass", "fail", "running"],
+              ["pass", "fail", "skip"],
+            ]),
+        finalStatuses,
+      ]);
+      expect(snapshots.at(-1)).toStrictEqual({
+        kind: "suite",
+        status: "completed",
+        startedAt: at(0).toISOString(),
+        finishedAt: at(10).toISOString(),
+        scenarios: context.selectedScenarios.map((scenario, index) =>
+          Object.assign(
+            { id: scenario.id, name: scenario.title, status: finalStatuses[index] },
+            index < finishedCount
+              ? {
+                  details: results[index]!.details,
+                  steps: results[index]!.steps,
+                  startedAt: at(index).toISOString(),
+                  finishedAt: at(index + 1).toISOString(),
+                }
+              : {},
+          ),
+        ),
+      });
+      expect(runScenario).toHaveBeenCalledTimes(finishedCount);
+      expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
+      );
+      expect(vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(lab.setScenarioRun).mock.invocationCallOrder.at(-1)!,
+      );
+    },
+  );
+
   it("does not publish terminal artifacts when cleanup fails", async () => {
     const lab = makeRetryTestLab();
     const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {

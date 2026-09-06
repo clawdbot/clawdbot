@@ -1,27 +1,29 @@
-import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-// Agent identity files also support SVG; these blobs render only as <img>, never inline markup.
-const IDENTITY_AVATAR_MIME_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/svg+xml",
-]);
+const IDENTITY_AVATAR_FAILURE_TTL_MS = 60_000;
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
-  loaded: boolean;
+  references: number;
+  settled: boolean;
+  retryAt?: number;
   promise: Promise<string | null>;
 };
 
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
+let identityAvatarGeneration = 0;
 
 function clearIdentityAvatarCache(): void {
+  identityAvatarGeneration += 1;
   for (const entry of identityAvatarCache.values()) {
     if (entry.blobUrl) {
       URL.revokeObjectURL(entry.blobUrl);
@@ -34,58 +36,47 @@ function clearIdentityAvatarCache(): void {
 // the owning Gateway or credential context changes.
 registerAvatarGatewayReset(clearIdentityAvatarCache);
 
-function trimIdentityAvatarCache(protectedEntry?: CachedIdentityAvatar): void {
-  while (identityAvatarCache.size > IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
-    let evicted = false;
-    for (const [key, entry] of identityAvatarCache) {
-      // Pending consumers still need their eventual blob. Only completed LRU
-      // entries may be evicted; the request currently resolving stays valid.
-      if (!entry.blobUrl || !entry.loaded || entry === protectedEntry) {
-        continue;
-      }
-      identityAvatarCache.delete(key);
-      URL.revokeObjectURL(entry.blobUrl);
-      evicted = true;
+function trimIdentityAvatarCache(): void {
+  for (const [key, entry] of identityAvatarCache) {
+    if (identityAvatarCache.size <= IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
       break;
     }
-    if (!evicted) {
-      break;
+    // Pending consumers still need their eventual blob. Evict only settled
+    // images or misses, in the Map's LRU order.
+    if (!entry.settled || entry.references > 0) {
+      continue;
+    }
+    identityAvatarCache.delete(key);
+    if (entry.blobUrl) {
+      URL.revokeObjectURL(entry.blobUrl);
     }
   }
 }
 
 function loadIdentityAvatar(url: string): string | Promise<string | null> {
   const cached = identityAvatarCache.get(url);
-  if (cached) {
-    // Map order is the LRU order; concurrent roster, profile, and chat views
-    // must share both the authenticated request and its resulting blob.
-    identityAvatarCache.delete(url);
+  // Map order is the LRU order; concurrent roster, profile, and chat views
+  // share the authenticated request and its result, including a cached miss.
+  identityAvatarCache.delete(url);
+  if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
-    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
+    return cached.blobUrl ?? cached.promise;
   }
 
   const entry: CachedIdentityAvatar = {
     blobUrl: null,
-    loaded: false,
+    references: 0,
+    settled: false,
     promise: Promise.resolve(null),
   };
-  const { authHeader } = readAvatarGatewayContext();
   entry.promise = (async () => {
     try {
-      const response = await fetch(url, {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
-      });
+      const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
       if (!response.ok) {
         return null;
       }
       const blob = await response.blob();
-      if (
-        blob.size === 0 ||
-        blob.size > AVATAR_MAX_BYTES ||
-        !IDENTITY_AVATAR_MIME_TYPES.has(blob.type.toLowerCase())
-      ) {
+      if (blob.size === 0 || blob.size > AVATAR_MAX_BYTES || !isAvatarImageMimeType(blob.type)) {
         return null;
       }
       const blobUrl = URL.createObjectURL(blob);
@@ -96,46 +87,150 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         return null;
       }
       entry.blobUrl = blobUrl;
-      trimIdentityAvatarCache(entry);
+      trimIdentityAvatarCache();
       return blobUrl;
     } catch {
       return null;
     } finally {
       if (!entry.blobUrl && identityAvatarCache.get(url) === entry) {
-        // Transient failures and uncached 404s must not hide a later upload.
-        identityAvatarCache.delete(url);
+        // Incidental rerenders share misses; expiry lets unversioned uploads and
+        // transient failures recover. New revisions or credentials bypass the miss.
+        entry.settled = true;
+        entry.retryAt = Date.now() + IDENTITY_AVATAR_FAILURE_TTL_MS;
+        trimIdentityAvatarCache();
       }
     }
   })();
   identityAvatarCache.set(url, entry);
-  trimIdentityAvatarCache(entry);
+  trimIdentityAvatarCache();
   return entry.promise;
 }
 
 /** Fetch connected-gateway profile images once and render CSP-safe blobs. */
 export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
-  const { authHeader, origin, resourceBasePath } = readAvatarGatewayContext();
+  const { authTokens, origin, resourceBasePath } = readAvatarGatewayContext();
   const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
   if (!trusted) {
     return null;
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.
-  const pageOrigin = globalThis.location?.origin;
-  const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
-  return origin || authHeader || crossOrigin ? loadIdentityAvatar(trusted) : trusted;
+  return origin || authTokens.length ? loadIdentityAvatar(trusted) : trusted;
 }
 
-/** A blob stays live until its image has finished loading or definitively failed. */
-export function settleAvatarImageUrl(value: string | null): void {
-  if (!value?.startsWith("blob:")) {
-    return;
+/** Acquire before awaiting: each pending or displayed consumer owns its own release. */
+export function retainAvatarImageUrl(value: string | Promise<string | null> | null): () => void {
+  const entry = value
+    ? [...identityAvatarCache.values()].find(
+        (item) => item.blobUrl === value || item.promise === value,
+      )
+    : undefined;
+  if (!entry) {
+    return () => undefined;
   }
-  for (const entry of identityAvatarCache.values()) {
-    if (entry.blobUrl === value) {
-      entry.loaded = true;
-      trimIdentityAvatarCache();
+  entry.references += 1;
+  let released = false;
+  return () => {
+    if (released) {
       return;
     }
+    released = true;
+    entry.references -= 1;
+    entry.settled = true;
+    trimIdentityAvatarCache();
+  };
+}
+
+/** View ownership for agent cards/selectors; bytes remain in the shared Gateway image cache. */
+export class IdentityAvatarController implements ReactiveController {
+  private connected = false;
+  private unsubscribeGatewayReset?: () => void;
+  private routes = new Map<
+    string,
+    { url: string | null; result: string | Promise<string | null> | null; release?: () => void }
+  >();
+  private activeRoutes: Set<string> | null = null;
+  private generation = identityAvatarGeneration;
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    host.addController(this);
+  }
+
+  hostConnected() {
+    this.connected = true;
+    this.unsubscribeGatewayReset = registerAvatarGatewayReset(() => this.host.requestUpdate());
+    this.host.requestUpdate();
+  }
+
+  hostDisconnected() {
+    this.connected = false;
+    this.unsubscribeGatewayReset?.();
+    this.unsubscribeGatewayReset = undefined;
+    for (const route of this.routes.values()) {
+      route.release?.();
+    }
+    this.routes.clear();
+  }
+
+  withActiveRoutes<T>(render: () => T): T {
+    this.activeRoutes = new Set();
+    try {
+      return render();
+    } finally {
+      for (const [key, route] of this.routes) {
+        if (!this.activeRoutes.has(key)) {
+          route.release?.();
+          this.routes.delete(key);
+        }
+      }
+      this.activeRoutes = null;
+    }
+  }
+
+  resolve(value: string): string | null {
+    if (!this.connected) {
+      return null;
+    }
+    if (!value.startsWith("/")) {
+      return value;
+    }
+    if (this.generation !== identityAvatarGeneration) {
+      for (const route of this.routes.values()) {
+        route.release?.();
+      }
+      this.routes.clear();
+      this.generation = identityAvatarGeneration;
+    }
+    this.activeRoutes?.add(value);
+    const result = resolveAvatarImageUrl(value);
+    const cached = this.routes.get(value);
+    if (cached && cached.result === result) {
+      return cached.url;
+    }
+    const route: { url: string | null; result: typeof result; release?: () => void } = {
+      url: null,
+      result,
+      release: retainAvatarImageUrl(result),
+    };
+    this.routes.set(value, route);
+    const apply = (url: string | null) => {
+      if (this.generation !== identityAvatarGeneration || this.routes.get(value) !== route) {
+        route.release?.();
+        return;
+      }
+      route.url = url;
+    };
+    if (typeof result === "string" || result === null) {
+      apply(result);
+    } else {
+      void result.then((url) => {
+        apply(url);
+        if (this.connected && this.routes.get(value) === route) {
+          this.host.requestUpdate();
+        }
+      });
+    }
+    cached?.release?.();
+    return route.url;
   }
 }

@@ -66,7 +66,7 @@ export function installQuestionTestHooks() {
     releaseAgentRunDelegatedAuthority(requesterAuthority);
     unregisterAuthorityClosed();
     clearAgentRunContext(requestParams.runId);
-    manager.reset();
+    manager.close();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });

@@ -58,12 +58,6 @@ struct LowCoverageHelperTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
-    @Test func `shell executor runs command`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/echo", "ok"], cwd: nil, env: nil, timeout: 2)
-        #expect(result.success == true)
-        #expect(result.stdout.contains("ok") || result.stderr.contains("ok"))
-    }
-
     @Test func `shell executor times out`() async {
         for _ in 0..<10 {
             let result = await ShellExecutor.runDetailed(

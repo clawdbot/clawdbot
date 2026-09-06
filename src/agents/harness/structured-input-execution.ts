@@ -1,9 +1,5 @@
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import {
-  runAgentHarnessGatewayQuestion,
-  type AgentHarnessQuestionGatewayCall,
-} from "./gateway-question.js";
+import { runAgentHarnessGatewayQuestion } from "./gateway-question.js";
 import type {
   StructuredInputAnswerValue,
   StructuredInputCompileResult,
@@ -34,8 +30,8 @@ type StructuredInputExecutionParams = {
   agentId?: string;
   runId?: string;
   timeoutMs: number;
-  gatewayCall: AgentHarnessQuestionGatewayCall;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
+  gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"];
+  delivery: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["delivery"];
   signal?: AbortSignal;
   isActive?: () => boolean;
   questionId?: (batch: number) => string | undefined;

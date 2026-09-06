@@ -42,14 +42,9 @@ async function releaseRuntimeLease(params: {
   runtime: SessionMcpRuntime;
   releaseLease?: () => void;
 }): Promise<void> {
-  params.releaseLease?.();
-  // Lease retirement is a lifecycle-only edge. Keep the manager graph out of
-  // read-only CLI startup paths that load tool materialization metadata.
-  const { completeDeferredSessionMcpRuntimeRetirement } =
-    await import("./agent-bundle-mcp-manager-api.js");
-  await completeDeferredSessionMcpRuntimeRetirement(params.runtime).catch((error: unknown) => {
-    logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
-  });
+  // Keep lifecycle imports out of read-only tool metadata loading.
+  const { releaseSessionMcpRuntime } = await import("./agent-bundle-mcp-manager-api.js");
+  await releaseSessionMcpRuntime(params);
 }
 
 function buildAppToolPolicyProjections(params: {
@@ -94,7 +89,7 @@ function buildAppToolPolicyProjections(params: {
         toolName: tool.toolName,
         operation: "tool",
         codexApproval: {
-          mode: server?.codexApprovalMode ?? "auto",
+          mode: server?.codexApprovalMode,
           ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
         },
       },
@@ -337,7 +332,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
           : {}),
         ...(tool.deniedBySession ? { deniedBySession: true } : {}),
         codexApproval: {
-          mode: server?.codexApprovalMode ?? "auto",
+          mode: server?.codexApprovalMode,
           ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
         },
       },
@@ -448,12 +443,14 @@ export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   agentId?: string;
   reservedToolNames?: Iterable<string>;
+  /** Transfer the lease admitted by the manager before returning this runtime. */
+  releaseLease?: () => void;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = params.runtime;
   let disposed = false;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
-  const releaseLease = runtime.acquireLease?.();
+  const releaseLease = params.releaseLease ?? runtime.acquireLease?.();
   runtime.markUsed();
   let catalog;
   try {
@@ -605,12 +602,18 @@ export async function materializeBundleMcpToolsForRun(params: {
 
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
+  excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
+  safeServerNamesByServer?: ReadonlyMap<string, string>;
   createRuntime?: (params: {
     sessionId: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
+    excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const createRuntime =
@@ -619,6 +622,11 @@ export async function createBundleMcpToolRuntime(params: {
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.excludeServerNames ? { excludeServerNames: params.excludeServerNames } : {}),
+    ...(params.safeServerNamesByServer
+      ? { safeServerNamesByServer: params.safeServerNamesByServer }
+      : {}),
   });
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,

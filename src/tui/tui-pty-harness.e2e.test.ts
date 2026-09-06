@@ -42,7 +42,7 @@ it("rejects rendering oracle false positives", () => {
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
 
-describe.sequential("TUI PTY harness", () => {
+describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let thinkingOverrideFixture: Awaited<ReturnType<typeof startTuiFixture>>;

@@ -93,7 +93,9 @@ describe("board registered widget content kinds", () => {
           },
         ],
       });
-      expect(store.readWidgetRegistered("session", "status")).toMatchObject({
+      expect(
+        store.readWidgetRegistered({ sessionKey: "session", agentId: "main" }, "status"),
+      ).toMatchObject({
         source: "diagram:second",
         pluginKind: "diagram:diagram",
         revision: 2,

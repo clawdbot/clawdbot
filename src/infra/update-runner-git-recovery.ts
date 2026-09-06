@@ -1,12 +1,14 @@
 import path from "node:path";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type { UpdateChannel } from "./update-channels.js";
-import { collectGitRuntimeErrors } from "./update-git-runtime.js";
+import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
   managerInstallArgs,
   managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 import { runStep } from "./update-runner-command.js";
 import {
   resolveBuildEnv,
@@ -16,17 +18,6 @@ import {
 } from "./update-runner-git-commands.js";
 import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
-type RecoveryReason =
-  | "manager-unavailable"
-  | "deps-install-failed"
-  | "build-failed"
-  | "rollback-checkout-dirty"
-  | "runtime-verification-failed";
-
-type GitRuntimeRecovery =
-  | { serviceRestartSafe: true }
-  | { serviceRestartSafe: false; reason: RecoveryReason };
-
 export async function rebuildRolledBackGitRuntime(params: {
   gitRoot: string;
   expectedSha: string;
@@ -35,7 +26,7 @@ export async function rebuildRolledBackGitRuntime(params: {
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
   timeoutMs: number;
   steps: UpdateStepResult[];
-}): Promise<GitRuntimeRecovery> {
+}): Promise<UpdateRecovery> {
   const appendStep = async (name: string, argv: string[], env?: NodeJS.ProcessEnv) => {
     const result = await runStep({
       runCommand: params.runCommand,
@@ -50,7 +41,10 @@ export async function rebuildRolledBackGitRuntime(params: {
     });
     return result.exitCode === 0;
   };
-  const appendFailure = (reason: RecoveryReason, detail: string): GitRuntimeRecovery => {
+  const appendFailure = (
+    reason: Extract<UpdateRecovery, { serviceRestartSafe: false }>["reason"],
+    detail: string,
+  ): UpdateRecovery => {
     params.steps.push({
       name: "git rollback runtime verify",
       command: `verify rollback runtime ${params.expectedSha}`,
@@ -67,7 +61,6 @@ export async function rebuildRolledBackGitRuntime(params: {
     params.gitRoot,
     params.timeoutMs,
     params.defaultCommandEnv,
-    "require-preferred",
   );
   if (manager.kind === "missing-required") {
     return appendFailure("manager-unavailable", manager.reason);
@@ -88,10 +81,11 @@ export async function rebuildRolledBackGitRuntime(params: {
       installEnv,
     );
     if (!installed && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
-      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-      installed = retryArgv
-        ? await appendStep("git rollback deps install (ignore scripts)", retryArgv, installEnv)
-        : false;
+      installed = await appendStep(
+        "git rollback deps install (ignore scripts)",
+        managerInstallIgnoreScriptsArgs(manager.manager),
+        installEnv,
+      );
     }
     if (!installed) {
       return appendFailure("deps-install-failed", "failed to restore dependencies");
@@ -133,27 +127,33 @@ export async function rebuildRolledBackGitRuntime(params: {
       );
     }
 
-    const runtimeErrors = await collectGitRuntimeErrors({
+    const recovery = await verifyGitUpdateRecovery({
       root: params.gitRoot,
       sha: params.expectedSha,
     });
-    const verified = runtimeErrors.length === 0;
     params.steps.push({
       name: "git rollback runtime verify",
       command: `verify rollback runtime ${params.expectedSha}`,
       cwd: params.gitRoot,
       durationMs: 0,
-      exitCode: verified ? 0 : 1,
-      ...(verified
-        ? {}
-        : {
-            stderrTail: runtimeErrors.join("\n"),
-          }),
+      exitCode: recovery.serviceRestartSafe ? 0 : 1,
+      ...(!recovery.serviceRestartSafe
+        ? {
+            stderrTail:
+              "Restored runtime artifacts or Gateway build identity could not be verified.",
+          }
+        : {}),
     });
-    return verified
-      ? { serviceRestartSafe: true }
-      : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    return recovery;
   } finally {
     await manager.cleanup?.();
   }
+}
+
+export async function readCurrentGitUpdateRecovery(root: string): Promise<UpdateRecovery> {
+  const head = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
+    cwd: root,
+    timeoutMs: 5000,
+  }).catch(() => null);
+  return verifyGitUpdateRecovery({ root, sha: head?.code === 0 ? head.stdout.trim() : null });
 }

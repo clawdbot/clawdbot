@@ -85,7 +85,6 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
-  | "codeModeRecoveryCandidate"
   | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
@@ -441,7 +440,7 @@ export function completeEmbeddedAttemptResult(
       messagingToolSentTargets: getMessagingToolSentTargets(),
       acceptedSessionSpawns,
       lastToolError,
-      lastAssistant: state.lastAssistant,
+      currentAttemptCompletedAssistant: state.currentAttemptCompletedAssistant,
       itemLifecycle: getItemLifecycle(),
       messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
@@ -459,7 +458,6 @@ export function completeEmbeddedAttemptResult(
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,
     currentAttemptReplayMetadata,
-    codeModeRecoveryCandidate: state.codeModeRecoveryCandidate,
     itemLifecycle: getItemLifecycle(),
     assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
@@ -480,6 +478,7 @@ export function completeEmbeddedAttemptResult(
     messagingToolSentTargets: getMessagingToolSentTargets(),
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
+    sourceReplyDelivered: subscription.getSourceReplyDelivered(),
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,

@@ -311,7 +311,12 @@ describe("legacy Codex policy wildcard migration", () => {
         defaults: {},
         list: [{ id: "worker", modelPolicy: { allow: ["codex/*"] } }],
       },
-      expectedPath: "agents.list.0.modelPolicy.allow.0",
+      expectedPath: "agents.list[0].modelPolicy.allow.0",
+    },
+    {
+      name: "keyed per-agent policy",
+      agents: { entries: { worker: { modelPolicy: { allow: ["codex/*"] } } } },
+      expectedPath: "agents.entries.worker.modelPolicy.allow.0",
     },
   ])("retains the legacy provider for a $name", ({ agents, expectedPath }) => {
     const raw = {

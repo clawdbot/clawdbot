@@ -1,6 +1,5 @@
-// Resolves package entrypoints for installed and bundled plugins.
+// Standalone build scripts load this before workspace packages are available.
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 /** True when a package entrypoint needs built JavaScript candidates. */
 export function isTypeScriptPackageEntry(entryPath: string): boolean {
@@ -26,13 +25,10 @@ export function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
       : sourceExtension === ".cts"
         ? [".cjs", ".js", ".mjs"]
         : [".js", ".mjs", ".cjs"];
-  const outputBases = [
+  // Dist/source bases and JS suffixes form unique candidates, never the TS source.
+  return [
     distWithoutExtension,
     ...(normalizedRelative.startsWith("src/") ? [`./dist/${normalizedRelative}`] : []),
     withoutExtension,
-  ];
-  const candidates = outputBases.flatMap((basePath) =>
-    outputExtensions.map((extension) => `${basePath}${extension}`),
-  );
-  return uniqueStrings(candidates).filter((candidate) => candidate !== normalized);
+  ].flatMap((basePath) => outputExtensions.map((extension) => `${basePath}${extension}`));
 }

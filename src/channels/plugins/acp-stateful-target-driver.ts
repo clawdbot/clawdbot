@@ -1,3 +1,4 @@
+import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
 /**
  * ACP stateful target driver for configured bindings.
  *
@@ -28,22 +29,19 @@ import type {
 function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
 }): StatefulBindingTargetDescriptor | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
   }
-  const meta = readAcpSessionEntry({
-    ...params,
-    sessionKey,
-  })?.acp;
-  const metaAgentId = meta?.agent?.trim();
-  if (metaAgentId) {
+  const target = resolveAcpSessionTarget(params);
+  const stored = readAcpSessionEntry({ cfg: params.cfg, ...target });
+  if (stored?.acp) {
     return {
       kind: "stateful",
       driverId: "acp",
-      sessionKey,
-      agentId: metaAgentId,
+      ...target,
     };
   }
   const spec = resolveConfiguredAcpBindingSpecBySessionKey({
@@ -121,13 +119,17 @@ async function resetAcpTargetInPlace(params: {
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
   if (
-    resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: params.sessionKey }).entry
-      ?.incognito === true
+    resolveSessionEntryAccessTarget({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: params.bindingTarget.agentId,
+    }).entry?.incognito === true
   ) {
     return { ok: false, error: "Incognito sessions cannot reset in place." };
   }
   const result = await performGatewaySessionReset({
     key: params.sessionKey,
+    agentId: params.bindingTarget.agentId,
     operatorRoleActor: { kind: "system" },
     reason: params.reason,
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",

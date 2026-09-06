@@ -522,6 +522,18 @@ describe("buildStatusText prepared context windows", () => {
       provider: "anthropic",
       model: "claude-haiku-4-5",
       resolvedHarness: "claude-cli",
+      sessionEntry: {
+        sessionId: "claude-cli-authored-cap",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "claude-haiku-4-5",
+        agentHarnessId: "claude-cli",
+        contextTokens: 256_000,
+        contextTokensSource: "resolved",
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
       thinkingCatalog: [
         {
           provider: "anthropic",

@@ -285,10 +285,12 @@ export const DASHBOARD_DOCUMENT_ELEMENT = {
   loadModule: () => import("../components/board/board-document.ts"),
 } satisfies OptionalCustomElement;
 
-export const CUSTODIAN_PANEL_ELEMENT = {
-  tagName: "openclaw-custodian-panel",
-  label: "custodian panel",
-  loadModule: () => import("../components/custodian/custodian-panel.ts"),
+export const ASSISTANT_PANEL_ELEMENT = {
+  tagName: "openclaw-assistant-panel",
+  get label() {
+    return t("assistantPanel.title");
+  },
+  loadModule: () => import("../components/assistant-panel.ts"),
 } satisfies OptionalCustomElement;
 
 // Loaded only for approval document URLs: the approval page pulls the protocol
@@ -321,3 +323,9 @@ export const EXEC_APPROVAL_ELEMENT = {
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
   return customElements.get(element.tagName) !== undefined;
 }
+
+export const LOGIN_GATE_ELEMENT = {
+  tagName: "openclaw-login-gate",
+  label: t("login.subtitle"),
+  loadModule: () => import("../components/login-gate.ts"),
+} satisfies OptionalCustomElement;

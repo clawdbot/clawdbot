@@ -119,6 +119,26 @@ Current-conversation binds do not require child-thread creation. They require an
 
 See [Configuration Reference](/gateway/configuration-reference).
 
+## Repair existing bare-session histories
+
+ACPX isolates bare session names by OpenClaw owner. If a session reports
+`SESSION_OWNER_MIGRATION_REQUIRED`, stop the Gateway and run
+`openclaw doctor --fix`, then restart. Doctor uses the same service workspace
+as the Gateway; ACPX's default state directory is `<service workspace>/state`.
+
+The repair requires one current, unambiguous canonical owner claim with matching
+backend identifiers. It preserves the raw history, event-log references, upstream
+session IDs, timestamps, options, and usage. Persistent record names move to an
+owner-qualified resource; existing oneshot physical IDs and histories remain intact.
+Ambiguous, stale, conflicting, unreadable, or live records remain in place with a
+diagnostic. Resolve the reported evidence problem before retrying; resetting the
+session does not bypass this repair.
+
+This is an offline, crash-recoverable migration with atomic destination-file
+publication. Files and SQLite are not one atomic transaction. Interrupted repairs
+can be rerun: Doctor checks the existing destination and canonical claim before
+finishing the metadata update and archiving the old persistent record.
+
 ## Plugin setup for acpx backend
 
 Packaged installs use the official `@openclaw/acpx` runtime plugin for ACP.

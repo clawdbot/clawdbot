@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { acpSessionActorKey, resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
@@ -12,6 +13,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagents/registry/subagent-recovery-state.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -97,6 +99,7 @@ type TaskRegistryMaintenanceRuntime = {
   closeAcpSession?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    agentId?: string;
     reason: string;
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
@@ -107,7 +110,7 @@ type TaskRegistryMaintenanceRuntime = {
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
   isBackgroundExecSessionActive?: typeof isBackgroundExecSessionActive;
-  hasActiveAcpTurn: (sessionKey: string) => boolean;
+  hasActiveAcpTurn: (sessionKey: string, agentId?: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
   hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
   deleteTaskRecordById: typeof deleteTaskRecordById;
@@ -126,10 +129,11 @@ type TaskRegistryMaintenanceRuntime = {
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listAcpSessionEntries,
   readAcpSessionEntry,
-  closeAcpSession: async ({ cfg, sessionKey, reason }) => {
+  closeAcpSession: async ({ cfg, sessionKey, agentId, reason }) => {
     await getAcpSessionManager().closeSession({
       cfg,
       sessionKey,
+      agentId,
       reason,
       discardPersistentState: true,
       clearMeta: true,
@@ -146,7 +150,8 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   isCronJobActive,
   getAgentRunContext,
   isBackgroundExecSessionActive,
-  hasActiveAcpTurn: isAcpTurnActive,
+  hasActiveAcpTurn: (sessionKey, agentId) =>
+    isAcpTurnActive(resolveAcpSessionTarget({ cfg: getRuntimeConfig(), sessionKey, agentId })),
   parseAgentSessionKey,
   hasActiveTaskForChildSessionKey,
   deleteTaskRecordById,
@@ -437,7 +442,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   }
   if (task.runtime === "acp") {
     // The persisted entry survives a crash, so only a live in-process turn proves the ACP run is alive.
-    return taskRegistryMaintenanceRuntime.hasActiveAcpTurn(childSessionKey);
+    return taskRegistryMaintenanceRuntime.hasActiveAcpTurn(childSessionKey, task.agentId);
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
@@ -561,6 +566,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
     !sessionKey ||
     taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({
       sessionKey,
+      agentId: task.agentId,
       excludeTaskId: task.taskId,
     })
   ) {
@@ -590,7 +596,10 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
   const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
   if (
     !sessionKey ||
-    taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({ sessionKey })
+    taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({
+      sessionKey,
+      agentId: acpEntry.agentId,
+    })
   ) {
     return false;
   }
@@ -620,6 +629,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   try {
     await closeAcpSession({
       cfg: acpEntry.cfg,
+      agentId: acpEntry.agentId,
       sessionKey,
       reason: "terminal-task-cleanup",
     });
@@ -656,10 +666,16 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   const seenSessionKeys = new Set<string>();
   for (const acpEntry of acpSessions) {
     const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
-    if (!sessionKey || seenSessionKeys.has(sessionKey)) {
+    if (!sessionKey) {
       continue;
     }
-    seenSessionKeys.add(sessionKey);
+    const actorKey = acpSessionActorKey(
+      resolveAcpSessionTarget({ cfg: acpEntry.cfg, sessionKey, agentId: acpEntry.agentId }),
+    );
+    if (seenSessionKeys.has(actorKey)) {
+      continue;
+    }
+    seenSessionKeys.add(actorKey);
     if (!shouldCloseOrphanedParentOwnedAcpSession(acpEntry)) {
       continue;
     }
@@ -670,6 +686,7 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
     try {
       await closeAcpSession({
         cfg: acpEntry.cfg,
+        agentId: acpEntry.agentId,
         sessionKey,
         reason: "orphaned-parent-task-cleanup",
       });
@@ -1032,7 +1049,7 @@ function startScheduledSweep() {
     // Reversing this order can preserve phantom active work for another sweep.
     await sweepTaskRegistry();
     await runTaskFlowRegistryMaintenance();
-  }).then(clearSweepInProgress, clearSweepInProgress);
+  }, "tasks:maintenance").then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

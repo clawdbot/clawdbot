@@ -68,8 +68,14 @@ export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
+export type AnthropicContextManagementOptions = {
+  anthropicServerCompaction?: boolean;
+  anthropicCompactThreshold?: number;
+  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } };
+};
+
 /** Provider options shared by the Anthropic provider and canonical transport. */
-export interface AnthropicOptions extends StreamOptions {
+export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
   /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).

@@ -11,7 +11,7 @@ import {
   streamSimple,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-chatgpt-responses">;
 
@@ -253,13 +253,13 @@ async function captureHttpProviderPayload(params: {
     const providerStream =
       params.transport === "direct"
         ? streamSimple
-        : resolveEmbeddedAgentStreamFn({
+        : resolveEmbeddedAgentStream({
             llmRuntime: createLlmRuntime(),
             currentStreamFn: undefined,
             model,
             sessionId: "thinking-contract",
             resolvedApiKey: "synthetic-test-key",
-          });
+          }).streamFn;
     const streamFn: StreamFn = (requestModel, context, options) =>
       providerStream(requestModel, context, {
         ...options,

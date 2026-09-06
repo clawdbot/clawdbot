@@ -3,6 +3,7 @@ import {
   classifyReleaseTrain,
   collectReleaseVersionFloorErrors,
   compareReleaseVersions,
+  parsePinnedReleaseVersion,
   parseReleaseVersion,
 } from "../scripts/lib/release-version.mjs";
 
@@ -41,5 +42,36 @@ describe("release version policy", () => {
     expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
     expect(compareReleaseVersions("2026.3.29-beta.1", "2026.3.29")).toBe(-1);
     expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
+  });
+
+  it.each([
+    ["2026.1.1", "2026.1.1"],
+    [" 2026.12.33 ", "2026.12.33"],
+    ["9999.12.9007199254740991", "9999.12.9007199254740991"],
+  ])("accepts stable release pin %j", (version, expected) => {
+    expect(parsePinnedReleaseVersion(version)).toBe(expected);
+  });
+
+  it.each([
+    "v2026.8.1",
+    "V2026.8.1",
+    "2026.8.1-alpha.1",
+    "2026.8.1-beta.1",
+    "2026.8.1-1",
+    "2026.8.1+build.1",
+    "latest",
+    "^2026.8.1",
+    "2026.8.x",
+    "https://example.com/2026.8.1",
+    "workspace:*",
+    "file:../package",
+    "git+https://example.com/repo.git",
+    "2026. 8.1",
+    "2026.08.1",
+    "2026.8.01",
+    "2026.13.1",
+    "2026.8.9007199254740992",
+  ])("rejects non-pin release form %j", (version) => {
+    expect(parsePinnedReleaseVersion(version)).toBeNull();
   });
 });

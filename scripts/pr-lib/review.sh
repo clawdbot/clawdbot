@@ -307,13 +307,10 @@ review_tests() {
 
 review_init() {
   local pr="$1"
-  local root json pr_url
-  root=$(repo_root) || return 1
+  local json pr_url
   # Metadata reads are read-only, so fetching before the side-effect marker keeps a
-  # transient GitHub failure inside the lock's auto-release window. Command substitution
-  # is already a subshell, so this cd gives gh its repo context without moving the
-  # caller - enter_worktree still reports the real invocation cwd.
-  json=$(cd "$root" && pr_meta_json "$pr") || return 1
+  # transient GitHub failure inside the lock's auto-release window.
+  json=$(pr_meta_json "$pr") || return 1
 
   enter_worktree "$pr" true || return 1
   write_pr_meta_files "$json"

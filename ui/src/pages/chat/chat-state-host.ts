@@ -1,3 +1,4 @@
+import type { ChatAccountSelection } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   AgentsListResult,
@@ -12,6 +13,7 @@ import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
   ChatStreamSegment,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -43,7 +45,7 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
-    initialUserMessage: ApplicationContext["initialUserMessage"];
+    chatSubmissions: ApplicationContext["chatSubmissions"];
     password: string;
     onboarding: boolean;
     assistantName: string;
@@ -54,7 +56,6 @@ export type ChatPageHost = ChatHost &
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
-    localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     automaticallyFetchFavicons: boolean;
@@ -74,6 +75,7 @@ export type ChatPageHost = ChatHost &
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
+    chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
@@ -108,10 +110,7 @@ export type ChatPageHost = ChatHost &
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
-    chatScrollCommitCleanup: (() => void) | null;
     chatStreamRenderFrame: number | null;
-    chatScrollFrame: number | null;
-    chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
@@ -137,7 +136,7 @@ export type ChatPageHost = ChatHost &
     loadAssistantIdentity: () => Promise<void>;
     applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
-    handleChatDraftChange: (next: string) => void;
+    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,
@@ -150,7 +149,7 @@ export type ChatPageHost = ChatHost &
     steerQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, toIndex: number) => void;
     editQueuedChatMessage: (id: string) => void;
-    updateQueuedChatMessageEdit: (draftText: string) => void;
+    updateQueuedChatMessageEdit: (draftText: string, mentions?: readonly HumanMention[]) => void;
     submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
     handleCloseSidebar: (slot: "detail" | "workspace") => void;

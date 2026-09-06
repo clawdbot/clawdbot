@@ -26,7 +26,7 @@ const CodexPluginsParamsSchema = Type.Object(
 );
 
 type CodexPluginsToolOptions = {
-  bindingStore: CodexAppServerBindingStore;
+  bindingStore: Pick<CodexAppServerBindingStore, "read">;
   context: OpenClawPluginToolContext;
   getPluginConfig: () => unknown;
   request?: typeof codexControlRequest;
@@ -58,7 +58,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
           : 12;
       const pluginConfig = options.getPluginConfig();
       const binding = options.context.sessionId
-        ? await options.bindingStore.read(
+        ? options.bindingStore.read(
             sessionBindingIdentity({
               sessionId: options.context.sessionId,
               sessionKey: options.context.sessionKey,

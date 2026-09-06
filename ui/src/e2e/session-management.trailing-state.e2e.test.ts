@@ -152,6 +152,21 @@ suite.define(() => {
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
+      await page.mouse.move(500, 500);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await captureUiProof(suite, page, "sidebar-session-title-icon-gap.png");
+
+      const [restingNameBounds, restingStateBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        state.boundingBox(),
+      ]);
+      if (!restingNameBounds || !restingStateBounds) {
+        throw new Error("Expected visible title and trailing state geometry");
+      }
+      expect(restingStateBounds.x - (restingNameBounds.x + restingNameBounds.width)).toBeCloseTo(
+        16,
+        1,
+      );
 
       await row.hover();
       await expect.poll(() => actionOpacity(state)).toBe("1");

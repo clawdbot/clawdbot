@@ -5,6 +5,11 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
@@ -39,9 +44,10 @@ import {
   parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
 } from "./execute-logging.js";
-import { createCliAbortError, stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
+import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
   enqueueCliRun,
@@ -128,11 +134,14 @@ export async function executePreparedCliRun(
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
   const params = context.params as PreparedCliRunInternalParams;
-  if (params.abortSignal?.aborted) {
-    throw createCliAbortError();
-  }
+  const assertCurrent = createCliRunCurrentAssertion(params);
+  assertCurrent();
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
+  const localProcessEnv = installationTargetEnv(getInstallationTarget());
+  if (localProcessEnv && executionTarget.kind === "node") {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
   const nodePlacement = executionTarget.kind === "node" ? executionTarget.placement : null;
   const usePluginOwnedExecution = executionTarget.kind === "plugin";
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
@@ -350,10 +359,9 @@ export async function executePreparedCliRun(
     }
   };
   const executeAttempt = async (): Promise<CliOutput> => {
+    assertCurrent();
     await context.preparedBackend.beforeExecution?.();
-    if (params.abortSignal?.aborted) {
-      throw createCliAbortError();
-    }
+    assertCurrent();
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
       params.skillsSnapshot && !params.controlOperation
@@ -450,12 +458,13 @@ export async function executePreparedCliRun(
           }),
         );
       }
-      Object.assign(env, mcpCaptureAttempt.env);
+      Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
 
       let executionCommand = backend.command;
+      let executionArgv0: string | undefined;
       let executionLeadingArgv: readonly string[] = [];
       context.runtimeOwnerFingerprint = undefined;
       context.runtimeArtifactFingerprint = undefined;
@@ -499,6 +508,7 @@ export async function executePreparedCliRun(
           });
         }
         executionCommand = executableIdentity.invocation.command;
+        executionArgv0 = executableIdentity.invocation.argv0;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
         context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
           provider: params.provider,
@@ -551,6 +561,7 @@ export async function executePreparedCliRun(
       }
       runOutput = await executeCliProcess({
         context,
+        assertCurrent,
         backend,
         deps: executeDeps,
         events,
@@ -561,12 +572,12 @@ export async function executePreparedCliRun(
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
         nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
-        usePluginOwnedExecution,
         initialGatewayCaptureKey,
         useResume,
         cliSessionIdToUse,
         resolvedSessionId,
         executionCommand,
+        executionArgv0,
         executionLeadingArgv,
         executionArgs: args,
         env,
@@ -613,9 +624,7 @@ export async function executePreparedCliRun(
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {
-      if (params.abortSignal?.aborted) {
-        throw createCliAbortError();
-      }
+      assertCurrent();
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
@@ -653,6 +662,7 @@ export async function executePreparedCliRun(
       failure = new AggregateError(
         [error, persistenceError],
         "CLI turn failed and its fork successor could not be persisted",
+        { cause: error },
       );
     }
     if (forkResumeClaimed && !forkSuccessorObserved) {

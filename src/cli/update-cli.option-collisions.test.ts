@@ -45,9 +45,13 @@ vi.mock("./update-cli/wizard.js", () => ({
   updateWizardCommand: (opts: unknown) => mocks.updateWizardCommand(opts),
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.defaultRuntime,
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: mocks.defaultRuntime,
+  };
+});
 
 function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
   return mock.mock.calls[0]?.[0];

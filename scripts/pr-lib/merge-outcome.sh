@@ -31,7 +31,7 @@ merge_outcome_init() {
   merge_outcome_load_local "$pr" "$MERGE_REPO"
 }
 
-# Cleanup validates retained proof without remote reads. Merge admission also
+# Cleanup validates retained proof locally (Git 2.45+ prevents lazy fetch). Admission also
 # supplies the freshly resolved repository identity; local validity is not reconciliation.
 merge_outcome_load_local() {
   local pr="$1" expected_repo="${2:-null}"
@@ -39,20 +39,30 @@ merge_outcome_load_local() {
   MERGE_OUTCOME_REF="refs/openclaw/pr-merge-outcomes/$pr"
   MERGE_OUTCOME_OID=""
   MERGE_OUTCOME_RECORD=""
-  if git symbolic-ref -q "$MERGE_OUTCOME_REF" >/dev/null 2>&1; then
+  if GIT_NO_LAZY_FETCH=1 git symbolic-ref -q "$MERGE_OUTCOME_REF" >/dev/null 2>&1; then
     merge_outcome_stop "symbolic outcome ref; inspect without deleting it"
     return 1
   fi
   local ref_status=0
-  if MERGE_OUTCOME_OID=$(git rev-parse --verify "$MERGE_OUTCOME_REF" 2>/dev/null); then
+  if MERGE_OUTCOME_OID=$(GIT_NO_LAZY_FETCH=1 git rev-parse --verify "$MERGE_OUTCOME_REF" 2>/dev/null); then
     local parents retained
-    [ "$(git cat-file -t "$MERGE_OUTCOME_OID")" = commit ] || { merge_outcome_stop "outcome ref is not a commit"; return 1; }
-    MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json" | jq -ce \
+    [ "$(GIT_NO_LAZY_FETCH=1 git cat-file -t "$MERGE_OUTCOME_OID")" = commit ] || { merge_outcome_stop "outcome ref is not a commit"; return 1; }
+    MERGE_OUTCOME_RECORD=$(GIT_NO_LAZY_FETCH=1 git show "$MERGE_OUTCOME_OID:outcome.json" | jq -ce \
       --argjson repo "$expected_repo" --argjson pr "$pr" '
       def oid: type == "string" and test("^[0-9a-f]{40}$");
+      def attempt: type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+      def recovery:
+        if has("recovery") then . as $record | .recovery |
+          type == "object" and
+          ((keys == ["actor","attempt","outcome","reason"]) or
+           (keys == ["actor","attempt","outcome","reason","replacementHead"] and
+            (.replacementHead | oid) and .replacementHead == $record.head)) and
+          (.outcome | oid) and (.attempt | attempt) and
+          (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
+        else true end;
       select(.version == 1 and ($repo == null or .repo == $repo) and .pr == $pr and .base == "main" and
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
-        (.attempt | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
+        (.attempt | attempt) and recovery and
         (.method == "squash" or .method == "merge" or .method == "rebase") and
         (.route == "immediate" or .route == "admin" or .route == "auto" or .route == "queue") and
         (.accepted | type == "boolean") and
@@ -62,19 +72,32 @@ merge_outcome_load_local() {
     printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c .repo | merge_outcome_repo_identity >/dev/null || {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
-    parents=$(git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
+    parents=$(GIT_NO_LAZY_FETCH=1 git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
     for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
-      git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
+      GIT_NO_LAZY_FETCH=1 git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("recovery")' >/dev/null; then
+      retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
+      if ! GIT_NO_LAZY_FETCH=1 git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
+        ! GIT_NO_LAZY_FETCH=1 git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+          .phase == "intent" and .accepted == false and .route == "immediate" and
+          .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
+          .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt and
+          $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
+        ' >/dev/null; then
+        merge_outcome_stop "invalid or unretained operator recovery provenance"; return 1
+      fi
+    fi
   else
-    git show-ref --verify --quiet "$MERGE_OUTCOME_REF" 2>/dev/null || ref_status=$?
+    GIT_NO_LAZY_FETCH=1 git show-ref --verify --quiet "$MERGE_OUTCOME_REF" 2>/dev/null || ref_status=$?
     [ "$ref_status" -eq 1 ] || { merge_outcome_stop "unreadable outcome ref"; return 1; }
   fi
 }
 
 merge_outcome_write() {
-  local record="$1" blob tree next parent
+  local record="$1" blob tree next parent entries capture
+  shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
   for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed] | unique | .[] | select(. != null)'); do
@@ -82,7 +105,15 @@ merge_outcome_write() {
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
   blob=$(printf '%s\n' "$record" | git hash-object -w --stdin) || return 1
-  tree=$(printf '100644 blob %s\toutcome.json\n' "$blob" | git mktree) || return 1
+  entries=$(printf '100644 blob %s\toutcome.json\n' "$blob")
+  # Replacement intent retains old captures as blobs before cleanup can remove
+  # the worktree. Later receipts retain this tree through their outcome parents.
+  for capture in "$@"; do
+    [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
+    blob=$(git hash-object -w --no-filters -- "$capture") || return 1
+    entries+=$'\n'"$(printf '100644 blob %s\t%s' "$blob" "${capture##*/}")"
+  done
+  tree=$(printf '%s\n' "$entries" | git mktree) || return 1
   next=$(printf 'Native PR merge outcome\n' | git -c commit.gpgsign=false commit-tree "$tree" "${parents[@]}") || return 1
   if git symbolic-ref -q "$MERGE_OUTCOME_REF" >/dev/null 2>&1 ||
     ! git update-ref --no-deref "$MERGE_OUTCOME_REF" "$next" "${MERGE_OUTCOME_OID:-$(pr_operation_lock_zero_oid)}"; then
@@ -121,27 +152,37 @@ merge_outcome_read_remote() {
   '
 }
 
-merge_outcome_observe() {
-  local pr="$1" oid
-  MERGE_OBSERVATION=$(merge_outcome_read_remote "$pr") || {
-    merge_outcome_stop "authoritative PR/main metadata unavailable or invalid"; return 1;
-  }
+merge_outcome_require_main() {
+  local oid="$1"
   # Fetch immutable objects only. Do not replace a pinned observation with the
   # moving origin/main tracking ref or FETCH_HEAD.
-  oid=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
-  if ! git cat-file -e "$oid^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$oid^{commit}" 2>/dev/null; then
     git fetch --no-tags --no-write-fetch-head "$MERGE_REPO_URL" "$oid" || { merge_outcome_stop "cannot fetch authoritative main $oid"; return 1; }
   fi
-  git cat-file -e "$oid^{commit}" || return 1
+  GIT_NO_LAZY_FETCH=1 git cat-file -e "$oid^{commit}"
+}
+
+merge_outcome_observe() {
+  MERGE_OBSERVATION=$(merge_outcome_read_remote "$1") || {
+    merge_outcome_stop "authoritative PR/main metadata unavailable or invalid"; return 1;
+  }
+  merge_outcome_require_main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)"
 }
 
 merge_outcome_stable() {
-  local reread
+  local reread main
   reread=$(merge_outcome_read_remote "$1") || return 1
-  [ "$reread" = "$MERGE_OBSERVATION" ] || {
-    merge_outcome_stop "PR or main changed during observation; rerun for read-only reconciliation if intent exists"
-    return 1
-  }
+  [ "$reread" = "$MERGE_OBSERVATION" ] && return 0
+  # Only finish an already-proven MERGED receipt; this never admits a future merge.
+  # Keep both snapshots pinned: later forward work cannot restart historical proof.
+  if printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
+    .pr.state == "MERGED" and .pr == $observed.pr
+  ' >/dev/null; then
+    main=$(printf '%s\n' "$reread" | jq -r .main)
+    merge_outcome_require_main "$main" || return 1
+    git merge-base --is-ancestor "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" "$main" && return 0
+  fi
+  merge_outcome_stop "PR or main changed during observation; rerun for read-only reconciliation if intent exists"
 }
 
 merge_outcome_reconcile() {

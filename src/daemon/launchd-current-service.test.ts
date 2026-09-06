@@ -22,23 +22,12 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
     ).toBe(true);
   });
 
-  it("preserves label-only fallback when launchd exposes no label variables", () => {
+  it("does not treat the configured label alone as current service identity", () => {
+    // Detached update helper children inherit OPENCLAW_LAUNCHD_LABEL.
     expect(
       isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway", {
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
       }),
-    ).toBe(true);
-  });
-
-  it("can require service markers for label-only fallback", () => {
-    expect(
-      isCurrentProcessLaunchdServiceLabel(
-        "ai.openclaw.gateway",
-        {
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        },
-        { allowConfiguredLabelFallback: false },
-      ),
     ).toBe(false);
   });
 

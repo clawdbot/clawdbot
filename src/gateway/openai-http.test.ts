@@ -2998,10 +2998,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(repeatedContent).toBe("hihi");
       }
 
-      {
+      for (const { payloads, expected } of [
+        { payloads: [{ text: "hello" }], expected: "hello" },
+        { payloads: [{ text: "" }, {}], expected: "No response from OpenClaw." },
+        {
+          payloads: [{ text: "First." }, {}, { text: "" }, { text: "Second." }],
+          expected: "First.\n\nSecond.",
+        },
+      ]) {
         agentCommandMock.mockClear();
         agentCommandMock.mockResolvedValueOnce({
-          payloads: [{ text: "hello" }],
+          payloads,
         } as never);
 
         const fallbackRes = await postChatCompletions(port, {
@@ -3012,7 +3019,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(fallbackRes.status).toBe(200);
         const fallbackText = await fallbackRes.text();
         expect(fallbackText).toContain("[DONE]");
-        expect(fallbackText).toContain("hello");
+        const fallbackContent = parseSseDataLines(fallbackText)
+          .filter((data) => data !== "[DONE]")
+          .flatMap((data) => {
+            const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+            return chunk.choices?.map((choice) => choice.delta?.content ?? "") ?? [];
+          })
+          .join("");
+        expect(fallbackContent).toBe(expected);
       }
 
       {
@@ -3323,70 +3337,69 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it.each([
-    { astral: "😀", boundary: 255 },
-    { astral: "𐐷", boundary: 511 },
-  ])(
-    "keeps streamed tool-call arguments well-formed ($astral at UTF-16 boundary $boundary)",
-    async ({ astral, boundary }) => {
-      const argumentPrefix = '{"value":"';
-      const value = `${"a".repeat(boundary - argumentPrefix.length)}${astral}tail`;
-      const expectedArguments = JSON.stringify({ value });
-      expect(expectedArguments.indexOf(astral)).toBe(boundary);
+    { name: "empty arguments", expectedArguments: "" },
+    ...[
+      { astral: "😀", boundary: 255 },
+      { astral: "𐐷", boundary: 511 },
+    ].map(({ astral, boundary }) => ({
+      name: `${astral} at UTF-16 boundary ${boundary}`,
+      expectedArguments: JSON.stringify({
+        value: `${"a".repeat(boundary - '{"value":"'.length)}${astral}tail`,
+      }),
+    })),
+  ])("keeps streamed tool-call arguments well-formed ($name)", async ({ expectedArguments }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Calling the tool." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "read_value",
+            arguments: expectedArguments,
+          },
+        ],
+      },
+    } as never);
 
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "Calling the tool." }],
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [
-            {
-              id: "call_1",
-              name: "read_value",
-              arguments: expectedArguments,
-            },
-          ],
-        },
-      } as never);
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "read the value" }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
 
-      const res = await postChatCompletions(enabledPort, {
-        stream: true,
-        model: "openclaw",
-        messages: [{ role: "user", content: "read the value" }],
-      });
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const data = parseSseDataLines(await res.text());
+    expect(data.at(-1)).toBe("[DONE]");
 
-      const data = parseSseDataLines(await res.text());
-      expect(data.at(-1)).toBe("[DONE]");
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const choices = chunks.flatMap(
+      (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+    );
+    const argumentDeltas = choices
+      .flatMap((choice) => {
+        const delta = choice.delta as Record<string, unknown> | undefined;
+        return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+      })
+      .map((toolCall) => {
+        const toolFunction = toolCall.function as Record<string, unknown> | undefined;
+        return toolFunction?.arguments;
+      })
+      .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
 
-      const chunks = data
-        .filter((line) => line !== "[DONE]")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const choices = chunks.flatMap(
-        (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+    expect(argumentDeltas.length).toBeGreaterThan(1);
+    for (const argumentsDelta of argumentDeltas) {
+      expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
+        argumentsDelta,
       );
-      const argumentDeltas = choices
-        .flatMap((choice) => {
-          const delta = choice.delta as Record<string, unknown> | undefined;
-          return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
-        })
-        .map((toolCall) => {
-          const toolFunction = toolCall.function as Record<string, unknown> | undefined;
-          return toolFunction?.arguments;
-        })
-        .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
-
-      expect(argumentDeltas.length).toBeGreaterThan(1);
-      for (const argumentsDelta of argumentDeltas) {
-        expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
-          argumentsDelta,
-        );
-      }
-      expect(argumentDeltas.join("")).toBe(expectedArguments);
-      expect(JSON.parse(argumentDeltas.join(""))).toEqual({ value });
-      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
-    },
-  );
+    }
+    expect(argumentDeltas.join("")).toBe(expectedArguments);
+    expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+  });
 
   it(
     "sends an initial SSE chunk before a streaming agent run settles",
@@ -3833,87 +3846,105 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("blocks a view-capped operator from mutating another operator's session", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
-      async () => {
-        const port = await getGatewayTestPort();
-        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-        const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
-        testState.gatewayAuth = trustedProxyAuth;
-        try {
-          await writeGatewayConfig({
-            gateway: {
-              auth: trustedProxyAuth,
-              trustedProxies: ["127.0.0.1"],
-              roles: {
-                default: "guest",
-                definitions: {
-                  guest: {
-                    agents: "*",
-                    scopes: ["operator.write"],
-                    sessions: { others: "view" },
+  it.each(["trusted-proxy", "token"] as const)(
+    "preserves %s authority when mutating another operator session",
+    async (authMethod) => {
+      const sharedSecretOwner = authMethod === "token";
+      await withEnvAsync(
+        { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+        async () => {
+          const port = await getGatewayTestPort();
+          let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+          const previousGatewayAuth = testState.gatewayAuth;
+          const trustedProxyAuth = {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          };
+          const requestAuth = sharedSecretOwner
+            ? { mode: "token" as const, token: "owner-secret" }
+            : trustedProxyAuth;
+          testState.gatewayAuth = requestAuth;
+          try {
+            await writeGatewayConfig({
+              gateway: {
+                auth: requestAuth,
+                trustedProxies: ["127.0.0.1"],
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      agents: sharedSecretOwner ? [] : "*",
+                      scopes: ["operator.write"],
+                      sessions: { others: "view" },
+                    },
                   },
                 },
               },
-            },
-          });
-          resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openAiChatCompletionsEnabled: true,
-          });
+            });
+            resetConfigRuntimeState();
+            server = await startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: requestAuth,
+              controlUiEnabled: false,
+              openAiChatCompletionsEnabled: true,
+            });
 
-          const owner = ensureProfileForEmail("session-owner@example.test");
-          const sessionKey = "agent:main:foreign-openai-http";
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId: "foreign-openai-http",
-              updatedAt: 1,
-              visibility: "shared",
-              createdVia: "operator",
-              createdActor: { type: "human", source: "profile", id: owner.id },
-            },
-          );
+            const owner = ensureProfileForEmail("session-owner@example.test");
+            const sessionKey = "agent:main:foreign-openai-http";
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: "foreign-openai-http",
+                updatedAt: 1,
+                visibility: "shared",
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: owner.id },
+              },
+            );
 
-          agentCommandMock.mockClear();
-          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-          const response = await postChatCompletions(
-            port,
-            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
-            {
-              "x-forwarded-for": "198.51.100.42",
-              "x-forwarded-proto": "https",
-              "x-forwarded-user": "guest@example.test",
-              "x-openclaw-session-key": sessionKey,
-            },
-          );
+            agentCommandMock.mockClear();
+            agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+            const response = await postChatCompletions(
+              port,
+              {
+                model: "openclaw",
+                messages: [{ role: "user", content: "mutate foreign session" }],
+              },
+              {
+                ...(sharedSecretOwner
+                  ? { authorization: "Bearer owner-secret" }
+                  : {
+                      "x-forwarded-for": "198.51.100.42",
+                      "x-forwarded-proto": "https",
+                      "x-forwarded-user": "guest@example.test",
+                    }),
+                "x-openclaw-session-key": sessionKey,
+              },
+            );
 
-          expect(response.status).toBe(403);
-          expect(await response.json()).toMatchObject({
-            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
-          });
-          expect(agentCommandMock).not.toHaveBeenCalled();
-        } finally {
-          await server?.close({ reason: "openai operator role session sharing test done" });
-          testState.gatewayAuth = previousGatewayAuth;
-          await writeGatewayConfig({});
-          resetConfigRuntimeState();
-        }
-      },
-    );
-  });
+            expect(response.status).toBe(sharedSecretOwner ? 200 : 403);
+            if (sharedSecretOwner) {
+              expect(agentCommandMock).toHaveBeenCalledOnce();
+            } else {
+              expect(await response.json()).toMatchObject({
+                error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+              });
+              expect(agentCommandMock).not.toHaveBeenCalled();
+            }
+          } finally {
+            await server?.close({ reason: "openai operator role session sharing test done" });
+            testState.gatewayAuth = previousGatewayAuth;
+            await writeGatewayConfig({});
+            resetConfigRuntimeState();
+          }
+        },
+      );
+    },
+  );
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(

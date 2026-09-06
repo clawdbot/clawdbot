@@ -631,7 +631,12 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(reset.ok).toBe(false);
   expect(reset.error?.code).toBe("UNAVAILABLE");
   expect(reset.error?.message ?? "").toMatch(/still active/i);
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup(
+    "agent:main:main",
+    ["main", "agent:main:main", "sess-main"],
+    "sess-main",
+    "main",
+  );
   expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();

@@ -133,7 +133,13 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     return;
   }
 
-  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+  await runNonInteractiveLocalSetup({
+    opts,
+    runtime,
+    baseConfig,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations ?? {},
+    baseHash: snapshot.hash,
+  });
 }
 
 /** Runs non-interactive onboarding in local, remote, or migration-import mode. */

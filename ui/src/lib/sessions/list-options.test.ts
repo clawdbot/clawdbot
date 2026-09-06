@@ -1,30 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
-
-function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
-  return {
-    ts,
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  let reject: (error: unknown) => void = () => undefined;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
+import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
 
 function createSessions(client: GatewayBrowserClient, key: string, ownerId?: string) {
-  return createSessionCapability({
+  return createTestSessionCapability({
     snapshot: {
       client,
       phase: "connected" as const,
@@ -122,8 +103,8 @@ describe("session list replacement options", () => {
 
   it("keeps derived titles when a foreground refresh queues behind an archive replacement", async () => {
     const key = "agent:main:untitled";
-    const archiveReplacementStarted = deferred<void>();
-    const archiveReplacement = deferred<SessionsListResult>();
+    const archiveReplacementStarted = createDeferred();
+    const archiveReplacement = createDeferred<SessionsListResult>();
     let listCallCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.list") {
@@ -277,7 +258,7 @@ describe("session list replacement options", () => {
       );
     });
     snapshot.client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot,
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -458,11 +439,14 @@ describe("session list replacement options", () => {
       assistantAgentId: "ops",
       hello: null,
     };
-    const sessions = createSessionCapability({
-      snapshot,
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
+    const sessions = createTestSessionCapability(
+      {
+        snapshot,
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      "ops",
+    );
 
     await sessions.refresh({ agentId: "ops", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({
@@ -556,7 +540,7 @@ describe("session list replacement options", () => {
 
   it("captures foreground list options before concurrent mutation refreshes", async () => {
     const key = "agent:main:concurrent";
-    const firstList = deferred<SessionsListResult>();
+    const firstList = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
@@ -695,7 +679,7 @@ describe("session list replacement options", () => {
   });
 
   it("does not publish a model override when the captured UI owner is already retired", async () => {
-    const pendingPatch = deferred<unknown>();
+    const pendingPatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
         return await pendingPatch.promise;
@@ -721,7 +705,7 @@ describe("session list replacement options", () => {
   it.each(["resolve", "reject"] as const)(
     "retires an optimistic model patch after the UI owner changes and the request %s",
     async (outcome) => {
-      const pendingPatch = deferred<unknown>();
+      const pendingPatch = createDeferred<unknown>();
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.patch") {
           return await pendingPatch.promise;
@@ -765,8 +749,8 @@ describe("session list replacement options", () => {
   ] as const)(
     "preserves a newer equal-value model claim when an older request %s (owner active: %s)",
     async (outcome, ownerActive) => {
-      const pendingPatch = deferred<unknown>();
-      const replacementPatch = deferred<unknown>();
+      const pendingPatch = createDeferred<unknown>();
+      const replacementPatch = createDeferred<unknown>();
       let patchCount = 0;
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.patch") {
@@ -813,8 +797,8 @@ describe("session list replacement options", () => {
   );
 
   it("does not reuse a retired owner's model baseline for the next owner", async () => {
-    const agentAPatch = deferred<unknown>();
-    const agentBPatch = deferred<unknown>();
+    const agentAPatch = createDeferred<unknown>();
+    const agentBPatch = createDeferred<unknown>();
     let patchCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {

@@ -1,5 +1,6 @@
 // Covers plugin-owned model id normalization through selection surfaces.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 
@@ -15,22 +16,25 @@ function normalizeLegacyFixtureModel({
     : undefined;
 }
 
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "model-selection-plugin-runtime-test-empty-plugin-metadata",
-  plugins: [
-    {
-      modelIdNormalization: {
-        providers: {
-          google: {
-            aliases: {
-              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+  ...createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "google-model-normalizer",
+        modelIdNormalization: {
+          providers: {
+            google: {
+              aliases: {
+                "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              },
             },
           },
         },
       },
-    },
-  ],
-}));
+    ],
+  }),
+};
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const loadPreparedModelCatalogSnapshotMock = vi.hoisted(() => vi.fn());
 

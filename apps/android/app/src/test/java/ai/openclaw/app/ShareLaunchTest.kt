@@ -323,16 +323,16 @@ class ShareLaunchTest {
 
     assertTrue(queue.enqueue(first, owner))
     assertTrue(queue.enqueue(second, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
     assertFalse(queue.acknowledgeHead(second.id, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
 
     runBlocking { assertTrue(queue.withHeadLease(first.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(first.id, owner))
-    assertEquals(second, queue.head.value)
+    assertEquals(listOf(second), queue.queued.value)
     runBlocking { assertTrue(queue.withHeadLease(second.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(second.id, owner))
-    assertNull(queue.head.value)
+    assertTrue(queue.queued.value.isEmpty())
   }
 
   @Test
@@ -345,7 +345,7 @@ class ShareLaunchTest {
     assertTrue(queue.enqueue(first, owner))
     assertFalse(queue.enqueue(overflow, owner))
     assertEquals(1, queue.size())
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first), queue.queued.value)
   }
 
   @Test
@@ -359,10 +359,10 @@ class ShareLaunchTest {
       queue.enqueue(first, ownerA)
       queue.enqueue(second, ownerB)
 
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first, second), queue.queued.value)
       assertTrue(queue.withHeadLease(second.id, ownerB) {})
       assertTrue(queue.acknowledgeHead(second.id, ownerB))
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first), queue.queued.value)
       assertTrue(queue.withHeadLease(first.id, ownerA) {})
     }
 
@@ -399,7 +399,7 @@ class ShareLaunchTest {
       assertTrue(firstLoader.await())
       assertFalse(staleLoader.await())
       assertFalse(staleLoaderRan)
-      assertEquals(next, queue.head.value)
+      assertEquals(listOf(next), queue.queued.value)
     }
 
   @Test

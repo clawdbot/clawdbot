@@ -202,9 +202,9 @@ export function describeAnthropicProviderRuntimeContract(
       });
     });
 
-    it("owns auth doctor hint generation", () => {
+    it("owns auth doctor hint generation", async () => {
       const provider = requireProviderContractProvider("anthropic");
-      const hint = provider.buildAuthDoctorHint?.({
+      const hint = await provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
         config: {
@@ -427,7 +427,6 @@ export function describeGithubCopilotProviderRuntimeContract(
               apiKey: "test-token",
               reasoning: level,
               maxTokens: 1024,
-              maxRetries: 0,
               onPayload: (payload) => {
                 payloads.push(payload);
                 throw new Error("Captured payload before network");

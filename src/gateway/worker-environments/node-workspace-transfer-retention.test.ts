@@ -354,3 +354,142 @@ it.each([
     }
   },
 );
+
+it("restores node reconciliation after Gateway bootstrap changes without replacing its Git base", async () => {
+  const root = await fs.realpath(tempDirs.make("node-workspace-restart-"));
+  const localPath = path.join(root, "gateway-workspace");
+  await fs.mkdir(localPath);
+  await fs.writeFile(path.join(localPath, "project.txt"), "base project\n");
+  await requireGit(localPath, ["init", "--quiet"]);
+  await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
+  await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
+  await requireGit(localPath, ["add", "."]);
+  await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
+  const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+  const owner = new AbortController();
+  const environmentId = "restart-worker";
+  const sessionId = "restart-session";
+  const ownerEpoch = 1;
+  const createService = () =>
+    createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: { ownerEpoch, sessionId },
+        environment: {
+          ownerEpoch,
+          attachedSessionIds: [sessionId],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot: path.join(root, "transfers"),
+    });
+  let service = createService();
+  let server = await startNodeWorkspaceTransferTestServer(service);
+  const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
+  const createActions = (
+    restoredWorkspace?: Parameters<typeof createNodeWorkerWorkspaceActions>[0]["restoredWorkspace"],
+  ) =>
+    createNodeWorkerWorkspaceActions({
+      environmentId,
+      ownerEpoch,
+      sessionId,
+      ownerSignal: owner.signal,
+      isOwnerCurrent: () => !owner.signal.aborted,
+      workspaceTransfer: service,
+      restoredWorkspace,
+      runWorkspaceCommand: (command) =>
+        runtime.exec(
+          {
+            ...command,
+            argv: [...command.argv],
+            gatewayNamespace: "gateway-restart-test",
+            environmentId,
+            sessionId,
+            generation: ownerEpoch,
+          },
+          command.signal,
+          { url: server.gatewayUrl },
+        ),
+    });
+  try {
+    const synced = await createActions().syncWorkspace({
+      localPath,
+      sessionId,
+      generation: ownerEpoch,
+    });
+    const remote = synced.remoteWorkspaceDir;
+    for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
+      await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
+    }
+    await requireGit(localPath, ["add", "SOUL.md", "USER.md", "IDENTITY.md"]);
+    await requireGit(localPath, ["commit", "--quiet", "-m", "local bootstrap after dispatch"]);
+    const gatewayCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+    expect(gatewayCommit).not.toBe(baseCommit);
+    await fs.writeFile(path.join(localPath, "project.txt"), "Gateway project edit\n");
+    await fs.writeFile(path.join(remote, "project.txt"), "worker project edit\n");
+    await fs.writeFile(path.join(remote, "result.txt"), "worker result\n");
+    await service.closeAll();
+    await server.close();
+    service = createService();
+    server = await startNodeWorkspaceTransferTestServer(service);
+    const restored = createActions({
+      localPath,
+      manifestRef: synced.manifestRef,
+      remoteWorkspaceDir: remote,
+    });
+    await restored.validateRestoredWorkspace();
+
+    let pending: WorkerWorkspaceReconciliationJournal | undefined;
+    let accepted: string | undefined;
+    const request = {
+      localPath,
+      remoteWorkspaceDir: remote,
+      baseManifestRef: synced.manifestRef,
+      journal: {
+        load: () => pending,
+        begin: (next: WorkerWorkspaceReconciliationJournal) => {
+          pending = next;
+        },
+        commit: (ref: string) => {
+          accepted = ref;
+          pending = undefined;
+        },
+        abort: () => {
+          pending = undefined;
+        },
+      },
+    };
+    const quiescence = await restored.quiesceWorkspace(remote);
+    try {
+      const result = await restored.reconcileWorkspace(request);
+      await verifyReconciledWorkspaceFinal(result, quiescence);
+      expect(result.getAppliedWorkspaceResult?.()?.conflictPaths).toEqual(["project.txt"]);
+      expect(accepted).toBe(result.manifestRef);
+    } finally {
+      await quiescence.resume();
+    }
+    for (const workspace of [localPath, remote]) {
+      await expect(fs.readFile(path.join(workspace, "project.txt"), "utf8")).resolves.toBe(
+        "Gateway project edit\n",
+      );
+      await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+        "worker result\n",
+      );
+    }
+    for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
+      await expect(fs.readFile(path.join(localPath, name), "utf8")).resolves.toBe(
+        `local bootstrap ${name}\n`,
+      );
+    }
+    expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
+    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(baseCommit);
+    owner.abort();
+    await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
+      "Node workspace transfer context is unavailable",
+    );
+  } finally {
+    owner.abort();
+    await service.closeAll();
+    await server.close();
+  }
+});

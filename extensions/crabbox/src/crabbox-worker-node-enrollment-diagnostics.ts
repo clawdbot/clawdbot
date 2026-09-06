@@ -2,8 +2,8 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-const NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 const MAX_NODE_ENROLLMENT_EVIDENCE_BYTES = 2_048;
 
 export async function collectCrabboxNodeEnrollmentEvidence(params: {
@@ -32,7 +32,7 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
       runCommand: params.runCommand,
       ...(params.signal ? { signal: params.signal } : {}),
       // The enrollment deadline has already elapsed; diagnostics need their own bounded budget.
-      timeoutMs: NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS,
+      timeoutMs: CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS,
     });
     if (result.termination !== "exit" || result.code !== 0) {
       throw crabboxCommandError("enrollment diagnostics", result);

@@ -271,17 +271,12 @@ struct ComputerInputGeometryTests {
         #expect(holdParams.durationMs == 2000)
     }
 
-    @Test func `v1 result encoding omits every additive v2 field`() throws {
-        let data = try JSONEncoder().encode(OpenClawComputerActResult(
-            ok: true,
-            cursorX: 12,
-            cursorY: 34))
+    @Test func `input result encoding uses the canonical success envelope`() throws {
+        let data = try JSONEncoder().encode(OpenClawComputerActResult(ok: true))
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        #expect(object.keys.sorted() == ["cursorX", "cursorY", "ok"])
+        #expect(object.keys.sorted() == ["ok"])
         #expect(object["ok"] as? Bool == true)
-        #expect(object["cursorX"] as? Double == 12)
-        #expect(object["cursorY"] as? Double == 34)
     }
 
     @Test func `decodes v2 window observation and element delivery fields`() throws {

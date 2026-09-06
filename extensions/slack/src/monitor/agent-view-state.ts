@@ -118,7 +118,7 @@ export function createSlackAgentViewState(params: {
     }
     const stateKey = workspaceStateKey();
     if (!stateKey) {
-      loaded = true;
+      // No app id yet: keep the durable lookup pending until it is learned.
       return false;
     }
     const openedStore = openWorkspaceStore();

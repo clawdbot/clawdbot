@@ -1,13 +1,16 @@
 // Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type {
   EventFrame,
+  SessionsCatalogListResult,
   TasksListResult,
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -33,6 +36,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { pluginStateEntriesInKeyRange } from "../plugin-state/plugin-state-store.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -221,6 +225,8 @@ type CodexHarnessAgentResult = {
   usage?: CodexHarnessAttemptUsage;
 };
 
+const CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT = 4_000;
+const CODEX_REDUCED_CONTEXT_PRESSURE_CHARS = 90_000;
 const CODEX_FULL_CONTEXT_AUTO_COMPACT_LIMIT = 700_000;
 const CODEX_FULL_CONTEXT_EFFECTIVE_WINDOW = 875_900;
 const CODEX_FULL_CONTEXT_STANDARD_WINDOW = 272_000;
@@ -455,8 +461,8 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
       : mode.kind === "reduced"
         ? [
             "model_auto_compact_token_limit_scope=body_after_prefix",
-            // One truncated 300 KB tool result is only a few thousand tokens.
-            "model_auto_compact_token_limit=4000",
+            // Raw nested CodeMode output is not necessarily emitted to model context.
+            `model_auto_compact_token_limit=${CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT}`,
             "tool_output_token_limit=10000",
           ]
         : undefined;
@@ -466,6 +472,7 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
 async function assertCodexHarnessSessionSelection(params: {
   client: GatewayClient;
   modelKey: string;
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): Promise<void> {
   const expected = parseModelKey(params.modelKey);
@@ -486,7 +493,9 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.modelProvider).toBe(expected.provider);
   expect(row?.model).toBe(expected.modelId);
   expect(row?.agentRuntime?.id).toBe("codex");
-  expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
+  expect(row?.thinkingLevel).toBe(
+    params.preserveNativeTurnSettings ? undefined : CODEX_HARNESS_THINKING,
+  );
 }
 
 async function readCodexHarnessSessionId(params: {
@@ -564,6 +573,7 @@ async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
+  nativeSupervision?: { command: string };
   loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
@@ -587,7 +597,11 @@ async function writeLiveGatewayConfig(params: {
         codex: {
           enabled: true,
           config: {
+            ...(params.nativeSupervision ? { supervision: { enabled: true } } : {}),
             appServer: {
+              ...(params.nativeSupervision
+                ? { command: params.nativeSupervision.command, homeScope: "user" as const }
+                : {}),
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
               ...(params.codexApprovalsReviewer
@@ -715,6 +729,7 @@ async function requestAgentText(params: {
   client: GatewayClient;
   expectedReply: string;
   message: string;
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): Promise<string> {
   const { text, events } = await requestAgentTextWithEvents({
@@ -724,12 +739,17 @@ async function requestAgentText(params: {
     sessionKey: params.sessionKey,
   });
   expect(text).toContain(params.expectedReply);
-  recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
+  recordCodexAttemptIdentity({
+    events,
+    preserveNativeTurnSettings: params.preserveNativeTurnSettings,
+    sessionKey: params.sessionKey,
+  });
   return text;
 }
 
 function recordCodexAttemptIdentity(params: {
   events: CapturedAgentEvent[];
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): void {
   const { events } = params;
@@ -747,7 +767,9 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = resolveCodexHarnessExpectedAppServerEffort(expectedModel);
+  const expectedEffort = params.preserveNativeTurnSettings
+    ? null
+    : resolveCodexHarnessExpectedAppServerEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
   expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
   if (CODEX_HARNESS_FULL_CONTEXT) {
@@ -1291,6 +1313,20 @@ async function verifyCodexCompactionStress(params: {
   let completedCompactions = 0;
   let reportedCompactions = 0;
   let startedCompactions = 0;
+  const observeTurn = (label: string, result: CodexHarnessAgentResult) => {
+    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
+    logCodexHarnessTurnMeasurement(label, result);
+    const compaction = readCompletedCodexCompactionStats(result.events);
+    completedCompactions += compaction.count;
+    startedCompactions += compaction.startedCount;
+    reportedCompactions += result.compactionCount;
+    const usage = readCodexNativeUsageSnapshots(result.events).at(-1);
+    if (!usage || usage.promptTokens <= 0) {
+      throw new Error(`${label} emitted no final native prompt usage`);
+    }
+    return { usage, compaction };
+  };
+  let previousUsage: CodexNativeUsageSnapshot | undefined;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
     const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
@@ -1307,17 +1343,12 @@ async function verifyCodexCompactionStress(params: {
     ].join("\n");
     const result = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
+      eventPrefixes: [...CODEX_HARNESS_CONTEXT_EVENT_PREFIXES, "tool"],
       sessionKey: params.sessionKey,
       message,
     });
     expect(result.text).toContain(acknowledgement);
-    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
-    logCodexHarnessTurnMeasurement(`reduced-stress-${turn}`, result);
-    const turnCompaction = readCompletedCodexCompactionStats(result.events);
-    completedCompactions += turnCompaction.count;
-    startedCompactions += turnCompaction.startedCount;
-    reportedCompactions += result.compactionCount;
+    previousUsage = observeTurn(`reduced-output-${turn}`, result).usage;
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
@@ -1331,6 +1362,69 @@ async function verifyCodexCompactionStress(params: {
     });
   }
 
+  // Native output above proves command execution, not CodeMode's outer emission.
+  // Direct input supplies bounded pressure after this wave's warm/cold-resume prefix.
+  let measuredPressureCycles = 0;
+  for (let cycle = 1; cycle <= 2; cycle += 1) {
+    if (!previousUsage) {
+      throw new Error("reduced pressure probe has no preceding native usage");
+    }
+    const denseToken = `CODEX-PRESSURE-${cycle}-OK`;
+    const dense = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: [
+        buildCodexHarnessDenseContext({
+          marker: `PRESSURE-${randomBytes(6).toString("hex").toUpperCase()}`,
+          chars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+        }),
+        `Do not use tools. Reply exactly ${denseToken} and nothing else.`,
+      ].join("\n\n"),
+    });
+    expect(dense.text.trim()).toBe(denseToken);
+    const pressure = observeTurn(`reduced-pressure-${cycle}`, dense);
+    // A final answer can cross the limit without another sampling opportunity.
+    const triggerToken = `CODEX-PRESSURE-TRIGGER-${cycle}-OK`;
+    const trigger = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: `Do not use tools. Reply exactly ${triggerToken} and nothing else.`,
+    });
+    expect(trigger.text.trim()).toBe(triggerToken);
+    const after = observeTurn(`reduced-trigger-${cycle}`, trigger);
+    const promptGrowth = pressure.usage.promptTokens - previousUsage.promptTokens;
+    // Compaction changes the prefix. Never compare usage across that boundary;
+    // the second fixed pair supplies a fresh interval if the first compacted early.
+    if (pressure.compaction.count === 0) {
+      expect(
+        promptGrowth,
+        "dense input did not create measured prompt pressure",
+      ).toBeGreaterThanOrEqual(CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT);
+      expect(
+        after.compaction.count,
+        "small trigger did not compact measured pressure",
+      ).toBeGreaterThan(0);
+      // Native compact retains real user messages; total prompt size need not shrink.
+      measuredPressureCycles += 1;
+    }
+    logCodexLiveStep("reduced-pressure-cycle", {
+      cycle,
+      inputChars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+      beforePromptTokens: previousUsage.promptTokens,
+      densePromptTokens: pressure.usage.promptTokens,
+      afterPromptTokens: after.usage.promptTokens,
+      denseCompactions: pressure.compaction.count,
+      triggerCompactions: after.compaction.count,
+      measured: pressure.compaction.count === 0,
+    });
+    previousUsage = after.usage;
+  }
+  expect(
+    measuredPressureCycles,
+    "wave omitted measured pressure-to-compaction proof",
+  ).toBeGreaterThan(0);
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
     0,
   );
@@ -2062,6 +2156,216 @@ async function verifyCodexSessionDeletion(params: {
 }
 
 describeLive("gateway live (Codex harness)", () => {
+  it.skipIf(CODEX_HARNESS_AUTH_MODE !== "api-key")(
+    "forks a supervised canonical message and continues its cold descendant on the native model",
+    async () => {
+      const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
+      const { modelId } = parseModelKey(modelKey);
+      const codexPackagePath = bundledPluginFileAt(
+        path.resolve(import.meta.dirname, "../.."),
+        "codex",
+        "package.json",
+      );
+      const codexPackage = asOptionalRecord(
+        JSON.parse(await fs.readFile(codexPackagePath, "utf8")),
+      );
+      const nativeVersion = asOptionalRecord(codexPackage?.dependencies)?.["@openai/codex"];
+      if (typeof nativeVersion !== "string") {
+        throw new Error("Codex plugin dependency pin is missing");
+      }
+      // Native seeding and supervised turns must use the same pinned plugin dependency.
+      const codexCommand = createRequire(codexPackagePath).resolve("@openai/codex/bin/codex.js");
+      const nativeCommand = [process.execPath, codexCommand];
+      const token = `test-${randomUUID()}`;
+      const instance = await createCodexHarnessLiveInstance(token, "api-key");
+      const codexHome = instance.state.path("canonical-codex-home");
+      const nativeHome = instance.state.path("canonical-native-user");
+      const workspace = instance.state.workspaceDir;
+      let client: GatewayClient | undefined;
+      const onEvent = (event: EventFrame) => {
+        if (event.event === "agent") {
+          for (const listener of gatewayAgentEventListeners) {
+            listener(event.payload as AgentEventPayload);
+          }
+        }
+      };
+      try {
+        instance.state.applyEnv();
+        await createLiveWorkspace(workspace);
+        await Promise.all([codexHome, nativeHome].map((dir) => fs.mkdir(dir, { recursive: true })));
+        instance.env.CODEX_HOME = codexHome;
+        instance.env.HOME = nativeHome;
+        instance.env.USERPROFILE = nativeHome;
+        delete instance.env.CODEX_API_KEY;
+        const nativeEnv = { ...instance.env, HOME: nativeHome, USERPROFILE: nativeHome };
+        const nativeOptions = {
+          baseEnv: nativeEnv,
+          cwd: workspace,
+          timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+          maxOutputBytes: 1024 * 1024,
+          killProcessTree: true,
+        };
+        const version = await runCommandWithTimeout([...nativeCommand, "--version"], nativeOptions);
+        expect(version.code).toBe(0);
+        expect(version.stdout.trim()).toBe(`codex-cli ${nativeVersion}`);
+        await fs.writeFile(
+          path.join(codexHome, "config.toml"),
+          [
+            `model = ${JSON.stringify(modelId)}`,
+            'model_provider = "openai"',
+            `model_reasoning_effort = ${JSON.stringify(CODEX_HARNESS_THINKING)}`,
+            'approval_policy = "never"',
+            'sandbox_mode = "danger-full-access"',
+          ].join("\n") + "\n",
+        );
+        const apiKey = process.env.OPENAI_API_KEY?.trim();
+        expect(apiKey, "canonical native proof requires the live API-key owner").toBeTruthy();
+        // Login owns the isolated native credential file; cleanup removes the entire test home.
+        const login = await runCommandWithTimeout([...nativeCommand, "login", "--with-api-key"], {
+          ...nativeOptions,
+          input: apiKey + "\n",
+        });
+        expect(login.code).toBe(0);
+        const seeded = await runCommandWithTimeout(
+          [
+            ...nativeCommand,
+            "debug",
+            "app-server",
+            "send-message-v2",
+            "Reply exactly CODEX-NATIVE-ROOT.",
+          ],
+          nativeOptions,
+        );
+        expect(seeded.code).toBe(0);
+        expect(seeded.stdout).toContain("< turn/completed notification: Completed");
+        expect(seeded.stdout).toContain(`model: "${modelId}"`);
+        expect(seeded.stdout).toContain('model_provider: "openai"');
+        await writeLiveGatewayConfig({
+          configPath: instance.configPath,
+          modelKey,
+          port: instance.port,
+          token,
+          workspace,
+          compactionMode: { kind: "off" },
+          nativeSupervision: { command: codexCommand },
+        });
+        const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+          displayName: "vitest-codex-canonical-live",
+        });
+        const connect = async () => {
+          await instance.startGateway();
+          return await connectTestGatewayClient({
+            url: instance.url,
+            token,
+            deviceIdentity,
+            timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+            requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+            clientDisplayName: "vitest-codex-canonical-live",
+            caps: CODEX_HARNESS_CLIENT_CAPS,
+            onEvent,
+          });
+        };
+        client = await connect();
+        const catalog = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+          catalogId: "codex",
+          agentId: "dev",
+        });
+        const sources = catalog.catalogs.flatMap((entry) =>
+          entry.hosts.flatMap((host) => host.sessions.map((session) => ({ host, session }))),
+        );
+        expect(sources).toHaveLength(1);
+        const { host, session } = sources[0]!;
+        expect(session.modelProvider).toBe("openai");
+        const source = await client.request<{ sessionKey: string }>("sessions.catalog.continue", {
+          catalogId: "codex",
+          hostId: host.hostId,
+          threadId: session.threadId,
+          sourceHomeId: session.sourceHomeId,
+          agentId: "dev",
+        });
+        await requestAgentText({
+          client,
+          sessionKey: source.sessionKey,
+          message: "Reply exactly CODEX-CANONICAL-SOURCE.",
+          expectedReply: "CODEX-CANONICAL-SOURCE",
+          preserveNativeTurnSettings: true,
+        });
+        let sourceKey = source.sessionKey;
+        let sourceThreadId = observedCodexThreadIds.get(sourceKey);
+        expect(sourceThreadId).not.toBe(session.threadId);
+        for (const phase of ["warm", "cold"] as const) {
+          if (phase === "cold") {
+            await client.stopAndWait();
+            await instance.stopGateway();
+            client = await connect();
+          }
+          await assertCodexHarnessSessionSelection({ client, modelKey, sessionKey: sourceKey });
+          const history = await client.request<{
+            messages: Array<{ role?: string; __openclaw?: { id?: string } }>;
+          }>("chat.history", { sessionKey: sourceKey, limit: 20 });
+          const entryId = history.messages.findLast((message) => message.role === "user")?.[
+            "__openclaw"
+          ]?.id;
+          expect(entryId).toBeTypeOf("string");
+          const child = await client.request<{ sessionKey: string; editorText?: string }>(
+            "sessions.fork",
+            {
+              sessionKey: sourceKey,
+              entryId,
+            },
+          );
+          expect(child.sessionKey).not.toBe(sourceKey);
+          expect(child.editorText).toBeTruthy();
+          await assertCodexHarnessSessionSelection({
+            client,
+            modelKey,
+            preserveNativeTurnSettings: true,
+            sessionKey: child.sessionKey,
+          });
+          await requestAgentText({
+            client,
+            sessionKey: child.sessionKey,
+            message: `Reply exactly CODEX-CANONICAL-${phase.toUpperCase()}.`,
+            expectedReply: `CODEX-CANONICAL-${phase.toUpperCase()}`,
+            preserveNativeTurnSettings: true,
+          });
+          await assertCodexHarnessSessionSelection({
+            client,
+            modelKey,
+            sessionKey: child.sessionKey,
+          });
+          const childThreadId = observedCodexThreadIds.get(child.sessionKey);
+          expect(childThreadId).not.toBe(sourceThreadId);
+          expect(observedCodexThreadActions.get(child.sessionKey)).toBe("resumed");
+          await assertCodexHarnessTranscriptModelIdentity({
+            client,
+            modelKey,
+            sessionKey: child.sessionKey,
+          });
+          logCodexLiveStep("canonical-message-fork", {
+            phase,
+            nativeVersion,
+            modelKey,
+            continued: true,
+          });
+          sourceKey = child.sessionKey;
+          sourceThreadId = childThreadId;
+        }
+      } catch (error) {
+        console.error(instance.logs());
+        throw error;
+      } finally {
+        gatewayAgentEventListeners.clear();
+        try {
+          await client?.stopAndWait();
+        } finally {
+          await instance.cleanup();
+        }
+      }
+    },
+    CODEX_HARNESS_TIMEOUT_MS,
+  );
+
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async () => {

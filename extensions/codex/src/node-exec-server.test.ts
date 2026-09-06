@@ -3,14 +3,15 @@ import { once } from "node:events";
 import { access, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
@@ -133,7 +134,12 @@ async function readNodeProcessNotifications(
   );
 }
 
+beforeEach(() => {
+  setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
+});
+
 afterEach(() => {
+  setManagedCodexPluginRoot(undefined);
   vi.unstubAllEnvs();
 });
 
@@ -247,10 +253,11 @@ describe("Codex node exec-server", () => {
   it.each([
     { host: "paired device", nodeId: "paired-node" },
     { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical one-time approval on a $host", async ({ nodeId }) => {
+  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
+    expect(policy.standingApproval).toEqual({ kind: "placement", scope: "codex.exec-server" });
     expect(policy.defaultPlatforms).toBeUndefined();
     expect(policy.classifyRisk?.({ command: CODEX_NODE_EXEC_SERVER_COMMAND, params: {} })).toEqual({
       level: "high",
@@ -272,12 +279,28 @@ describe("Codex node exec-server", () => {
       invokeNode,
     } satisfies OpenClawPluginNodeInvokePolicyContext;
 
-    for (const decision of ["deny", "allow-always", null] as const) {
+    for (const { decision, result } of [
+      {
+        decision: "deny",
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+          message:
+            "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+        },
+      },
+      {
+        decision: null,
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+        },
+      },
+    ] as const) {
       request.mockResolvedValueOnce({ decision });
-      await expect(policy.handle(context)).resolves.toMatchObject({
-        ok: false,
-        code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-      });
+      await expect(policy.handle(context)).resolves.toEqual(result);
       expect(invokeNode).not.toHaveBeenCalled();
     }
     await expect(policy.handle({ ...context, approvals: undefined })).resolves.toMatchObject({
@@ -293,6 +316,14 @@ describe("Codex node exec-server", () => {
       code: "CODEX_NODE_EXEC_WORKSPACE_INVALID",
     });
     expect(invokeNode).not.toHaveBeenCalled();
+
+    request.mockResolvedValueOnce({ decision: "allow-always" });
+    await expect(policy.handle(context)).resolves.toEqual({
+      ok: true,
+      payload: { connected: true },
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    invokeNode.mockClear();
 
     const approvedPlacement = { ...placement };
     request.mockImplementationOnce(async () => {
@@ -316,15 +347,18 @@ describe("Codex node exec-server", () => {
     });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Run Codex execution on node",
+        title: "Run Codex on this node placement",
         description: expect.stringContaining(`${nodeId}: ${approvedPlacement.cwd}`),
         severity: "critical",
-        allowedDecisions: ["allow-once"],
+        allowedDecisions: ["allow-once", "allow-always"],
       }),
     );
     // Gateway approval descriptions are bounded to 256 characters.
     expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
       "arbitrary processes and filesystem access across the node account, not only this workspace",
+    );
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "Allow always applies only while this exact placement remains active",
     );
   });
 

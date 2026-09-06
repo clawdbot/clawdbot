@@ -128,14 +128,17 @@ Platform and remote-access details: [Linux app](/platforms/linux) and
 
 ## Custom or unlisted providers
 
-If your provider is not listed, run `openclaw onboard --classic`, choose
-**Custom Provider**, and enter:
+If your provider is not listed, run `openclaw onboard` in a terminal on the
+Gateway host, choose **Custom Provider** (under **More…** when shown), and enter:
 
 - Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (probes all three and auto-detects)
 - Base URL and API key (API key is optional if the endpoint does not require one)
 - Model ID and optional model alias
 
-Multiple custom endpoints can coexist — each gets its own endpoint ID.
+Multiple custom endpoints can coexist — each gets its own endpoint ID. Guided
+setup verifies a real model reply before saving the provider and activating its
+model. A failed or cancelled check preserves the previous configuration. The
+classic wizard also retains its custom-provider setup.
 
 ## Related
 

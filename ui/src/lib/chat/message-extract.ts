@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
@@ -66,8 +67,8 @@ function extractThinking(message: unknown): string | null {
   const parts: string[] = [];
   if (Array.isArray(content)) {
     for (const p of content) {
-      const item = p as Record<string, unknown>;
-      if (item.type === "thinking" && typeof item.thinking === "string") {
+      const item = asOptionalRecord(p);
+      if (item?.type === "thinking" && typeof item.thinking === "string") {
         const cleaned = item.thinking.trim();
         if (cleaned) {
           parts.push(cleaned);
@@ -104,8 +105,8 @@ function extractRawText(message: unknown): string | null {
   if (Array.isArray(content)) {
     const parts = content
       .map((p) => {
-        const item = p as Record<string, unknown>;
-        if (isTextContentBlockType(item.type, role) && typeof item.text === "string") {
+        const item = asOptionalRecord(p);
+        if (item && isTextContentBlockType(item.type, role) && typeof item.text === "string") {
           return item.text;
         }
         return null;
@@ -122,6 +123,7 @@ function extractRawText(message: unknown): string | null {
 }
 
 export function readTranscriptMediaEntries(message: unknown): Array<{
+  factIndex: number;
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
@@ -133,11 +135,12 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   if (!message || typeof message !== "object") {
     return [];
   }
-  return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
+  return (readPersistedMediaFacts(message) ?? []).flatMap((fact, factIndex) => {
     const path = fact.path ?? fact.url;
     return path
       ? [
           {
+            factIndex,
             path,
             mediaType: fact.contentType ?? fact.kind,
             fileName: fact.fileName,

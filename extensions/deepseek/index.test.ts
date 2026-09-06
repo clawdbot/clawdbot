@@ -188,7 +188,7 @@ describe("deepseek provider plugin", () => {
 
   it("builds the static DeepSeek model catalog", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://api.deepseek.com");

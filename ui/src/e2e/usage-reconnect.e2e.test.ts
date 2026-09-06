@@ -1,10 +1,12 @@
 // Control UI tests cover proxy-style same-client reconnects through the real browser lifecycle.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { CostUsageSummary } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -76,7 +78,12 @@ function sessionsUsage(
           ...usageTotals,
           activityDates: [today()],
           dailyBreakdown: [
-            { date: today(), tokens: usageTotals.totalTokens, cost: usageTotals.totalCost },
+            {
+              ...usageTotals,
+              date: today(),
+              tokens: usageTotals.totalTokens,
+              cost: usageTotals.totalCost,
+            },
           ],
           messageCounts: {
             total: 2,
@@ -148,7 +155,12 @@ async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
+      page.locator(".usage-controls"),
+    ]),
+  );
 }
 
 async function captureResultProof(page: Page, name: string, resultLabel: string): Promise<void> {

@@ -12,6 +12,7 @@ import {
 } from "libopus-wasm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -19,6 +20,7 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+export const VOICE_WAV_HEADER_BYTES = 44;
 const FFMPEG_ERROR_OUTPUT_BYTES = 8_192;
 const DISCORD_OPUS_FRAME_SIZE = 960;
 const DISCORD_OPUS_FRAME_BYTES = DISCORD_OPUS_FRAME_SIZE * CHANNELS * (BIT_DEPTH / 8);
@@ -49,7 +51,7 @@ let warnedOpusMissing = false;
 function buildWavBuffer(pcm: Buffer): Buffer {
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
   const byteRate = SAMPLE_RATE * blockAlign;
-  const header = Buffer.alloc(44);
+  const header = Buffer.alloc(VOICE_WAV_HEADER_BYTES);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + pcm.length, 4);
   header.write("WAVE", 8);
@@ -66,7 +68,7 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-export function createDiscordOpusEncodeStream(): Transform {
+export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
   return new DiscordOpusEncodeStream();
 }
 
@@ -144,6 +146,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 class DiscordOpusEncodeStream extends Transform {
   #buffer = Buffer.alloc(0);
   #encoder!: LibopusEncoder;
+  readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
   constructor() {
     super({ readableObjectMode: true });
@@ -182,16 +185,29 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _flush(done: TransformCallback): void {
     try {
-      if (this.#buffer.length > 0) {
-        const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
-        this.#buffer.copy(frame);
-        this.#buffer = Buffer.alloc(0);
-        this.#encodeFrame(frame);
-      }
+      this.flushPartialFrame();
       done();
     } catch (err) {
       done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
     }
+  }
+
+  flushPartialFrame(): boolean {
+    if (this.destroyed || this.#buffer.length === 0) {
+      return false;
+    }
+    const pcmBytes = this.#buffer.length;
+    const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+    this.#buffer.copy(frame);
+    this.#buffer = Buffer.alloc(0);
+    this.#encodeFrame(frame, pcmBytes);
+    return true;
+  }
+
+  takePcmBytes(packet: Buffer): number {
+    const bytes = this.#packetPcmBytes.get(packet) ?? 0;
+    this.#packetPcmBytes.delete(packet);
+    return bytes;
   }
 
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
@@ -200,8 +216,10 @@ class DiscordOpusEncodeStream extends Transform {
     done(err);
   }
 
-  #encodeFrame(frame: Buffer): void {
-    this.push(Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE })));
+  #encodeFrame(frame: Buffer, pcmBytes = frame.length): void {
+    const packet = Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE }));
+    this.#packetPcmBytes.set(packet, pcmBytes);
+    this.push(packet);
   }
 }
 
@@ -211,11 +229,15 @@ function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
 
 export async function decodeOpusStream(
   stream: Readable,
-  params: OpusDecodeCallbacks,
+  params: OpusDecodeCallbacks & { maxBytes: number },
 ): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  await decodeOpusStreamChunks(stream, { ...params, onChunk: (chunk) => chunks.push(chunk) });
-  return Buffer.concat(chunks);
+  return await readByteStreamWithLimit(decodeOpusFrames(stream, params), {
+    maxBytes: params.maxBytes,
+    onOverflow: () =>
+      new Error(
+        `Discord voice capture exceeds the transcription PCM limit (${params.maxBytes} bytes); speak a shorter segment.`,
+      ),
+  });
 }
 
 export async function decodeOpusStreamChunks(
@@ -224,6 +246,19 @@ export async function decodeOpusStreamChunks(
     onChunk: (pcm48kStereo: Buffer) => void;
   },
 ): Promise<void> {
+  try {
+    for await (const pcm of decodeOpusFrames(stream, params)) {
+      params.onChunk(pcm);
+    }
+  } catch (err) {
+    params.onError?.(err);
+  }
+}
+
+async function* decodeOpusFrames(
+  stream: Readable,
+  params: OpusDecodeCallbacks,
+): AsyncGenerator<Buffer> {
   let decoder: LibopusDecoder;
   try {
     decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
@@ -244,7 +279,7 @@ export async function decodeOpusStreamChunks(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_FRAME_SIZE });
       if (decoded.length > 0) {
-        params.onChunk(pcmInt16ToBuffer(decoded));
+        yield pcmInt16ToBuffer(decoded);
       }
     }
   } catch (err) {

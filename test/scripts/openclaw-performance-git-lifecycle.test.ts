@@ -1,10 +1,17 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import type { PerformanceFixtureOptions } from "./openclaw-performance-workflow.test-support.js";
 
+// Each case owns its checkout and process trees. Overlap their real timeout and
+// drain waits while keeping subprocess pressure bounded.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
+
 // Performance jobs run on Ubuntu. Exercise their POSIX bodies here; the shared
 // ci-platform-checkout suite owns native Windows Job Object proof.
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const steps = {
   target: ["resolve_target", "Resolve OpenClaw target ref"],
@@ -38,7 +45,9 @@ posixIt.each(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
     const report = await performanceRun(mode);
     expect(report.code, report.output).toBe(0);
     expect(report.readyAttempts.length).toBeGreaterThan(0);
-    if (mode === "prepare") expect(report.githubOutput).toContain("ready=true\n");
+    if (mode === "prepare") {
+      expect(report.githubOutput).toContain("ready=true\n");
+    }
     if (mode === "publish") {
       expect(report.pushes).toHaveLength(1);
       expect(report.fetches).toHaveLength(0);
@@ -51,7 +60,7 @@ posixIt.each(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
 posixIt.each([23, 124, 125, 143])(
   "baseline ordinary fetch %s is advisory after extinction",
   async (code) => {
-    const report = await performanceRun("baseline", { fetchResults: [code] });
+    const report = await performanceRun("baseline", { fetchResults: [code, code, code] });
     expect(report.code, report.output).toBe(0);
     expect(report.githubSummary).toBe(
       "No previous source performance baseline could be fetched.\n",
@@ -117,7 +126,11 @@ const terminalCases = [
 // Every injected lifecycle failure must stop at its command, before later policy actions.
 posixIt.each(
   terminalCases.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((code) => ({ ...entry, code })),
+    (["cleanup-failure", "cancel"] as const).map((code) => ({
+      mode: entry.mode,
+      operation: entry.operation,
+      code,
+    })),
   ),
 )(
   "$mode $operation $code fences every later action",
@@ -151,11 +164,10 @@ posixIt.each(
 posixIt.each(["hang", 23, 124, 125, 143] as const)(
   "prepare initial fetch %s cannot reach checkout, commit or token readiness",
   async (failure) => {
-    const report = await performanceRun("prepare", { fetchResults: [failure] });
+    const report = await performanceRun("prepare", { fetchResults: [failure, failure, failure] });
     expect(report.code, report.output).toBe(1);
-    expect(report.fetches.map(({ args }) => args)).toEqual([
-      ["fetch", "--depth=1", "origin", "main"],
-    ]);
+    expect(report.fetches).toHaveLength(3);
+    expect(report.fetches.every(({ args }) => args.includes("--depth=1"))).toBe(true);
     expect(report.checkouts).toHaveLength(0);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
     expect(report.githubOutput).toBe("ready=false\n");
@@ -179,7 +191,8 @@ posixIt(
     expect(report.commands.some(({ args }) => args[0] === "commit")).toBe(false);
     expect(
       report.commands.every(
-        ({ envProbe }) => !JSON.parse(envProbe!).token && !JSON.parse(envProbe!).auth,
+        ({ envProbe, args }) =>
+          !JSON.parse(envProbe!).token && JSON.parse(envProbe!).auth === (args[0] === "fetch"),
       ),
     ).toBe(true);
   },
@@ -226,8 +239,21 @@ posixIt.each([124, 125, 143, "hang"] as const)(
     for (const command of report.commands) {
       const scope = JSON.parse(command.envProbe!);
       expect(scope.token).toBe(false);
-      expect(scope.auth).toBe(command.args[0] === "push");
-      if (scope.auth) expect(scope).toMatchObject({ count: "2", hooks: "/dev/null", prompt: "0" });
+      const authenticated = [
+        "push",
+        "fetch",
+        "ls-tree",
+        "checkout",
+        "cherry-pick",
+        "rev-parse",
+      ].includes(command.args[0]!);
+      expect(scope.auth).toBe(authenticated);
+      if (scope.auth) {
+        expect(scope).toMatchObject({ count: "3", prompt: "0" });
+      }
+      if (command.args[0] === "push") {
+        expect(command.configuration).toContain("core.hooksPath=/dev/null");
+      }
     }
     expect(JSON.stringify(report)).not.toContain("fixture-performance-token");
     expect(JSON.stringify(report)).not.toContain(

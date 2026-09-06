@@ -14,7 +14,7 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 openclaw plugins install @openclaw/matrix
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/matrix` or `npm:@openclaw/matrix`. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
@@ -226,7 +226,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
           labels: ["Thinking", "Writing", "Searching"], // candidates for label: "auto"
           maxLines: 8, // max rolling progress lines (default: 8)
           maxLineChars: 120, // max chars per line before truncation (default: 120)
-          toolProgress: true, // show tool/progress activity (default: true)
+          toolProgress: true, // rolling tool log in the progress draft (default: false)
         },
       },
     },
@@ -238,7 +238,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 - `progress.labels`: candidates used only when `label` is `"auto"` or unset.
 - `progress.maxLines`: max rolling progress lines kept in the draft; older lines are trimmed past this.
 - `progress.maxLineChars`: max characters per compact progress line before truncation.
-- `progress.toolProgress`: when `true` (default), live tool/progress activity appears in the draft.
+- `progress.toolProgress`: when `true`, live tool/progress activity appears in the draft. The default `false` keeps the draft to its headline, commentary, plan milestones, and approval or failure lines.
 
 | `streaming.mode`  | Behavior                                                                                                                                                 |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -273,6 +273,17 @@ Matrix uses the shared audio media provider under `tools.media.audio`, such as O
 - The transcript is marked machine-generated and untrusted in the agent prompt.
 - The attachment is marked as already transcribed so downstream media tools do not transcribe it again.
 - Set `tools.media.audio.enabled: false` to disable audio transcription globally.
+
+## Reply controls and presentations
+
+Buttons and selection lists in agent replies include readable fallback text and
+structured content under `com.openclaw.presentation`. Stock Matrix clients show
+the text; OpenClaw-aware clients can render the structured controls. Replies that
+contain only controls still produce a room message.
+
+For replies with multiple attachments, the first event carries the controls.
+Streamed replies retain them in the finalized edit. When a table or chart cannot
+be rendered natively, an authored text fallback is preserved.
 
 ## Approval metadata
 
@@ -339,7 +350,11 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Manual config equivalent:
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+
+Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
+
+Manual config equivalent:
 
 ```json5
 {

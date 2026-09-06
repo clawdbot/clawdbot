@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { assertNoGatewayLogSentinels } from "./gateway-log-sentinel.js";
-import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
+import {
+  readQaScenarioById,
+  readQaScenarioExecutionConfig,
+  readQaScenarioPackYamlSource,
+} from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 describe("qa scenario catalog causality", () => {
+  it("never slices bounded gateway log snapshots with absolute cursors", () => {
+    expect(readQaScenarioPackYamlSource()).not.toMatch(
+      /readGatewayLogs\s*\(\s*\)[^\r\n]*\.slice\s*\(/u,
+    );
+  });
+
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",

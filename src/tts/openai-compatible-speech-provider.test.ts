@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { mockFirstObjectArg } from "../test-utils/mock-call-assertions.js";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 import { withSpeakerSelectionCompat, withSpeakerSelectionFallbackCompat } from "./speaker.js";
 import { getResolvedSpeechProviderConfig } from "./tts-provider-resolution.js";
@@ -23,57 +24,32 @@ vi.mock("./provider-registry.js", async () => {
   };
 });
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  readProviderBinaryResponseMock: vi.fn(async (response: Response, label: string) => {
-    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-    if (contentType === "application/json" || contentType?.startsWith("text/")) {
-      throw new Error(`${label}: malformed audio response`);
-    }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0) {
-      throw new Error(`${label}: malformed audio response`);
-    }
-    return bytes;
-  }),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
+  vi.hoisted(() => ({
+    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+    postJsonRequestMock: vi.fn(),
+    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
+  }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  readProviderBinaryResponse: readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("missing first mock call");
-  }
-  const [arg] = call;
-  if (!arg || typeof arg !== "object") {
-    throw new Error("missing first mock argument");
-  }
-  return arg as Record<string, unknown>;
-}
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const { readProviderBinaryResponse } = await import("../agents/provider-http-errors.js");
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    readProviderBinaryResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  };
+});
 
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     providerState.provider = undefined;
     vi.unstubAllEnvs();
@@ -294,14 +270,14 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    const httpConfigRequest = requireFirstMockArg(resolveProviderHttpRequestConfigMock);
+    const httpConfigRequest = mockFirstObjectArg(resolveProviderHttpRequestConfigMock);
     expect(httpConfigRequest.baseUrl).toBe("https://example.test/v1");
     expect(httpConfigRequest.defaultBaseUrl).toBe("https://example.test/v1");
     expect(httpConfigRequest.provider).toBe("demo");
     expect(httpConfigRequest.capability).toBe("audio");
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    const postRequest = mockFirstObjectArg(postJsonRequestMock);
     expect(postRequest.url).toBe("https://example.test/v1/audio/speech");
     expect(postRequest.timeoutMs).toBe(1234);
     expect(postRequest.body).toStrictEqual({

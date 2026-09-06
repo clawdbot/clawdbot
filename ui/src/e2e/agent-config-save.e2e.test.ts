@@ -95,7 +95,28 @@ suite.define(() => {
     );
   });
 
-  it("submits keyed entries and surfaces Gateway validation failures", async () => {
+  it.each([
+    {
+      name: "profile allow",
+      toolId: "read",
+      groupId: "fs",
+      groupLabel: "Files",
+      description: "Read files",
+      profileLabel: "Full",
+      tools: { profile: "full" },
+      expectedTools: { profile: "full", deny: ["read"] },
+    },
+    {
+      name: "wildcard alsoAllow",
+      toolId: "web_fetch",
+      groupId: "web",
+      groupLabel: "Web",
+      description: "Fetch web content",
+      profileLabel: "Minimal",
+      tools: { profile: "minimal", alsoAllow: ["web_*"] },
+      expectedTools: { profile: "minimal", alsoAllow: ["web_*"], deny: ["web_fetch"] },
+    },
+  ])("submits keyed entries and surfaces Gateway validation failures ($name)", async (scenario) => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -108,7 +129,7 @@ suite.define(() => {
             entries: {
               main: {
                 default: true,
-                tools: { profile: "full" },
+                tools: scenario.tools,
               },
             },
           },
@@ -134,17 +155,17 @@ suite.define(() => {
             },
             "tools.catalog": {
               agentId: "main",
-              profiles: [{ id: "full", label: "Full" }],
+              profiles: [{ id: scenario.tools.profile, label: scenario.profileLabel }],
               groups: [
                 {
-                  id: "fs",
-                  label: "Files",
+                  id: scenario.groupId,
+                  label: scenario.groupLabel,
                   source: "core",
                   tools: [
                     {
-                      id: "read",
-                      label: "read",
-                      description: "Read files",
+                      id: scenario.toolId,
+                      label: scenario.toolId,
+                      description: scenario.description,
                       source: "core",
                       defaultProfiles: ["full"],
                     },
@@ -154,7 +175,7 @@ suite.define(() => {
             },
             "tools.effective": {
               agentId: "main",
-              profile: "full",
+              profile: scenario.tools.profile,
               groups: [],
               notices: [],
             },
@@ -169,11 +190,17 @@ suite.define(() => {
 
         await page
           .locator(".agent-tools-group")
-          .filter({ hasText: "Files" })
+          .filter({ hasText: scenario.groupLabel })
           .locator(".agent-tools-group__summary")
           .click();
+        const toggle = page.locator(`#agent-tool-${scenario.toolId} wa-switch`);
+        await expect
+          .poll(() =>
+            toggle.evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
+          )
+          .toBe(true);
         await gateway.deferNext("config.set");
-        await page.locator("#agent-tool-read wa-switch").click();
+        await toggle.click();
 
         const request = await gateway.waitForRequest("config.set");
         const params = requireRecord(request.params);
@@ -183,7 +210,7 @@ suite.define(() => {
             entries: {
               main: {
                 default: true,
-                tools: { profile: "full", deny: ["read"] },
+                tools: scenario.expectedTools,
               },
             },
           },

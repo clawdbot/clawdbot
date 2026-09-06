@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { finished } from "node:stream/promises";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
+import { quoteSqliteIdentifier as quoteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -65,21 +68,11 @@ type SchemaEntry = {
   sql: string;
 };
 
-type TableColumn = { name: string; pk: number };
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
 function requireSafeTableName(value: string): string {
   if (!SAFE_TABLE_NAME.test(value)) {
     throw new Error(`Git backup table name is not filesystem-safe: ${value}`);
   }
   return value;
-}
-
-function sha256(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
@@ -124,6 +117,11 @@ function isVirtualShadow(name: string, virtualTables: readonly string[]): boolea
   );
 }
 
+// Bound table I/O by a batch plus the largest row, never by the complete table.
+const TABLE_BATCH_BYTES = 1024 * 1024;
+type TableColumn = { name: string; pk: number };
+type GitBackupTableDigest = { rows: number; sha256: string };
+
 function readTableColumns(database: DatabaseSync, table: string): TableColumn[] {
   return database
     .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
@@ -158,12 +156,12 @@ function encodeSqliteValue(value: unknown): unknown {
   throw new Error(`Git backup cannot encode SQLite value type ${typeof value}.`);
 }
 
-async function serializeTableToFile(
+async function serializeGitBackupTable(
   database: DatabaseSync,
   table: string,
-  outputPath: string,
+  outputPath?: string,
   rowFilter?: (row: Record<string, unknown>) => boolean,
-): Promise<{ rows: number; sha256: string }> {
+): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
     throw new Error(`Git backup table has no readable columns: ${table}`);
@@ -171,23 +169,37 @@ async function serializeTableToFile(
   const primaryKey = columns
     .filter((column) => column.pk > 0)
     .toSorted((left, right) => left.pk - right.pk)
-    .map((column) => quoteIdentifier(column.name));
-  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "rowid";
+    .map((column) => `source.${quoteIdentifier(column.name)}`);
+  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "source.rowid";
+  // Escape TEXT before node:sqlite can truncate embedded NULs. Keep filtering
+  // on decoded values and sorting on source columns, not escaped result aliases.
+  const projection = columns.map(({ name }) => {
+    const column = quoteIdentifier(name);
+    return `CASE WHEN typeof(${column}) = 'text' THEN json_quote(${column}) ELSE ${column} END AS ${column}`;
+  });
   const statement = database.prepare(
-    `SELECT ${columns.map((column) => quoteIdentifier(column.name)).join(", ")}
-       FROM ${quoteIdentifier(table)} ORDER BY ${orderBy}`,
+    `SELECT ${projection.join(", ")}
+       FROM ${quoteIdentifier(table)} AS source ORDER BY ${orderBy}`,
   );
   statement.setReadBigInts(true);
-  // Stream each JSONL row to disk while hashing, instead of accumulating one
-  // in-memory string. Large agent databases can exceed V8's max string length
-  // (~512MB) when a table serialization is buffered whole, which surfaced as
-  // `RangeError: Invalid string length` on `git backup create`.
-  const handle = await fs.open(outputPath, "wx", 0o600);
+  const output = outputPath ? await fs.open(outputPath, "wx", 0o600) : undefined;
   const hash = createHash("sha256");
+  const pending: string[] = [];
+  let pendingBytes = 0;
   let rows = 0;
+  const flush = async () => {
+    if (output && pending.length > 0) {
+      await output.writeFile(pending.join(""));
+      pending.length = 0;
+      pendingBytes = 0;
+    }
+  };
   try {
     for (const rawRow of statement.iterate()) {
-      const source = rawRow as Record<string, unknown>;
+      const source: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(rawRow)) {
+        source[name] = typeof value === "string" ? JSON.parse(value) : value;
+      }
       if (rowFilter && !rowFilter(source)) {
         continue;
       }
@@ -195,19 +207,22 @@ async function serializeTableToFile(
       for (const column of columns) {
         encoded[column.name] = encodeSqliteValue(source[column.name]);
       }
-      const bytes = Buffer.from(`${JSON.stringify(encoded)}\n`, "utf8");
-      let written = 0;
-      while (written < bytes.length) {
-        const { bytesWritten } = await handle.write(bytes, written);
-        written += bytesWritten;
-      }
-      hash.update(bytes);
+      const line = `${JSON.stringify(encoded)}\n`;
+      hash.update(line);
       rows += 1;
+      if (output) {
+        pending.push(line);
+        pendingBytes += Buffer.byteLength(line);
+        if (pendingBytes >= TABLE_BATCH_BYTES) {
+          await flush();
+        }
+      }
     }
+    await flush();
+    return { rows, sha256: hash.digest("hex") };
   } finally {
-    await handle.close();
+    await output?.close();
   }
-  return { rows, sha256: hash.digest("hex") };
 }
 
 function schemaText(entries: SchemaEntry[], userVersion: number): string {
@@ -284,7 +299,7 @@ export async function dumpGitBackupDatabase(params: {
               );
             }
           : undefined;
-      tables[table] = await serializeTableToFile(
+      tables[table] = await serializeGitBackupTable(
         database,
         table,
         path.join(tablesPath, `${table}.jsonl`),
@@ -522,22 +537,63 @@ function validateRestoredOwner(
   buildSnapshotValidator(identity)(database, databasePath);
 }
 
-function loadTable(database: DatabaseSync, table: string, content: string): number {
+/** Load and hash one JSONL table without retaining the whole artifact. */
+async function loadGitBackupTable(
+  database: DatabaseSync,
+  table: string,
+  inputPath: string,
+): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   const statement = database.prepare(
     `INSERT INTO ${quoteIdentifier(table)} (${columns.map((column) => quoteIdentifier(column.name)).join(", ")})
      VALUES (${columns.map(() => "?").join(", ")})`,
   );
+  const input = fsSync.createReadStream(inputPath);
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  const hash = createHash("sha256");
+  input.on("data", (chunk: Buffer) => hash.update(chunk));
+  const pending: Array<ReturnType<typeof decodeSqliteValue>[]> = [];
+  let pendingBytes = 0;
   let rows = 0;
-  for (const line of content.split("\n")) {
-    if (!line) {
-      continue;
+  const flush = () => {
+    if (pending.length === 0) {
+      return;
     }
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    statement.run(...columns.map((column) => decodeSqliteValue(parsed[column.name])));
-    rows += 1;
+    // This database is private staging. Only verified publication exposes it;
+    // disk reads stay outside these bounded synchronous insert transactions.
+    database.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const values of pending) {
+        statement.run(...values);
+      }
+      database.exec("COMMIT;");
+    } catch (error) {
+      database.exec("ROLLBACK;");
+      throw error;
+    }
+    pending.length = 0;
+    pendingBytes = 0;
+  };
+  try {
+    for await (const line of lines) {
+      if (!line) {
+        continue;
+      }
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
+      pendingBytes += Buffer.byteLength(line);
+      rows += 1;
+      if (pendingBytes >= TABLE_BATCH_BYTES) {
+        flush();
+      }
+    }
+    flush();
+    return { rows, sha256: hash.digest("hex") };
+  } finally {
+    lines.close();
+    input.destroy();
+    await finished(input).catch(() => undefined);
   }
-  return rows;
 }
 
 /** Restore one materialized Git snapshot scope into a fresh SQLite file. */
@@ -592,26 +648,19 @@ export async function restoreGitBackupDirectory(params: {
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
     }
-    database.exec("BEGIN IMMEDIATE;");
-    try {
-      for (const [table, expected] of Object.entries(manifest.tables)) {
-        requireSafeTableName(table);
-        const content = await fs.readFile(
-          path.join(params.sourcePath, GIT_BACKUP_TABLES, `${table}.jsonl`),
-          "utf8",
-        );
-        if (sha256(content) !== expected.sha256) {
-          throw new Error(`Git backup table hash mismatch: ${table}`);
-        }
-        const rows = loadTable(database, table, content);
-        if (rows !== expected.rows) {
-          throw new Error(`Git backup table row count mismatch: ${table}`);
-        }
+    for (const [table, expected] of Object.entries(manifest.tables)) {
+      requireSafeTableName(table);
+      const actual = await loadGitBackupTable(
+        database,
+        table,
+        path.join(params.sourcePath, GIT_BACKUP_TABLES, `${table}.jsonl`),
+      );
+      if (actual.sha256 !== expected.sha256) {
+        throw new Error(`Git backup table hash mismatch: ${table}`);
       }
-      database.exec("COMMIT;");
-    } catch (error) {
-      database.exec("ROLLBACK;");
-      throw error;
+      if (actual.rows !== expected.rows) {
+        throw new Error(`Git backup table row count mismatch: ${table}`);
+      }
     }
     for (const statement of virtual) {
       if (/\bUSING\s+vec0\b/iu.test(statement)) {
@@ -639,24 +688,15 @@ export async function restoreGitBackupDirectory(params: {
     // their canonical empty schemas before enforcing database ownership.
     convergeRestoredSchema(database, restoreIdentity);
     validateRestoredOwner(database, stagedPath, restoreIdentity);
-    const verifyTablesDirectory = path.join(stagingDirectory, ".verify-tables");
-    await fs.mkdir(verifyTablesDirectory, { recursive: true, mode: 0o700 });
-    const tables = await Promise.all(
-      Object.entries(manifest.tables).map(async ([table, expected]) => {
-        requireSafeTableName(table);
-        const actual = await serializeTableToFile(
-          database,
-          table,
-          path.join(verifyTablesDirectory, `${table}.jsonl`),
-        );
-        return {
-          table,
-          rows: actual.rows,
-          sha256: actual.sha256,
-          ok: actual.rows === expected.rows && actual.sha256 === expected.sha256,
-        };
-      }),
-    );
+    const tables: GitBackupTableResult[] = [];
+    for (const [table, expected] of Object.entries(manifest.tables)) {
+      const actual = await serializeGitBackupTable(database, table);
+      tables.push({
+        table,
+        ...actual,
+        ok: actual.rows === expected.rows && actual.sha256 === expected.sha256,
+      });
+    }
     if (tables.some((table) => !table.ok)) {
       throw new Error(`Restored Git backup does not match its table manifest: ${stagedPath}`);
     }

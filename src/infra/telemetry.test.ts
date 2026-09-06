@@ -466,4 +466,54 @@ describe("anonymous telemetry", () => {
     expect(result?.note).toHaveLength(500);
     expect(persisted?.note).toHaveLength(500);
   });
+
+  it("bounds streamed update responses without replacing the cached result or successful ping", async () => {
+    const chunk = new Uint8Array(1024 * 1024).fill(120);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('{"version":"2026.8.25","padding":"'),
+      ...Array<Uint8Array>(32).fill(chunk),
+      encoder.encode('"}'),
+    ][Symbol.iterator]();
+    let canceled = false;
+    let enqueuedBytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = chunks.next();
+        if (next.done) {
+          controller.close();
+        } else {
+          enqueuedBytes += next.value.byteLength;
+          controller.enqueue(next.value);
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ version: "2026.8.24", padding: "x".repeat(chunk.length) }),
+      )
+      .mockResolvedValueOnce(new Response(body));
+    const options = { surface: "gateway" as const, fetchImpl };
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW })).resolves.toEqual({
+      version: "2026.8.24",
+    });
+    await expect(
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 1 }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(canceled).toBe(true);
+    expect(enqueuedBytes).toBeLessThan(32 * chunk.length);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW,
+      latestVersion: "2026.8.24",
+    });
+    await expect(
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 30_001 }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

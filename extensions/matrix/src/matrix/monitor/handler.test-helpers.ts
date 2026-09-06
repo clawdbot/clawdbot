@@ -109,7 +109,7 @@ type MatrixHandlerTestHarnessOptions = {
   runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
-  shouldAckReaction?: () => boolean;
+  shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
@@ -258,7 +258,17 @@ export function createMatrixHandlerTestHarness(
             cfg: turn.cfg,
             dispatcherOptions: {
               ...turn.dispatcherOptions,
-              deliver: turn.delivery.deliver,
+              // Core resolves the plan's prepared payload before any delivery branch
+              // reads it; a harness that skips that step tests a different pipeline.
+              deliver: async (
+                payload: Parameters<typeof turn.delivery.deliver>[0],
+                info: Parameters<typeof turn.delivery.deliver>[1],
+              ) => {
+                const prepared = turn.delivery.preparePayload
+                  ? await turn.delivery.preparePayload(payload, info)
+                  : payload;
+                return prepared === null ? undefined : await turn.delivery.deliver(prepared, info);
+              },
               onError: turn.delivery.onError,
             },
             replyOptions: turn.replyOptions,

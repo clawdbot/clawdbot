@@ -1,6 +1,7 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
 import type { TemplateResult } from "lit";
+import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
@@ -25,6 +26,7 @@ export type TranscriptHeader = {
 };
 
 export type ChatTranscriptSession = {
+  readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
@@ -36,6 +38,8 @@ export type ChatTranscriptSession = {
     header?: TranscriptHeader | null,
   ): TemplateResult;
   syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void;
+  /** Returns the sampled loaded message at or preceding the viewport midpoint. */
+  activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;

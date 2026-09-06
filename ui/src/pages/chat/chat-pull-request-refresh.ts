@@ -1,4 +1,4 @@
-import { isGitHubPullRequestLink } from "../../components/github-link-target.ts";
+import { parseGitHubLinkTarget } from "../../components/github-link-target.ts";
 import type { ChatEventPayload } from "./chat-gateway.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -11,7 +11,7 @@ export function pullRequestLinksIn(text: unknown): string[] {
   const links: string[] = [];
   for (const match of text.matchAll(GITHUB_URL_CANDIDATE)) {
     const href = match[0].replace(/[.,;:!?]+$/u, "");
-    if (isGitHubPullRequestLink(href)) {
+    if (parseGitHubLinkTarget(href)?.kind === "pull") {
       links.push(href);
     }
   }

@@ -1,7 +1,13 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -28,6 +34,49 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("completes direct setup as the selected channel", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const channelWizard = buildChannelWizardMocks();
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["channels.status", "channels.pairing.list", "wizard.start", "wizard.next"],
+        methodResponses: {
+          "channels.status": {
+            ts: Date.now(),
+            channelOrder: ["slack"],
+            channelLabels: { slack: "Slack" },
+            channelMeta: [{ id: "slack", label: "Slack" }],
+            channels: { slack: { configured: false, running: false } },
+            channelAccounts: {},
+            channelDefaultAccountId: {},
+          },
+          "channels.pairing.list": {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          },
+          "wizard.start": channelWizard.start,
+          "wizard.next": channelWizard.next,
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/channels`);
+      const slackRow = page.locator(".channels-item", { hasText: "Slack" }).first();
+      await slackRow.getByRole("button", { name: "Set up", exact: true }).click();
+      const wizard = page.locator(".channels-wizard");
+      await wizard.getByRole("button", { name: "Continue" }).click();
+
+      expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
+        {
+          sessionId: "mock-wizard-session",
+          answer: { stepId: "mock-wizard-step-slack", value: null },
+        },
+      ]);
+      await wizard.getByText("Channel configured", { exact: true }).waitFor();
+      await wizard.getByRole("heading", { name: "Set up Slack" }).waitFor();
+    });
+  });
+
   it("shows rejected channel configuration saves in the open editor without losing the draft", async () => {
     await suite.withPage(
       {
@@ -94,11 +143,24 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         await detail.getByRole("switch", { name: "Enabled" }).waitFor();
         if (captureUiProofEnabled) {
-          await detail.screenshot({ path: path.join(uiProofArtifactDir, "00-editor-before.png") });
+          // The native dialog owns the scale/fade around this slotted detail panel.
+          await waitForControlUiProofSurface(
+            page.locator("openclaw-modal-dialog").filter({ has: detail }).locator("dialog"),
+            [detail.getByRole("switch", { name: "Enabled" })],
+          );
+          await writeFile(
+            path.join(uiProofArtifactDir, "00-editor-before.png"),
+            await takeControlUiElementScreenshot(page, detail, [
+              detail.getByRole("switch", { name: "Enabled" }),
+            ]),
+          );
         }
 
         await gateway.deferNext("config.set");
@@ -134,7 +196,10 @@ suite.define(() => {
         expect(await detail.getByRole("switch", { name: "Enabled" }).isChecked()).toBe(false);
         expect(await gateway.getRequests("config.get")).toHaveLength(readsBefore);
         if (captureUiProofEnabled) {
-          await detail.screenshot({ path: path.join(uiProofArtifactDir, "01-visible-error.png") });
+          await writeFile(
+            path.join(uiProofArtifactDir, "01-visible-error.png"),
+            await takeControlUiElementScreenshot(page, detail, [alert]),
+          );
         }
       },
     );
@@ -166,7 +231,10 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         const relink = detail.getByRole("button", { name: "Relink" });
         await relink.waitFor();
@@ -246,7 +314,9 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/channels`);
         expect(response?.status()).toBe(200);
-        const channel = page.locator(".channels-item", { hasText: "WhatsApp" }).first();
+        const channel = page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first();
         await channel.click();
         const detail = page.locator(".channels-detail");
         await detail.waitFor();
@@ -356,7 +426,10 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/channels`);
-      await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+      await page
+        .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+        .first()
+        .click();
       const detail = page.locator(".channels-detail");
       await detail.waitFor();
       await detail.getByRole("button", { name: "Logout" }).click();
@@ -456,7 +529,10 @@ suite.define(() => {
         telegram: ["@alpha_bot", "@work_bot", "2"],
       };
       for (const [channelId, label] of channelEntries) {
-        await page.locator(".channels-item", { hasText: label }).first().click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: label })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         await expect
           .poll(() => detail.locator("h2.settings-section__heading").textContent())

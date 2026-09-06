@@ -1,4 +1,3 @@
-// Global singleton tests cover process-wide singleton creation and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   drainGlobalSingletonLifecycleState,
@@ -44,18 +43,13 @@ describe("resolveGlobalSingleton", () => {
 });
 
 describe("resolveGlobalMap", () => {
-  it("reuses the same map instance", () => {
+  it("reuses the same map instance and preserves its contents", () => {
     const first = resolveGlobalMap<string, number>(TEST_MAP_KEY);
+    first.set("a", 1);
     const second = resolveGlobalMap<string, number>(TEST_MAP_KEY);
 
     expect(first).toBe(second);
-  });
-
-  it("preserves existing map contents across repeated resolution", () => {
-    const map = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-    map.set("a", 1);
-
-    expect(resolveGlobalMap<string, number>(TEST_MAP_KEY).get("a")).toBe(1);
+    expect(second.get("a")).toBe(1);
   });
 
   it("reuses a prepopulated global map without creating a new one", () => {

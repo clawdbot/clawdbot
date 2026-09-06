@@ -79,7 +79,7 @@ function createContext() {
           "config.set",
           "openclaw.setup.detect",
           "openclaw.setup.verify",
-          "openclaw.setup.activate",
+          "openclaw.setup.activate.start",
           "openclaw.setup.prepare.start",
         ],
       },
@@ -395,12 +395,11 @@ describe("ModelSetupPage catalog icons", () => {
           ],
         };
       }
-      if (method === "openclaw.setup.activate") {
+      if (method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-          latencyMs: 731,
-          lines: ["Model ready"],
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m" },
         };
       }
       return {};
@@ -415,17 +414,17 @@ describe("ModelSetupPage catalog icons", () => {
 
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
         {
+          sessionId: expect.any(String),
           agentId: "main",
           kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
           modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
         },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        { timeoutMs: null },
       );
       expect(page.textContent).toContain("Connection verified");
       expect(page.textContent).toContain("llama-cpp/gemma-4-e4b-it-q4_k_m");
-      expect(page.textContent).toContain("Verified in 731 ms");
     });
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.detect",
@@ -468,13 +467,13 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
     expect(page.textContent).not.toContain("Connection verified");
     expect(request).not.toHaveBeenCalledWith(
-      "openclaw.setup.activate",
+      "openclaw.setup.activate.start",
       expect.anything(),
       expect.anything(),
     );
   });
 
-  it("flushes a pending config draft before one-shot activation and refreshes afterward", async () => {
+  it("flushes a pending config draft before activation review and refreshes afterward", async () => {
     vi.useFakeTimers();
     const { context, client, request, runtimeConfig } = createContext();
     const order: string[] = [];
@@ -498,11 +497,11 @@ describe("ModelSetupPage catalog icons", () => {
         hash = "hash-2";
         return { hash };
       }
-      if (method === "openclaw.setup.activate") {
+      if (method === "openclaw.setup.activate.start") {
         order.push(method);
         config = { ...config, configuredModel: "openai/gpt-5" };
         hash = "hash-3";
-        return { ok: true, modelRef: "openai/gpt-5", latencyMs: 42, lines: [] };
+        return { done: true, status: "done", modelActivation: { modelRef: "openai/gpt-5" } };
       }
       throw new Error(`Unexpected method ${method}`);
     });
@@ -534,7 +533,7 @@ describe("ModelSetupPage catalog icons", () => {
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
     await vi.waitFor(() => {
-      expect(order).toEqual(["config.set", "openclaw.setup.activate", "config.get"]);
+      expect(order).toEqual(["config.set", "openclaw.setup.activate.start", "config.get"]);
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
     expect(runtimeConfig.state.configForm).toMatchObject({
@@ -783,7 +782,7 @@ describe("ModelSetupPage catalog icons", () => {
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
     await waitForFast(() => {
-      expect(page.textContent).toContain("Connection changed before model activation started.");
+      expect(page.textContent).toContain("Connection changed before model setup continued.");
     });
     expect(replacementRequest).not.toHaveBeenCalled();
   });
@@ -820,8 +819,8 @@ describe("ModelSetupPage catalog icons", () => {
         ...(restart ? { gatewayRestartRequired: true as const } : {}),
       };
       request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.activate") {
-          return { ok: true, ...modelActivation, latencyMs: 42, lines: [] };
+        if (method === "openclaw.setup.activate.start") {
+          return { done: true, status: "done", modelActivation };
         }
         if (method === "openclaw.setup.auth.start") {
           return { sessionId: "warning-auth", done: false, status: "running" };

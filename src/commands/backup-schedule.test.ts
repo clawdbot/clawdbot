@@ -2,7 +2,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCronCli } from "../cli/cron-cli.js";
+import { registerBackupCommand } from "../cli/program/register.backup.js";
+import { CronService } from "../cron/service.js";
+import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-harness.js";
+import type { CronListPageOptions } from "../cron/service/list-page-types.js";
+import type { CronJobCreate, CronJobPatch } from "../cron/types.js";
+import { defaultRuntime } from "../runtime.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gatewayRpc = vi.hoisted(() => ({
@@ -31,8 +40,17 @@ import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { backupDisableCommand, backupEnableCommand } from "./backup-schedule.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-backup-lookup-" });
 
 const roots: string[] = [];
+
+async function runCli(args: string[]) {
+  const program = new Command();
+  program.exitOverride();
+  registerBackupCommand(program);
+  registerCronCli(program);
+  await program.parseAsync(args, { from: "user" });
+}
 
 // enable --push preflights an origin remote, so push fixtures need a real repo.
 async function pushReadyRepository(): Promise<string> {
@@ -55,6 +73,7 @@ describe("scheduled backups", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
     );
@@ -140,55 +159,126 @@ describe("scheduled backups", () => {
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
-  it("atomically converges an existing declaration and removes it idempotently", async () => {
-    gatewayRpc.call.mockResolvedValueOnce({
-      created: false,
-      updated: true,
-      job: { id: "existing" },
-    });
+  it.each(["", "   "])("rejects an explicit blank interval %j before scheduling", async (every) => {
     const runtime = createTestRuntime();
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+
     await expect(
-      backupEnableCommand(runtime, {
-        repository: "/tmp/openclaw-backups",
-        globalOnly: true,
-      }),
-    ).resolves.toEqual({ id: "existing", updated: true });
-    expect(gatewayRpc.call).toHaveBeenCalledOnce();
-    expect(gatewayRpc.call).toHaveBeenCalledWith(
-      "cron.add",
-      expect.anything(),
-      expect.objectContaining({
-        declarationKey: BACKUP_CRON_JOB_NAME,
-        payload: expect.objectContaining({ argv: expect.arrayContaining(["--global"]) }),
-      }),
-    );
-
-    gatewayRpc.call.mockReset();
-    gatewayRpc.call.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
-        return {
-          jobs: [
-            { id: "decoy", name: BACKUP_CRON_JOB_NAME },
-            {
-              id: "existing",
-              name: "operator display name",
-              declarationKey: BACKUP_CRON_JOB_NAME,
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
-    await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: true });
-    expect(gatewayRpc.call).toHaveBeenCalledWith("cron.remove", {}, { id: "existing" });
-    expect(gatewayRpc.call).not.toHaveBeenCalledWith("cron.remove", {}, { id: "decoy" });
-
-    gatewayRpc.call.mockReset();
-    gatewayRpc.call.mockResolvedValueOnce({
-      jobs: [{ id: "decoy", name: BACKUP_CRON_JOB_NAME }],
-    });
-    await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: false });
+      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every }),
+    ).rejects.toThrow("Invalid duration (empty)");
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { scenario: "ordinary", renamed: false, decoys: 1, disabled: false },
+    { scenario: "renamed", renamed: true, decoys: 1, disabled: false },
+    { scenario: "beyond the first page", renamed: false, decoys: 200, disabled: false },
+    { scenario: "already disabled", renamed: false, decoys: 1, disabled: true },
+  ])(
+    "removes the $scenario managed declaration through the CLI",
+    async ({ renamed, decoys, disabled }) => {
+      const { storePath } = await makeStorePath();
+      const runJob = vi.fn(async () => {
+        throw new Error("Scheduled execution is outside this lookup test");
+      });
+      const cron = new CronService({
+        storePath,
+        cronEnabled: false,
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: runJob,
+        runCommandJob: runJob,
+      });
+      gatewayRpc.call.mockImplementation(
+        async (method: string, _options: unknown, params: unknown) => {
+          switch (method) {
+            case "cron.add":
+              return await cron.add(params as CronJobCreate);
+            case "cron.list":
+              return await cron.listPage(params as CronListPageOptions);
+            case "cron.get":
+              return await cron.readJob((params as { id: string }).id);
+            case "cron.update": {
+              const { id, patch } = params as { id: string; patch: CronJobPatch };
+              return await cron.update(id, patch);
+            }
+            case "cron.remove":
+              return await cron.remove((params as { id: string }).id);
+            default:
+              throw new Error(`Unexpected test RPC: ${method}`);
+          }
+        },
+      );
+      const runtime = createTestRuntime();
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`Unexpected CLI exit ${code}`);
+      });
+      try {
+        const decoyIds: string[] = [];
+        for (let index = 0; index < decoys; index += 1) {
+          const job = await cron.add({
+            name: BACKUP_CRON_JOB_NAME,
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "command", argv: ["synthetic-command"] },
+            delivery: { mode: "none" },
+          });
+          decoyIds.push(job.id);
+        }
+        const enableArgs = [
+          "backup",
+          "enable",
+          "--repository",
+          path.dirname(storePath),
+          "--global-only",
+        ];
+        await runCli(enableArgs);
+        const managed = expectDefined(
+          (await cron.list({ includeDisabled: true })).find(
+            (job) => job.declarationKey === BACKUP_CRON_JOB_NAME,
+          ),
+          "created managed backup",
+        );
+        await runCli([...enableArgs, "--every", "6h"]);
+        expect(await cron.readJob(managed.id)).toMatchObject({
+          schedule: { everyMs: 21_600_000 },
+          payload: { argv: expect.arrayContaining(["--global"]) },
+        });
+        if (renamed) {
+          await runCli(["cron", "edit", managed.id, "--name", "Nightly operator backup"]);
+        }
+        if (disabled) {
+          await cron.update(managed.id, { enabled: false });
+        }
+        const page = await cron.listPage({ includeDisabled: true, limit: 200 });
+        expect(page.total).toBe(decoys + 1);
+        if (decoys === 200) {
+          expect(page.jobs.some((job) => job.id === managed.id)).toBe(false);
+          expect(page.hasMore).toBe(true);
+        }
+
+        await runCli(["backup", "disable"]);
+
+        expect(await cron.readJob(managed.id)).toBeUndefined();
+        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled Git backups disabled.");
+        expect(
+          (await cron.list({ includeDisabled: true })).map((job) => job.id).toSorted(),
+        ).toEqual(decoyIds.toSorted());
+        await runCli(["backup", "disable"]);
+        expect(runtime.log).toHaveBeenLastCalledWith("Scheduled Git backups are already disabled.");
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runJob).not.toHaveBeenCalled();
+      } finally {
+        cron.stop();
+      }
+    },
+  );
 
   it("redacts pushed schedules by default and warns only on explicit full fidelity", async () => {
     const runtime = createTestRuntime();

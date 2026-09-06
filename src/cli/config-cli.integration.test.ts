@@ -13,7 +13,8 @@ const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
-const { runConfigGet, runConfigSet, runConfigUnset } = await import("./config-cli.js");
+const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
+  await import("./config-cli.js");
 const { withConfigFileHarness } = useConfigCliIntegrationHarness();
 
 function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
@@ -126,6 +127,52 @@ describe("config cli integration", () => {
     );
   });
 
+  it.each(["root", "agent"])(
+    "repairs a stale deployment patch at %s scope without changing policy",
+    async (scope) => {
+      const configForExec = (exec: Record<string, string>) =>
+        scope === "root"
+          ? { tools: { exec } }
+          : { agents: { entries: { worker: { tools: { exec } } } } };
+      const migrated = configForExec({ mode: "ask" });
+      const migratedRaw = JSON.stringify(migrated) + "\n";
+      await withConfigFileHarness(
+        "openclaw-config-cli-patch-exec-mode-migrated-",
+        migratedRaw,
+        async ({ configPath, tempDir }) => {
+          const patchPath = path.join(tempDir, "patch.json5");
+          fs.writeFileSync(
+            patchPath,
+            JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
+          );
+          const output = createTestRuntime();
+
+          await expect(
+            runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
+          ).rejects.toThrow("__exit__:1");
+
+          expect(fs.readFileSync(configPath, "utf8")).toBe(migratedRaw);
+          const errors = output.errors.join("\n");
+          expect(errors).toContain(
+            scope === "root" ? "tools.exec.mode:" : "agents.entries.worker.tools.exec.mode:",
+          );
+          expect(errors).toContain('Replace security/ask with mode="ask"');
+          expect(errors).toContain("at this scope");
+
+          fs.writeFileSync(
+            patchPath,
+            JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }),
+          );
+          await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
+          expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+            ...migrated,
+            messages: { ackReaction: "✅" },
+          });
+        },
+      );
+    },
+  );
+
   it("conflicts when a top-level include changes after config set starts", async () => {
     await withConfigFileHarness(
       "openclaw-config-cli-include-conflict-",
@@ -175,6 +222,92 @@ describe("config cli integration", () => {
       expect(output.errors).toStrictEqual([]);
       expect(output.logs).toStrictEqual(["No change"]);
     });
+  });
+
+  it("accepts absent and exact authored expectations", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-success-",
+      "{ gateway: { port: 18789 } }\n",
+      async ({ configPath }) => {
+        const absentOutput = createTestRuntime();
+        await runConfigSet({
+          path: "gateway.bind",
+          value: '"loopback"',
+          cliOptions: { strictJson: true, expectCurrentAbsent: true },
+          runtime: absentOutput.runtime,
+        });
+        expect(absentOutput.errors).toStrictEqual([]);
+
+        const exactOutput = createTestRuntime();
+        await runConfigSet({
+          path: "gateway.port",
+          value: "19001",
+          cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+          runtime: exactOutput.runtime,
+        });
+        expect(exactOutput.errors).toStrictEqual([]);
+        expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+          gateway: { bind: "loopback", port: 19001 },
+        });
+      },
+    );
+  });
+
+  it("rejects a conditional set when the authored value changed before CLI load", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-preload-conflict-",
+      "{ gateway: { port: 19002 } }\n",
+      async ({ configPath }) => {
+        const before = fs.readFileSync(configPath, "utf8");
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigSet({
+            path: "gateway.port",
+            value: "19001",
+            cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+            runtime: output.runtime,
+          }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+        expect(output.logs).toStrictEqual([]);
+        expect(output.errors.join("\n")).toContain(
+          "conditional config set expectation did not match the authored config",
+        );
+        expect(output.errors.join("\n")).not.toContain("18789");
+        expect(output.errors.join("\n")).not.toContain("19002");
+      },
+    );
+  });
+
+  it("keeps the snapshot hash guard after a matching conditional preflight", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-postload-race-",
+      "{ gateway: { port: 18789 } }\n",
+      async ({ configPath }) => {
+        const concurrentRaw = "{ gateway: { port: 19002 } }\n";
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigSet({
+            path: "gateway.port",
+            value: "19001",
+            cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+            runtime: output.runtime,
+            beforePersistentApply: () => {
+              fs.writeFileSync(configPath, concurrentRaw, "utf8");
+            },
+          }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(concurrentRaw);
+        expect(output.logs).toStrictEqual([]);
+        expect(output.errors.join("\n")).toContain("config changed since last load");
+        expect(output.errors.join("\n")).not.toContain("18789");
+        expect(output.errors.join("\n")).not.toContain("19002");
+      },
+    );
   });
 
   it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {

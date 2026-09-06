@@ -446,6 +446,8 @@ function applySessionRouteStateRepair(params: {
     clear("providerOverride");
     clear("modelOverride");
     clear("modelOverrideSource");
+    clear("modelOverrideFallbackOriginProvider");
+    clear("modelOverrideFallbackOriginModel");
     clear("modelOverrideRouteResolution");
     clear("liveModelSwitchPending");
   }

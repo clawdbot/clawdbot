@@ -18,6 +18,7 @@ import {
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
@@ -36,6 +37,26 @@ const activeRunRegistrationMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  const gatewayCall = async (...args: Parameters<typeof actual.callGatewayTool>) => {
+    const [method, , rawParams] = args;
+    const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+    if (method === "question.request") {
+      return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+    }
+    if (method === "question.waitAnswer") {
+      return await new Promise((resolve) => {
+        activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
+      });
+    }
+    if (method === "question.resolve") {
+      const result = params?.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: params?.answers };
+      activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
+      return result;
+    }
+    return await actual.callGatewayTool(...args);
+  };
   return {
     ...actual,
     cancelPendingAgentQuestionForSession: async (
@@ -49,25 +70,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
     },
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
+    agentHarnessStructuredInput: {
+      ...actual.agentHarnessStructuredInput,
+      run: (params: Parameters<typeof actual.agentHarnessStructuredInput.run>[0]) =>
+        actual.agentHarnessStructuredInput.run({ ...params, gatewayCall }),
     },
     clearActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.clearActiveEmbeddedRun>
@@ -151,6 +157,7 @@ describe("runCodexAppServerAttempt steering", () => {
       if (incognito) {
         params.sessionKey = `agent:main:dashboard:incognito-${params.sessionId}`;
       }
+      await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
       const onAttemptAbort = vi.fn();
       params.onAttemptAbort = onAttemptAbort;
       const onAgentEvent = vi.fn();
@@ -336,6 +343,7 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
       sessionKey: params.sessionKey,
       resolvedBy: "image-reply",
+      authority: { kind: "run", assertCurrent: expect.any(Function) },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -903,6 +911,12 @@ describe("runCodexAppServerAttempt steering", () => {
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }

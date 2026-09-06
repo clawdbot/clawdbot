@@ -1,16 +1,8 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-const CODEX_REASONING_EFFORTS = [
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-] as const;
+const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type CodexEnabledReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
-export type CodexReasoningEffort = CodexEnabledReasoningEffort | "none";
+type CodexReasoningEffort = CodexEnabledReasoningEffort | "none" | "ultra";
 
 const LEGACY_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const LEGACY_PRO_MODEL_ID_RE = /^gpt-5\.[45]-pro$/u;
@@ -39,23 +31,23 @@ function resolveSupportedReasoningEffort(params: {
   if (supported.includes(params.requested)) {
     return params.requested;
   }
-  // Ultra enables proactive multi-agent behavior, so it must be explicit.
-  // Lower-effort fallback may select Max or below, never Ultra.
-  const fallbackEfforts =
-    params.requested === "ultra" ? supported : supported.filter((effort) => effort !== "ultra");
   const requestedRank = CODEX_REASONING_EFFORTS.indexOf(params.requested);
   return (
-    fallbackEfforts.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
-    fallbackEfforts.at(-1)
+    supported.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
+    supported.at(-1)
   );
 }
 
-/** Resolve a turn effort from the selected model's provider-owned metadata. */
 export function resolveCodexAppServerReasoningEffort(params: {
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra";
+  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"];
   modelId: string;
   supportedReasoningEfforts?: readonly string[];
 }): CodexReasoningEffort | null {
+  // Ultra is a runtime mode, not an API effort tier. Codex owns its inference
+  // budget and proactive delegation; route metadata must not erase the runtime mode.
+  if (params.thinkLevel === "ultra") {
+    return "ultra";
+  }
   if (params.thinkLevel === "off") {
     return params.supportedReasoningEfforts?.includes("none") ? "none" : null;
   }

@@ -3,9 +3,77 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import {
   isExactSemverVersion,
   parseRegistryNpmSpec,
+  type ParsedRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
 } from "../infra/npm-registry-spec.js";
 import { isBetaTag, type UpdateChannel } from "../infra/update-channels.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
+import { isUnavailableNpmTarget, PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
+import type { PluginPackageInstall } from "./package-manifest.types.js";
+
+export type PluginInstallSource = {
+  source: "npm" | "clawhub";
+  spec: string;
+  expectedIntegrity?: string;
+};
+
+/** Only declared identities participate; a ClawHub slug never implies an npm package. */
+export function resolvePluginInstallSources(
+  install: PluginPackageInstall,
+  explicitSource?: PluginInstallSource["source"],
+): PluginInstallSource[] {
+  const sources: PluginInstallSource[] = [];
+  for (const source of ["npm", "clawhub"] as const) {
+    const spec = (source === "npm" ? install.npmSpec : install.clawhubSpec)?.trim();
+    if (!spec || (explicitSource && source !== explicitSource)) {
+      continue;
+    }
+    // Manifest integrity pins npm even when the old default was ClawHub. A
+    // ClawHub-only catalog projection carries that candidate's own digest.
+    const integritySource = install.npmSpec?.trim() ? "npm" : "clawhub";
+    sources.push({
+      source,
+      spec,
+      ...(source === integritySource && install.expectedIntegrity
+        ? { expectedIntegrity: install.expectedIntegrity }
+        : {}),
+    });
+  }
+  return sources;
+}
+
+export function isUnavailablePluginSource(
+  source: PluginInstallSource["source"],
+  result: { ok: boolean; code?: string },
+): boolean {
+  if (result.ok) {
+    return false;
+  }
+  return source === "npm"
+    ? result.code === PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE ||
+        isUnavailableNpmTarget({ ok: false, code: result.code })
+    : isUnavailableClawHubTarget({ ok: false, code: result.code }) ||
+        result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE ||
+        result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE;
+}
+
+/** Availability alone permits a declared secondary; every attempt owns its artifact review. */
+export async function installWithSourceFallback<T>(params: {
+  sources: readonly PluginInstallSource[];
+  install: (source: PluginInstallSource) => Promise<T>;
+  result: (attempt: T) => { ok: boolean; code?: string };
+  onFallback: (message: string) => void | Promise<void>;
+}): Promise<{ attempt: T; source: PluginInstallSource }> {
+  for (const [index, source] of params.sources.entries()) {
+    const attempt = await params.install(source);
+    const secondary = params.sources[index + 1];
+    if (!secondary || !isUnavailablePluginSource(source.source, params.result(attempt))) {
+      return { attempt, source };
+    }
+    await params.onFallback(`${source.spec} unavailable; using ${secondary.spec} instead.`);
+  }
+  throw new Error("Plugin has no declared remote install source.");
+}
 
 type ChannelInstallSpecs = {
   installSpec: string;
@@ -14,27 +82,17 @@ type ChannelInstallSpecs = {
   fallbackLabel?: string;
 };
 
-function resolveDefaultNpmSpec(spec: string): { name: string } | null {
+/** Bare specs and latest retain default intent while following the active release channel. */
+export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | null {
   const parsed = parseRegistryNpmSpec(spec);
   if (!parsed) {
     return null;
   }
-  if (parsed.selectorKind === "none") {
-    return { name: parsed.name };
-  }
-  if (parsed.selectorKind === "tag" && parsed.selector?.toLowerCase() === "latest") {
-    return { name: parsed.name };
-  }
-  return null;
-}
-
-function isDefaultClawHubSpecForBetaChannel(spec: string): { name: string } | null {
-  const parsed = parseClawHubPluginSpec(spec);
-  if (!parsed) {
-    return null;
-  }
-  if (!parsed.version || parsed.version.toLowerCase() === "latest") {
-    return { name: parsed.name };
+  if (
+    parsed.selectorKind === "none" ||
+    (parsed.selectorKind === "tag" && parsed.selector?.toLowerCase() === "latest")
+  ) {
+    return parsed;
   }
   return null;
 }
@@ -102,21 +160,40 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
 export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   spec: string;
   updateChannel?: UpdateChannel;
+  officialPackageName?: string;
+  coreVersion?: string;
+  versionBoundToCore?: boolean;
 }): ChannelInstallSpecs {
-  if (params.updateChannel !== "beta") {
+  const parsed = parseClawHubPluginSpec(params.spec);
+  if (
+    parsed &&
+    params.officialPackageName === parsed.name &&
+    (params.updateChannel === "extended-stable" ||
+      (params.updateChannel === "stable" && params.versionBoundToCore))
+  ) {
+    const npm = resolveNpmInstallSpecsForUpdateChannel({
+      ...params,
+      spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
+    });
+    return { installSpec: `clawhub:${npm.installSpec}`, recordSpec: params.spec };
+  }
+  if (
+    params.updateChannel !== "beta" ||
+    !parsed ||
+    (parsed.version && parsed.version.toLowerCase() !== "latest")
+  ) {
     return {
       installSpec: params.spec,
       recordSpec: params.spec,
     };
   }
-  const betaTarget = isDefaultClawHubSpecForBetaChannel(params.spec);
-  if (!betaTarget) {
-    return {
-      installSpec: params.spec,
-      recordSpec: params.spec,
-    };
-  }
-  const betaSpec = `clawhub:${betaTarget.name}@beta`;
+  // Declared official sources share the installed core's beta cohort even when
+  // availability moves an install from npm to ClawHub.
+  const betaTarget =
+    params.officialPackageName === parsed.name
+      ? resolveNpmInstallSpecsForUpdateChannel({ ...params, spec: parsed.name }).installSpec
+      : `${parsed.name}@beta`;
+  const betaSpec = `clawhub:${betaTarget}`;
   return {
     installSpec: betaSpec,
     recordSpec: params.spec,

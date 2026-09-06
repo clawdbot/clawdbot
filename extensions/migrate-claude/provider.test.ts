@@ -24,6 +24,7 @@ function planItemById(
     action?: string;
     status?: string;
     reason?: string;
+    details?: Record<string, unknown>;
   }[],
   id: string,
 ) {
@@ -667,6 +668,8 @@ describe("Claude migration provider", () => {
     expect(await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf8")).toContain(
       "Imported from Claude: project CLAUDE.md",
     );
+    const generatedSkillItem = planItemById(result.items, "skill:claude-command-ship");
+    expect(generatedSkillItem.details?.backupPath).toBeUndefined();
     const generatedSkill = await fs.readFile(
       path.join(workspaceDir, "skills", "claude-command-ship", "SKILL.md"),
       "utf8",
@@ -679,4 +682,177 @@ describe("Claude migration provider", () => {
     ).resolves.toBeUndefined();
     await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
   });
+
+  it("backs up the whole generated skill directory before overwriting it", async () => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "project");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+    await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+    const provider = buildClaudeMigrationProvider();
+    const context = makeContext({ source, stateDir, workspaceDir, reportDir });
+    const plan = await provider.plan(context);
+    await writeFile(path.join(targetDir, "SKILL.md"), "# Local skill\n");
+    await writeFile(path.join(targetDir, "notes.md"), "Keep these notes.\n");
+
+    const conflict = await provider.apply(context, plan);
+    expect(planItemById(conflict.items, "skill:claude-command-ship")).toMatchObject({
+      status: "conflict",
+      reason: "target exists",
+    });
+    await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toBe(
+      "# Local skill\n",
+    );
+
+    const result = await provider.apply({ ...context, overwrite: true }, plan);
+
+    const item = planItemById(result.items, "skill:claude-command-ship");
+    expect(item.status).toBe("migrated");
+    expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toContain("Ship safely.");
+    await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
+      "Keep these notes.\n",
+    );
+    const backupPath = item.details?.backupPath;
+    if (typeof backupPath !== "string") {
+      throw new Error("expected generated skill backup path");
+    }
+    await expect(fs.readFile(path.join(backupPath, "SKILL.md"), "utf8")).resolves.toBe(
+      "# Local skill\n",
+    );
+    await expect(fs.readFile(path.join(backupPath, "notes.md"), "utf8")).resolves.toBe(
+      "Keep these notes.\n",
+    );
+    expect(
+      JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8")).items.find(
+        (reportItem: { id?: string }) => reportItem.id === item.id,
+      )?.details?.backupPath,
+    ).toBe(backupPath);
+  });
+
+  it.each([false, true])(
+    "reports a removed command source without changing its generated skill (overwrite: %s)",
+    async (overwrite) => {
+      const root = testWorkspace.dir;
+      const source = path.join(root, "project");
+      const sourceFile = path.join(source, ".claude", "commands", "ship.md");
+      const workspaceDir = path.join(root, "workspace");
+      const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+      const targetFile = path.join(targetDir, "SKILL.md");
+      const reportDir = path.join(root, "report");
+      await writeFile(sourceFile, "Ship safely.\n");
+      if (overwrite) {
+        await writeFile(targetFile, "# Local skill\n");
+      }
+      const provider = buildClaudeMigrationProvider();
+      const context = makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir,
+        reportDir,
+        overwrite,
+      });
+      const plan = await provider.plan(context);
+      await fs.unlink(sourceFile);
+
+      const result = await provider.apply(context, plan);
+
+      const item = planItemById(result.items, "skill:claude-command-ship");
+      expect(item).toMatchObject({ status: "error", reason: expect.stringContaining("ENOENT") });
+      expect(result.summary).toMatchObject({ migrated: 0, errors: 1 });
+      expect(item.details?.backupPath).toBeUndefined();
+      if (overwrite) {
+        await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Local skill\n");
+      } else {
+        await expect(fs.access(targetDir)).rejects.toThrow();
+      }
+      const report = JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8"));
+      expect(planItemById(report.items, item.id)).toEqual(item);
+      await expect(fs.access(path.join(reportDir, "item-backups"))).rejects.toThrow();
+    },
+  );
+
+  it("reports the generated skill backup when the overwrite fails", async () => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "project");
+    const workspaceDir = path.join(root, "workspace");
+    const reportDir = path.join(root, "report");
+    const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+    await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+    await writeFile(path.join(targetDir, "SKILL.md", "original.md"), "# Local skill\n");
+
+    const provider = buildClaudeMigrationProvider();
+    const result = await provider.apply(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir,
+        reportDir,
+        overwrite: true,
+      }),
+    );
+
+    const item = planItemById(result.items, "skill:claude-command-ship");
+    expect(item.status).toBe("error");
+    const backupPath = item.details?.backupPath;
+    if (typeof backupPath !== "string") {
+      throw new Error("expected failed generated skill overwrite to report its backup path");
+    }
+    await expect(
+      fs.readFile(path.join(backupPath, "SKILL.md", "original.md"), "utf8"),
+    ).resolves.toBe("# Local skill\n");
+    expect(
+      JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8")).items.find(
+        (reportItem: { id?: string }) => reportItem.id === item.id,
+      )?.details?.backupPath,
+    ).toBe(backupPath);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "materializes symlinked generated skills in the backup before overwriting them",
+    async () => {
+      for (const scenario of ["target-directory", "skill-file"] as const) {
+        const root = path.join(testWorkspace.dir, scenario);
+        const source = path.join(root, "project");
+        const workspaceDir = path.join(root, "workspace");
+        const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+        const outsideDir = path.join(root, "outside");
+        const outsideSkill = path.join(outsideDir, "SKILL.md");
+        await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+        await writeFile(outsideSkill, "# Outside skill\n");
+        if (scenario === "target-directory") {
+          await fs.mkdir(path.dirname(targetDir), { recursive: true });
+          await fs.symlink(outsideDir, targetDir);
+        } else {
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.symlink(outsideSkill, path.join(targetDir, "SKILL.md"));
+        }
+
+        const provider = buildClaudeMigrationProvider();
+        const result = await provider.apply(
+          makeContext({
+            source,
+            stateDir: path.join(root, "state"),
+            workspaceDir,
+            reportDir: path.join(root, "report"),
+            overwrite: true,
+          }),
+        );
+
+        const item = planItemById(result.items, "skill:claude-command-ship");
+        expect(item.status).toBe("migrated");
+        const backupPath = item.details?.backupPath;
+        if (typeof backupPath !== "string") {
+          throw new Error("expected symlinked generated skill backup path");
+        }
+        expect((await fs.lstat(backupPath)).isSymbolicLink()).toBe(false);
+        expect((await fs.lstat(path.join(backupPath, "SKILL.md"))).isSymbolicLink()).toBe(false);
+        await expect(fs.readFile(path.join(backupPath, "SKILL.md"), "utf8")).resolves.toBe(
+          "# Outside skill\n",
+        );
+        await expect(fs.readFile(outsideSkill, "utf8")).resolves.toContain("Ship safely.");
+      }
+    },
+  );
 });

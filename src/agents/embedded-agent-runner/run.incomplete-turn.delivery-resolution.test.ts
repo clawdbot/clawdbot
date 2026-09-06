@@ -129,13 +129,18 @@ describe("incomplete-turn delivery resolution", () => {
 
   it("suppresses the incomplete-turn warning after an accepted sessions_spawn terminal success", () => {
     const attemptWithAcceptedSpawn: Partial<EmbeddedRunAttemptResult> & {
-      acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+      acceptedSessionSpawns: Array<{
+        runId: string;
+        childSessionKey: string;
+        expectsCompletionMessage: boolean;
+      }>;
     } = {
       assistantTexts: [],
       acceptedSessionSpawns: [
         {
           runId: "run-child",
           childSessionKey: "agent:claude:subagent:child",
+          expectsCompletionMessage: true,
         },
       ],
       lastAssistant: makeLastAssistant({
@@ -149,6 +154,29 @@ describe("incomplete-turn delivery resolution", () => {
     );
 
     expect(incompleteTurnText).toBeNull();
+  });
+
+  it("surfaces one warning when only a collector was accepted", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText(
+      makeIncompleteTurnParams(
+        {
+          assistantTexts: [],
+          acceptedSessionSpawns: [
+            {
+              runId: "collector-run",
+              childSessionKey: "agent:claude:subagent:collector",
+              expectsCompletionMessage: false,
+            },
+          ],
+          lastAssistant: makeLastAssistant({ provider: "anthropic", model: "sonnet-4.6" }),
+        },
+        { hadPotentialSideEffects: true },
+      ),
+    );
+
+    expect(incompleteTurnText).toBe(
+      "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+    );
   });
 
   it("still surfaces the incomplete-turn warning without an accepted sessions_spawn success", () => {

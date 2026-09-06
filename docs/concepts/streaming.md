@@ -263,9 +263,10 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
-- `progress` shows one quiet work summary and authored milestones, not a rolling
-  tool log. Generated progress emoji are omitted; approvals and failures stay
-  visible. Routine edits coalesce while attention updates flush immediately.
+- `progress` is quiet by default: headline, authored commentary and reasoning,
+  plan milestones, and approval or failure lines. The same default applies on
+  every progress-draft channel; `streaming.progress.toolProgress: true` adds
+  the rolling tool log with its icons.
 - `progress` mode deletes the status draft once the final answer is delivered,
   so busy channels keep no orphaned tool log above the reply. Error finals keep
   the draft as the record of the failed turn.
@@ -278,10 +279,11 @@ Slack-only:
   when available.
 - `block` uses append-style draft previews.
 - `progress` streams Slack's native agent card by default: one message carries
-  narration, authored milestones (or one work-summary row), and the final answer.
-  Ordinary tool calls do not create task rows. Routine progress updates coalesce
-  at one-second intervals; attention and completion flush immediately. The card appears
-  only for turns that do real work, so plain questions are answered without one.
+  narration, the live plan card (authored milestones, or one work-summary row
+  until `streaming.progress.toolProgress: true` gives each tool call a row),
+  and the final answer. Routine progress updates coalesce at one-second
+  intervals; attention and completion flush immediately. The card appears only
+  for turns that do real work, so plain questions are answered without one.
   `streaming.progress.nativeTaskCards: false` falls back to the Block Kit
   session card, which finalizes to success or error and posts the assistant's
   final text as a separate message.
@@ -351,10 +353,10 @@ Supported surfaces:
   progress chatter is also suppressed instead of delivered as standalone status
   messages, while approval prompts, media payloads, and errors still route
   normally.
-- To keep preview streaming but hide tool-progress lines, set
-  `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
-  `false` for that channel (both default `true`, and both are honored in every
-  mode). To keep tool-progress lines visible while hiding command/exec text,
+- `streaming.preview.toolProgress` (default `true`) controls tool-progress
+  lines in `partial` and `block` previews; `streaming.progress.toolProgress`
+  (default `false`) opts the `progress` draft into the rolling tool log. To
+  keep tool-progress lines visible while hiding command/exec text,
   set `streaming.preview.commandText` or `streaming.progress.commandText` to
   `"status"` (the default). Set either option to `"raw"` to opt into command
   text. This policy is shared by draft/progress channels

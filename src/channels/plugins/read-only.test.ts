@@ -487,6 +487,25 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       accountId: "ops",
       config: { token: "changed" },
     });
+    for (const [channelEnabled, accountEnabled, expected] of [
+      [true, false, false],
+      [true, true, true],
+      [true, undefined, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      const current = createExternalChannelTestConfig({
+        pluginDir,
+        channels: {
+          "external-chat": {
+            enabled: channelEnabled,
+            accounts: { ops: { enabled: accountEnabled } },
+          },
+        },
+      });
+      const account = second?.config.resolveAccount(current, "ops");
+      expect(second?.config.isEnabled?.(account, current)).toBe(expected);
+    }
     expect(
       pluginIds(
         listReadOnlyChannelPluginsForConfig(

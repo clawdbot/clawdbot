@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
@@ -48,12 +49,15 @@ import {
   resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
+import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { prefersBuiltPluginArtifacts } from "./plugin-runtime-artifact-selection.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -119,6 +123,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
       });
@@ -145,6 +150,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
       });
   const entry = context.normalized.entries[policyId];
@@ -204,6 +210,11 @@ export function loadRuntimePluginCandidate(params: {
       record,
       message,
     });
+  const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    pluginId,
+    packageName: candidate.packageName,
+    packageBuild: candidate.packageManifest?.build,
+  });
   if (blockUntrustedLocalScopedChannelSetupImport) {
     record.status = "disabled";
     record.error =
@@ -216,13 +227,18 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const preferBuiltPluginArtifacts = prefersBuiltPluginArtifacts(
+    context.artifactPreference,
+    candidate.origin,
+  );
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
     source: candidate.source,
     rootDir: pluginRoot,
     origin: candidate.origin,
-    preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+    preferBuiltPluginArtifacts,
+    sourcePreferred: manifestRecord.sourcePreferred,
     packageManifest: candidate.packageManifest,
     registry,
   });
@@ -233,7 +249,8 @@ export function loadRuntimePluginCandidate(params: {
         source: manifestRecord.setupSource,
         rootDir: pluginRoot,
         origin: candidate.origin,
-        preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
         packageManifest: candidate.packageManifest,
         registry,
       })
@@ -356,6 +373,86 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const catalogRequest = params.options.capabilityCatalog;
+  if (catalogRequest && manifestRecord.capabilityCatalogSource !== undefined) {
+    try {
+      if (!manifestRecord.capabilityCatalogSource) {
+        throw new Error("entry must resolve inside the selected plugin root");
+      }
+      const artifact = resolvePluginRuntimeArtifact({
+        pluginId,
+        entryKind: "capability-catalog",
+        source: manifestRecord.capabilityCatalogSource,
+        rootDir: pluginRoot,
+        origin: candidate.origin,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
+        packageManifest: candidate.packageManifest,
+        registry,
+      });
+      const { source, modulePath } = preparePluginModule({
+        modulePath: artifact.source,
+        boundaryRoot: artifact.rootDir,
+        boundaryLabel: "plugin root",
+        rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+          origin: candidate.origin,
+          rootDir: candidate.rootDir,
+          env: context.env,
+        }),
+        surfaceLabel: `${pluginId} capabilityCatalogEntry`,
+      });
+      if (source.capabilityCatalog?.context !== catalogRequest.context) {
+        source.capabilityCatalog = {
+          context: catalogRequest.context,
+          value: resolvePluginCapabilityCatalog(
+            params.loadPluginModule(modulePath),
+            catalogRequest.context,
+          ),
+        };
+      }
+      const catalog = source.capabilityCatalog.value;
+      if (Object.hasOwn(catalog, catalogRequest.family)) {
+        const catalogApi = params.registryBuilder.createApi(record, {
+          config: context.cfg,
+          pluginConfig: validatedConfig.value,
+          hookPolicy: entry?.hooks,
+          registrationMode: registrationPlan.mode,
+        });
+        runPluginRegisterSyncInRegistry(
+          (registration) => {
+            for (const provider of catalog.speechProviders ?? []) {
+              registration.registerSpeechProvider(provider);
+            }
+            for (const provider of catalog.realtimeTranscriptionProviders ?? []) {
+              registration.registerRealtimeTranscriptionProvider(provider);
+            }
+            for (const provider of catalog.realtimeVoiceProviders ?? []) {
+              registration.registerRealtimeVoiceProvider(provider);
+            }
+          },
+          catalogApi,
+          registry,
+          record.id,
+        );
+        // Descriptor coverage must never satisfy full-runtime containment checks.
+        record.imported = false;
+        record.capabilityCatalog = capabilityCatalogFamilies.filter((key) =>
+          Object.hasOwn(catalog, key),
+        );
+        registry.plugins.push(record);
+        state.seenIds.set(pluginId, candidate.origin);
+        return;
+      }
+    } catch (error) {
+      params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
+      throw new Error(
+        `Plugin ${pluginId} capabilityCatalogEntry failed: ${String(error)}. Repair the declared entry in ${manifestRecord.manifestPath}.`,
+        { cause: error },
+      );
+    }
+    // Shipped register()-only plugins and families omitted by a catalog keep runtime discovery.
+  }
+
   const loadEntry =
     registrationPlan.loadSetupEntry && runtimeSetupEntry
       ? runtimeSetupEntry
@@ -415,6 +512,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
       diagnosticMessagePrefix: "failed to load plugin: ",
+      missingDependencyHint,
     });
     moduleLoadFailed = true;
     return;
@@ -565,6 +663,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      missingDependencyHint,
       ...(error instanceof PluginDashboardDeclarationError
         ? { diagnosticCode: "dashboard-declaration-invalid" }
         : {}),

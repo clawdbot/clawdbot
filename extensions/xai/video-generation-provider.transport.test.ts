@@ -201,7 +201,12 @@ describe("xai video generation provider transport", () => {
             },
           } as never,
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(
+        expect.objectContaining({
+          name: "SsrFBlockedError",
+          message: expect.stringContaining("private/internal/special-use IP address"),
+        }),
+      );
 
       expect(server.requests).toHaveLength(0);
     },

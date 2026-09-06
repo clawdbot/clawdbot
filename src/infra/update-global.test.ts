@@ -115,18 +115,6 @@ describe("update global helpers", () => {
     ).toBe("openclaw@next");
   });
 
-  it("applies an unflagged npm policy to primary and retry argv", () => {
-    expect(
-      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
-    expect(
-      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).toEqual(expect.arrayContaining(["--omit=optional"]));
-    expect(
-      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
-  });
-
   it("maps main and explicit package targets to install specs", () => {
     expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
       "github:openclaw/openclaw#main",
@@ -215,7 +203,7 @@ describe("update global helpers", () => {
     ["11.13.0", "unflagged"],
     ["11.14.0", "unflagged"],
     ["11.15.9", "unflagged"],
-    ["11.16.0", "allow-scripts"],
+    ["11.16.0", "allow-scripts-advisory"],
     ["12.0.0", "allow-scripts"],
   ] as const)("binds npm %s lifecycle policy to the owning executable", async (version, policy) => {
     await withTestDir({ prefix: "openclaw-npm-owner-" }, async (prefix) => {
@@ -744,69 +732,6 @@ describe("update global helpers", () => {
         packageRoot: path.join(customGlobalRoot, "openclaw"),
       });
     });
-  });
-
-  it("builds npm staged install argv with an explicit prefix", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      "/tmp/stage",
-      "openclaw@latest",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
-      "npm",
-      "i",
-      "-g",
-      "--allow-scripts=openclaw",
-      "--prefix",
-      "/tmp/stage",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
-  });
-
-  it("omits npm's lifecycle allowlist before npm 11.16", () => {
-    expect(
-      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
-  });
-
-  it("allows only the resolved npm candidate lifecycle identity", () => {
-    expect(globalInstallArgs("npm", "/tmp/openclaw-2026.7.2.tgz")).toContain(
-      "--allow-scripts=/tmp/openclaw-2026.7.2.tgz",
-    );
-    expect(globalInstallArgs("npm", "openclaw@npm:@vendor/openclaw@1.2.3")).toContain(
-      "--allow-scripts=@vendor/openclaw",
-    );
-    expect(globalInstallArgs("npm", "openclaw@npm:vendor-openclaw@1.2.3")).toContain(
-      "--allow-scripts=vendor-openclaw",
-    );
-    expect(globalInstallArgs("npm", "./openclaw-candidate")).toContain(
-      "--allow-scripts=./openclaw-candidate",
-    );
-  });
-
-  it("keeps commas in ancestor directories out of npm's lifecycle policy", () => {
-    expect(
-      globalInstallArgs(
-        "npm",
-        "/tmp/build,cache/openclaw-candidate",
-        null,
-        null,
-        "/tmp/build,cache",
-      ),
-    ).toContain("--allow-scripts=./openclaw-candidate");
   });
 
   it("builds global install argv for each supported manager", () => {

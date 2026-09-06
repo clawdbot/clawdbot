@@ -5,6 +5,7 @@ import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-
 import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
+import { policyEvidenceFinding as toolPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
@@ -324,28 +325,6 @@ function toolPostureEntries(
   kind: PolicyToolPostureEvidence["kind"],
 ): readonly PolicyToolPostureEvidence[] {
   return (evidence.toolPosture ?? []).filter((entry) => entry.kind === kind);
-}
-
-function toolPostureFinding(
-  entry: PolicyToolPostureEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
-): HealthFinding {
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
-    path: "openclaw config",
-    ocPath: entry.source,
-    target: entry.source,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
 }
 
 function toolPostureLabel(entry: PolicyToolPostureEvidence): string {

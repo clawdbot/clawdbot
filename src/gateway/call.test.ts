@@ -23,7 +23,7 @@ const TLS_FINGERPRINT = "ab".repeat(32);
 
 const gatewayConfigMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
-  loadGatewayTlsRuntime: vi.fn(),
+  inspectGatewayTlsCertificate: vi.fn(),
   resolveConfigPath: vi.fn(
     (env: NodeJS.ProcessEnv, stateDir: string) =>
       env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
@@ -158,7 +158,7 @@ vi.mock("../infra/tls/gateway.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/tls/gateway.js")>();
   return {
     ...actual,
-    loadGatewayTlsRuntime: gatewayConfigMocks.loadGatewayTlsRuntime,
+    inspectGatewayTlsCertificate: gatewayConfigMocks.inspectGatewayTlsCertificate,
   };
 });
 
@@ -312,9 +312,9 @@ function resetGatewayCallMocks() {
   resolveGatewayPort.mockReset().mockReturnValue(18789);
   gatewayConfigMocks.resolveConfigPath.mockClear();
   gatewayConfigMocks.resolveStateDir.mockClear();
-  gatewayConfigMocks.loadGatewayTlsRuntime
+  gatewayConfigMocks.inspectGatewayTlsCertificate
     .mockReset()
-    .mockResolvedValue({ enabled: false, required: false });
+    .mockResolvedValue({ ok: false, error: "gateway tls is disabled" });
   gatewayConfigMocks.useActualDispatchConfig = false;
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
@@ -600,6 +600,16 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
     expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
     expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps device identity for dotted-localhost shared-token auth", async () => {
+    await callGateway({
+      method: "health",
+      url: "ws://localhost.:18789",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
@@ -1504,10 +1514,9 @@ describe("buildGatewayConnectionDetails", () => {
       },
     } satisfies OpenClawConfig;
     resolveGatewayPort.mockReturnValue(18800);
-    gatewayConfigMocks.loadGatewayTlsRuntime.mockResolvedValue({
-      enabled: true,
-      fingerprintSha256: TLS_FINGERPRINT,
-      required: true,
+    gatewayConfigMocks.inspectGatewayTlsCertificate.mockResolvedValue({
+      ok: true,
+      value: { cert: "public-certificate", fingerprintSha256: TLS_FINGERPRINT },
     });
 
     const details = await buildGatewayProbeConnectionDetails({ config });

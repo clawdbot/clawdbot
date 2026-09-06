@@ -1,4 +1,7 @@
-import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+  isDefinitiveRunLifecycle,
+} from "../agents/agent-run-terminal-outcome.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
@@ -61,7 +64,7 @@ function terminalEventKey(event: {
   return `${event.contextClaimId ?? ""}\0${event.lifecycleGeneration ?? ""}\0${event.runId}\0${event.seq}`;
 }
 
-/** Owns each lifecycle end write before optional chat presentation code runs. */
+/** Owns each definitive lifecycle write before optional chat presentation code runs. */
 export function createSessionLifecyclePersistenceOwner() {
   const prepared = new Map<string, PreparedPersistence>();
   const inFlight = new Set<Promise<void>>();
@@ -150,10 +153,12 @@ export function createSessionLifecyclePersistenceOwner() {
       if (preparedPersistence) {
         return preparedPersistence;
       }
-      const phase = params.event.data?.phase;
-      if (phase === "end" && terminalEventKey(params.event)) {
-        // Every admitted lifecycle end is prepared by observe(). A missing
-        // promise means its exact owner expired or shutdown retired it.
+      if (
+        isDefinitiveRunLifecycle({ phase: params.event.data?.phase, data: params.event.data }) &&
+        terminalEventKey(params.event)
+      ) {
+        // Every definitive lifecycle is prepared by observe(). A missing promise
+        // means its exact owner expired or shutdown retired it.
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
       const authority = terminalEventAuthority(params.event);

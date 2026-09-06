@@ -229,28 +229,19 @@ function firstStringParam(value: unknown): string | null {
   return null;
 }
 
-function resolveMissingProperty(error: TypeBoxValidationError): string | null {
-  if (
-    error.keyword !== "required" &&
-    error.keyword !== "dependentRequired" &&
-    error.keyword !== "dependencies"
-  ) {
-    return null;
+function resolveMissingProperties(error: TypeBoxValidationError): string[] {
+  const properties =
+    error.keyword === "required"
+      ? error.params?.requiredProperties
+      : error.keyword === "dependentRequired" || error.keyword === "dependencies"
+        ? error.params?.dependencies
+        : undefined;
+  // Dependency lists include present fields. Only a failed single-key condition
+  // identifies a missing property; larger conditions retain their native message.
+  if (!Array.isArray(properties) || (error.keyword !== "required" && properties.length !== 1)) {
+    return [];
   }
-  return (
-    firstStringParam(error.params?.missingProperty) ??
-    firstStringParam(error.params?.requiredProperties) ??
-    firstStringParam(error.params?.dependencies)
-  );
-}
-
-function resolveValidationErrorPath(error: TypeBoxValidationError): string {
-  const basePath = normalizeErrorPath(error.instancePath);
-  const missingProperty = resolveMissingProperty(error);
-  if (!missingProperty) {
-    return basePath;
-  }
-  return appendPathSegment(basePath, missingProperty);
+  return properties.filter((property): property is string => typeof property === "string");
 }
 
 function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
@@ -299,14 +290,6 @@ function resolveAdditionalProperties(error: TypeBoxValidationError): string[] {
   return typeof additionalProperty === "string" ? [additionalProperty] : [];
 }
 
-function formatRequiredMessage(error: TypeBoxValidationError): string | null {
-  const missingProperty = resolveMissingProperty(error);
-  if (!missingProperty) {
-    return null;
-  }
-  return `must have required property '${missingProperty}'`;
-}
-
 function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): string | null {
   const additionalProperties = resolveAdditionalProperties(error);
   if (additionalProperties.length === 0) {
@@ -316,43 +299,58 @@ function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): strin
   return `must not have additional properties: ${quoted}`;
 }
 
-function formatValidationErrorMessage(error: TypeBoxValidationError): string {
-  return (
-    formatRequiredMessage(error) ??
-    formatAdditionalPropertiesMessage(error) ??
-    error.message ??
-    "invalid"
-  );
-}
-
 function formatValidationErrors(
   errors: TypeBoxValidationError[] | null | undefined,
 ): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
     return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
   }
-  return errors.map((error) => {
-    const path = resolveValidationErrorPath(error);
-    const baseMessage = formatValidationErrorMessage(error);
+  const seenDependencyConditions = new Set<string>();
+  return errors.flatMap((error) => {
+    if (error.keyword === "dependentRequired" || error.keyword === "dependencies") {
+      // TypeBox can repeat the same dependency condition once per absent member.
+      const condition = JSON.stringify([
+        error.keyword,
+        error.schemaPath,
+        error.instancePath,
+        error.params?.property,
+        error.params?.dependencies,
+      ]);
+      if (seenDependencyConditions.has(condition)) {
+        return [];
+      }
+      seenDependencyConditions.add(condition);
+    }
+    const missingProperties = resolveMissingProperties(error);
     const allowedValuesSummary = getAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
-    const message = allowedValuesSummary
-      ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
-      : baseMessage;
-    const safePath = sanitizeTerminalText(path);
-    const safeMessage = sanitizeTerminalText(message);
-    return {
-      path,
-      message,
-      text: `${safePath}: ${safeMessage}`,
-      ...(additionalProperty ? { additionalProperty } : {}),
-      ...(allowedValuesSummary
-        ? {
-            allowedValues: allowedValuesSummary.values,
-            allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
-          }
-        : {}),
-    };
+    return (missingProperties.length ? missingProperties : [undefined]).map((missingProperty) => {
+      const basePath = normalizeErrorPath(error.instancePath);
+      const path =
+        missingProperty === undefined ? basePath : appendPathSegment(basePath, missingProperty);
+      const baseMessage =
+        missingProperty === undefined
+          ? (formatAdditionalPropertiesMessage(error) ?? error.message ?? "invalid")
+          : `must have required property '${missingProperty}'`;
+      const message = allowedValuesSummary
+        ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
+        : baseMessage;
+      const safePath = sanitizeTerminalText(path);
+      const safeMessage = sanitizeTerminalText(message);
+      const formattedError: JsonSchemaValidationError = {
+        path,
+        message,
+        text: `${safePath}: ${safeMessage}`,
+      };
+      if (additionalProperty) {
+        formattedError.additionalProperty = additionalProperty;
+      }
+      if (allowedValuesSummary) {
+        formattedError.allowedValues = allowedValuesSummary.values;
+        formattedError.allowedValuesHiddenCount = allowedValuesSummary.hiddenCount;
+      }
+      return formattedError;
+    });
   });
 }
 

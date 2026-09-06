@@ -148,7 +148,11 @@ export class SqliteSessionImportStage {
         setClear.run(kind);
       },
     });
+    const repeatedRows = diskSet("repeated");
     const user = this.database.prepare("INSERT OR REPLACE INTO user_keys VALUES (?, ?, ?)");
+    const readRow = this.database.prepare(
+      "SELECT event_json FROM rows WHERE source = ? AND seq = ?",
+    );
     const update = this.database.prepare(
       "UPDATE rows SET event_json = ? WHERE source = ? AND seq = ?",
     );
@@ -161,12 +165,14 @@ export class SqliteSessionImportStage {
     function* entries() {
       for (const row of rows) {
         const entry: unknown = JSON.parse(row.eventJson);
+        let eventJson = row.eventJson;
         if (!isRecord(entry)) {
           recognized = false;
           continue;
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
-          update.run(JSON.stringify(entry), source, row.seq);
+          eventJson = JSON.stringify(entry);
+          update.run(eventJson, source, row.seq);
           changed = true;
         }
         if (entry.type === "session") {
@@ -185,9 +191,22 @@ export class SqliteSessionImportStage {
             strippedKey ?? null,
           );
         }
+        const indexed = isIndexedSessionEntry(entry);
+        const leafControl = isSessionTranscriptLeafControl(entry);
         // Unknown payload stays in the original, never silently declared complete.
-        if (!isIndexedSessionEntry(entry) && !isSessionTranscriptLeafControl(entry)) {
+        if (!indexed && !leafControl) {
           recognized = false;
+        }
+        if (typeof entry.id === "string" && (indexed || leafControl)) {
+          const previous = lookup(entry.id);
+          if (previous) {
+            const previousRow = readRow.get(source, Number(previous.entry.importSeq));
+            if (previousRow && String(previousRow.event_json) === eventJson) {
+              repeatedRows.add(String(row.seq));
+              changed = true;
+              continue;
+            }
+          }
         }
         const metadata = { ...entry };
         delete metadata.message;
@@ -222,6 +241,13 @@ export class SqliteSessionImportStage {
       resetDescendantIds: diskSet("reset"),
       invalidLeafControlIds: diskSet("invalid"),
     });
+    this.database
+      .prepare(
+        `DELETE FROM rows WHERE source = ? AND CAST(seq AS TEXT) IN (
+          SELECT id FROM tree_sets WHERE kind = 'repeated'
+        )`,
+      )
+      .run(source);
     const select = this.database.prepare("INSERT OR REPLACE INTO selected VALUES (?, ?, ?, ?)");
     const selected = this.database.prepare("SELECT 1 FROM selected WHERE id = ?");
     const walk = (leaf: string | null, visible: boolean): boolean => {
@@ -289,9 +315,6 @@ export class SqliteSessionImportStage {
       }
       // Retain the exact header and selected physical rows; rewrite only normalized parent links.
       const chosen = this.database.prepare("SELECT seq, parent_id FROM selected ORDER BY seq");
-      const readRow = this.database.prepare(
-        "SELECT event_json FROM rows WHERE source = ? AND seq = ?",
-      );
       for (const selectedRow of chosen.iterate()) {
         const row = readRow.get(source, selectedRow.seq!);
         // SAFETY: selected rows came from the record-checked navigation pass in this spool.

@@ -1,6 +1,7 @@
 /** Direct Gateway extension relay with in-band Browser Relay Authentication v2. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -140,6 +141,12 @@ export async function handleGatewayExtensionUpgrade(
   }
 
   const protocols = requestProtocols(req);
+  // Gateway resolves trusted-proxy attribution before plugin dispatch. The raw
+  // peer is only a fallback for direct harnesses outside that request scope.
+  const source =
+    getPluginRuntimeGatewayRequestScope()?.client?.clientIp ??
+    req.socket?.remoteAddress ??
+    "unknown";
   const token = readExtensionRelayToken();
   if (!token) {
     invalidateBrowserRelayAuthV2Authority();
@@ -159,6 +166,7 @@ export async function handleGatewayExtensionUpgrade(
           authenticateExtensionWebSocket({
             ws,
             authority,
+            source,
             resource,
             removePreAuthGuard,
             prepareAuthenticated: async () => {

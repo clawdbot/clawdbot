@@ -13,7 +13,7 @@ const helperPath = path.join(
 const { createTempDir } = createScriptTestHarness();
 
 type Fixture = {
-  blockActivity?: boolean;
+  timeoutActivity?: boolean;
   now?: string;
   profile?: unknown;
   search?: unknown[];
@@ -57,7 +57,7 @@ if body=$(jq -cn --slurpfile fixtures "$FIXTURE" --slurpfile requests "$REQUEST_
   $fixtures[0] as $fixture | $ARGS.positional as $args |
   if any($fixture.fail[]?; . as $needle | any($args[]; contains($needle))) then
     null | halt_error(1)
-  elif $fixture.blockActivity and $args[0] == "api" and ($args[1] | startswith("users/") | not) then
+  elif $fixture.timeoutActivity and $args[0] == "api" and ($args[1] | startswith("users/") | not) then
     null | halt_error(124)
   elif $args[0] == "api" and ($args[1] | startswith("users/")) then
     if $fixture | has("profile") then $fixture.profile else
@@ -90,8 +90,6 @@ if body=$(jq -cn --slurpfile fixtures "$FIXTURE" --slurpfile requests "$REQUEST_
   fi
 else
   response_code=$?
-  # Bound the blocked-scan reproduction without network or a surviving child process.
-  if [[ "$response_code" == 124 ]]; then sleep 0.5; fi
   exit "$response_code"
 fi
 `,
@@ -132,8 +130,8 @@ fi
 }
 
 describe("openclaw-pr-maintainer github activity helper", () => {
-  it("prints canonical identity before the first activity request, even when a scan blocks", () => {
-    const { requests } = runHelper(["alias"], { blockActivity: true });
+  it("prints canonical identity before the first activity request returns a timeout", () => {
+    const { requests } = runHelper(["alias"], { timeoutActivity: true });
     expect(requiredAt(requests, 0).args[1]).toBe("users/alias");
     expect(requiredAt(requests, 1).output).toContain(
       "Example Author (@Canonical, User, account created 2010-09-21",

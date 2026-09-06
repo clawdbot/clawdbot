@@ -12,6 +12,7 @@ import {
 } from "../src/gateway/test-helpers.e2e.js";
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -131,14 +132,7 @@ function writeModelResponse(res: ServerResponse, sequence: number): void {
       },
     },
   ];
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(res, events);
 }
 
 async function startMockModelServer(rejectModel?: string): Promise<MockModelServer> {
@@ -246,7 +240,10 @@ async function waitForRequestCount(
   count: number,
 ): Promise<void> {
   await vi.waitFor(() => {
-    expect(requestsContaining(server, marker).length).toBeGreaterThanOrEqual(count);
+    expect(
+      requestsContaining(server, marker).length,
+      `model request marker: ${marker}`,
+    ).toBeGreaterThanOrEqual(count);
   }, WAIT_OPTIONS);
 }
 
@@ -464,7 +461,9 @@ describe("plugin cron registry ownership e2e", () => {
         expect(requestText(server.requests[0]!)).toContain(`PROVIDER_HOOK_${provider}`);
         expect(requestText(server.requests.at(-1)!)).toContain(`PROVIDER_HOOK_${fallbackProvider}`);
       } finally {
-        if (jobId) await client.request("cron.remove", { id: jobId });
+        if (jobId) {
+          await client.request("cron.remove", { id: jobId });
+        }
         await disconnectGatewayClient(client);
       }
     },

@@ -1,17 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
+import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
 } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
@@ -19,6 +23,8 @@ import {
 } from "./admission.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
+import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { registerWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
@@ -74,7 +80,7 @@ export async function executeWorkerTurn(
     );
   }
   await recoverWorkspaceBeforeTurn(params);
-  const githubPublicationAvailable = await prepareGitHubPublicationAvailability({
+  const github = await prepareWorkerGitHubBinding({
     sessionId: placement.sessionId,
     sessionKey: placement.sessionKey,
     agentId: placement.agentId,
@@ -102,7 +108,6 @@ export async function executeWorkerTurn(
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
-      turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message, persisted.admission);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
       baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
@@ -141,7 +146,6 @@ export async function executeWorkerTurn(
       prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
       modelRef,
       turn,
-      githubPublicationAvailable,
       portalAvailable,
     });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
@@ -173,6 +177,7 @@ export async function executeWorkerTurn(
       cancel();
     }
   });
+  let revokeSkillAuthoring: (() => void) | undefined;
   try {
     const isAuthorized = () => {
       try {
@@ -190,6 +195,42 @@ export async function executeWorkerTurn(
         return false;
       }
     };
+    if (turn.skillLibraryAuthoring && toolAuthority.allowedToolNames.includes("skill_workshop")) {
+      if (!bootstrapReceipt.protocolFeatures.includes(WORKER_SKILL_WORKSHOP_FEATURE)) {
+        throw new StaleWorkerBuildError();
+      }
+      const assertSkillAuthority = () => {
+        if (
+          !isAuthorized() ||
+          !params.placements.isWorkerTurnToolAuthorized(params.turnClaim, "skill_workshop")
+        ) {
+          throw new Error("Worker personal authoring authority closed.");
+        }
+      };
+      const capability = turn.skillLibraryAuthoring;
+      revokeSkillAuthoring = registerWorkerSkillAuthoring(
+        params.turnClaim,
+        createLibrarySkillWorkshopTool({
+          ...capability,
+          defaultTarget: "personal",
+          invoke: (input) =>
+            withGatewayToolCallerIdentity(
+              {
+                agentId: placement.agentId,
+                sessionKey: placement.sessionKey,
+                operationalRunInstance,
+                receiptAuthority: () => {
+                  assertSkillAuthority();
+                  return true;
+                },
+                workerTurnClaim: params.turnClaim,
+              },
+              () => capability.invoke(input),
+            ),
+        }),
+        assertSkillAuthority,
+      );
+    }
     const media = await prepareWorkerTurnMedia({
       turn,
       history,
@@ -199,6 +240,21 @@ export async function executeWorkerTurn(
       isAuthorized,
       signal,
     });
+    const skillResources = await prepareSkillResourceDelivery(
+      turn.skillsSnapshot,
+      () => {
+        if (!isAuthorized()) {
+          throw new Error("Worker turn lost authority before skill resource delivery.");
+        }
+      },
+      turn.explicitSkillSelections,
+    );
+    if (
+      skillResources &&
+      !bootstrapReceipt.protocolFeatures.includes(SKILL_RESOURCE_PROTOCOL_FEATURE)
+    ) {
+      throw new StaleWorkerBuildError();
+    }
     if (!userMessageAlreadyPersisted && !turn.userTurnTranscriptRecorder) {
       const canonical = buildPersistedUserTurnMessage({
         text: turn.transcriptPrompt ?? turn.prompt,
@@ -262,6 +318,14 @@ export async function executeWorkerTurn(
             prompt: media.prompt,
             suppressPromptTranscript: true,
             workspaceDir: placement.remoteWorkspaceDir,
+            ...(github ? { github } : {}),
+            ...(skillResources ? { skillResources } : {}),
+            ...(turn.skillLibraryAuthoring &&
+            toolAuthority.allowedToolNames.includes("skill_workshop")
+              ? {
+                  skillAuthoring: { multipleProfiles: turn.skillLibraryAuthoring.multipleProfiles },
+                }
+              : {}),
             ...(turn.permissionMode
               ? {
                   permissionMode: turn.permissionMode,
@@ -294,7 +358,11 @@ export async function executeWorkerTurn(
         limitBytes: launchPlan.limitBytes,
         reason: launchPlan.reason,
       });
-      throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+      throw new WorkerTurnExecutionError(
+        skillResources
+          ? "The selected skills and conversation exceed this worker transport limit. Detach some session skills or start a shorter session, then retry."
+          : WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+      );
     }
     if (!isAuthorized()) {
       throw new Error("Worker turn authority changed while preparing its launch");
@@ -430,6 +498,7 @@ export async function executeWorkerTurn(
       workspaceConflictSummary: workspaceConflict?.summary,
     });
   } finally {
+    revokeSkillAuthoring?.();
     stopWatchingClaim();
     stopWatchingRun();
   }

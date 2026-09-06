@@ -2,17 +2,19 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
+import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorConfigFixture,
-  createDoctorHealthContribution,
   createDoctorHealthFlowContext,
   createDoctorLintContext,
   resolveDoctorHealthContributions,
@@ -93,6 +95,7 @@ const mocks = vi.hoisted(() => ({
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchAgentOverrides: vi.fn(),
+  noteMacDisabledGatewayLaunchAgent: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
@@ -385,6 +388,7 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+  noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
   noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
@@ -490,10 +494,28 @@ vi.mock("../version.js", async () => ({
   resolveIsNixMode: vi.fn(() => false),
 }));
 
+vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
+  restoreDoctorConfigEnvRefs: (cfg: OpenClawConfig) => cfg,
+}));
+
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
-  replaceConfigFile: mocks.replaceConfigFile,
+  transformConfigFile: async ({
+    transform,
+    ...options
+  }: Parameters<typeof import("../config/config.js").transformConfigFile>[0]) => {
+    const { nextConfig } = await transform(
+      {},
+      { snapshot: createDoctorConfigSnapshot(), previousHash: null, attempt: 0 },
+      {},
+    );
+    return mocks.replaceConfigFile({ ...options, nextConfig });
+  },
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({
@@ -813,6 +835,7 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
     mocks.gatherDaemonStatus.mockReset().mockResolvedValue({});
+    vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     mocks.noteWorkspaceStatus.mockReset();
     mocks.resolveGatewayService
       .mockReset()
@@ -1568,7 +1591,11 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: {
+        status: "resolved",
+        report: pluginVersionDrift,
+        runningGatewayVersion: "2026.6.1",
+      },
     });
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValueOnce([
       {
@@ -1599,7 +1626,11 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/workspace-status" })],
     });
     expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
-      pluginVersionDrift,
+      pluginVersionReadiness: {
+        status: "resolved",
+        report: pluginVersionDrift,
+        runningGatewayVersion: "2026.6.1",
+      },
     });
     expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
       rpc: {
@@ -1610,10 +1641,53 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: true,
+      pluginVersionTarget: "restart",
     });
   });
 
-  it("passes daemon-context plugin drift into the workspace status note", async () => {
+  it("reports plugin drift against the service version that will run after restart", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.5.2" },
+      pluginVersionRestartReadiness: {
+        status: "resolved",
+        runningGatewayVersion: "2026.5.2",
+        report: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.2",
+              gatewayVersion: "2026.6.1",
+              source: "npm",
+            },
+          ],
+        },
+      },
+    });
+    const cfg = { plugins: { entries: { whatsapp: { enabled: true } } } };
+
+    await contribution.run(createDoctorHealthFlowContext({ cfg }));
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: {
+        status: "resolved",
+        runningGatewayVersion: "2026.5.2",
+        report: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            expect.objectContaining({
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.2",
+              gatewayVersion: "2026.6.1",
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("resolves pinned drift targets for ordinary Doctor before rendering its note", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.6.1",
@@ -1623,15 +1697,22 @@ describe("doctor health contributions", () => {
           installedVersion: "2026.5.30-beta.1",
           gatewayVersion: "2026.6.1",
           source: "npm",
+          spec: "@openclaw/codex@2026.5.30-beta.1",
         },
       ],
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.6.1",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
     await contribution.run(
       createDoctorHealthFlowContext({
         cfg,
@@ -1648,11 +1729,31 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      packageName: "@openclaw/codex",
+      target: "2026.6.1",
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: {
+        status: "resolved",
+        report: {
+          ...pluginVersionDrift,
+          drifts: [
+            expect.objectContaining({
+              targetResolution: expect.objectContaining({
+                status: "unresolved",
+                error: expect.stringContaining("HTTP 404"),
+              }),
+            }),
+          ],
+        },
+      },
+    });
   });
 
-  it("omits daemon-context plugin drift when gateway version used the fallback", async () => {
+  it("keeps post-restart plugin readiness when the Gateway is stopped", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.5.2-test",
@@ -1667,7 +1768,7 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: null },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
@@ -1679,11 +1780,11 @@ describe("doctor health contributions", () => {
     );
 
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
     });
   });
 
-  it("omits daemon-context plugin drift when probe auth was skipped", async () => {
+  it("keeps post-restart plugin readiness when the Gateway probe is unavailable", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.6.1",
@@ -1699,7 +1800,7 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: {},
       rpc: { authWarning: "exec SecretRef probe auth skipped" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
@@ -1711,7 +1812,19 @@ describe("doctor health contributions", () => {
     );
 
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
+    });
+  });
+
+  it("omits plugin readiness when status fails before applicability is known", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    mocks.gatherDaemonStatus.mockRejectedValueOnce(new Error("service inspection failed"));
+    const cfg = {};
+
+    await contribution.run(createDoctorHealthFlowContext({ cfg }));
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1729,7 +1842,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1743,7 +1856,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
 
     const ctx = createDoctorLintContext({
@@ -1756,7 +1869,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1775,7 +1888,7 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = {
       gateway: {
@@ -1804,8 +1917,11 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
+    });
   });
 
   it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {
@@ -1839,6 +1955,7 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
   });
 
@@ -2767,7 +2884,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
+  it("preserves the shipped legacy dependency selector as a non-destructive deprecation", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-legacy-plugin-deps-lint-",
@@ -2800,8 +2917,9 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/legacy-plugin-dependencies",
-            severity: "warning",
-            path: legacyRuntimeRoot,
+            severity: "info",
+            message:
+              "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
           }),
         ],
       });
@@ -3162,6 +3280,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       healthOk: false,
+      env: ctx.env,
     });
   });
 
@@ -4404,9 +4523,11 @@ describe("doctor health contributions", () => {
       );
     });
 
-    it("forwards explicit paths through later doctor repair writes", async () => {
+    it("consumes committed roster format while preserving later explicit edits", async () => {
       const ctx = buildWriteConfigCtx({});
-      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+      ctx.cfg.agents = { ownership: "explicit", entries: { default: {} } };
+      ctx.configResult.persistCanonicalAgentRoster = true;
+      ctx.configResult.explicitSetPaths = [["agents", "ownership"]];
 
       await writeConfigContribution.run(ctx);
 
@@ -4414,12 +4535,16 @@ describe("doctor health contributions", () => {
         1,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: true,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );
 
-      ctx.cfg = { gateway: { mode: "remote" } };
+      expect(ctx.configResultWriteCommitted).toBe(true);
+      expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
+
+      ctx.cfg = { ...ctx.cfg, gateway: { mode: "remote" } };
       await writeConfigContribution.run(ctx);
 
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
@@ -4427,7 +4552,8 @@ describe("doctor health contributions", () => {
         2,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: undefined,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );

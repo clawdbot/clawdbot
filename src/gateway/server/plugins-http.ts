@@ -59,14 +59,12 @@ function createPluginRouteRuntimeClient(
   requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
-  const sharedSecretOwner =
-    !authenticatedUserProfile &&
-    (requestAuth?.authMethod === "token" || requestAuth?.authMethod === "password");
+  const operatorRoleActor = requestAuth?.operatorRoleActor;
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(sharedSecretOwner ? { internal: { operatorRoleActor: { kind: "system" as const } } } : {}),
+    ...(operatorRoleActor ? { internal: { operatorRoleActor } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -267,7 +265,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
-              registry: params.registry,
+              registry,
               route,
               req,
               gatewayRequestContext,
@@ -347,7 +345,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
-                registry: params.registry,
+                registry,
                 route,
                 req,
                 gatewayRequestContext,

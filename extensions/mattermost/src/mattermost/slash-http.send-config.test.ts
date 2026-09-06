@@ -6,6 +6,9 @@ import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
+type BuildPreparedModelsProviderData =
+  typeof import("./runtime-api.js").buildPreparedModelsProviderData;
+
 const mockState = vi.hoisted(() => ({
   readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
   parseSlashCommandPayload: vi.fn(() => ({
@@ -18,7 +21,13 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildPreparedModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () => ({
+    byProvider: new Map(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
+    modelCatalog: [],
+    modelNames: new Map(),
+  })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -50,6 +59,9 @@ const mockState = vi.hoisted(() => ({
   })),
   listMattermostCommands: vi.fn(async () => []),
   dispatchInbound: vi.fn(async () => undefined),
+  renderMattermostModelSummaryView: vi.fn(),
+  renderMattermostModelsPickerView: vi.fn(),
+  renderMattermostProviderPickerView: vi.fn(),
 }));
 
 vi.mock("./runtime-api.js", () => {
@@ -69,6 +81,7 @@ vi.mock("./runtime-api.js", () => {
     formatInboundFromLabel: vi.fn(() => ""),
     rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+    sendHttpRequestRejection: vi.fn(async () => undefined),
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,
       parentSessionKey: undefined,
@@ -114,9 +127,9 @@ vi.mock("./client.js", async () => {
 });
 
 vi.mock("./model-picker.js", () => ({
-  renderMattermostModelSummaryView: vi.fn(),
-  renderMattermostModelsPickerView: vi.fn(),
-  renderMattermostProviderPickerView: vi.fn(),
+  renderMattermostModelSummaryView: mockState.renderMattermostModelSummaryView,
+  renderMattermostModelsPickerView: mockState.renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView: mockState.renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel: vi.fn(),
   resolveMattermostModelPickerEntry: mockState.resolveMattermostModelPickerEntry,
 }));
@@ -264,6 +277,72 @@ describe("slash-http cfg threading", () => {
       expect.objectContaining({
         cfg,
         accountId: "default",
+      }),
+    );
+  });
+
+  it.each([
+    {
+      commandText: "/model",
+      entry: { kind: "summary" },
+      render: "summary",
+      text: "replacement model summary",
+    },
+    {
+      commandText: "/models",
+      entry: { kind: "providers" },
+      render: "providers",
+      text: "replacement provider picker",
+    },
+  ] as const)("sends recovered data for $commandText initial render", async (testCase) => {
+    const cfg = {} as OpenClawConfig;
+    const buttons = [{ text: "OpenAI", value: "openai" }];
+    mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
+    mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(testCase.entry);
+    mockState.buildPreparedModelsProviderData.mockResolvedValueOnce({
+      byProvider: new Map([["openai", new Set(["gpt-5.6-luna"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "gpt-5.6-luna" },
+      modelCatalog: [],
+      modelNames: new Map([["openai/gpt-5.6-luna", "Replacement Luna"]]),
+    });
+    const render =
+      testCase.render === "summary"
+        ? mockState.renderMattermostModelSummaryView
+        : mockState.renderMattermostProviderPickerView;
+    render.mockReturnValueOnce({ text: testCase.text, buttons });
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_models",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
+    expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
+      cfg,
+      "agent-1",
+    );
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
+      "channel:chan-1",
+      testCase.text,
+      expect.objectContaining({
+        accountId: "default",
+        buttons,
+        cfg,
       }),
     );
   });

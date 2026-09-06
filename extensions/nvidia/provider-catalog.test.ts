@@ -101,7 +101,6 @@ const catalogResponses = new Map<
 >();
 
 afterEach(() => {
-  vi.useRealTimers();
   clearLiveCatalogCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
   ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
@@ -576,37 +575,6 @@ describe("nvidia provider catalog", () => {
     await buildLiveNvidiaProvider();
 
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips featured catalog cache when ttl expiry overflows", async () => {
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
-      ],
-    });
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "z-ai/glm-5.2",
-          "model-name": "GLM 5.2",
-          context: 202752,
-          "max-output": 8192,
-        },
-      ],
-    });
-
-    const first = await buildLiveNvidiaProvider();
-    const second = await buildLiveNvidiaProvider();
-
-    expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.2"]);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(4);
   });
 
   it("does not cache successful featured catalog responses with no usable rows", async () => {

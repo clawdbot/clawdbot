@@ -16,6 +16,7 @@ export const ApprovalProtocolSchemas = {
   ExternalPostApprovalScope: approvals.ExternalPostApprovalScopeSchema,
   StandingGrantApprovalScope: approvals.StandingGrantApprovalScopeSchema,
   ApprovalScope: approvals.ApprovalScopeSchema,
+  PluginApprovalExternalResolution: approvals.PluginApprovalExternalResolutionSchema,
   ExecApprovalPresentation: approvals.ExecApprovalPresentationSchema,
   PluginApprovalPresentation: approvals.PluginApprovalPresentationSchema,
   SystemAgentApprovalPresentation: approvals.SystemAgentApprovalPresentationSchema,

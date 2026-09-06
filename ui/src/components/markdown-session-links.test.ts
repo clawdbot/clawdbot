@@ -1,12 +1,9 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { describe, expect, it, vi } from "vitest";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { navigateMarkdownSession, type SessionLinkTarget } from "./markdown-session-links.ts";
 
 describe("markdown session links", () => {
   it("navigates through the canonical chat session route", () => {
-    setSessionPathBuilder(buildControlUiSessionPath);
     const navigate = vi.fn();
     const context = {
       basePath: "",

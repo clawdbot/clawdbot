@@ -11,6 +11,7 @@ import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
@@ -51,7 +52,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const {
     client,
     core,
-    cfg,
+    cfg: startupConfig,
     accountId,
     runtime,
     logger,
@@ -90,11 +91,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
-  const contextVisibilityMode = resolveChannelContextVisibilityMode({
-    cfg,
-    channel: "matrix",
-    accountId,
-  });
   const handlerState = createMatrixHandlerState({
     core,
     accountId,
@@ -243,7 +239,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ...prefix,
                 audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
                   content: prefix.content,
-                  cfg,
+                  cfg: startupConfig,
                 })
                   ? "defer"
                   : "run",
@@ -273,6 +269,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const {
+        cfg,
+        liveDmAllowFrom,
         route: _route,
         hasExplicitSessionBinding,
         roomConfig,
@@ -300,6 +298,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         effectiveRoomUsers,
         resolveMessageIngress,
       } = resolvedIngressResult;
+      const contextVisibilityMode = resolveChannelContextVisibilityMode({
+        cfg,
+        channel: "matrix",
+        accountId,
+      });
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
@@ -438,14 +441,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const { deliverReply, onReplyError, turnDispatcherOptions } = replyDispatcher;
       const pinnedMainDmOwner = isDirectMessage
-        ? await (async () => {
-            const { liveCfg, liveDmAllowFrom } = await handlerState.resolveLiveAccountAllowlists();
-            return resolvePinnedMainDmOwnerFromAllowlist({
-              dmScope: liveCfg.session?.dmScope,
-              allowFrom: liveDmAllowFrom,
-              normalizeEntry: normalizeMatrixUserId,
-            });
-          })()
+        ? resolvePinnedMainDmOwnerFromAllowlist({
+            dmScope: cfg.session?.dmScope,
+            allowFrom: liveDmAllowFrom,
+            normalizeEntry: normalizeMatrixUserId,
+          })
         : null;
 
       const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
@@ -554,6 +554,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
             delivery: {
               observeMessageSent: true,
+              preparePayload: prepareMatrixReplyPayload,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },

@@ -242,8 +242,8 @@ export async function recordShortTermRecalls(params: {
                 entry.claimHash === claimHash,
             )
           : undefined;
-      // Interactive/grounded writers retain their path-qualified identity.
-      // Daily recurrence reinforces that candidate instead of creating a rival.
+      // Non-daily writers retain their path-qualified identity unless daily
+      // ingestion has already established the canonical claim entry.
       const claimKey =
         signalType === "daily"
           ? buildDailyClaimEntryKey(claimHash)
@@ -254,8 +254,11 @@ export async function recordShortTermRecalls(params: {
               source: "memory",
               claimHash,
             });
+      const dailyClaimEntry =
+        signalType === "daily" ? undefined : store.entries[buildDailyClaimEntryKey(claimHash)];
       const key =
         nonDailyEntry?.key ??
+        dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
       const score = clampScore(result.score);
@@ -311,8 +314,11 @@ export async function recordShortTermRecalls(params: {
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
       // Daily claim keys omit the file path; retain the first source citation
-      // while observations from distinct days accumulate on the same claim.
-      const preserveFirstDailySource = signalType === "daily" && existing !== undefined;
+      // while observations from distinct days accumulate on the same claim. A
+      // A later non-daily signal cites it the same way, so the claim never
+      // adopts the path of whichever file the search or backfill happened to hit.
+      const preserveFirstDailySource =
+        existing !== undefined && (signalType === "daily" || dailyClaimEntry !== undefined);
       store.entries[key] = {
         key,
         path: preserveFirstDailySource ? existing.path : normalizedPath,

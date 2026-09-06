@@ -26,6 +26,7 @@ const BOT_TOKEN = "424242:telegram-model-picker-proof";
 const CHAT_ID = 2468;
 const MESSAGE_ID = 9001;
 const PREPARED_MODEL = "prepared-model";
+const DISCOVERED_MODEL = "discovered-model";
 const REPLACEMENT_MODEL = "replacement-model";
 const REPLACEMENT_PROVIDER = "qa-picker";
 const REPLACEMENT_MODEL_REF = `${REPLACEMENT_PROVIDER}/${REPLACEMENT_MODEL}`;
@@ -448,10 +449,10 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
-      succeed(res, {
+      writeJson(res, 200, {
         models: [
           {
-            name: PREPARED_MODEL,
+            name: DISCOVERED_MODEL,
             modified_at: "2026-08-16T00:00:00Z",
             digest: "prepared-model-digest",
             size: 1,
@@ -468,7 +469,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
-      succeed(res, {
+      writeJson(res, 200, {
         model_info: { "general.context_length": 8192 },
         capabilities: ["completion", "tools"],
       });
@@ -518,7 +519,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     } else if (
       method === "editMessageText" &&
       pickerStage === "models" &&
-      hasCallback({ method, body }, `mdl_sel_ollama/${PREPARED_MODEL}`)
+      hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
     ) {
       pickerStage = "repeated-providers";
       queueCallback("mdl_prov");
@@ -556,7 +557,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          await gatewayOwner.start({
+          const gateway = await gatewayOwner.start({
             repoRoot,
             useRepoCli: true,
             transportBaseUrl: apiRoot,
@@ -627,16 +628,21 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             }),
           });
 
-          const startupDiscoveryRequests = discoveryRequests;
-          expect(startupDiscoveryRequests).toBe(0);
           pendingUpdates.push(initialModelsUpdate());
 
           await expect
-            .poll(() => ({ stage: pickerStage, discoveryRequests }), {
+            .poll(() => pickerStage, {
               interval: 50,
               timeout: 30_000,
             })
-            .toEqual({ stage: "providers", discoveryRequests: 2 });
+            .toBe("providers");
+          const warmedModels = await gateway.call("models.list", { view: "all" });
+          expect(warmedModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
+          expect(discoveryRequests).toBeGreaterThan(0);
           const warmDiscoveryRequests = discoveryRequests;
           discoveryFrozen = true;
           queueCallback("mdl_prov");
@@ -664,15 +670,33 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
-              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${PREPARED_MODEL}`),
+              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
           ).toBe(true);
           expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
           ).toHaveLength(4);
+          const preparedModels = await gateway.call("models.list", { view: "default" });
+          expect(preparedModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
           expect(discoveryRequests).toBe(warmDiscoveryRequests);
           expect(postWarmDiscoveryAttempts).toBe(0);
+
+          discoveryFrozen = false;
+          const refreshedModels = await gateway.call("models.list", {
+            view: "default",
+            refresh: true,
+          });
+          expect(refreshedModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
+          expect(discoveryRequests).toBeGreaterThan(warmDiscoveryRequests);
         } finally {
           await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }

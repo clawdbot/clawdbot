@@ -535,6 +535,28 @@ describe("applySessionModelSelection", () => {
     );
   });
 
+  it("resolves SDK effective persistence from the current write draft", async () => {
+    const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    const draft = {
+      agents: {
+        ...cfg.agents,
+        entries: { main: { model: "anthropic/claude-sonnet-4-6" } },
+      },
+    };
+    effects.mutateConfigFileWithRetry.mockImplementationOnce(
+      async ({ mutate }: { mutate: (config: OpenClawConfig) => string }) => ({
+        nextConfig: draft,
+        result: mutate(draft),
+      }),
+    );
+
+    await applySessionModelSelection(createParams({ cfg, canPersistStickyModelSelection: true }));
+
+    await vi.waitFor(() => expect(effects.info).toHaveBeenCalledOnce());
+    expect(draft.agents.defaults.model).toBe("anthropic/claude-opus-4-6");
+    expect(draft.agents.entries.main.model).toBe("openai/gpt-4o");
+  });
+
   it.each([
     {
       name: "clears overrides for an authoritative default",
@@ -734,6 +756,34 @@ describe("applySessionModelSelection", () => {
     expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
     expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects account selection authority revoked during metadata preparation", async () => {
+    const metadata = createDeferred<ModelCatalogEntry[]>();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockReturnValueOnce(metadata.promise);
+    let authorized = true;
+    const params = createParams({
+      validateAuthProfileSelection: () => (authorized ? undefined : "Select an account you own."),
+      request: {
+        provider: "openai",
+        model: "gpt-4o",
+        isDefault: false,
+        profileOverride: "openai:work",
+        runtime: { kind: "unchanged" },
+      },
+    });
+    const initial = structuredClone(params.sessionEntry);
+    const pending = applySessionModelSelection(params);
+    authorized = false;
+    metadata.resolve([]);
+
+    expect(await pending).toMatchObject({
+      status: "rejected",
+      message: "Select an account you own.",
+    });
+    expect(params.sessionEntry).toEqual(initial);
+    expect(lifecycleEvents).toEqual([]);
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -15,6 +15,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -201,6 +202,12 @@ describe("scripts/test-extension.mts", () => {
     );
     expect(chunks.flat()).toEqual(expectedFiles);
     expect(new Set(chunks.flat()).size).toBe(expectedFiles.length);
+  });
+
+  it("excludes plugin browser tests from the server-side extension inventory", () => {
+    const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.includes("/browser/"))).toBe(false);
   });
 
   it("includes newly authored Matrix tests in bounded process targets", () => {
@@ -559,7 +566,16 @@ describe("scripts/test-extension.mts", () => {
     expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
-    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
+    const largestPlugin = Math.max(
+      ...balancedExpectedExtensionIds.map(
+        (targetArg) => resolveExtensionTestPlan({ targetArg }).estimatedCost,
+      ),
+    );
+    const lowerBound = Math.max(
+      largestPlugin,
+      Math.ceil(totals.reduce((sum, cost) => sum + cost, 0) / shards.length),
+    );
+    expect(Math.max(...totals)).toBe(lowerBound);
 
     for (const shard of shards) {
       expect(shard.extensionIds.length).toBeGreaterThan(0);
@@ -687,9 +703,13 @@ describe("scripts/test-extension.mts", () => {
     });
   });
 
-  it.each([false, true])(
-    "runs installed Vitest without pnpm (Maglev opt-in: %s)",
-    (enableMaglev) => {
+  it.each([
+    { enableMaglev: false, realHomeReplay: false },
+    { enableMaglev: true, realHomeReplay: false },
+    { enableMaglev: false, realHomeReplay: true },
+  ])(
+    "runs installed Vitest without pnpm (Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
+    ({ enableMaglev, realHomeReplay }) => {
       const root = realpathSync(
         mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
       );
@@ -707,11 +727,12 @@ describe("scripts/test-extension.mts", () => {
         config,
         `import assert from 'node:assert/strict';
 assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false}}};`,
+export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
+      const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {test,expect} from 'vitest';test('selected native case',()=>expect(process.env.HOME).toBe(${JSON.stringify(home)}));`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';test('selected native case',()=>{expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -721,6 +742,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       }
       const params = {
         config,
+        homeMode: realHomeReplay ? "live-aware" : undefined,
         args: [
           "--configLoader=native",
           "--reporter=verbose",
@@ -730,7 +752,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
           "**/excluded.test.mjs",
         ],
         targets: [path.join(root, "selected.test.mjs"), path.join(root, "excluded.test.mjs")],
-      };
+      } satisfies VitestBatchRunParams;
       writeFileSync(
         entry,
         `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({...${JSON.stringify(params)},env:{...process.env,OPENCLAW_VITEST_ENABLE_MAGLEV:${JSON.stringify(enableMaglev ? "1" : "")}}});`,
@@ -746,6 +768,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
               PATH: "",
               HOME: home,
               USERPROFILE: home,
+              OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",
+              OPENCLAW_LIVE_USE_REAL_HOME: realHomeReplay ? "1" : "0",
               TMPDIR: root,
               TMP: root,
               TEMP: root,
@@ -784,6 +808,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
         "-r",
         ".",
         "--exclude=extensions/codex/src/app-server/client.test.ts",
+        "--exclude=",
+        "extensions/codex/src/app-server/stream.test.ts",
         "extensions/codex/src/app-server/models.test.ts",
         "--reporter=dot",
       ]),
@@ -797,28 +823,62 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       "-r",
       ".",
       "--exclude=codex/src/app-server/client.test.ts",
+      "--exclude=",
+      "codex/src/app-server/stream.test.ts",
       "codex/src/app-server/models.test.ts",
       "--reporter=dot",
     ]);
   });
 
-  it("relativizes absolute Vitest paths from extension cwd", () => {
-    const extensionCwd = path.join(process.cwd(), "extensions", "codex");
-    expect(
-      relativizeExtensionVitestArgs(
-        [
-          "--exclude",
-          path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
-          path.join(extensionCwd, "src", "app-server", "client.test.ts"),
-        ],
-        extensionCwd,
-      ),
-    ).toEqual([
-      "--exclude",
-      "codex/src/app-server/run-attempt.test.ts",
-      "codex/src/app-server/client.test.ts",
-    ]);
+  it.each([
+    ["--tagsFilter", "slow"],
+    ["--tagsFilter=", "slow"],
+    ["--fsModuleCachePath", "extensions/cache"],
+    ["--attachmentsDir", "extensions/artifacts"],
+    ["--max-workers", "2"],
+    ["--watch", "false"],
+    ["--no-file-parallelism"],
+    ["--retry.delay", "100"],
+  ])("preserves native Vitest option operands from a plugin cwd: %j", (...flags) => {
+    const target = "extensions/browser/src/example.test.ts";
+    const args = relativizeExtensionVitestArgs(
+      [...flags, target],
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(
+      parseCLI(["vitest", "run", ...flags, "browser/src/example.test.ts"]),
+    );
   });
+
+  it("preserves native separator tails without interpreting them as plugin paths", () => {
+    const tail = ["--", "extensions/browser/src/literal.test.ts", "--exclude="];
+    const args = relativizeExtensionVitestArgs(
+      tail,
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(parseCLI(["vitest", "run", ...tail]));
+  });
+
+  it.each(["--exclude", "--exclude="])(
+    "relativizes absolute %s paths from extension cwd",
+    (flag) => {
+      const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+      expect(
+        relativizeExtensionVitestArgs(
+          [
+            flag,
+            path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+            path.join(extensionCwd, "src", "app-server", "client.test.ts"),
+          ],
+          extensionCwd,
+        ),
+      ).toEqual([
+        flag,
+        "codex/src/app-server/run-attempt.test.ts",
+        "codex/src/app-server/client.test.ts",
+      ]);
+    },
+  );
 
   posixIt(
     "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",

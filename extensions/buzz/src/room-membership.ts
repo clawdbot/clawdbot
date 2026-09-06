@@ -63,17 +63,6 @@ export function parseBuzzRoomMembershipEvent(
   };
 }
 
-export function isNewerBuzzRoomMembership(
-  candidate: BuzzRoomMembership,
-  current: BuzzRoomMembership | undefined,
-): boolean {
-  return (
-    !current ||
-    candidate.createdAt > current.createdAt ||
-    (candidate.createdAt === current.createdAt && candidate.eventId < current.eventId)
-  );
-}
-
 export function parseBuzzRoomMembershipChangeEvent(
   event: Event,
   membership: BuzzRoomMembership,

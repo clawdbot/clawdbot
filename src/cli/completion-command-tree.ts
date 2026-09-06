@@ -29,6 +29,14 @@ export function commandNameVariants(command: Command): string[] {
   return [command.name(), ...command.aliases()];
 }
 
+export function visibleCompletionCommands(command: Command): Command[] {
+  // The help API also synthesizes a help command; completion dispatch uses registered nodes.
+  return command
+    .createHelp()
+    .visibleCommands(command)
+    .filter((child) => command.commands.includes(child));
+}
+
 export function collectShellCompletionCommandTree(program: Command): ShellCompletionCommandTree {
   const descendants: ShellCompletionContext[] = [];
 
@@ -43,8 +51,8 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
       command,
       pathVariants,
       completions: [
-        ...command.commands.flatMap(commandNameVariants),
-        ...command.options.flatMap(completionFlags),
+        ...visibleCompletionCommands(command).flatMap(commandNameVariants),
+        ...command.options.filter((option) => !option.hidden).flatMap(completionFlags),
       ],
       valueOptions: [
         ...new Set([

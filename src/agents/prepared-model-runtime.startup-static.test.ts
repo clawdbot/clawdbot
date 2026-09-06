@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
   const authStorage = {
@@ -120,7 +122,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
+  prepareAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
 }));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
@@ -129,12 +131,16 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({ agentFacts }: { agentFacts: unknown }) => ({
-    generationFingerprint: "test-generation",
-    input: (agentFacts as { input: unknown }).input,
-  }),
   createPreparedModelCatalogWorker: () => ({
-    loadCatalog: mocks.runPreparedModelCatalogWorker,
+    loadCatalog: async () => {
+      const catalog = await mocks.runPreparedModelCatalogWorker();
+      // Real worker replies pair every catalog with its observed auth generation.
+      setPreparedModelFullCatalogAuth(catalog, {
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+      });
+      return catalog;
+    },
     loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
   }),
 }));
@@ -179,6 +185,7 @@ vi.mock("./agent-scope-config.js", async (importOriginal) => ({
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,
+  getRuntimeAuthProfileStoreCredentialsRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
@@ -241,16 +248,20 @@ beforeEach(() => {
 
 describe("prepareScopedReadOnlyModelAuthModes", () => {
   function usePreparedSyntheticAuth() {
-    mocks.resolveAmbientCredentials.mockImplementationOnce((...args: unknown[]) => {
+    mocks.resolveAmbientCredentials.mockImplementationOnce(async (...args: unknown[]) => {
       const params = args[0] as {
         syntheticAuthProviderRefs: string[];
-        resolveSyntheticAuth: (provider: string) => { apiKey?: string } | undefined;
+        resolveSyntheticAuth: (provider: string) => Promise<{ apiKey?: string } | undefined>;
       };
       return Object.fromEntries(
-        params.syntheticAuthProviderRefs.flatMap((provider) => {
-          const key = params.resolveSyntheticAuth(provider)?.apiKey;
-          return key ? [[provider, { type: "api_key", key }]] : [];
-        }),
+        (
+          await Promise.all(
+            params.syntheticAuthProviderRefs.map(async (provider) => {
+              const key = (await params.resolveSyntheticAuth(provider))?.apiKey;
+              return key ? [[provider, { type: "api_key", key }]] : [];
+            }),
+          )
+        ).flat(),
       );
     });
   }
@@ -560,9 +571,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
       }),
     );
     const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
-      | { resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined }
+      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
       | undefined;
-    expect(ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
+    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
       apiKey: "synthetic-openai-key",
     });
     expect(mocks.resolveSyntheticAuth).toHaveBeenCalledWith({

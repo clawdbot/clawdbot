@@ -97,6 +97,32 @@ agents:
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
+### Model Studio / DashScope (Qwen)
+
+OpenClaw's direct-provider adapter enables explicit prompt caching by default on
+native or default Model Studio / DashScope OpenAI-compatible routes, using
+`compat.cacheControlFormat: "anthropic"` and the
+existing system, last-tool, and last-conversation cache markers. Explicit model
+compat settings take precedence over detected defaults. Custom proxy endpoints
+receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
+explicitly only when the proxy supports these markers.
+
+The embedded runner's boundary-aware Chat Completions transport does not yet apply
+these markers; detecting the format alone does not enable explicit caching there.
+
+Explicit `cacheRetention` values reach this transport without enabling
+`compat.supportsPromptCacheKey`; leave that flag unset because this route does not
+need OpenAI's `prompt_cache_key` or `prompt_cache_retention` fields. With no explicit
+retention, the transport keeps its `"short"` default. Model Studio uses a five-minute
+explicit cache window, so `"long"` keeps ephemeral markers without requesting a
+one-hour TTL.
+
+To disable OpenClaw's explicit markers, set `cacheRetention: "none"`. The current
+`compat.cacheControlFormat` schema accepts only `"anthropic"`, not a disable value;
+omitting it uses the detected default. Alibaba's automatic implicit caching is
+separate and cannot be disabled. Supported models, minimum prompt lengths, and
+cache billing are described in [Model Studio context caching](https://www.alibabacloud.com/help/en/model-studio/context-cache).
+
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.

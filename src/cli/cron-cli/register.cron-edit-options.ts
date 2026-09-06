@@ -1,5 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import {
@@ -153,11 +154,16 @@ export async function resolveCronEditPayloadDeliveryPatch(
   }
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
-    const existingKind = (await loadExistingJob()).payload.kind;
+    const existingJob = await loadExistingJob();
+    const existingKind = existingJob.payload.kind;
     if (existingKind === "script") {
       throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
     }
-    if (existingKind === "systemEvent" || isSystemOwnedCronPayloadKind(existingKind)) {
+    if (
+      existingKind === "systemEvent" ||
+      isSystemOwnedCronPayloadKind(existingKind) ||
+      isSystemMonitorDeclaration(existingJob.declarationKey)
+    ) {
       throw new Error(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;
@@ -173,7 +179,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
   ) {
     // Tool grants are shared by every payload kind; a policy-only edit must
     // preserve the stored execution kind instead of creating an agent turn.
-    toolsOnlyPayloadKind = (await loadExistingJob()).payload.kind;
+    const existingJob = await loadExistingJob();
+    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
+      throw new Error("System-owned cron jobs cannot be edited by cron clients.");
+    }
+    toolsOnlyPayloadKind = existingJob.payload.kind;
   }
   const hasAgentTurnPayloadField =
     hasAgentTurnSpecificPayloadField ||

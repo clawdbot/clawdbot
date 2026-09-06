@@ -114,16 +114,25 @@ describe("node worker Git transfers", () => {
       description: "reuses Git-base tracked files without requesting unavailable blobs",
       changed: false,
       replaceSymlinkAncestor: false,
+      lateWrite: false,
     },
     {
       description: "downloads changed and nested files without restoring deleted Git-base paths",
       changed: true,
       replaceSymlinkAncestor: false,
+      lateWrite: false,
     },
     {
       description: "replaces a Git-base symlink ancestor without changing files outside staging",
       changed: false,
       replaceSymlinkAncestor: true,
+      lateWrite: false,
+    },
+    {
+      description: "preserves the prior workspace when a matched base file changes before capture",
+      changed: true,
+      replaceSymlinkAncestor: false,
+      lateWrite: true,
     },
   ];
   it.each([
@@ -135,11 +144,12 @@ describe("node worker Git transfers", () => {
       description: "handles a prepared project cache " + seedState,
       changed: false,
       replaceSymlinkAncestor: false,
+      lateWrite: false,
       seedState,
     })),
   ])(
     "$description (prepared project: $seedState)",
-    async ({ changed, replaceSymlinkAncestor, seedState }) => {
+    async ({ changed, replaceSymlinkAncestor, lateWrite, seedState }) => {
       transferDebug.mockClear();
       const root = tempDirs.make("node-worker-transfer-git-");
       const source = path.join(root, "source");
@@ -187,7 +197,7 @@ describe("node worker Git transfers", () => {
           }
         }
       }
-      if (invalidSeed) {
+      if (invalidSeed || lateWrite) {
         await fs.mkdir(workspaceDir);
         await fs.writeFile(path.join(workspaceDir, "previous.txt"), "preserve prior workspace\n");
       }
@@ -250,6 +260,16 @@ describe("node worker Git transfers", () => {
             requestedBlobs.push(sha256);
             const file = filesByHash.get(sha256);
             if (file) {
+              if (lateWrite && sha256 === tracked.sha256) {
+                const staging = (await fs.readdir(root)).find((name) =>
+                  name.startsWith(".workspace.workspace-transfer-"),
+                );
+                expect(staging).toBeDefined();
+                const script = path.join(root, staging!, "script.sh");
+                const original = await fs.stat(script);
+                await fs.writeFile(script, "#!/bin/sh\nexit 1\n");
+                await fs.utimes(script, original.atime, original.mtime);
+              }
               const body = await fs.readFile(file);
               res.writeHead(200, { "content-length": String(body.byteLength) });
               res.end(body);
@@ -270,6 +290,7 @@ describe("node worker Git transfers", () => {
           environmentId: "environment-git",
           workspaceDir,
           manifestHome: root,
+          hashMemo: new Map(),
           transfer: {
             direction: "download",
             token: "test-token",
@@ -280,6 +301,17 @@ describe("node worker Git transfers", () => {
         if (invalidSeed) {
           await expect(transfer).rejects.toThrow("prepared project seed is invalid");
           expect(requestedPacks).toBe(0);
+          expect(await fs.readFile(path.join(workspaceDir, "previous.txt"), "utf8")).toBe(
+            "preserve prior workspace\n",
+          );
+          return;
+        }
+        if (lateWrite) {
+          await expect(transfer).rejects.toMatchObject({
+            cause: expect.objectContaining({
+              message: expect.stringContaining("materialized a different manifest"),
+            }),
+          });
           expect(await fs.readFile(path.join(workspaceDir, "previous.txt"), "utf8")).toBe(
             "preserve prior workspace\n",
           );
@@ -309,6 +341,15 @@ describe("node worker Git transfers", () => {
           changed ? "script.sh" : "tracked.txt",
         );
         expect(requestedBlobs).toEqual([...filesByHash.keys()]);
+        expect(transferDebug).toHaveBeenCalledWith(
+          "node worker manifest capture completed",
+          expect.objectContaining({
+            contentHashCount: downloadablePaths.size,
+            memoHitCount:
+              snapshot.manifest.entries.filter((entry) => entry.type === "file").length -
+              downloadablePaths.size,
+          }),
+        );
         await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
         if (changed) {
           await expect(fs.access(path.join(workspaceDir, "deleted.txt"))).rejects.toMatchObject({

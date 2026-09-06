@@ -1,5 +1,4 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-// Control UI test helper supports modal dialog setup.
 import { expect, vi } from "vitest";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 
@@ -43,13 +42,87 @@ export function installDialogPolyfill(): () => void {
   };
 }
 
+async function waitForDialog<T>(read: () => T): Promise<T> {
+  // Lazy module loading is fixture setup, not part of the DOM readiness deadline.
+  await vi.dynamicImportSettled();
+  return vi.waitFor(read);
+}
+
+export function createModalDialogTestFixture(
+  dismissModal: (modal: HTMLElement) => void = (modal) => {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  },
+) {
+  const restoreDialogPolyfill = installDialogPolyfill();
+  const operations: Promise<unknown>[] = [];
+  const requests: Promise<unknown>[] = [];
+  const modals = new Set<HTMLElement>();
+  const captureModals = () => {
+    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
+      modals.add(modal);
+    }
+  };
+  const observer = new MutationObserver(captureModals);
+  observer.observe(document.body, { childList: true, subtree: true });
+  let pendingCleanup: Promise<void> | undefined;
+
+  function track<T>(completion: Promise<T>, work: Promise<unknown>[]) {
+    work.push(completion);
+    void completion.catch(() => {});
+    return completion;
+  }
+
+  async function cleanup() {
+    let joined = false;
+    try {
+      // An assertion can fail before the lazy dialog exists. Catalog completion
+      // can repaint its host, so join those responses before cancelling the owner.
+      await vi.dynamicImportSettled();
+      await Promise.allSettled(requests);
+      await vi.dynamicImportSettled();
+      captureModals();
+      for (const modal of modals) {
+        if (modal.parentElement) {
+          dismissModal(modal);
+        }
+      }
+      const results = await Promise.allSettled(operations);
+      await vi.dynamicImportSettled();
+      joined = true;
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Dialog operations failed during fixture cleanup");
+      }
+    } finally {
+      observer.disconnect();
+      if (joined) {
+        document.body.replaceChildren();
+        restoreDialogPolyfill();
+      }
+    }
+  }
+
+  return {
+    waitFor: waitForDialog,
+    track: <T>(completion: Promise<T>) => track(completion, operations),
+    mockRequest: <Args extends unknown[], Result>(request: (...args: Args) => Promise<Result>) =>
+      vi.fn((...args: Args) => track(request(...args), requests)),
+    cleanup: () => (pendingCleanup ??= cleanup()),
+  };
+}
+
 /**
  * Wait for the confirm dialog `showConfirmDialog` renders into `document.body`.
  * Returned separately from answering it so tests can mutate owner state (a
  * reconnect, an agent switch) while the decision is still pending.
  */
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
-  return vi.waitFor(() => {
+  return waitForDialog(() => {
     const actions = document.body.querySelector<HTMLElement>(
       "openclaw-modal-dialog .exec-approval-actions",
     );
@@ -72,7 +145,7 @@ export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "c
 
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
 export async function waitForRenderedModalDialog(container: HTMLElement) {
-  await vi.waitFor(() => {
+  await waitForDialog(() => {
     if (!container.querySelector("openclaw-modal-dialog")) {
       throw new Error("Expected openclaw-modal-dialog");
     }
@@ -81,6 +154,7 @@ export async function waitForRenderedModalDialog(container: HTMLElement) {
 }
 
 export async function waitForInputDialog(): Promise<HTMLInputElement> {
+  await vi.dynamicImportSettled();
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const input = document.body.querySelector("openclaw-modal-dialog input");
     if (input instanceof HTMLInputElement) {

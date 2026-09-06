@@ -62,6 +62,21 @@ describe("isRetryableAssistantError", () => {
     },
   );
 
+  it("does not retry a structured provider refusal with transient-looking text", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("HTTP 503 temporary provider response"),
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 0,
+            details: { provider: "anthropic", category: "cyber" },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("retries an incomplete terminal stream that retained visible partial text", () => {
     expect(
       isRetryableAssistantError({

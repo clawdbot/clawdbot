@@ -296,45 +296,43 @@ function readFirstStringParam(params: Record<string, unknown>, keys: readonly st
   return "";
 }
 
-function readStructuredAttachmentMediaParams(value: unknown): string[] {
+function readStructuredAttachmentMediaParam(value: unknown): string | undefined {
   if (!Array.isArray(value)) {
-    return [];
+    return undefined;
   }
-  const values: string[] = [];
+  let media: string | undefined;
   for (const attachment of value) {
     if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
       continue;
     }
     const record = attachment as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      const candidate = readToolStringParam(record, key);
-      if (candidate) {
-        values.push(candidate);
-      }
+      // Preserve eager alias reads; earlier content must not hide a later accessor error.
+      media = readToolStringParam(record, key) || media;
     }
   }
-  return values;
+  return media;
 }
 
 export function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolean {
-  const text = ["message", "text", "content", "caption", "SendMessage"]
-    .map((field) => (typeof params[field] === "string" ? params[field] : ""))
-    .filter((value) => value.trim())
-    .join("\n");
-  const mediaUrls = [
-    ...(readStringArrayParam(params, "mediaUrls") ?? []),
-    ...readStructuredAttachmentMediaParams(params.attachments),
-  ];
-  return hasReplyPayloadContent(
-    {
-      text,
-      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
-      mediaUrls,
-      presentation: params.presentation,
-      interactive: params.interactive,
-    },
-    { trimText: true },
-  );
+  let text: string | undefined;
+  for (const field of ["message", "text", "content", "caption", "SendMessage"]) {
+    const value = typeof params[field] === "string" ? params[field] : "";
+    if (value.trim()) {
+      text = value;
+    }
+  }
+  const mediaUrls = readStringArrayParam(params, "mediaUrls");
+  const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
+  return hasReplyPayloadContent({
+    text,
+    mediaUrl:
+      readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
+      attachmentMedia,
+    mediaUrls,
+    presentation: params.presentation,
+    interactive: params.interactive,
+  });
 }
 
 export function sanitizeMessageToolVisiblePayload(

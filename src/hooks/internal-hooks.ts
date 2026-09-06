@@ -289,6 +289,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
+  // An admitted event finishes its snapshot even if a handler awaits across a reload or disable.
   const typeHandlers = [
     ...(handlers.get(event.type) ?? []),
     ...listLegacyPluginInternalHooks(event.type),

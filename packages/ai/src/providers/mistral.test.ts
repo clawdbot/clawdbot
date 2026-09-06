@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const mistralMockState = vi.hoisted(() => ({
@@ -239,6 +240,35 @@ describe("Mistral provider", () => {
 
   afterEach(() => {
     configureAiTransportHost({});
+  });
+
+  it("reports every parsed Mistral event as request activity", async () => {
+    const events = [
+      { data: { id: "resp-activity", model: "mistral-large-latest", choices: [], usage: {} } },
+      {
+        data: {
+          id: "resp-activity",
+          model: "mistral-large-latest",
+          choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+        },
+      },
+    ];
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+      },
+    };
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runMistralFixture(context, { signal: controller.signal });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(events.length);
   });
 
   it("reports the real HTTP response captured by the Mistral HTTPClient hook", async () => {

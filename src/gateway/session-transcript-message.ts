@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -114,10 +115,10 @@ export function projectTranscriptEntryMessage(
   seq: number,
   transcriptPosition?: TranscriptDisplayPosition,
 ): unknown {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  if (!isVisibleTranscriptRecord(entry)) {
     return null;
   }
-  const record = entry as Record<string, unknown>;
+  const record = entry;
   if (record.message) {
     const recordTimestampMs =
       typeof record.timestamp === "string"
@@ -138,6 +139,8 @@ export function projectTranscriptEntryMessage(
     return null;
   }
   const kind = record.type;
+  const compactionIdentity =
+    kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
   const parsedTimestamp =
     typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
@@ -147,6 +150,10 @@ export function projectTranscriptEntryMessage(
     __openclaw: {
       kind,
       id: typeof record.id === "string" ? record.id : undefined,
+      ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
+      ...(typeof compactionIdentity?.itemId === "string"
+        ? { itemId: compactionIdentity.itemId }
+        : {}),
       transcriptPosition,
       seq,
     },

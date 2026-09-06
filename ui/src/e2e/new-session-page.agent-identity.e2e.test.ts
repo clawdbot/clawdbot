@@ -209,6 +209,10 @@ suite.define(() => {
         await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
         await hero.waitFor();
         await picker.locator(".agent-select__label").waitFor();
+        await page.waitForLoadState("networkidle");
+        const identityRequests = await gateway.getRequests("agent.identity.get");
+        expect(identityRequests).toHaveLength(1);
+        expect(identityRequests[0]).toMatchObject({ params: { agentId: "main" } });
         await picker.locator(".agent-select__trigger").click();
         await capture(page, `${theme}-named-picker-open.png`);
         await captureElement(

@@ -610,12 +610,12 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
 
 type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
   ChannelPlugin<TResolvedAccount, Probe, Audit>,
-  "security" | "pairing" | "threading" | "outbound"
+  "capabilities" | "security" | "pairing" | "threading" | "outbound"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount, Probe, Audit>,
-      "security" | "pairing" | "threading" | "outbound"
+      "capabilities" | "security" | "pairing" | "threading" | "outbound"
     >
   >;
 
@@ -825,6 +825,7 @@ export function createChatChannelPlugin<
 }): ChannelPlugin<TResolvedAccount, Probe, Audit> {
   return {
     ...params.base,
+    capabilities: params.base.capabilities ?? { chatTypes: ["direct"] },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       ...params.base.conversationBindings,

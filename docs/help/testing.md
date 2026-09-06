@@ -761,15 +761,19 @@ Native dependency policy:
 
 - Command: `pnpm test:ui:e2e`
 - Config: `test/vitest/vitest.ui-e2e.config.ts`
-- Files: `ui/src/**/*.e2e.test.ts`
+- Files: `ui/src/**/*.e2e.test.ts` and the QA Lab media-transcript real-Gateway suite
 - Scope:
-  - Starts the Vite Control UI
-  - Drives a real Chromium page through Playwright
-  - Replaces the Gateway WebSocket with deterministic in-browser mocks
+  - Uses four resource groups in two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share the parallel phase (at most two workers total); `ui-e2e-serial` and `ui-e2e-serial-standalone` share the later single-worker phase
+  - The two bundle-consuming projects lazily acquire one temporary UI bundle/preview per invocation; standalone projects own their fixture, source, or custom-build servers
+  - Selecting only standalone suites skips the shared bundle build; new E2E files default to bundled ownership
+  - Every selected project discovers Chromium and drives real pages through Playwright; the root config retains the complete discovery inventory
+  - Most suites replace the Gateway WebSocket with deterministic in-browser mocks; some start isolated real Gateways
 - Expectations:
-  - Runs in CI as part of `pnpm test:e2e`
-  - No real Gateway, agents, or provider keys required
+  - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
+  - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
+
+The dedicated real-Gateway CI job uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` completes in a clean checkout. Keep source and built outputs unchanged until all workers and children finish. MCP conformance runs serially first, then the other 13 files share at most two workers in the same invocation, with no extra jobs or shards. Readiness failures stop execution without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets without the prebuilt config keep their original serial command. See [CI](/ci) for the resource policy and bounded timing evidence.
 
 ### E2E: OpenShell backend smoke
 
@@ -983,7 +987,8 @@ Useful env vars:
 ## Docs sanity
 
 Run docs checks after doc edits: `pnpm check:docs`.
-Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Run the shared publishing parser's anchor audit when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Diagnostics show `unknown` when a reliable source line is unavailable.
 
 ## Offline regression (CI-safe)
 

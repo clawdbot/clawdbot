@@ -22,8 +22,6 @@ import {
   type MatrixThreadRelation,
 } from "./types.js";
 
-const getCore = () => getMatrixRuntime();
-
 async function renderMatrixFormattedContent(params: {
   client: MatrixClient;
   markdown?: string | null;
@@ -169,7 +167,7 @@ export function buildThreadRelation(threadId: string, replyToId?: string): Matri
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
-  const kind = getCore().media.mediaKindFromMime(contentType ?? "");
+  const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
       return MsgType.Image;

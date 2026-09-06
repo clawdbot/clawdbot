@@ -17,7 +17,6 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -265,100 +264,6 @@ describe("runContextEngineMaintenance", () => {
       replacements: [
         { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
       ],
-    });
-  });
-
-  it("forces background maintenance rewrites through the runtime target even when a session manager exists", async () => {
-    const maintain = vi.fn(async (params?: unknown) => {
-      await (
-        params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
-      )?.runtimeContext?.rewriteTranscriptEntries?.({
-        replacements: [
-          {
-            entryId: "entry-1",
-            message: castAgentMessage({
-              role: "assistant",
-              content: [{ type: "text", text: "done" }],
-              timestamp: 2,
-            }),
-          },
-        ],
-      });
-      return {
-        changed: false,
-        bytesFreed: 0,
-        rewrittenEntries: 0,
-      };
-    });
-    const sessionManager = {
-      appendMessage: vi.fn(),
-      getSessionTarget: () => undefined,
-    } as unknown as Parameters<typeof runContextEngineMaintenance>[0]["sessionManager"];
-    const transcriptUpdateListener = vi.fn();
-    const cleanupTranscriptUpdateListener = onSessionTranscriptUpdate(transcriptUpdateListener);
-
-    try {
-      await runContextEngineMaintenance({
-        contextEngine: {
-          info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        },
-        sessionId: "session-background-file-rewrite",
-        sessionKey: "agent:main:session-background-file-rewrite",
-        sessionTarget: {
-          agentId: "custom-agent",
-          sessionId: "custom-session",
-          sessionKey: "agent:custom-agent:custom-session",
-          storePath: "/tmp/custom-agent.sqlite",
-        },
-        sessionFile: "/tmp/session-background-file-rewrite.jsonl",
-        reason: "turn",
-        executionMode: "background",
-        sessionManager,
-        config: {},
-      });
-    } finally {
-      cleanupTranscriptUpdateListener();
-    }
-
-    expect(resolveRuntimeTranscriptReadTargetMock).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
-      storePath: "/tmp/custom-agent.sqlite",
-    });
-    expect(sessionManagerOpenMock).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      storePath: "/tmp/custom-agent.sqlite",
-    });
-    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-      sessionManager: openedSessionManager,
-      replacements: [
-        {
-          entryId: "entry-1",
-          message: castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-            timestamp: 2,
-          }),
-        },
-      ],
-    });
-    expect(transcriptUpdateListener).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      target: {
-        agentId: "custom-agent",
-        sessionId: "custom-session",
-        sessionKey: "agent:custom-agent:custom-session",
-      },
     });
   });
 

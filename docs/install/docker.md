@@ -68,7 +68,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 
     - prompts for provider API keys
     - generates a gateway token and writes it to `.env`
-    - creates the auth-profile secret key directory
+    - creates the legacy auth-profile secret key directory
     - starts the gateway via Docker Compose
 
     Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the gateway's network namespace and only works once the gateway container exists.
@@ -243,10 +243,11 @@ checkouts also compile first-party plugins published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
-Known dependency/source-only ids keep their existing source and dependency
-staging without gaining a compiled root dist entry. A selected plugin with
-unified build entries must compile successfully; unselected external plugin
-source and runtime output are pruned.
+This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
+runtime. Ordinary source builds generate its runtime through the separate
+external-plugin build path; root npm artifacts continue to exclude it. Selected
+plugins must compile successfully; unselected external plugin source and
+runtime output are pruned.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
@@ -298,7 +299,7 @@ separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
 the Node, archive, and manifest digests. Build that appliance independently
 from the same landed OpenClaw source.
 
-To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id.
+To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id. Restart the Gateway after adding or changing a mount; runtime loading and setup use the mounted source.
 
 ### Observability
 
@@ -449,7 +450,9 @@ That mounted config directory holds:
 - `state/openclaw.sqlite` for shared provider auth and `agents/<agentId>/agent/openclaw-agent.sqlite` for agent-local OAuth/API-key profiles
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
-The auth-profile secret directory stores the local encryption key for OAuth-backed auth profile token material. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
+The auth-profile secret directory stores the local encryption key used to recover legacy encrypted OAuth sidecar credentials. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
+
+Current OAuth token material is stored as plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and ID-token values. The separate key mount does not encrypt current SQLite rows or protect these tokens from a state-only backup or copy. Treat the config directory and its backups as credentials.
 
 Installed downloadable plugins store package state under the mounted OpenClaw home, so install records and package roots survive container replacement; gateway startup does not regenerate bundled-plugin dependency trees.
 
@@ -576,11 +579,13 @@ does not reveal the full token.
     keeps both dependency layers cacheable without omitting `packages/*`, selected
     `extensions/*`, or other required workspace metadata.
 
-    Runtime assembly replaces the build dependency trees with the fresh production
-    install while retaining compiled workspace packages and native addon outputs.
-    It does not run `pnpm prune` on dependencies inherited from an image layer;
-    pnpm 12 can fail that operation with `EXDEV` on OverlayFS. The `build` target
-    retains development dependencies for live-test containers.
+    The `runtime-assets` stage inherits `production-deps` and overlays `/app`
+    from `runtime-build-output`, a copy of `build` with dependency trees removed.
+    This reuses the fresh production install's layers while preserving compiled
+    workspace packages and native addon outputs. It does not run `pnpm prune`
+    on dependencies inherited from an image layer; pnpm 12 can fail that operation
+    with `EXDEV` on OverlayFS. The `build` target retains development dependencies
+    for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and

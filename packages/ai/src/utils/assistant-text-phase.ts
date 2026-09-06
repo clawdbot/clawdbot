@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 type AssistantTextPhaseBlock = {
   type: "text";
   text: string;
@@ -32,7 +34,14 @@ function tagUnphasedText(
     if (block.text.trim().length === 0 || block.textSignature !== undefined) {
       continue;
     }
-    const signature = encodeAssistantTextSignatureV1(`${idPrefix}-${phaseIndex}`, phase);
+    // Responses carry no run-scoped identity, so a response-local index aliases
+    // segments across responses (every response's first commentary becomes
+    // `<prefix>-0`) and collapses distinct stream-reconciliation rows. Entropy
+    // keeps each generated identity unique per segment.
+    const signature = encodeAssistantTextSignatureV1(
+      `${idPrefix}-${phaseIndex}-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      phase,
+    );
     block.textSignature = signature;
     tagged.set(block, signature);
     phaseIndex += 1;

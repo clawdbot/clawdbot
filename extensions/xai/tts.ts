@@ -1,19 +1,11 @@
 // Xai plugin module implements tts behavior.
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
-  assertOkOrThrowProviderError,
-  postJsonRequest,
-  readProviderBinaryResponse,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
-import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
@@ -32,6 +24,10 @@ export async function listXaiTtsVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   const baseUrl = normalizeXaiTtsBaseUrl(params.baseUrl);
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url: `${baseUrl}/tts/voices`,
     init: {
@@ -42,7 +38,7 @@ export async function listXaiTtsVoices(params: {
       },
     },
     timeoutMs: XAI_TTS_VOICE_LIST_TIMEOUT_MS,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     auditContext: "xai tts voices",
   });
   try {
@@ -180,6 +176,7 @@ export async function xaiTTSStream(params: {
   // roughly 4/3; the fixed allowance covers the event envelope and metadata.
   const maxPayload = Math.ceil(maxBytes / 3) * 4 + 1024;
 
+  // Wire the socket before the first yield; deferred imports can miss immediate transport events.
   return await new Promise((resolve, reject) => {
     let connectSettled = false;
     let released = false;
@@ -445,6 +442,10 @@ export async function xaiTTS(params: {
   }
 
   const ttsBaseUrl = normalizeXaiTtsBaseUrl(baseUrl);
+  const { assertOkOrThrowProviderError, postJsonRequest, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await postJsonRequest({
     url: `${ttsBaseUrl}/tts`,
     headers: new Headers({
@@ -463,18 +464,17 @@ export async function xaiTTS(params: {
     },
     timeoutMs,
     fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(ttsBaseUrl),
     auditContext: "xai tts",
   });
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
-        maxBytes,
-        onOverflow: ({ maxBytes: maxBytesLocal }) =>
-          new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-      }),
-    );
+    return await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

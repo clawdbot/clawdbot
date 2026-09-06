@@ -1,5 +1,9 @@
 // Codex helper module selects an app-server connection from private binding ownership.
 import {
+  AgentHarnessPreflightError,
+  type EmbeddedRunAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -26,6 +30,32 @@ type CodexSupervisionModelSelection = {
   model: string;
   modelProvider: string;
 };
+
+/** Prevents a prepared native session from becoming a fresh thread after its binding changes. */
+export function assertCodexSessionRuntimeOwnership(
+  binding:
+    | Pick<
+        CodexAppServerThreadBinding,
+        "preserveNativeModel" | "connectionScope" | "model" | "modelProvider"
+      >
+    | undefined,
+  expected: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+): void {
+  if (!expected) {
+    return;
+  }
+  const auth = binding?.connectionScope === "supervision" ? "native" : "host";
+  const hostModelChanged =
+    expected.auth === "host" &&
+    (!expected.modelRef ||
+      binding?.model !== expected.modelRef.model ||
+      binding?.modelProvider !== expected.modelRef.provider);
+  if (binding?.preserveNativeModel !== true || auth !== expected.auth || hostModelChanged) {
+    throw new AgentHarnessPreflightError(
+      "Codex native session ownership is missing or changed. Reattach the original native session or create a new chat with a concrete model; no replacement thread was started.",
+    );
+  }
+}
 
 /** Requires the native model pair after a supervised pending branch has materialized. */
 export function requireCodexSupervisionModelSelection(

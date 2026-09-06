@@ -128,7 +128,10 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   const modelRegistry = sessions.ModelRegistry.inMemory(authStorage);
   modelRegistry.registerProvider(model.provider, { api: model.api, streamSimple: stream });
   resolveModelMock.mockReturnValue({ model, error: null, authStorage, modelRegistry });
-  vi.mocked(streamResolution.resolveEmbeddedAgentStreamFn).mockReturnValue(stream);
+  vi.mocked(streamResolution.resolveEmbeddedAgentStream).mockReturnValue({
+    streamFn: stream,
+    strategy: "session-custom",
+  });
   applyExtraParamsToAgentMock.mockReturnValue({
     effectiveExtraParams: { responsesCompactEndpoint: operation === "endpoint" },
   });

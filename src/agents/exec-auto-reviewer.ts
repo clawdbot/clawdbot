@@ -16,6 +16,7 @@ import {
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
+import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import {
   DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
@@ -360,7 +361,6 @@ export function createModelExecAutoReviewer(params: {
   signal?: AbortSignal;
 }): (input: ModelAutoReviewInput) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision {
   const cfg = params.cfg;
-  const agentId = params.agentId ?? "main";
   if (!cfg) {
     return (input) =>
       "kind" in input
@@ -371,6 +371,7 @@ export function createModelExecAutoReviewer(params: {
           }
         : defaultExecAutoReviewer(input);
   }
+  const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
   const prepareModel =
     params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent;
   const complete =

@@ -10,7 +10,6 @@ import {
 import {
   deleteRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
-  findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
@@ -98,7 +97,6 @@ describe("managed worktree registry", () => {
       snapshotRef: "refs/openclaw/snapshots/first",
     });
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toBeUndefined();
-    expect(findRegistryWorktreeByPath(env, record.path)?.id).toBe("first");
     expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
     expect(getRegistryWorktreeProvisionedState(env, "first")).toEqual([
       { path: ".env.local", mode: 0o600, chunks: 1 },

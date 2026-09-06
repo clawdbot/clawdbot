@@ -58,52 +58,16 @@ function parseStorageKind(raw: string): StorageKind | null {
   return null;
 }
 
-/** Parse an optional storage mutation request from a route body. */
-function parseStorageMutationRequest(
-  kindParam: unknown,
-  body: Record<string, unknown>,
-): { kind: StorageKind | null; targetId: string | undefined } {
-  return {
-    kind: parseStorageKind(toStringOrEmpty(kindParam)),
-    targetId: resolveTargetIdFromBody(body),
-  };
-}
-
-/** Parse a required storage mutation request and throw on invalid input. */
-function parseRequiredStorageMutationRequest(
-  kindParam: unknown,
-  body: Record<string, unknown>,
-): { kind: StorageKind; targetId: string | undefined } | null {
-  const parsed = parseStorageMutationRequest(kindParam, body);
-  if (!parsed.kind) {
-    return null;
-  }
-  return {
-    kind: parsed.kind,
-    targetId: parsed.targetId,
-  };
-}
-
-function parseStorageMutationOrRespond(
-  res: BrowserResponse,
-  kindParam: unknown,
-  body: Record<string, unknown>,
-) {
-  const parsed = parseRequiredStorageMutationRequest(kindParam, body);
-  if (!parsed) {
+/** Parse storage mutations once at the request boundary. */
+function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
+  const body = readBody(req);
+  const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
+  const targetId = resolveTargetIdFromBody(body);
+  if (!kind) {
     jsonError(res, 400, "kind must be local|session");
     return null;
   }
-  return parsed;
-}
-
-function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
-  const body = readBody(req);
-  const parsed = parseStorageMutationOrRespond(res, req.params.kind, body);
-  if (!parsed) {
-    return null;
-  }
-  return { body, parsed };
+  return { body, parsed: { kind, targetId } };
 }
 
 function assertRange(

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPackageManagerWarningMessage,
@@ -19,18 +20,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
-  const [call] = warn.mock.calls;
-  if (!call) {
-    throw new Error("expected package manager warning");
-  }
-  const [message] = call;
-  if (message === undefined) {
-    throw new Error("expected package manager warning");
-  }
-  return message;
-}
 
 describe("install runtime enforcement", () => {
   it("reads the canonical package engine range", () => {
@@ -514,7 +503,8 @@ describe("warnIfNonPnpmLifecycle", () => {
       ),
     ).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(requireFirstWarning(warn)).toContain("detected npm");
+    const [message] = expectDefined(warn.mock.calls[0], "package manager warning call");
+    expect(message).toContain("detected npm");
   });
 
   it("stays quiet for pnpm", () => {

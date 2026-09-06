@@ -4,7 +4,13 @@
  * Normalizes paths/text/image fallbacks before tool results are styled or truncated.
  */
 import * as os from "node:os";
-import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  getCapabilities,
+  getImageDimensions,
+  imageFallback,
+  Text,
+} from "@earendil-works/pi-tui";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
@@ -45,6 +51,11 @@ export function trimTrailingEmptyLines(lines: readonly string[]): string[] {
   return lines.slice(0, lines.findLastIndex((line) => line !== "") + 1);
 }
 
+export function reuseTextComponent(lastComponent: Component | undefined, content: string): Text {
+  const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0); // SAFETY: Render slots only reuse the component returned by this renderer.
+  text.setText(content);
+  return text;
+}
 /** Extracts text output and image placeholders from a tool result. */
 export function getTextOutput(
   result:

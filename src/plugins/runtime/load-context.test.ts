@@ -44,6 +44,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -150,7 +151,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       manifestRegistry,
       metadataSnapshot,
       installRecords: {},
-      preferBuiltPluginArtifacts: false,
+      preferBuiltPluginArtifacts: undefined,
     });
     expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({

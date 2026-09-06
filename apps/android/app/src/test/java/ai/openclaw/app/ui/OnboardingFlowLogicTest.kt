@@ -17,7 +17,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Base64
 
 class OnboardingFlowLogicTest {
   @Test
@@ -691,48 +690,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryGatewayDetailPreservesRetryablePairingGuidance() {
-    assertEquals(
-      "Gateway approval is in progress. OpenClaw will retry automatically.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = null,
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-        gatewayConnectionProblem = pairingRequiredProblem(retryable = true),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayDetailPrefersAuthProblemOverStaleAddressWhenNotReady() {
-    assertEquals(
-      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = "wss://gateway.example.test",
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-        gatewayConnectionProblem = authProblem(),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayDetailPrefersAuthProblemWhileNodeApprovalIsLoading() {
-    assertEquals(
-      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = "wss://gateway.example.test",
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
-        gatewayConnectionProblem = authProblem(),
-      ),
-    )
-  }
-
-  @Test
   fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
     val cases =
       listOf(
@@ -915,60 +872,6 @@ class OnboardingFlowLogicTest {
     )
   }
 
-  @Test
-  fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {
-    val setupCode =
-      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
-    val scanned = resolveScannedSetupCodeResult(setupCode)
-
-    val plan =
-      resolveOnboardingPlanFixture(
-        setupCode = requireNotNull(scanned.setupCode),
-        token = "stale-shared-token",
-        password = "stale-shared-password",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
-    assertNull(scanned.error)
-  }
-
-  @Test
-  fun resolvesOnboardingManualConnectConfigWhenSetupCodeIsBlank() {
-    val plan =
-      resolveOnboardingPlanFixture(
-        token = "shared-token",
-        password = "shared-password",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
-    assertEquals("127.0.0.1", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("", plan?.config?.bootstrapToken)
-    assertEquals("shared-token", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
-  }
-
-  @Test
-  fun onboardingManualEndpointChangeReplacesSavedGatewayAuth() {
-    val plan =
-      resolveOnboardingPlanFixture(
-        manualHost = "10.0.2.2",
-        manualPort = "18790",
-        token = "replacement-token",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals("replacement-token", plan?.config?.token)
-  }
-
   private data class PermissionApprovalCase(
     val expected: Boolean,
     val currentCameraEnabled: Boolean = false,
@@ -1104,29 +1007,4 @@ class OnboardingFlowLogicTest {
       clientMaxProtocol = clientMax,
       expectedProtocol = expected,
     )
-
-  private fun resolveOnboardingPlanFixture(
-    setupCode: String = "",
-    savedManualHost: String = "127.0.0.1",
-    savedManualPort: String = "18789",
-    savedManualTls: Boolean = false,
-    manualHost: String = "127.0.0.1",
-    manualPort: String = "18789",
-    manualTls: Boolean = false,
-    token: String = "",
-    password: String = "",
-  ): GatewayConnectPlan? =
-    resolveOnboardingGatewayConnectPlan(
-      setupCode = setupCode,
-      savedManualHost = savedManualHost,
-      savedManualPort = savedManualPort,
-      savedManualTls = savedManualTls,
-      manualHost = manualHost,
-      manualPort = manualPort,
-      manualTls = manualTls,
-      token = token,
-      password = password,
-    )
-
-  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

@@ -48,6 +48,7 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
   includeLabelOwners?: string;
@@ -73,7 +74,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     sessionKey: params.activeSessionKey ?? params.sessionKeys?.[0] ?? "",
     storePath: params.storePath,
   });
-  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
+  const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
     const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
@@ -236,7 +237,10 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 transactionDb,
                 replacement.sessionKey,
                 cloneSessionEntry(replacement.entry),
-                { previousEntry: selectedBefore ?? null },
+                {
+                  ...(params.consumePendingReset ? { consumePendingReset: true } : {}),
+                  previousEntry: selectedBefore ?? null,
+                },
               );
               deleteLegacySessionEntryRows(
                 transactionDb,
@@ -263,14 +267,17 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       },
     };
   });
+  const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;

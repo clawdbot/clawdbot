@@ -48,6 +48,7 @@ import {
   readMainFrameDocumentIdentityForPage,
   withPageScopedCdpClient,
 } from "./pw-session.page-cdp.js";
+import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
 type StoredSnapshotRef = RoleRefMap[string] & { backendDOMNodeId?: number };
@@ -660,12 +661,18 @@ export async function resizeViewportViaPlaywright(opts: {
   targetId?: string;
   width: number;
   height: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.setViewportSize({
+  const state = ensurePageState(page);
+  const viewport = {
     width: resolveViewportDimension(opts.width, "width"),
     height: resolveViewportDimension(opts.height, "height"),
+  };
+  await runPageEmulationTransition({
+    state,
+    signal: opts.signal,
+    run: () => setViewportSizeOnPage(page, state, viewport),
   });
 }
 

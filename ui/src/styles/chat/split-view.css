@@ -60,7 +60,6 @@ openclaw-chat-pane {
     openclaw-session-owner-chip,
     .chat-pane__participants,
     .chat-pane__presence,
-    .chat-pane__face-switch,
     .chat-pane__sharing-menu,
     .chat-pane__draft-indicator,
     .chat-pane__branches-menu,
@@ -177,6 +176,38 @@ openclaw-chat-pane {
      window drag the macOS app starts from this row. */
   user-select: none;
   -webkit-user-select: none;
+}
+
+.chat-pane__header--centered {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-center,
+.chat-pane__header-trailing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-trailing {
+  gap: 8px;
+}
+
+.chat-pane__header-center {
+  position: relative;
+  justify-self: center;
+}
+
+.chat-pane__header-trailing {
+  margin-left: auto;
+  justify-self: end;
+}
+
+.chat-pane__header--centered .chat-pane__header-trailing {
+  margin-left: 0;
 }
 
 /* Identity trail: project, then session. One flex row owns the alignment of
@@ -611,12 +642,15 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
+  border: 0;
   gap: 4px;
   flex: 0 0 auto;
+  min-width: 0;
+  padding: 0;
   /* With the title text-hugging, this claims the leftover width so the
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
-  margin-left: auto;
+  margin: 0 0 0 auto;
 }
 
 /* One box model for every action, whatever wraps it. A custom element defaults
@@ -674,6 +708,26 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__header-center .chat-pane__sharing-menu,
+.chat-pane__header-center .chat-pane__draft-indicator {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 100%;
+  display: inline-flex;
+  transform: translateY(-50%);
+}
+
+.chat-pane__header-center .chat-pane__sharing-trigger {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
 .chat-pane__sharing-menu::part(menu) {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
@@ -701,13 +755,50 @@ openclaw-chat-pane {
   padding: 6px 12px;
 }
 
-.chat-pane__sharing-visibility-item[disabled] {
-  opacity: 1;
-  color: var(--muted);
-}
-
 .chat-pane__sharing-members-title {
   margin-top: 8px;
+}
+
+.chat-pane__sharing-owner-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-owner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member-skeleton {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-member-skeleton-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.chat-pane__sharing-member-skeleton-label {
+  width: 72%;
+  height: 10px;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(2) .chat-pane__sharing-member-skeleton-label {
+  width: 56%;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(3) .chat-pane__sharing-member-skeleton-label {
+  width: 64%;
 }
 
 .chat-pane__sharing-member {
@@ -745,6 +836,21 @@ openclaw-chat-pane {
   font-size: 13px;
 }
 
+.chat-pane__draft-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-pane__header-center .chat-pane__draft-indicator {
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
 /* A full split header measures 793px including insets, so secondary controls
    shed through 800px of container content; restoration then has 8px+ slack.
    The close action survives at the 320px pane floor. */
@@ -754,7 +860,6 @@ openclaw-chat-pane {
   .chat-pane__actions .chat-pane__split-down,
   .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,
@@ -791,52 +896,11 @@ openclaw-chat-pane {
   min-height: 34px;
 }
 
-.chat-header-session-menu__trigger {
-  position: relative;
-}
-
-.chat-header-session-menu__status-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 6px;
-  height: 6px;
-  border: 1px solid var(--chat-surface);
-  border-radius: 999px;
-  background: var(--info);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"],
-.chat-header-session-menu__status-icon[data-tone="warn"] {
-  color: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"] {
-  background: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"],
-.chat-header-session-menu__status-icon[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"] {
-  background: var(--danger);
-}
-
-.chat-header-session-menu__status-icon[data-tone="info"] {
-  color: var(--info);
-}
-
 .chat-header-session-menu--compact .session-menu__back {
   z-index: 1;
   position: sticky;
   top: 0;
   background: var(--wa-color-surface-raised);
-}
-
-.chat-header-session-menu--compact .session-menu__chevron {
-  display: inline-flex;
 }
 
 .chat-header-session-menu--compact::part(menu) {
@@ -902,16 +966,25 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
   );
 }
 
-/* Apply the safe edge to whichever header occupies the first content row;
-   mobile has a separate topbar row. */
+/* Only the physical top-left header needs window-control clearance. A left
+   dock puts the side tabs there; mobile has a separate topbar row. */
 .shell:not(.shell--mobile-nav)
-  :is(
-    .chat-split-view__column:first-child
-      > .chat-split-view__cell:first-child
-      :is(.chat-main__conversation-column, .chat-pane-primary-column)
-      > .chat-pane__header,
-    .sidebar-region--expanded .side-panel__header
-  ) {
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region:not(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      )
+  )
+  > .sidebar-region__header
+  > .chat-pane__header,
+.shell:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+    .sidebar-region--narrow
+  )
+  [data-region-header="side"] {
   padding-left: var(--shell-titlebar-inset);
 }
 
@@ -922,9 +995,7 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
    center the session title/actions 2px above the traffic-light/hosted-button
    centerline. Drawer layouts instead fold titlebar clearance into their 58px
    topbar row (layout.mobile.css). */
-html.openclaw-native-macos
-  .shell:not(.shell--mobile-nav)
-  :is(.chat-pane__header, .sidebar-region--expanded .side-panel__header) {
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
   min-height: var(--openclaw-native-titlebar-height, 50px);
 }
 

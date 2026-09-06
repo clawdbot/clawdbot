@@ -244,6 +244,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     const session = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey,
+      agentId: binding.agentId,
     });
     if (!session) {
       staleBindings.push(binding);

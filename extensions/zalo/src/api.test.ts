@@ -1,4 +1,5 @@
 // Zalo tests cover api plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -72,19 +73,11 @@ function createOkFetcher() {
   return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
 }
 
-function requireFirstFetchCall(fetcher: ReturnType<typeof createOkFetcher>, label: string) {
-  const [call] = fetcher.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
-}
-
 async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) => Promise<unknown>) {
   const fetcher = createOkFetcher();
   await run("test-token", fetcher);
   expect(fetcher).toHaveBeenCalledTimes(1);
-  const [, init] = requireFirstFetchCall(fetcher, "Zalo request");
+  const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo request");
   if (!init) {
     throw new Error("expected Zalo request init");
   }
@@ -228,7 +221,7 @@ describe("Zalo API request methods", () => {
       await vi.advanceTimersByTimeAsync(25);
 
       await rejected;
-      const [, init] = requireFirstFetchCall(fetcher, "Zalo chat action request");
+      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo chat action request");
       if (!init) {
         throw new Error("expected Zalo chat action request init");
       }
@@ -268,7 +261,7 @@ describe("Zalo API request methods", () => {
       await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
 
       await rejected;
-      const [, init] = requireFirstFetchCall(fetcher, "Zalo send request");
+      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo send request");
       if (!init?.signal) {
         throw new Error("expected Zalo send request abort signal");
       }
@@ -280,12 +273,7 @@ describe("Zalo API request methods", () => {
   });
 
   it("caps oversized sendChatAction timeouts before scheduling the timer", async () => {
-    const setTimeoutMock = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    const clearTimeoutMock = vi
-      .spyOn(globalThis, "clearTimeout")
-      .mockImplementation(() => undefined);
+    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
     try {
       const fetcher = vi.fn<ZaloFetch>(
         async () => new Response(JSON.stringify({ ok: true, result: {} })),
@@ -304,38 +292,26 @@ describe("Zalo API request methods", () => {
       expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       setTimeoutMock.mockRestore();
-      clearTimeoutMock.mockRestore();
     }
   });
 
   it("keeps getUpdates on the long-poll request timeout", async () => {
-    const setTimeoutMock = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    const clearTimeoutMock = vi
-      .spyOn(globalThis, "clearTimeout")
-      .mockImplementation(() => undefined);
+    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
     try {
       const fetcher = createOkFetcher();
 
       await getUpdates("test-token", { timeout: 45 }, fetcher);
 
       expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 50_000);
-      const [, init] = requireFirstFetchCall(fetcher, "Zalo getUpdates request");
+      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo getUpdates request");
       expect(init?.body).toBe(JSON.stringify({ timeout: "45" }));
     } finally {
       setTimeoutMock.mockRestore();
-      clearTimeoutMock.mockRestore();
     }
   });
 
   it("validates outbound photo URLs against the SSRF guard before posting", async () => {
-    const setTimeoutMock = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    const clearTimeoutMock = vi
-      .spyOn(globalThis, "clearTimeout")
-      .mockImplementation(() => undefined);
+    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
     const fetcher = createOkFetcher();
     try {
       await sendPhoto(
@@ -355,7 +331,7 @@ describe("Zalo API request methods", () => {
         ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS,
       );
       expect(fetcher).toHaveBeenCalledTimes(1);
-      const [, init] = requireFirstFetchCall(fetcher, "Zalo photo request");
+      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo photo request");
       expect(init?.body).toBe(
         JSON.stringify({
           chat_id: "chat-123",
@@ -364,7 +340,6 @@ describe("Zalo API request methods", () => {
       );
     } finally {
       setTimeoutMock.mockRestore();
-      clearTimeoutMock.mockRestore();
     }
   });
 

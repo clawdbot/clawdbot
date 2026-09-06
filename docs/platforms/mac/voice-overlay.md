@@ -9,6 +9,10 @@ title: "Voice overlay"
 
 Audience: macOS app contributors. Goal: keep the voice overlay predictable when wake-word and push-to-talk overlap.
 
+Configure voice input under **Dashboard → Settings → Talk → This Mac**. The
+overlay and microphone test remain native; the Dashboard owns their device
+settings. See [Voice wake](/platforms/mac/voicewake) for the controls and permissions.
+
 ## Behavior
 
 - If the overlay is already visible from wake-word and the user presses the hotkey, the hotkey session adopts the existing text instead of resetting it. The overlay stays up while the hotkey is held. On release: send if there is trimmed text, otherwise dismiss.

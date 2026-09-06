@@ -29,7 +29,10 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  prepareMemoryEmbeddingCacheUpsert,
+  type MemoryEmbeddingCacheRow,
+} from "./manager-embedding-cache.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
@@ -84,7 +87,7 @@ export type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
-type MemoryReindexRetryState = {
+export type MemoryReindexRetryState = {
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -98,7 +101,9 @@ const META_KEY = MEMORY_INDEX_META_KEY;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
-const EMBEDDING_CACHE_SEED_BATCH_SIZE = 1_000;
+// Production embeddings measured ~28 KB/row; 1,000-row synchronous commits
+// blocked the event loop for seconds. Keep each commit small between yields.
+const EMBEDDING_CACHE_SEED_BATCH_SIZE = 100;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
@@ -343,10 +348,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected hasIndexedChunks(): boolean {
-    const row = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
-      | { found?: number }
-      | undefined;
-    return row?.found === 1;
+    return (
+      this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
+    );
   }
 
   protected hasSemanticChunks(): boolean {
@@ -513,7 +517,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      if (this.dropLegacyVectorTable()) {
+      if (!this.database.readOnly && this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -624,25 +628,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return buildMemorySourceFilter(alias, sources);
   }
 
-  protected openDatabase(): DatabaseSync {
-    const dbPath = resolveUserPath(this.settings.store.databasePath);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
-  }
-
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
     if (!this.cache.enabled) {
       return;
     }
-    type CacheRow = {
-      rowid: number;
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
-    };
+    type CacheRow = MemoryEmbeddingCacheRow & { rowid: number };
     const selectBatch = sourceDb.prepare(
       `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at
        FROM ${EMBEDDING_CACHE_TABLE}
@@ -650,14 +640,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
        ORDER BY rowid
        LIMIT ?`,
     );
-    const insert = this.db.prepare(
-      `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-         embedding=excluded.embedding,
-         dims=excluded.dims,
-         updated_at=excluded.updated_at`,
-    );
+    const upsert = prepareMemoryEmbeddingCacheUpsert(this.db);
     let lastRowid = 0;
     while (true) {
       // Materialize each source page so neither a read cursor nor a write
@@ -670,15 +653,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.db,
         () => {
           for (const row of batch) {
-            insert.run(
-              row.provider,
-              row.model,
-              row.provider_key,
-              row.hash,
-              row.embedding,
-              row.dims,
-              row.updated_at,
-            );
+            upsert(row);
           }
         },
         { operationLabel: "memory.embedding-cache.seed" },

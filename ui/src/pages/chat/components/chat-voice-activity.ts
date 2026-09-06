@@ -145,6 +145,7 @@ type ChatVoiceStatusProps = {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
+  onUseSystemDefaultMicrophone?: () => Promise<void>;
 };
 
 export function renderChatVoiceStatus(
@@ -169,19 +170,34 @@ export function renderChatVoiceStatus(
         <span class="agent-chat__composer-error-icon" aria-hidden="true"
           >${icons.alertTriangle}</span
         >
-        <span class="agent-chat__talk-status-text">${props.detail}</span>
-        ${props.onDismissError
-          ? html`
-              <button
-                class="callout__dismiss"
-                type="button"
-                @click=${props.onDismissError}
-                aria-label=${t("chat.composer.dismissVoiceInputError")}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        <div class="callout__content">
+          <div class="agent-chat__talk-status-text">${props.detail}</div>
+          ${
+            props.onUseSystemDefaultMicrophone
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${props.onUseSystemDefaultMicrophone}
+                >
+                  ${t("chat.composer.useSystemDefaultMicrophoneForCall")}
+                </button>`
+              : nothing
+          }
+        </div>
+        ${
+          props.onDismissError
+            ? html`
+                <button
+                  class="callout__dismiss"
+                  type="button"
+                  @click=${props.onDismissError}
+                  aria-label=${t("chat.composer.dismissVoiceInputError")}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
     </div>
   `;

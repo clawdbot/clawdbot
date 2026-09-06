@@ -98,12 +98,52 @@ async function main() {
   if (listed.length === 0) {
     throw new Error("No successful main CI runs found");
   }
+  const releaseRunPageSchema = z.array(
+    runPageSchema.element.extend({
+      event: z.literal("workflow_dispatch"),
+      head_branch: z.string().min(1),
+    }),
+  );
+  const releaseRuns: z.infer<typeof releaseRunPageSchema> = [];
+  // Full Release Validation freezes tooling on release-ci branches. These
+  // workflows validate the canonical target before any Gateway test executes;
+  // workflow head_sha is tooling identity, not the measured source identity.
+  for (const workflow of [
+    "openclaw-release-checks.yml",
+    "openclaw-live-and-e2e-checks-reusable.yml",
+  ]) {
+    let sampled = 0;
+    for (let page = 1; sampled < count; page += 1) {
+      if (page > 25) {
+        throw new Error("Release run pagination limit exceeded; reduce --runs");
+      }
+      const pageRuns = releaseRunPageSchema.parse(
+        JSON.parse(
+          await readGh([
+            "api",
+            `repos/${repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&status=success&per_page=${pageSize}&page=${page}`,
+            "--jq",
+            "[.workflow_runs[] | {id, created_at, status, conclusion, event, head_branch, head_sha}]",
+          ]),
+        ),
+      );
+      releaseRuns.push(...pageRuns.slice(0, count - sampled));
+      sampled += pageRuns.length;
+      if (pageRuns.length < pageSize) {
+        break;
+      }
+    }
+  }
   // New gh versions reject reporter ANSI unless opted in; logs are parsed, never printed.
   const logFlags = (await readGh(["api", "--help"])).includes("--allow-escape-sequences")
     ? ["--allow-escape-sequences"]
     : [];
   const runs: CiTimingRun[] = [];
-  for (const run of listed.slice(0, count)) {
+  const sampledRuns = [
+    ...listed.slice(0, count).map((run) => ({ run, source: "ci" as const })),
+    ...releaseRuns.map((run) => ({ run, source: "release" as const })),
+  ];
+  for (const { run, source } of sampledRuns) {
     const logs: CiTimingRun["logs"] = [];
     let seenJobs = 0;
     for (let page = 1; page <= 25; page += 1) {
@@ -121,11 +161,16 @@ async function main() {
         if (job.conclusion !== "success") {
           continue;
         }
-        const kind = job.name.startsWith("checks-ui-e2e (")
-          ? "uiE2e"
-          : job.name.startsWith("checks-node-compact-")
-            ? "compact"
-            : undefined;
+        const kind =
+          source === "release"
+            ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
+              ? "repoE2e"
+              : undefined
+            : job.name.startsWith("checks-ui-e2e (")
+              ? "uiE2e"
+              : job.name.startsWith("checks-node-compact-")
+                ? "compact"
+                : undefined;
         if (kind) {
           console.error(`[ci-timings] ${run.id}: ${job.name}`);
           logs.push({
@@ -154,6 +199,7 @@ async function main() {
   const { timings, changes, runIds } = refitTestTimings(runs, previous);
   if (
     Object.keys(timings.uiE2e.fileSeconds).length +
+      Object.keys(timings.repoE2eFileSeconds).length +
       Object.keys(timings.compactGroupSeconds.blacksmith).length +
       Object.keys(timings.compactGroupSeconds.github).length ===
     0
@@ -161,7 +207,7 @@ async function main() {
     throw new Error("No test timings have at least two successful run samples");
   }
   ciTestTimingsSchema.parse(timings);
-  console.log(`Sampled successful main CI runs: ${runIds.join(", ")}\n`);
+  console.log(`Sampled successful CI and release-check runs: ${runIds.join(", ")}\n`);
   console.log("| Key | Old seconds | New seconds | Delta |\n| --- | ---: | ---: | ---: |");
   for (const change of changes) {
     const delta =
