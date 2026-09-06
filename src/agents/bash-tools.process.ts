@@ -19,7 +19,6 @@ import {
   hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
-  markTerminalPollObserved,
   prepareSessionPoll,
   setJobTtlMs,
 } from "./bash-process-registry.js";
@@ -154,7 +153,7 @@ function resolvePollWaitMs(value: unknown) {
 }
 
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
@@ -202,7 +201,6 @@ function finishedPollResult(
   pollScope: object | undefined,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
-  acknowledgeNotifyOnExit(finished);
   const delivery = prepareSessionPoll(finished, pollScope);
   const { output: unreadOutput, outputDropped } = delivery;
   const output = unreadOutput.trim();
@@ -225,7 +223,10 @@ function finishedPollResult(
       ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
     }),
-    () => delivery.acknowledge(),
+    () => {
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(finished);
+    },
   );
 }
 
@@ -349,9 +350,9 @@ export function createProcessTool(
               },
               s.endedAt !== undefined
                 ? {
+                    ...finishedSessionDetails(s.id, s),
+                    status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
-                    exitCode: s.exitCode ?? undefined,
-                    exitSignal: s.exitSignal ?? undefined,
                   }
                 : Object.assign(
                     { pid: s.pid ?? undefined },
@@ -361,10 +362,16 @@ export function createProcessTool(
           );
         const lines = sessions.map((s) => {
           const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const timeoutReason =
+            "exitReason" in s &&
+            (s.exitReason === "overall-timeout" || s.exitReason === "no-output-timeout")
+              ? s.exitReason
+              : undefined;
+          const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
           return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${marker} :: ${label}`;
+          }${timeoutMarker}${marker} :: ${label}`;
         });
         return textResult(lines.join("\n") || "No running or recent sessions.", {
           status: "completed",
@@ -451,7 +458,6 @@ export function createProcessTool(
             }
           }
           if (scopedSession.exited) {
-            markTerminalPollObserved(scopedSession);
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
             if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {
@@ -507,25 +513,25 @@ export function createProcessTool(
             retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
             defaultTailNote(totalLines, window.usingDefaultTail);
-          return textResult(
-            runtime
-              ? text + buildInputWaitHint(runtime)
-              : appendExecTimeoutRetryGuidance(text, record.exitReason),
-            {
-              ...(runtime
-                ? {
-                    status: record.exited ? "completed" : "running",
-                    sessionId: params.sessionId,
-                    name: deriveSessionName(record.command),
-                    ...runningSessionInputDetails(runtime),
-                  }
-                : finishedSessionDetails(params.sessionId, record)),
-              total: totalLines,
-              totalLines,
-              totalChars,
-              truncated: record.truncated,
-            },
-          );
+          const output = runtime
+            ? text + buildInputWaitHint(runtime)
+            : appendExecTimeoutRetryGuidance(text, record.exitReason);
+          return textResult(output, {
+            ...(runtime
+              ? {
+                  status: record.exited ? "completed" : "running",
+                  sessionId: params.sessionId,
+                  name: deriveSessionName(record.command),
+                  ...runningSessionInputDetails(runtime),
+                }
+              : finishedSessionDetails(params.sessionId, record)),
+            // Code Mode reads details, so preserve the requested page and its recovery hints.
+            output,
+            total: totalLines,
+            totalLines,
+            totalChars,
+            truncated: record.truncated,
+          });
         }
 
         case "write": {

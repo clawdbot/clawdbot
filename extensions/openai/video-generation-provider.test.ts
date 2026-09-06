@@ -1,7 +1,5 @@
 // Openai tests cover video generation provider plugin behavior.
 import fs from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -396,74 +395,66 @@ describe("openai video generation provider", () => {
       const socketClosed = new Promise<boolean>((resolve) => {
         notifySocketClosed = resolve;
       });
-      const server = createServer((request, response) => {
-        request.socket.once("close", () => notifySocketClosed?.(true));
-        response.writeHead(200, { "content-type": "application/json" });
-        response.write('{"error":"still streaming');
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
+      await withServer(
+        (request, response) => {
+          request.socket.once("close", () => notifySocketClosed?.(true));
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"error":"still streaming');
+        },
+        async (baseUrl) => {
+          postMultipartRequestMock.mockResolvedValueOnce({
+            response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
+            release: vi.fn(async () => {}),
+          });
+          const upstreamUrl = `${baseUrl}/videos/vid_unread/content`;
+          const downloadRelease = vi.fn(async () => {});
+          if (allowPrivateNetwork) {
+            fetchWithTimeoutGuardedMock.mockImplementationOnce(async () => ({
+              response: await fetch(upstreamUrl),
+              finalUrl: upstreamUrl,
+              release: downloadRelease,
+            }));
+          } else {
+            fetchWithTimeoutMock.mockImplementationOnce(async () => await fetch(upstreamUrl));
+          }
 
-      try {
-        postMultipartRequestMock.mockResolvedValueOnce({
-          response: streamedJsonResponse({ id: "vid_unread", status: "completed" }),
-          release: vi.fn(async () => {}),
-        });
-        const { port } = server.address() as AddressInfo;
-        const upstreamUrl = `http://127.0.0.1:${port}/videos/vid_unread/content`;
-        const downloadRelease = vi.fn(async () => {});
-        if (allowPrivateNetwork) {
-          fetchWithTimeoutGuardedMock.mockImplementationOnce(async () => ({
-            response: await fetch(upstreamUrl),
-            finalUrl: upstreamUrl,
-            release: downloadRelease,
-          }));
-        } else {
-          fetchWithTimeoutMock.mockImplementationOnce(async () => await fetch(upstreamUrl));
-        }
-
-        await expect(
-          buildOpenAIVideoGenerationProvider().generateVideo({
-            provider: "openai",
-            model: "sora-2",
-            prompt: "Reject an unending public video error response",
-            cfg: allowPrivateNetwork
-              ? {
-                  models: {
-                    providers: {
-                      openai: {
-                        baseUrl: `http://127.0.0.1:${port}/v1`,
-                        request: { allowPrivateNetwork: true },
-                        models: [],
+          await expect(
+            buildOpenAIVideoGenerationProvider().generateVideo({
+              provider: "openai",
+              model: "sora-2",
+              prompt: "Reject an unending public video error response",
+              cfg: allowPrivateNetwork
+                ? {
+                    models: {
+                      providers: {
+                        openai: {
+                          baseUrl: `${baseUrl}/v1`,
+                          request: { allowPrivateNetwork: true },
+                          models: [],
+                        },
                       },
                     },
-                  },
-                }
-              : {},
-          }),
-        ).rejects.toThrow("OpenAI generated video download: malformed video response");
-
-        await expect(
-          Promise.race([
-            socketClosed,
-            new Promise<boolean>((resolve) => {
-              setTimeout(() => resolve(false), 250);
+                  }
+                : {},
             }),
-          ]),
-        ).resolves.toBe(true);
-        if (allowPrivateNetwork) {
-          expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
-          expect(downloadRelease).toHaveBeenCalledOnce();
-        } else {
-          expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
-        }
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+          ).rejects.toThrow("OpenAI generated video download: malformed video response");
+
+          await expect(
+            Promise.race([
+              socketClosed,
+              new Promise<boolean>((resolve) => {
+                setTimeout(() => resolve(false), 250);
+              }),
+            ]),
+          ).resolves.toBe(true);
+          if (allowPrivateNetwork) {
+            expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
+            expect(downloadRelease).toHaveBeenCalledOnce();
+          } else {
+            expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+          }
+        },
+      );
     },
   );
 

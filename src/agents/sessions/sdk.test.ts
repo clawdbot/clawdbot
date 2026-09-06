@@ -14,6 +14,7 @@ import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-pr
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -144,14 +145,7 @@ function createAssistantError(errorMessage: string): AssistantMessage {
     api: testModel.api,
     provider: testModel.provider,
     model: testModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "error",
     errorMessage,
     timestamp: 1,
@@ -280,14 +274,7 @@ function createSessionManagerWithPersistedAssistantMessages(
         api: "messages",
         provider: "anthropic",
         model: "sonnet-4.6",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: message.stopReason ?? "stop",
         timestamp: Date.now(),
       },
@@ -369,14 +356,7 @@ describe("AgentSession tree navigation", () => {
       api: testModel.api,
       provider: testModel.provider,
       model: testModel.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 3,
     });
@@ -389,14 +369,7 @@ describe("AgentSession tree navigation", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: 4,
       }),
@@ -824,14 +797,7 @@ describe("createAgentSession tool defaults", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: Date.now(),
       },
@@ -874,14 +840,7 @@ describe("createAgentSession tool defaults", () => {
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: Date.now(),
       },

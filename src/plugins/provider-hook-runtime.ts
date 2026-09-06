@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -31,8 +32,6 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import type {
   ProviderPlugin,
-  ProviderExtraParamsForTransportContext,
-  ProviderPrepareExtraParamsContext,
   ProviderResolveAuthProfileIdContext,
   ProviderFollowupFallbackRouteContext,
   ProviderFollowupFallbackRouteResult,
@@ -74,7 +73,10 @@ export function attachModelProviderRuntimePluginHandle<TModel extends object>(
   model: TModel,
   runtimeHandle: ProviderRuntimePluginHandle,
 ): TModel {
-  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  const next = attachModelProviderLocalServiceReconciler(
+    model,
+    runtimeHandle.plugin?.reconcileLocalService,
+  ) as TModel & ModelWithProviderRuntimePluginHandle;
   next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
   return next;
 }
@@ -225,9 +227,9 @@ export function resolveLoadedProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] | undefined {
-  const filterRegistryPlugins = (registry: PluginRegistry) => {
-    const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return registry.providers
+  const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
+  const filterRegistryPlugins = (registry: PluginRegistry) =>
+    registry.providers
       .filter(
         ({ pluginId, provider }) =>
           (!onlyPluginIds || onlyPluginIds.has(pluginId)) &&
@@ -237,28 +239,29 @@ export function resolveLoadedProviderPluginsForHooks(params: {
             )),
       )
       .map(({ pluginId, provider }) => Object.assign({}, provider, { pluginId }));
-  };
   const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (generationRegistry) {
     return filterRegistryPlugins(generationRegistry);
   }
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   // An empty generation is authoritative. Outside a generation, only a loaded
   // hit proves the registry serves this query; preparation may discover on a miss.
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  for (const registry of [
-    scopedRegistry,
-    getLoadedRuntimePluginRegistry({ env, workspaceDir, requiredPluginIds: params.onlyPluginIds }),
-  ]) {
+  const readLoadedRegistry = (registry: PluginRegistry | undefined) => {
     if (registry && registryContainsRuntimePluginIds(registry, params.onlyPluginIds)) {
       const plugins = filterRegistryPlugins(registry);
-      if (plugins.length > 0) {
-        return plugins;
-      }
+      return plugins.length > 0 ? plugins : undefined;
     }
-  }
-  return undefined;
+    return undefined;
+  };
+  return (
+    readLoadedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry) ??
+    readLoadedRegistry(
+      getLoadedRuntimePluginRegistry({
+        env: params.env ?? process.env,
+        workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+        requiredPluginIds: params.onlyPluginIds,
+      }),
+    )
+  );
 }
 
 export function resolveProviderPluginsForHooks(
@@ -434,34 +437,6 @@ export function ensureProviderRuntimePluginHandle(
   return params.runtimeHandle;
 }
 
-export function prepareProviderExtraParams(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderPrepareExtraParamsContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.prepareExtraParams?.(params.context) ??
-    undefined
-  );
-}
-
-export function resolveProviderExtraParamsForTransport(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderExtraParamsForTransportContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.extraParamsForTransport?.(params.context) ??
-    undefined
-  );
-}
-
 export function resolveProviderAuthProfileId(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -487,19 +462,6 @@ export function resolveProviderFollowupFallbackRoute(params: {
   return (
     ensureProviderRuntimePluginHandle(params).plugin?.followupFallbackRoute?.(params.context) ??
     undefined
-  );
-}
-
-export function wrapProviderStreamFn(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  runtimeHandle?: ProviderRuntimePluginHandle;
-  context: ProviderWrapStreamFnContext;
-}) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined
   );
 }
 

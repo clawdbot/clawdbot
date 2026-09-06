@@ -189,11 +189,6 @@ export function resolveNewSessionSubmitBlock(
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
-  if (modelUnavailableMessage) {
-    return { gate: "model-unavailable", reason: modelUnavailableMessage };
-  }
   if (host.pendingAttachmentReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
@@ -262,11 +257,16 @@ export function resolveNewSessionSubmitBlock(
       host.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
       host.pendingPlacement.recoveryScope === client.recoveryScope,
     );
-    // Recovery retries own the remaining draft state; the place gates
+    // Recovery retries own the frozen request; the model and place gates
     // below intentionally do not apply to a restored placement draft.
     return retryReady
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  const modelUnavailableMessage =
+    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+  if (modelUnavailableMessage) {
+    return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
   if (place.agents().length === 0) {
     return { gate: "agents", reason: t("newSession.agentsUnavailable") };

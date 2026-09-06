@@ -9,6 +9,7 @@ import type {
   TextContent,
   ToolCall,
 } from "@openclaw/llm-core";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
  * Native Anthropic Messages streaming transport.
@@ -550,22 +551,11 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   const projection = projectAnthropicTools(tools ?? [], (name) =>
     isOAuthToken ? toClaudeCodeToolName(name) : name,
   );
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
-  for (const tool of projection.tools) {
-    converted.push({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    });
-  }
+  const converted = projection.tools.map((tool) => ({
+    name: tool.wireName,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
   return { projection, tools: converted };
 }
 
@@ -1275,7 +1265,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (contentIndex === undefined) {
             return false;
           }
-          block.thinking += text;
+          appendAssistantThinking(block, text);
           block.thinkingSignature = "reasoning_content";
           eventSink.push({
             type: "thinking_delta",
@@ -1630,7 +1620,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "thinking_delta" &&
               typeof delta.thinking === "string"
             ) {
-              block.thinking += delta.thinking;
+              appendAssistantThinking(block, delta.thinking);
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,

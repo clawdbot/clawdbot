@@ -55,7 +55,6 @@ import {
   finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
-  formatUpdateOutcomeNotice,
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
@@ -65,7 +64,6 @@ import {
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 import {
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
   buildControlPlaneUpdateRestartHealthPendingResult,
   isPendingControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
@@ -474,74 +472,6 @@ describe("restart sentinel", () => {
         "Reason: validation failed",
         "Run openclaw doctor",
       ].join("\n"),
-    );
-  });
-
-  it.each<{
-    name: string;
-    payload: Partial<import("./restart-sentinel.js").RestartSentinelPayload>;
-    expected: string;
-  }>([
-    {
-      name: "success with both versions",
-      payload: {
-        stats: { before: { version: "2026.8.1" }, after: { version: "2026.8.2" } },
-        message: "/update",
-      },
-      expected: "✅ OpenClaw updated to 2026.8.2 (from 2026.8.1).",
-    },
-    {
-      name: "success without the previous version",
-      payload: { stats: { after: { version: "2026.8.2" } }, doctorHint: "Run openclaw doctor." },
-      expected: "✅ OpenClaw updated to 2026.8.2.\nRun openclaw doctor.",
-    },
-    {
-      name: "success without versions",
-      payload: { message: "tool note" },
-      expected: "✅ OpenClaw updated and restarted.",
-    },
-    {
-      name: "failure with a reason",
-      payload: {
-        status: "error",
-        stats: { reason: "verification failed", before: { version: "2026.8.1" } },
-        doctorHint: "Run openclaw doctor.",
-      },
-      expected:
-        "⚠️ OpenClaw update failed: verification failed. The gateway is running 2026.8.1.\nRun openclaw doctor.",
-    },
-    {
-      name: "failure with the first failed step",
-      payload: {
-        status: "error",
-        stats: {
-          steps: [
-            { name: "download", command: "download", log: { exitCode: 0 } },
-            { name: "install", command: "install", log: { exitCode: 1 } },
-            { name: "verify", command: "verify", log: { exitCode: 1 } },
-          ],
-        },
-      },
-      expected: "⚠️ OpenClaw update failed: install. The gateway is running the previous version.",
-    },
-    {
-      name: "skipped with a recorded reason",
-      payload: { status: "skipped", stats: { reason: "already-current" } },
-      expected: "ℹ️ OpenClaw update skipped: already-current.",
-    },
-    {
-      name: "skipped without a reason",
-      payload: { status: "skipped" },
-      expected: "ℹ️ OpenClaw update skipped: unknown reason.",
-    },
-    {
-      name: "a sentence note",
-      payload: { message: "  The requested update is complete.  " },
-      expected: "✅ OpenClaw updated and restarted.\nThe requested update is complete.",
-    },
-  ])("formats a human update outcome for $name", ({ payload, expected }) => {
-    expect(formatUpdateOutcomeNotice({ kind: "update", status: "ok", ts: 1, ...payload })).toBe(
-      expected,
     );
   });
 
@@ -1030,7 +960,7 @@ describe("control-plane update restart sentinel", () => {
     });
 
     expect(pendingPayload.status).toBe("skipped");
-    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
+    expect(pendingPayload.stats?.reason).toBe("restart-health-pending");
     expect(pendingPayload.continuation).toBeUndefined();
     expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
 

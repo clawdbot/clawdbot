@@ -6,6 +6,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 
 const anthropicModel = {
@@ -30,14 +31,7 @@ describe("wrapStreamFnHandleSensitiveStopReason", () => {
             api: anthropicModel.api,
             provider: anthropicModel.provider,
             model: anthropicModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "error",
             errorMessage: "Unhandled stop reason: sensitive",
             timestamp: Date.now(),

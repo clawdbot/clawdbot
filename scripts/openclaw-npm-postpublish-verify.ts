@@ -31,6 +31,7 @@ import {
   comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "./lib/package-dist-inventory-contract.mts";
+import { collectPackageRootImports } from "./lib/package-root-imports.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
@@ -666,77 +667,14 @@ type ParsedImportSpecifiersResult =
   | { ok: true; specifiers: Set<string> }
   | { ok: false; error: string };
 
-function extractLiteralSpecifier(node: unknown): string | null {
-  if (!node || typeof node !== "object") {
-    return null;
-  }
-  const candidate = node as { type?: string; value?: unknown };
-  if (candidate.type === "Literal" && typeof candidate.value === "string") {
-    return candidate.value;
-  }
-  return null;
-}
-
 function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
-  const specifiers = new Set<string>();
-  let program: unknown;
   try {
-    program = acorn.parse(source, {
-      allowHashBang: true,
-      ecmaVersion: "latest",
-      sourceType: "module",
-    });
+    // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
+    acorn.parse(source, { allowHashBang: true, ecmaVersion: "latest", sourceType: "module" });
+    return { ok: true, specifiers: collectPackageRootImports(source) };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
-
-  const visited = new Set<unknown>();
-  const pending: unknown[] = [program];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || typeof current !== "object" || visited.has(current)) {
-      continue;
-    }
-    visited.add(current);
-    const node = current as Record<string, unknown>;
-    const nodeType = typeof node.type === "string" ? node.type : null;
-
-    if (nodeType === "ImportDeclaration") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "ExportAllDeclaration" || nodeType === "ExportNamedDeclaration") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "ImportExpression") {
-      const specifier = extractLiteralSpecifier(node.source);
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-    } else if (nodeType === "CallExpression") {
-      const callee = node.callee as { type?: string; name?: string } | undefined;
-      const args = Array.isArray(node.arguments) ? node.arguments : [];
-      if (callee?.type === "Identifier" && callee.name === "require" && args.length === 1) {
-        const specifier = extractLiteralSpecifier(args[0]);
-        if (specifier) {
-          specifiers.add(specifier);
-        }
-      }
-    }
-
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        pending.push(...value);
-      } else if (value && typeof value === "object") {
-        pending.push(value);
-      }
-    }
-  }
-
-  return { ok: true, specifiers };
 }
 
 export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {

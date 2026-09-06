@@ -189,11 +189,14 @@ describe("session placement recovery", () => {
         },
       });
       expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        message: retained.message,
-        messageId: retained.messageId,
-        phase: "paused",
-        reason: "not-sent",
-        error: expect.stringContaining("Keep this page open"),
+        persisted: false,
+        recovery: {
+          message: retained.message,
+          messageId: retained.messageId,
+          phase: "paused",
+          reason: "not-sent",
+          error: expect.stringContaining("Keep this page open"),
+        },
       });
       expect(
         readSessionPlacementRecovery(
@@ -205,32 +208,48 @@ describe("session placement recovery", () => {
     },
   );
 
-  it("keeps bounded pause errors on UTF-16 character boundaries", () => {
-    const error = `${"x".repeat(4095)}🤖`;
+  it.each([false, true])(
+    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
+    (persistent) => {
+      const error = `${"x".repeat(4095)}🤖`;
+      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
 
-    const paused = pauseSessionPlacementRecovery(recovery, error, false);
+      expect(paused.recovery.error).toBe("x".repeat(4095));
+      expect(paused.persisted).toBe(persistent);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(persistent ? paused.recovery : null);
+    },
+  );
 
-    expect(paused.error).toBe("x".repeat(4095));
-  });
-
-  it("keeps storage-failure guidance on UTF-16 character boundaries", () => {
+  it("keeps storage-failure guidance on UTF-16 boundaries", () => {
     const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
     const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const storage = sessionStorage;
     vi.stubGlobal("sessionStorage", {
-      getItem: () => null,
-      removeItem: () => undefined,
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
       setItem: () => {
         throw new DOMException("quota exceeded", "QuotaExceededError");
       },
-      get length() {
-        return 0;
-      },
-      key: () => null,
     });
 
     const paused = pauseSessionPlacementRecovery(recovery, error, true);
 
-    expect(paused.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.persisted).toBe(false);
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
   });
 
   it("migrates only exact framed rows under a new scope", () => {

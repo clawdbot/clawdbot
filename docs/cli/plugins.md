@@ -43,9 +43,10 @@ openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
 openclaw plugins doctor [--json]
-openclaw plugins init <id> [--name <name>] [--type tool|provider] [--directory <path>]
-openclaw plugins build [--entry <path>] [--check]
-openclaw plugins validate [--entry <path>] [--json]
+openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
+openclaw plugins build [--root <path>] [--entry <path>] [--check]
+openclaw plugins validate [--root <path>] [--entry <path>] [--json]
+openclaw plugins pack [--root <path>] [--out <file.tgz>] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
@@ -94,6 +95,26 @@ The scaffold writes TypeScript source but generates metadata from the built
 `--entry <path>` when the entry is not the default package entry. Use
 `plugins build --check` in CI to fail when generated metadata is stale without
 rewriting files.
+
+### Feature scaffold and artifacts
+
+Use `--type feature` for a typed backend operation, agent tool, native page,
+and composer replacement. Run `npm install`, `npm run build`, and
+`npm run validate` in the generated project. Its browser source is declared in
+`package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
+assets and their manifest declaration.
+
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
+scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
+restart the Gateway and reload the browser. See
+[Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
+
+`plugins pack` validates a built project, bundles its backend dependencies, and
+writes an archive containing compiled code and UI with no install scripts or
+runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,
+and exact `plugin_activate_artifact` request. The output file must not exist.
+See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
+view lifecycle, and recovery.
 
 ### Provider scaffold
 
@@ -535,6 +556,19 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 Global discovery diagnostics go to stderr, including with `--json`. This explains partial inventory when workspace discovery has no selected system owner, even when no plugins are found. Plugin-specific diagnostics stay in each report. Policy fields use the same case-insensitive plugin ID matching as runtime configuration; the reported plugin ID retains its declared spelling.
 </Note>
 
+SDK import failures appear in the existing plugin error output and Doctor's
+plugin diagnostics. The diagnostic names the plugin, imported
+`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+For an official plugin, run `openclaw plugins update <id>` and restart the Gateway.
+If the error identifies a nested SDK, the plugin bundles an incompatible
+OpenClaw SDK; update the plugin or contact its author.
+
+JSON diagnostics may include `code: "sdk-incompatible"` and an optional
+`sdkCompatibility` object with `seam`, `coreVersion`, `builtWithOpenClawVersion`
+(when known), and `nestedSdk`. Existing diagnostics without these fields remain
+valid. Model errors point to runtime inspection without including raw loader
+errors.
+
 ## Doctor
 
 ```bash
@@ -625,3 +659,5 @@ root `marketplaces` key.
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
 - [ClawHub](/clawhub)
+- [ClawHub CLI](/clawhub/cli) - standalone registry commands
+- [ClawHub publishing](/clawhub/publishing) - owners, scopes, and release review

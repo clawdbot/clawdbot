@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
@@ -35,11 +36,23 @@ type TestAdapter = ChildAdapter & {
 
 function createTestAdapter(): TestAdapter {
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const events = createProcessAdapterEvents();
+  let settled = false;
+  const settle: TestAdapter["settle"] = (code, signal = null) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    events.emitExit(code, signal);
+    exit.resolve({ code, signal });
+  };
   let stdoutListener: ((chunk: string) => void) | undefined;
   let stderrListener: ((chunk: string) => void) | undefined;
   const adapter: TestAdapter = {
     pid: 1234,
     supportsRawOutput: false,
+    onExit: events.onExit,
+    onError: events.onError,
     onStdout: (listener) => {
       stdoutListener = listener;
     },
@@ -48,12 +61,12 @@ function createTestAdapter(): TestAdapter {
     },
     wait: async () => await exit.promise,
     kill: vi.fn((signal?: NodeJS.Signals) => {
-      exit.resolve({ code: null, signal: signal ?? "SIGTERM" });
+      settle(null, signal ?? "SIGTERM");
     }),
-    dispose: vi.fn(),
+    dispose: vi.fn(() => events.clear()),
     emitStdout: (chunk) => stdoutListener?.(chunk),
     emitStderr: (chunk) => stderrListener?.(chunk),
-    settle: (code, signal = null) => exit.resolve({ code, signal }),
+    settle,
   };
   return adapter;
 }
@@ -442,7 +455,7 @@ describe("local CLI pending process cancellation", () => {
     const second = executePreparedCliRun(
       createRunContext({ runId: "cli-queue-aborted", signal: controller.signal }),
     );
-    const secondOutcome = Promise.allSettled([second]);
+    const secondRejected = expect(second).rejects.toMatchObject({ name: "AbortError" });
     controller.abort();
     firstPreparation.resolve();
 
@@ -450,9 +463,7 @@ describe("local CLI pending process cancellation", () => {
     firstAdapter.emitStdout("first");
     firstAdapter.settle(0);
     await expect(first).resolves.toMatchObject({ text: "first" });
-    await expect(secondOutcome).resolves.toEqual([
-      { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) },
-    ]);
+    await secondRejected;
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     expect(supervisor.getRecord("cli-queue-aborted")).toBeUndefined();
   });

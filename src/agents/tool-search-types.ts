@@ -107,6 +107,8 @@ export type ToolSearchCatalogEntry = {
   name: string;
   label?: string;
   description: string;
+  /** Recorded when the catalog owner also exposes this tool in the native surface. */
+  directVisible?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -163,6 +165,7 @@ export type ToolSearchCatalogCompactionParams = {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  toolExecutionAllow?: readonly string[];
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;

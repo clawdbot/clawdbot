@@ -3,7 +3,7 @@ import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-re
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
-import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
+import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deriveInboundMessageHookContext,
@@ -114,7 +114,9 @@ function resolveAssembledReplyPipeline(
     ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
     : params.replyOptions;
   if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
-    replyOptions = withReplySystemEventSessionKey(replyOptions ?? {}, params.routeSessionKey);
+    replyOptions = withReplySystemEventContext(replyOptions ?? {}, {
+      sessionKey: params.routeSessionKey,
+    });
   }
   if (!params.replyPipeline) {
     return {

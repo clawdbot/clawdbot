@@ -68,6 +68,7 @@ import {
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { waitForChildClose } from "../helpers/process-wait.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -2254,20 +2255,6 @@ async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 
     }
     await realDelay(25);
   }
-}
-
-async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 3_000) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("child did not close before timeout"));
-      }, timeoutMs);
-      child.once("close", (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    },
-  );
 }
 
 function isProcessAlive(pid: number) {

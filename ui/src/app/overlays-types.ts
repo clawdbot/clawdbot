@@ -1,3 +1,4 @@
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
@@ -13,6 +14,8 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
+  updateRun: UpdateRunRecord | null;
+  updateRunAcknowledged: boolean;
   controlUiRefreshRequired: boolean;
 };
 
@@ -30,6 +33,7 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   refreshUpdateStatus: () => Promise<void>;
+  acknowledgeUpdateRun: () => void;
   runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
   holdUpdate: () => Promise<boolean>;
   decideApproval: (

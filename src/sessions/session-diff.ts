@@ -10,6 +10,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { gitEnvironment, runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
+import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   loadSessionDiffBranchMetadata,
@@ -27,6 +28,16 @@ const MAX_BASELINE_TOTAL_BYTES = 16 * 1024 * 1024;
 // Past this the full-patch git call is skipped entirely: runGit buffers stdout
 // in memory, so a pathological diff must degrade to stats-only entries.
 const MAX_TOTAL_CHANGED_LINES = 100_000;
+// Patch consumers require a/b paths. Pin formatting without changing Git's
+// content conversions; read-scoped RPCs must not execute diff/textconv drivers.
+const PATCH_DIFF_ARGS = [
+  "--patch",
+  "--no-color",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--src-prefix=a/",
+  "--dst-prefix=b/",
+];
 
 type FileStatus = SessionDiffFile["status"];
 
@@ -119,7 +130,8 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
     if (!token) {
       continue;
     }
-    const [added, deleted, inlinePath] = token.split("\t");
+    const [added, deleted, ...pathParts] = token.split("\t");
+    const inlinePath = pathParts.join("\t");
     if (added === undefined || deleted === undefined) {
       continue;
     }
@@ -144,21 +156,21 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
 }
 
 function chunkPath(chunk: string): string | null {
-  const newFile = /^\+\+\+ b\/(.+)$/m.exec(chunk);
+  const newFile = /(?:^|\n)\+\+\+ b\/([^\n]+)(?:\n|$)/.exec(chunk);
   if (newFile) {
     return expectDefined(newFile[1], "new file capture group 1");
   }
   // Deleted files have `+++ /dev/null`; key the chunk by the old path.
-  const oldFile = /^--- a\/(.+)$/m.exec(chunk);
+  const oldFile = /(?:^|\n)--- a\/([^\n]+)(?:\n|$)/.exec(chunk);
   if (oldFile) {
     return expectDefined(oldFile[1], "old file capture group 1");
   }
   // Pure renames and binary chunks have neither marker line.
-  const renameTo = /^rename to (.+)$/m.exec(chunk);
+  const renameTo = /(?:^|\n)rename to ([^\n]+)(?:\n|$)/.exec(chunk);
   if (renameTo) {
     return expectDefined(renameTo[1], "rename to capture group 1");
   }
-  const header = /^diff --git a\/.+ b\/(.+)$/m.exec(chunk);
+  const header = /(?:^|\n)diff --git a\/[^\n]+ b\/([^\n]+)(?:\n|$)/.exec(chunk);
   return header ? expectDefined(header[1], "header capture group 1") : null;
 }
 
@@ -168,7 +180,8 @@ export function splitPatchByFile(patch: string): Map<string, string> {
   if (!patch.trim()) {
     return byPath;
   }
-  const parts = patch.split(/^(?=diff --git )/m);
+  // Git records end at LF; JavaScript multiline anchors also match content CRs.
+  const parts = patch.split(/(?<=\n)(?=diff --git )/);
   for (const part of parts) {
     if (!part.startsWith("diff --git ")) {
       continue;
@@ -181,25 +194,18 @@ export function splitPatchByFile(patch: string): Map<string, string> {
   return byPath;
 }
 
-function isBinaryChunk(chunk: string): boolean {
-  return /^Binary files .* differ$/m.test(chunk) || chunk.includes("\nGIT binary patch\n");
-}
-
-function countPatchAdditions(chunk: string): number {
-  let additions = 0;
-  let inHunk = false;
-  for (const line of chunk.split("\n")) {
-    if (line.startsWith("@@")) {
-      inHunk = true;
-      continue;
-    }
-    // Count only hunk-body additions so a `+++foo` content line is not mistaken
-    // for the `+++ b/path` header (which always precedes the first hunk).
-    if (inHunk && line.startsWith("+")) {
-      additions += 1;
-    }
-  }
-  return additions;
+function readPatchHeader(chunk: string): { additions?: number; binary: boolean } {
+  // A null-to-file addition has one hunk spanning the converted postimage.
+  // Stop at the first LF-delimited header so content (including CR) cannot
+  // masquerade as binary metadata or a later hunk.
+  const header = /(?:^|\n)(@@ [^\n]*|Binary files [^\n]* differ|GIT binary patch)\n/.exec(
+    chunk,
+  )?.[1];
+  const added = /^@@ -0,0 \+1(?:,(\d+))? @@(?: |$)/.exec(header ?? "");
+  return {
+    ...(added ? { additions: Number(added[1] ?? 1) } : {}),
+    binary: header !== undefined && !header.startsWith("@@ "),
+  };
 }
 
 /**
@@ -253,66 +259,65 @@ async function collectUntrackedFiles(
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   for (const filePath of paths.slice(0, MAX_UNTRACKED_FILES)) {
+    const file: SessionDiffFile = {
+      path: filePath,
+      status: "added",
+      additions: 0,
+      deletions: 0,
+      untracked: true,
+    };
+    files.push(file);
     // Hardlink/escape guard before git reads the file contents.
     if (!(await isPatchableWorkingTreePath(realRoot, filePath))) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        truncated: true,
-      });
+      file.truncated = true;
       continue;
     }
-    // Exit code 1 is git's "files differ" for --no-index, not a failure.
-    // --no-textconv: checkout-configurable textconv drivers must never run
-    // from this read-scoped RPC (same reason as --no-ext-diff).
-    const patch = await gitOut(
-      root,
+    const result = await runCommandBuffered(
       [
+        "git",
+        "-C",
+        root,
+        "-c",
+        "core.quotePath=false",
         "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
+        ...PATCH_DIFF_ARGS,
         "--no-index",
         "--",
         "/dev/null",
         filePath,
       ],
-      [0, 1],
+      {
+        timeoutMs: GIT_TIMEOUT_MS,
+        env: gitEnvironment(),
+        maxOutputBytes: MAX_PATCH_BYTES_PER_FILE,
+        // This RPC does not consume Git diagnostics. Verbose converters must
+        // not abort otherwise valid diff output by filling an unused stream.
+        discardOutput: { stderr: true },
+      },
     );
-    if (patch === null) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        truncated: true,
-      });
+    const patchTruncated =
+      result.termination === "output-limit" && result.outputLimitStream === "stdout";
+    // --no-index exits 1 for differences, but also for missing input, which
+    // has no patch. A complete first hunk retains counts even when its body clips.
+    if (
+      !patchTruncated &&
+      (result.termination !== "exit" || (result.code !== 0 && result.code !== 1))
+    ) {
+      file.truncated = true;
       continue;
     }
-    if (isBinaryChunk(patch)) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        binary: true,
-      });
+    const patch = result.stdout.toString("utf8");
+    if (!patch.startsWith("diff --git ")) {
+      file.truncated = true;
       continue;
     }
-    const additions = countPatchAdditions(patch);
-    files.push({
-      path: filePath,
-      status: "added",
-      additions,
-      deletions: 0,
-      untracked: true,
-      ...takePatch(patch, budget),
-    });
+    const header = readPatchHeader(patch);
+    file.additions = header.additions ?? 0;
+    if (header.binary) {
+      file.binary = true;
+      continue;
+    }
+    Object.assign(file, takePatch(patchTruncated ? undefined : patch, budget));
   }
   return { files, truncated };
 }
@@ -338,19 +343,17 @@ async function collectTrackedFiles(
     (sum, entry) => sum + entry.additions + entry.deletions,
     0,
   );
-  // --no-textconv alongside --no-ext-diff: repo config + .gitattributes can
-  // define textconv commands, and a read RPC must never execute them.
   const patchText =
     totalChangedLines > MAX_TOTAL_CHANGED_LINES
       ? null
-      : await gitOut(root, diffArgs(["--patch", "--no-color", "--no-ext-diff", "--no-textconv"]));
+      : await gitOut(root, diffArgs(PATCH_DIFF_ARGS));
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
   const truncated = entries.length > MAX_FILES;
   const files: SessionDiffFile[] = [];
   for (const entry of entries.slice(0, MAX_FILES)) {
     const stat = numstat.get(entry.path);
     const chunk = chunks.get(entry.path);
-    const binary = stat?.binary === true || (chunk !== undefined && isBinaryChunk(chunk));
+    const binary = stat?.binary === true || (chunk !== undefined && readPatchHeader(chunk).binary);
     const file: SessionDiffFile = {
       path: entry.path,
       status: entry.status,
@@ -726,8 +729,10 @@ export async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  // New paths cannot match the baseline; hashing them can exhaust the budget
+  // before an unchanged pre-session file is compared.
   const current = await fingerprintBaselineCandidates({
-    candidates: diff.files,
+    candidates: diff.files.filter((file) => fingerprints.has(file.path)),
     root: diff.root,
   });
   const currentFingerprints = new Map(current.files.map((file) => [file.path, file.fingerprint]));

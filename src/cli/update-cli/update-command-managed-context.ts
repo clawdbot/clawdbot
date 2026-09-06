@@ -14,7 +14,7 @@ export type OwnedManagedUpdateContext = {
   pluginInstallRecords: Record<string, PluginInstallRecord>;
 };
 
-/** Run one update phase under the stopped managed Gateway's authoritative environment. */
+/** Run one update phase under the managed Gateway's authoritative environment. */
 export async function withOwnedManagedUpdateEnv<T>(
   env: NodeJS.ProcessEnv | undefined,
   run: () => Promise<T>,
@@ -28,7 +28,8 @@ export async function withOwnedManagedUpdateEnv<T>(
   for (const key of Object.keys(process.env)) {
     delete process.env[key];
   }
-  Object.assign(process.env, env);
+  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
+  Object.assign(process.env, env === process.env ? previousEnv : env);
   try {
     return await run();
   } finally {
@@ -46,7 +47,7 @@ export async function captureOwnedManagedUpdateContext(params: {
 }): Promise<OwnedManagedUpdateContext | undefined> {
   const stopState = params.stopState;
   if (
-    stopState?.stopped !== true ||
+    stopState?.inspected !== true ||
     stopState.serviceUpdateVerdict?.kind !== "owned" ||
     !stopState.serviceEnv
   ) {

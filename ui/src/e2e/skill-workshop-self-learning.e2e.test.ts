@@ -134,8 +134,9 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
       );
       expect(replayedPatch.baseHash).toBe("hash-current");
 
-      await gateway.setMethodResponse("config.get", configSnapshot(true, "hash-enabled"));
-      await gateway.resolveDeferred("config.patch", { ok: true });
+      const enabledSnapshot = configSnapshot(true, "hash-enabled");
+      await gateway.setMethodResponse("config.get", enabledSnapshot);
+      await gateway.resolveDeferred("config.patch", { ok: true, ...enabledSnapshot });
 
       const toggle = page.getByLabel("Toggle autonomous self-learning", { exact: true });
       await expect.poll(() => toggle.isChecked()).toBe(true);

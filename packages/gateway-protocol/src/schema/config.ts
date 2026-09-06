@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
  * Gateway config and update protocol schemas.
@@ -164,6 +165,8 @@ export const UpdateScheduleStateSchema = closedObject({
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
   updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
+  activeRun: Type.Optional(UpdateRunRecordSchema),
+  lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(
     Type.Union([
       Type.Literal("stable"),

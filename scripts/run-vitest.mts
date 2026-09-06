@@ -6,17 +6,19 @@ import path from "node:path";
 import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import { agentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
-import { isUiBrowserTestFile, isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+  isUiTestTarget,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import {
   prepareE2eVitestRuntime,
   resolveVitestCliEntry,
-  resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
 import {
@@ -44,6 +46,7 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
+import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
@@ -311,6 +314,7 @@ function isExplicitProjectRouterTargetArg(
   return fsImpl.existsSync(filePath)
     ? isDelegableBroadProjectRouterTarget(arg, cwd) ||
         isOwnedAgentDirectoryTarget(arg, cwd, fsImpl) ||
+        isPluginControlUiPath(toRepoRelativeArg(arg, cwd)) ||
         isOwnedExtensionRootTarget(arg, cwd, fsImpl)
     : path.extname(arg) === "" &&
         /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
@@ -883,13 +887,13 @@ export function spawnWatchedVitestProcess({
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
-    .then(async ([{ code, signal }]) => {
+    .then(async ([{ code, signal, groupJoined }]) => {
       await diagnosticsCompletion;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
-      return { code, signal: normalizeNodeSignal(signal) };
+      return { code, signal: normalizeNodeSignal(signal), groupJoined };
     })
     .finally(teardown);
 
@@ -926,14 +930,8 @@ export async function runVitest(
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const handle = spawnTestProjectsRunner(delegatedArgs, env);
-    const { code, signal } = await handle.completion;
-    const exitSignal = handle.getForwardedSignal() ?? signal;
-    if (exitSignal) {
-      await exitBySignal(exitSignal);
-    }
-    process.exitCode = code ?? 1;
-    return;
+    const { runTestProjects } = await import("./test-projects-run.mts");
+    return runTestProjects(exitBySignal, delegatedArgs, env);
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
@@ -986,7 +984,9 @@ export async function runVitest(
   }
   const sourceMode =
     !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
-  const workers = sourceMode ? undefined : createVitestWorkerRun();
+  const workers = sourceMode
+    ? undefined
+    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
@@ -1044,5 +1044,7 @@ export async function runVitest(
 }
 
 if (import.meta.main) {
-  await runVitestCli("vitest", runVitest);
+  // The project owner imports our spawn helpers; top-level await would deadlock
+  // its dynamic import when this module is also the native entrypoint.
+  void runVitestCli("vitest", runVitest);
 }

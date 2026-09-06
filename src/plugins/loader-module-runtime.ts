@@ -23,26 +23,34 @@ import {
 } from "./sdk-alias.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-const LAZY_RUNTIME_REFLECTION_KEYS = [
-  "version",
-  "gateway",
-  "config",
-  "agent",
-  "subagent",
-  "system",
-  "media",
-  "mediaUnderstanding",
-  "tts",
-  "channel",
-  "events",
-  "logging",
-  "state",
-  "modelAuth",
-  "imageGeneration",
-  "videoGeneration",
-  "musicGeneration",
-  "llm",
-] as const satisfies readonly (keyof PluginRuntime)[];
+// Preserve the existing enumeration order, appending surfaces added to the runtime contract.
+// Scoped runtime proxies also ask for descriptors after their get trap returns.
+const LAZY_RUNTIME_PROPERTIES = {
+  version: true,
+  gateway: true,
+  config: true,
+  agent: true,
+  subagent: true,
+  system: true,
+  media: true,
+  mediaUnderstanding: true,
+  tts: true,
+  channel: true,
+  events: true,
+  logging: true,
+  state: true,
+  modelAuth: true,
+  imageGeneration: true,
+  videoGeneration: true,
+  musicGeneration: true,
+  llm: true,
+  hooks: true,
+  nodes: true,
+  sandbox: true,
+  worktrees: true,
+  webSearch: true,
+  tasks: true,
+} satisfies Record<keyof PluginRuntime, true>;
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -205,6 +213,12 @@ export function createLazyPluginRuntime(params: {
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
     // Prepared metadata and host facades must not initialize broad runtime services.
     if (!resolvedRuntime) {
+      if (prop === "gateway" || prop === "hooks" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       if (prop === "version") {
         return VERSION;
       }
@@ -216,9 +230,9 @@ export function createLazyPluginRuntime(params: {
       ? Reflect.get(resolveRuntime(), prop)
       : Reflect.get(resolveRuntime(), prop, receiver[0]);
   };
-  const lazyRuntimeReflectionKeySet = new Set<PropertyKey>(LAZY_RUNTIME_REFLECTION_KEYS);
   const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
-    if (!lazyRuntimeReflectionKeySet.has(prop)) {
+    // Once loaded, assignment through the proxy must see the owner's real descriptor.
+    if (resolvedRuntime || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
       return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
     }
     return {
@@ -233,25 +247,15 @@ export function createLazyPluginRuntime(params: {
     };
   };
   return new Proxy({} as PluginRuntime, {
-    get(_target, prop, receiver) {
-      // Instance-bound surfaces are complete runtime objects. Keep them direct so
-      // the first Gateway call does not materialize the broad plugin runtime graph.
-      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
-        const value = params.runtimeOptions?.[prop];
-        if (value !== undefined) {
-          return value;
-        }
-      }
-      return getRuntimeProperty(prop, receiver);
-    },
+    get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),
     set(_target, prop, value, receiver) {
       return Reflect.set(resolveRuntime(), prop, value, receiver);
     },
     has(_target, prop) {
-      return lazyRuntimeReflectionKeySet.has(prop) || Reflect.has(resolveRuntime(), prop);
+      return Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) || Reflect.has(resolveRuntime(), prop);
     },
     ownKeys() {
-      return [...LAZY_RUNTIME_REFLECTION_KEYS];
+      return Object.keys(LAZY_RUNTIME_PROPERTIES);
     },
     getOwnPropertyDescriptor(_target, prop) {
       return resolveLazyRuntimeDescriptor(prop);

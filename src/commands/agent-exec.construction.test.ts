@@ -7,7 +7,8 @@ import { isProcessAlive, waitForDead, waitForPidFile } from "../../test/helpers/
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as cliBackends from "../plugins/cli-backends.runtime.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import * as processSupervisor from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -21,7 +22,7 @@ afterEach(() => {
 });
 
 describe("agent exec command composition", () => {
-  it("bounds blocked service-relay construction through the shipped CLI command", async () => {
+  it("bounds blocked private-input construction through the shipped CLI command", async () => {
     const root = tempDirs.make("openclaw-agent-exec-service-construction-");
     const pidPath = path.join(root, "command.pid");
     const configPath = path.join(root, "openclaw.json");
@@ -76,7 +77,10 @@ describe("agent exec command composition", () => {
       },
       async () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const supervisor = getProcessSupervisor();
+        // POSIX relay cancellation loses cleanup identity. Keep that failed owner
+        // local so shared-worker teardown cannot inherit its expected uncertainty.
+        const supervisor = createProcessSupervisor();
+        vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
         const spawn = supervisor.spawn.bind(supervisor);
         const admitted = createDeferred<SpawnInput>();
         vi.spyOn(supervisor, "spawn").mockImplementation((input) => {
@@ -130,6 +134,13 @@ describe("agent exec command composition", () => {
             process.kill(commandPid, "SIGKILL");
           }
           await result;
+          const cleanup = supervisor.shutdown();
+          // Windows uses a direct child; only POSIX loses the relay's cleanup authority.
+          if (process.platform === "win32") {
+            await expect(cleanup).resolves.toBeUndefined();
+          } else {
+            await expect(cleanup).rejects.toThrow("service child cleanup identity lost");
+          }
         }
       },
     );

@@ -29,6 +29,17 @@ describe("resolveRuntimeWorkerUrl", () => {
           }),
         ),
       ).toBe(path.join(root, "dist/agents/code-mode.worker.js"));
+      const candidateRoot = path.join(root, "candidate");
+      expect(
+        fileURLToPath(
+          resolveRuntimeWorkerUrl({
+            currentModuleUrl,
+            sourceWorkerName: "code-mode.worker",
+            distWorkerPath: "agents/code-mode.worker.js",
+            root: candidateRoot,
+          }),
+        ),
+      ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
     }
   });
 });
@@ -52,14 +63,11 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
   it("uses canonical launchers unless the sealed bundle registers a sibling", async () => {
     vi.resetModules();
     try {
-      const {
-        registerSealedRuntimeProcessEntrypoint,
-        resolveRuntimeProcessEntrypointUrl,
-        resolveRuntimeWorkerUrl: resolveUrl,
-      } = await import("./runtime-worker-url.js");
+      const { registerSealedRuntimeProcessEntrypoint, resolveRuntimeProcessEntrypointUrl } =
+        await import("./runtime-process-url.js");
       const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
       expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
-        resolveUrl(runtimeProcessEntrypoints.githubExec),
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.githubExec),
       );
       const sqliteUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
       const sealedUrl = new URL("file:///worker-bundle/github-exec-launcher.mjs");

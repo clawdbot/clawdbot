@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistryParams } from "./registry-types.js";
@@ -44,6 +46,11 @@ export type PluginLoadOptions = {
   /** Built hosts prefer canonical checkout artifacts by default; false retains source execution. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
+  /** Resolve declared descriptors for this family without full runtime registration. */
+  capabilityCatalog?: {
+    family: keyof PluginCapabilityCatalog;
+    context: PluginCapabilityCatalogContext;
+  };
   activate?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;

@@ -13,6 +13,7 @@ import {
   REAL_PNG_DATA_URL,
   getAgentTestMocks,
   operatorWriteCliClient,
+  operatorWriteGatewayClient,
   makeContext,
   type AgentHandlerArgs,
   waitForAssertion,
@@ -1042,31 +1043,44 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("inlines a workspace-local avatar in agent.identity.get (#97602)", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
-      await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
-      mocks.loadConfigReturn = {
-        agents: {
-          defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
-        },
-      };
+  it.each(["browser", "cli", "copilot"])(
+    "projects a workspace-local avatar for %s agent.identity.get",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
+        await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: { workspace },
+            list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+          },
+        };
 
-      const respond = await invokeAgentIdentityGet(
-        { sessionKey: "agent:main:main" },
-        { reqId: "5-local-avatar" },
-      );
+        const client = kind === "cli" ? operatorWriteCliClient() : operatorWriteGatewayClient();
+        if (kind === "copilot" && client) {
+          client.connect.client.id = "openclaw-browser-copilot";
+        }
+        const respond = await invokeAgentIdentityGet(
+          { sessionKey: "agent:main:main" },
+          {
+            reqId: "5-local-avatar",
+            client,
+          },
+        );
 
-      expect(mockCallArg(respond)).toBe(true);
-      expectRecordFields(mockCallArg(respond, 0, 1), {
-        agentId: "main",
-        avatar: REAL_PNG_DATA_URL,
-        avatarSource: "avatar.png",
-        avatarStatus: "local",
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatar:
+            kind === "browser"
+              ? expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/)
+              : REAL_PNG_DATA_URL,
+          avatarSource: "avatar.png",
+          avatarStatus: "local",
+        });
+        expect(mockCallArg(respond, 0, 2)).toBeUndefined();
       });
-      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-    });
-  });
+    },
+  );
 
   it("reports a hardlinked avatar as unreadable in agent.identity.get", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-hardlink-" }, async (workspace) => {

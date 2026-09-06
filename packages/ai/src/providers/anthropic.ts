@@ -9,6 +9,7 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -635,7 +636,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "thinking") {
-              block.thinking += event.delta.thinking;
+              appendAssistantThinking(block, event.delta.thinking);
               eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,

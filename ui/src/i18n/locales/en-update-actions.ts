@@ -16,6 +16,8 @@ const enUpdateActions = {
       macAction: "Update Mac app and restart",
     },
     dialog: {
+      checkStatus: "Check status",
+      retryUpdate: "Retry update",
       installing: "Installing the update on the Gateway. It restarts once the install finishes.",
       notStarted:
         "The update request went unanswered. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",

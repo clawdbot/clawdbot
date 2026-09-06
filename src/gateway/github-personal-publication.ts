@@ -21,6 +21,10 @@ import {
 } from "./github-personal-publication-store.js";
 import { resolveGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
+import {
+  rejectGitHubPublicationSelection,
+  type GitHubPublicationPreparation,
+} from "./github-publication-failure.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
@@ -33,7 +37,11 @@ type SessionAction = PersonalGitHubAction & {
 };
 type Selection = { generation: string; account: { accountId: number; login: string } };
 
-function bindSelection(action: SessionAction, selected: Selection) {
+function bindSelection(
+  action: SessionAction,
+  selected: Selection,
+  preparation?: GitHubPublicationPreparation,
+) {
   const assertCurrent = () => {
     action.assertCurrent();
     const record = readUserGitHubConnection(action.owner);
@@ -43,14 +51,20 @@ function bindSelection(action: SessionAction, selected: Selection) {
       record.selection.accountId !== selected.account.accountId ||
       record.selection.login.toLowerCase() !== selected.account.login.toLowerCase()
     ) {
-      throw new Error(
+      rejectGitHubPublicationSelection(
         "My GitHub identity changed; review the current account before publishing again.",
+        preparation,
       );
     }
     return record.selection;
   };
   const initial = assertCurrent();
-  return { profileId: initial.profileId, assertCurrent };
+  return {
+    owner: action.owner,
+    profileId: initial.profileId,
+    accountId: initial.accountId,
+    assertCurrent,
+  };
 }
 
 export function createPersonalGitHubPublicationCoordinator(
@@ -136,18 +150,16 @@ export function createPersonalGitHubPublicationCoordinator(
     });
   };
   const prepareIdentity = async (
-    action: SessionAction,
-    selected: Selection,
+    bound: ReturnType<typeof bindSelection>,
     assertWorkspace: () => void,
   ) => {
-    const bound = bindSelection(action, selected);
     const assertCurrent = () => {
       bound.assertCurrent();
       assertWorkspace();
     };
     assertCurrent();
     try {
-      await requestCurrentPersonalGitHubRefresh(action.owner);
+      await requestCurrentPersonalGitHubRefresh(bound.owner);
     } catch {
       assertCurrent();
       throw new Error(
@@ -157,7 +169,7 @@ export function createPersonalGitHubPublicationCoordinator(
     assertCurrent();
     return await preparePersonalGitHubPublicationIdentity({
       profileId: bound.profileId,
-      accountId: selected.account.accountId,
+      accountId: bound.accountId,
       assertCurrent,
     });
   };
@@ -193,7 +205,7 @@ export function createPersonalGitHubPublicationCoordinator(
           return execution.ownsExecution();
         },
         identity: {
-          prepare: async () => await prepareIdentity(action, selected, assertWorkspace),
+          prepare: async () => await prepareIdentity(bound, assertWorkspace),
           isCurrent: (identity) => {
             assertCurrent();
             return (
@@ -250,10 +262,12 @@ export function createPersonalGitHubPublicationCoordinator(
       }
       const selected = input.selection;
       action.assertCurrent();
-      const existing = readPersonalGitHubPublication(action.owner, {
-        sessionId: action.sessionId,
-        idempotencyKey: input.idempotencyKey,
-      });
+      const readRequest = () =>
+        readPersonalGitHubPublication(action.owner, {
+          sessionId: action.sessionId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      const existing = readRequest();
       if (existing) {
         if (
           existing.connection_generation !== selected.generation ||
@@ -269,15 +283,17 @@ export function createPersonalGitHubPublicationCoordinator(
         action.assertCurrent();
         return status(existing, action, action).result;
       }
-      bindSelection(action, selected);
+      const bound = bindSelection(action, selected, {
+        idempotencyKey: input.idempotencyKey,
+        hasRequest: () => Boolean(readRequest()),
+      });
       return await withWorkspace(action, async (assertWorkspace) => {
-        const bound = bindSelection(action, selected);
         const assertCurrent = () => {
           assertWorkspace();
           bound.assertCurrent();
         };
         const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
-        const identity = await prepareIdentity(action, selected, assertWorkspace);
+        const identity = await prepareIdentity(bound, assertWorkspace);
         const target = await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent });
         const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
           cwd: worktree.path,

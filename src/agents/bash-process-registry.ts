@@ -64,24 +64,13 @@ export interface ProcessSession {
   sessionKey?: string;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
-  /** `session.mainKey` from the runtime config, snapshotted at exec start.
-   *  Used by background-exit notifications to remap cron-run keys to the
-   *  agent's main queue without an ambient config load. If config changes
-   *  while the process runs, the exit notification follows the start-time
-   *  session contract. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; required so the cron-run remap
-   *  can route global-scope agents to the literal "global" queue instead
-   *  of an agent-main queue the heartbeat never drains. Snapshotted with
-   *  `mainKey` for the same start-time routing reason. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
-  /** Set when process poll observed the terminal result before notification. */
+  /** Set only after a terminal poll result is delivered or persisted. */
   terminalPollObserved?: boolean;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   // Deprecated declaration-closure compatibility only; runtime never uses this.
@@ -335,11 +324,6 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
-/** Records that a terminal process poll consumed the process result. */
-export function markTerminalPollObserved(session: ProcessSession): void {
-  session.terminalPollObserved = true;
-}
-
 /** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,
@@ -355,7 +339,9 @@ export function recordNotifyOnExitRemoval(
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
   notifyOnExitRemoval?: NotifyOnExitRemoval;
+  terminalPollObserved?: boolean;
 }): void {
+  record.terminalPollObserved = true;
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;

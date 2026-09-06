@@ -56,6 +56,24 @@ When creating or refreshing a PR body, append this final footer only when the Ru
 
 URLs work directly: `gh pr view https://github.com/owner/repo/pull/55`.
 
+### Landing ownership
+
+When the user asks to land or merge a PR, the terminal outcome is the PR's verified
+GitHub state, not the end of a review, worker turn, or CI observation.
+
+- Keep the job active until `gh pr view ... --json state,mergedAt,mergeCommit`
+  proves `state` is `MERGED`.
+- Treat review findings, merge conflicts, failed checks, and requested changes as
+  continuation work when they are in scope. Patch them, rerun the required gates,
+  and re-evaluate the exact updated head.
+- A pending check is a wait state, not completion. Use the repository's supported
+  wait or merge workflow; do not claim success from partial green checks.
+- If work was delegated to a persistent session and that run stops before merge,
+  continue the same session rather than treating its report as the final result.
+- Stop as blocked only when continuing requires new authority, unavailable
+  credentials, or a product decision that cannot be inferred safely. Report the
+  exact blocker and leave the PR unmerged.
+
 ## Issues
 
 ```bash

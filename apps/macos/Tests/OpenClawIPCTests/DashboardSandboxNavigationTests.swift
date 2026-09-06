@@ -8,6 +8,195 @@ import WebKit
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
+        ("http://[fd12:3456:789a::1]:18789/control/", "http://[fd12:3456:789a::1]:18789"),
+        ("https://Gateway.Example:443/control/", "https://gateway.example"),
+        ("http://Gateway.Example:80/control/", "http://gateway.example"),
+        ("https://gateway.example:8443/control/", "https://gateway.example:8443"),
+    ])
+    func `dashboard origins match browser normalization`(address: String, expectedOrigin: String) throws {
+        let url = try #require(URL(string: address))
+        let browserURL = try #require(URL(string: expectedOrigin + "/control/chat"))
+        #expect(DashboardWindowController.originString(for: url) == expectedOrigin)
+        #expect(DashboardWindowController.isTrustedLinkSource(browserURL, dashboardURL: url))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: browserURL, dashboardURL: url, isMainFrame: true))
+    }
+
+    @Test(arguments: [
+        ("https://login.example/sign-in", true),
+        ("http://login.example/sign-in", false),
+        ("https://user@login.example/sign-in", false),
+        ("file:///sign-in", false),
+    ])
+    func `identity redirects require browser auth and secure credential-free URLs`(
+        address: String, allowed: Bool) throws
+    {
+        let url = try #require(URL(string: address))
+        let browserAuth = DashboardWindowAuth.browserIdentity(gatewayUrl: "wss://gateway.example/control/")
+        #expect(DashboardWindowController.shouldAllowIdentityNavigation(
+            to: url, auth: browserAuth, isMainFrame: true,
+            sourceIsDashboard: true, navigationType: .other) == allowed)
+        #expect(!DashboardWindowController.shouldAllowIdentityNavigation(
+            to: url, auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture", password: nil),
+            isMainFrame: true, sourceIsDashboard: true, navigationType: .other))
+        #expect(!DashboardWindowController.shouldAllowIdentityNavigation(
+            to: url, auth: browserAuth, isMainFrame: true,
+            sourceIsDashboard: true, navigationType: .linkActivated))
+        #expect(DashboardWindowController.shouldAllowIdentityNavigation(
+            to: url, auth: browserAuth, isMainFrame: true,
+            sourceIsDashboard: false, navigationType: .formSubmitted) == allowed)
+    }
+
+    @Test func `sign-in documents cannot observe native data or consume pending commands`() async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><head></head><body><script>
+            window.commands = 0;
+            window.addEventListener('openclaw:native-new-session', () => window.commands++);
+            window.addEventListener('openclaw:native-navigate', event => {
+              window.navigation = event.detail.path;
+              event.preventDefault();
+            });
+            window.__OPENCLAW_NATIVE_COMMANDS_READY__ = location.pathname.startsWith('/control/');
+            window.dispatchEvent(new Event('openclaw:native-commands-state'));
+            </script></body></html>
+            """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let dashboardURL = server.url("/control/")
+        let auth = DashboardWindowAuth.browserIdentity(gatewayUrl: server.websocketURL("/control/").absoluteString)
+        let snapshot = DashboardGatewaySnapshot(gateways: [.init(
+            id: "primary", name: "Private Gateway", kind: "remote",
+            isPrimary: true, canPromote: false, health: .ok)], currentId: "primary")
+        let controller = DashboardWindowController(
+            url: dashboardURL, auth: auth, websiteDataStore: .nonPersistent(),
+            gatewaySnapshot: snapshot, windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show()
+        // A login outside the configured mount is untrusted even on the same origin.
+        controller.webView.load(URLRequest(url: server.url("/login")))
+        try await self.waitForDocument(controller, url: server.url("/login"))
+        controller.updateGatewaySnapshot(snapshot)
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeNavigation(.init(
+            path: "/chat/example",
+            fallbackURL: server.url("/control/chat/example")))
+        controller.show(url: dashboardURL, auth: auth)
+        #expect(controller.webView.url == server.url("/login"))
+        #expect(controller._testPendingNativeCommands == [.newSession])
+        #expect(controller._testPendingNativeNavigation?.path == "/chat/example")
+        let exposed = try await controller.webView.evaluateJavaScript("""
+        [window.__OPENCLAW_NATIVE_CONTROL_AUTH__, window.__OPENCLAW_NATIVE_GATEWAYS__,
+         window.__OPENCLAW_NATIVE_WEB_CHROME__, window.__OPENCLAW_NATIVE_HISTORY__,
+         window.__OPENCLAW_NATIVE_NOTIFICATIONS__].some(value => value !== undefined)
+        """) as? Bool
+        #expect(exposed == false)
+        #expect(try await controller.webView.evaluateJavaScript("window.commands") as? Int == 0)
+
+        controller.webView.load(URLRequest(url: dashboardURL))
+        try await self.waitForDocument(
+            controller, url: dashboardURL,
+            ready: "window.commands === 1 && window.navigation === '/chat/example'")
+        #expect(try await controller.webView.evaluateJavaScript("window.commands") as? Int == 1)
+        #expect(try await controller.webView.evaluateJavaScript("window.navigation") as? String == "/chat/example")
+        #expect(try await controller.webView.evaluateJavaScript(
+            "window.__OPENCLAW_NATIVE_GATEWAYS__.gateways[0].name") as? String == "Private Gateway")
+        #expect(try await controller.webView.evaluateJavaScript(
+            "window.__OPENCLAW_NATIVE_CONTROL_AUTH__.token === null && " +
+                "window.__OPENCLAW_NATIVE_CONTROL_AUTH__.password === null") as? Bool == true)
+    }
+
+    private func waitForDocument(
+        _ controller: DashboardWindowController,
+        url: URL,
+        ready: String = "document.readyState === 'complete'") async throws
+    {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            if controller.webView.url == url, !controller.webView.isLoading, controller.canDeliverNativeCommands,
+               try await controller.webView.evaluateJavaScript(ready) as? Bool == true
+            {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("The dashboard did not finish loading \(url)")
+    }
+
+    @Test func `same URL sign in retains commands until the current document installs its shell`() async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><head></head><body>Sign in<script>
+            window.commands = [];
+            window.mountShell = () => {
+              window.addEventListener('openclaw:native-new-session', () => window.commands.push('new'));
+              window.addEventListener('openclaw:native-toggle-search', event => {
+                window.commands.push('search'); event.preventDefault();
+              });
+              window.__OPENCLAW_NATIVE_COMMANDS_READY__ = true;
+              window.dispatchEvent(new Event('openclaw:native-commands-state'));
+            };
+            </script></body></html>
+            """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let url = server.url()
+        let auth = DashboardWindowAuth.browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
+        let controller = DashboardWindowController(
+            url: url, auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: url, auth: auth)
+        try await self.waitForDocument(controller, url: url)
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeCommand(.commandPalette)
+        #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette])
+
+        _ = try await controller.webView.evaluateJavaScript("window.mountShell(); null")
+        try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new,search'")
+        controller.webView.reload()
+        try await self.waitForDocument(
+            controller, url: url, ready: "window.__OPENCLAW_NATIVE_COMMANDS_READY__ === undefined")
+        controller.dispatchNativeCommand(.newSession)
+        // A queued notification from the previous same-URL shell is only a wakeup;
+        // the new sign-in document still has no listener-owned readiness fact.
+        _ = try await controller.webView.evaluateJavaScript(
+            "window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'}); null")
+        #expect(controller._testPendingNativeCommands == [.newSession])
+        #expect(try await controller.webView.evaluateJavaScript("window.commands.length") as? Int == 0)
+        _ = try await controller.webView.evaluateJavaScript("window.mountShell(); null")
+        try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new'")
+    }
+
+    @Test func `blob documents cannot inherit the root dashboard native credentials`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let dashboardURL = server.url("/")
+        let auth = DashboardWindowAuth(
+            gatewayUrl: server.websocketURL().absoluteString, token: "fixture-token", password: nil)
+        let controller = DashboardWindowController(
+            url: dashboardURL, auth: auth, websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: dashboardURL, auth: auth)
+        try await self.waitForDocument(controller, url: dashboardURL)
+        let blobAddress = try #require(try await controller.webView.evaluateJavaScript("""
+        URL.createObjectURL(new Blob(['<!doctype html><html><head></head><body>Attachment</body></html>'],
+                                    {type: 'text/html'}))
+        """) as? String)
+        let blobURL = try #require(URL(string: blobAddress))
+        controller.webView.load(URLRequest(url: blobURL))
+        try await self.waitForDocument(controller, url: blobURL)
+        // Blob URLs keep their creator's origin; origin equality alone is not document trust.
+        #expect(try await controller.webView.evaluateJavaScript("location.origin") as? String ==
+            DashboardWindowController.originString(for: dashboardURL))
+        #expect(try await controller.webView.evaluateJavaScript("""
+        [window.__OPENCLAW_NATIVE_CONTROL_AUTH__, window.__OPENCLAW_NATIVE_WEB_CHROME__,
+         window.__OPENCLAW_NATIVE_HISTORY__].every(value => value === undefined)
+        """) as? Bool == true)
+        #expect(!DashboardWindowController.isTrustedLinkSource(blobURL, dashboardURL: dashboardURL))
+    }
+
+    @Test(arguments: [
         "https://widgets.example/mcp-app-sandbox?csp=encoded",
         "http://127.0.0.1:18790/mcp-app-sandbox?csp=encoded",
     ])

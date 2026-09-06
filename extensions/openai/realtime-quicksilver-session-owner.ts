@@ -15,6 +15,7 @@ type BrokerParams = {
 };
 
 type BrokerOwner = {
+  retiring: Set<BrokerSession>;
   current?: {
     params: BrokerParams;
     session: BrokerSession;
@@ -22,7 +23,9 @@ type BrokerOwner = {
 };
 
 function resolveBrokerOwner(): BrokerOwner {
-  return resolveGlobalSingleton<BrokerOwner>(OPENAI_QUICKSILVER_SESSION_OWNER_KEY, () => ({}));
+  return resolveGlobalSingleton<BrokerOwner>(OPENAI_QUICKSILVER_SESSION_OWNER_KEY, () => ({
+    retiring: new Set(),
+  }));
 }
 
 export function acquireOpenAIQuicksilverBrowserSessionBroker(params: BrokerParams): BrokerSession {
@@ -35,7 +38,12 @@ export function acquireOpenAIQuicksilverBrowserSessionBroker(params: BrokerParam
 
   // Full plugin registration can run more than once in one process. The provider and
   // HTTP route must share one reservation map or an offer reserved by one rejects at another.
-  const mutableParams = { ...params };
+  const mutableParams = {
+    ...params,
+    onCleanupComplete: () => {
+      owner.retiring.delete(session);
+    },
+  };
   const session = createOpenAIQuicksilverBrowserSessionBroker(mutableParams);
   owner.current = { params: mutableParams, session };
   return session;
@@ -45,11 +53,21 @@ export async function releaseOpenAIQuicksilverBrowserSessionBroker(
   session: BrokerSession,
 ): Promise<void> {
   const owner = resolveBrokerOwner();
-  if (owner.current?.session !== session) {
-    return;
+  // A replacement may admit new work, but failed old cleanup retains its exact
+  // capability and global reservation until background or explicit retry succeeds.
+  if (owner.current?.session === session) {
+    owner.current = undefined;
+    owner.retiring.add(session);
   }
-
-  // Release ownership before async teardown so a later registration can install a replacement.
-  owner.current = undefined;
-  await session.cleanup();
+  // Even a completed replacement's cleanup callback must retry retained older
+  // generations. Do not re-add empty owners or touch a different live current.
+  const results = await Promise.allSettled(
+    Array.from(owner.retiring, (retiring) => retiring.cleanup()),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "OpenAI realtime broker cleanup remains incomplete");
+  }
 }

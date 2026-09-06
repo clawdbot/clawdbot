@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -64,11 +66,12 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(artifactDir, fileName),
-  });
+  await writeFile(
+    path.join(artifactDir, fileName),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.getByRole("button", { name: "Full body", exact: true }),
+    ]),
+  );
 }
 
 describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", () => {

@@ -13,7 +13,6 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
@@ -441,17 +440,6 @@ class AgentsPage
     return Object.fromEntries(
       this.context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
     );
-  }
-
-  // Local /avatar/<id> images need a bearer credential when gateway auth is
-  // active; the agent select uses this to decide whether <img> URLs can load.
-  private controlUiAuthToken(): string | null {
-    const { snapshot, connection } = this.context.gateway;
-    return resolveControlUiAuthToken({
-      hello: snapshot.hello,
-      settings: connection,
-      password: connection.password,
-    });
   }
 
   private ensureInitialData() {
@@ -949,7 +937,6 @@ class AgentsPage
         renderAgents({
           access,
           basePath: this.context.basePath,
-          authToken: this.controlUiAuthToken(),
           loading: agentsState.agentsLoading,
           error: agentsState.agentsError,
           agentsList: this.agentsList,

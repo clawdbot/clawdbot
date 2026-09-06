@@ -112,7 +112,7 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   persistStickyModelSelectionBestEffort: (params: {
     agentId: string;
     model: string;
-    target?: "agent" | "defaults";
+    target: "agent" | "defaults";
   }) => stickyModelMock.persistBestEffort(params),
 }));
 
@@ -376,9 +376,20 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   return {
     loadPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
-    loadPreparedModelCatalogOwnerSnapshot: async () => {
+    withPreparedModelCatalogOwner: async (
+      _params: unknown,
+      read: (owner: {
+        modelCatalog: { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] };
+        authModes: object;
+        isCurrent: () => boolean;
+      }) => unknown,
+    ) => {
       const entries = await loadModelCatalog();
-      return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
+      return read({
+        modelCatalog: { entries, routeVariants: entries },
+        authModes: {},
+        isCurrent: () => true,
+      });
     },
   };
 });
@@ -682,7 +693,7 @@ async function persistModelDirectiveForTest(params: {
           directiveAck: undefined,
           errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
         };
-  return { persisted, sessionEntry };
+  return { persisted, sessionEntry, result };
 }
 
 type HandleDirectiveParams = Parameters<typeof handleDirectiveOnly>[0];
@@ -1828,22 +1839,29 @@ describe("/model chat UX", () => {
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
   });
 
-  it("persists an atomic model/runtime/thinking transaction when the runtime supports it", async () => {
+  it("commits model/runtime selection while keeping supported mixed thinking on its turn", async () => {
     setOpenAiRuntimeScopedUltraProvider();
     const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted } = await persistModelDirectiveForTest({
+    const { persisted, result } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
     });
 
     expect(persisted.errorText).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      directives: { thinkLevel: "ultra" },
+      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
+    });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-luna",
       modelOverrideSource: "user",
       agentRuntimeOverride: "openclaw",
-      thinkingLevel: "ultra",
+      thinkingLevel: "high",
     });
   });
 
@@ -1974,7 +1992,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
-  it("preserves an authorized unscoped effective-default selection", async () => {
+  it("keeps an authorized selection session-only without a default target", async () => {
     const sessionEntry = createSessionEntry();
     const result = await runHandleCommand("/model openai/gpt-4o", {
       sessionEntry,
@@ -1983,13 +2001,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("Configured default update requested.");
+    expect(result?.text).toContain("for this session only; configured default unchanged.");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
-      model: "openai/gpt-4o",
-    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("preserves a compatible auth profile for a mixed model directive", async () => {

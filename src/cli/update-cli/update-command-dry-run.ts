@@ -1,13 +1,19 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
+import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 type UpdateDryRunPreview = {
+  runId: string;
+  run?: UpdateRunRecord;
   dryRun: true;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -67,6 +73,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
 }
 
 export function printUpdateDryRun(params: {
+  runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
   updateInstallKind: "git" | "package" | "unknown";
@@ -87,7 +94,7 @@ export function printUpdateDryRun(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
-  opts: { tag?: string; json?: boolean };
+  opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
 }): void {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
@@ -144,6 +151,8 @@ export function printUpdateDryRun(params: {
 
   printDryRunPreview(
     {
+      runId: params.runId,
+      run: getUpdateRun(params.runId, { env: params.opts.run?.env }),
       dryRun: true,
       root: params.root,
       installKind: params.installKind,
@@ -164,4 +173,17 @@ export function printUpdateDryRun(params: {
     },
     Boolean(params.opts.json),
   );
+  if (!params.opts.json) {
+    printResult(
+      {
+        runId: params.runId,
+        status: "skipped",
+        mode: params.mode,
+        reason: "dry-run",
+        steps: [],
+        durationMs: 0,
+      },
+      params.opts,
+    );
+  }
 }

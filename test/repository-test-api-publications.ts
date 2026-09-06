@@ -64,7 +64,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/tools/model-config.helpers.ts": Symbol.for("openclaw.modelConfigHelpersTestApi"),
-  "src/agents/tools/structured-output-tool.ts": Symbol.for("openclaw.structuredOutputToolTestApi"),
   "src/agents/tools/web-fetch.ts": Symbol.for("openclaw.webFetchTestApi"),
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
@@ -77,7 +76,6 @@ const publications: Record<string, string | symbol> = {
   "src/auto-reply/reply/reply-run-registry.registry.ts": Symbol.for(
     "openclaw.replyRunRegistryTestApi",
   ),
-  "src/auto-reply/reply/stage-sandbox-media.ts": Symbol.for("openclaw.stageSandboxMediaTestApi"),
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),
   "src/cli/command-secret-gateway.ts": Symbol.for("openclaw.commandSecretGatewayTestApi"),
   "src/cli/gateway-cli/run.ts": Symbol.for("openclaw.gatewayRunTestApi"),
@@ -98,9 +96,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/commands/doctor/shared/codex-route-session-repair.ts": Symbol.for(
     "openclaw.codexRouteSessionRepairTestApi",
-  ),
-  "src/commands/doctor/shared/plugin-dependency-cleanup.ts": Symbol.for(
-    "openclaw.pluginDependencyCleanupTestApi",
   ),
   "src/commands/doctor/shared/stale-auth-order.ts": Symbol.for("openclaw.staleAuthOrderTestApi"),
   "src/commands/doctor/shared/stale-oauth-profile-shadows.ts": Symbol.for(

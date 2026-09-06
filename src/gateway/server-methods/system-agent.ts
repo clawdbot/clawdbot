@@ -13,7 +13,9 @@ import {
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   SystemAgentChatEngine,
   SystemAgentWizardAnswerError,
@@ -455,10 +457,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        // The gateway surface must never install/restart its own daemon; the
-        // engine's setup path honors this via surface: "gateway".
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
+          deps: { gatewayHostLifecycle: context.hostLifecycle },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
@@ -637,9 +638,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return undefined;
     });
     // Human waiting must retain the requesting tool, but release the task queue:
-    // the approval owner reenters it to apply the exact proposal.
+    // the approval owner reenters it to apply the exact proposal. Gateway closure
+    // retires this observation without changing the pending decision or its handoff.
     if (pending) {
-      const reply = await pending.completion;
+      const reply = await racePromiseWithAbortSignal(pending.completion, getAsyncWorkSignal());
       respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
     }
   },

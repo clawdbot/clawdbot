@@ -9,9 +9,18 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   loadTranscriptEvents,
+  readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  bindSessionPendingInputSources,
+  listSessionPendingInputs,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+} from "../../config/sessions/session-accessor.pending-inputs.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
@@ -144,6 +153,141 @@ beforeAll(async () => {
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
+  it.each([
+    { collected: false, excludeFromContext: false },
+    { collected: false, excludeFromContext: true },
+    { collected: true, excludeFromContext: false },
+    { collected: true, excludeFromContext: true },
+  ])(
+    "preserves admitted input custody through repeated history rewrites ($collected, $excludeFromContext)",
+    async ({ collected, excludeFromContext }) => {
+      const directory = tempDirs.make("openclaw-admitted-rewrite-");
+      const target = {
+        agentId: "main",
+        sessionId: "admitted-rewrite",
+        sessionKey: "agent:main:admitted-rewrite",
+        storePath: path.join(directory, "sessions.json"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const manager = SessionManager.open(target, directory);
+      const toolEntryId = appendSessionMessages(manager, [
+        asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+          timestamp: 2,
+        }),
+        asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
+      ])[2];
+      const message: Parameters<typeof stageSessionPendingInput>[1]["message"] = {
+        role: "user" as const,
+        content: "Continue the work",
+        timestamp: 4,
+        idempotencyKey: "admitted-rewrite:user",
+        ...(excludeFromContext ? { excludeFromContext: true } : {}),
+      };
+      const source = requireValue(
+        await stageSessionPendingInput(target, {
+          runId: "admitted-rewrite",
+          message,
+          assertCurrent: () => {},
+        }),
+        "pending input receipt",
+      );
+      const sources = [source];
+      if (collected) {
+        sources.push(
+          requireValue(
+            await stageSessionPendingInput(target, {
+              runId: "admitted-rewrite-second",
+              message: {
+                ...message,
+                idempotencyKey: "admitted-rewrite-second:user",
+              },
+              assertCurrent: () => {},
+            }),
+            "second pending input receipt",
+          ),
+        );
+      }
+      const receipt = collected
+        ? requireValue(
+            bindSessionPendingInputSources(sources, {
+              ...message,
+              idempotencyKey: "collected-rewrite:user",
+            }),
+            "collected input receipt",
+          )
+        : source;
+      try {
+        await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message }));
+        manager.reloadPersistedTranscript();
+        const originalRows = await loadTranscriptEvents(target);
+        let rewriteTarget = requireValue(toolEntryId, "tool result entry");
+        let currentEntryId = receipt.inputId;
+        for (const replacementText of ["short result", "shorter"]) {
+          const rewritten = receipt.run(() =>
+            rewriteTranscriptEntriesInSessionManager({
+              sessionManager: manager,
+              replacements: [
+                {
+                  entryId: rewriteTarget,
+                  message: createToolResultReplacement("read", replacementText, 3),
+                },
+              ],
+            }),
+          );
+          expect(rewritten.changed).toBe(true);
+          expect(
+            receipt.run(() => appendTranscriptMessageSync(target, { message: receipt.message })),
+          ).toMatchObject({
+            ok: true,
+            value: { appended: false },
+          });
+          await waitForSessionTranscriptProjection(target);
+          const reopened = SessionManager.open(target, directory);
+          const activeUsers = reopened
+            .getBranch()
+            .filter(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "user" &&
+                "idempotencyKey" in entry.message &&
+                entry.message.idempotencyKey === receipt.message.idempotencyKey,
+            );
+          expect(activeUsers).toHaveLength(1);
+          currentEntryId = requireValue(activeUsers[0], "active admitted user").id;
+          expect(currentEntryId).not.toBe(receipt.inputId);
+          expect(
+            readActiveTranscriptEntryAnchor({ ...target, entryId: currentEntryId }),
+          ).toBeDefined();
+          expect(
+            await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message })),
+          ).toMatchObject({ appended: false, messageId: currentEntryId });
+          rewriteTarget = requireValue(
+            reopened
+              .getBranch()
+              .find((entry) => entry.type === "message" && entry.message.role === "toolResult"),
+            "rewritten tool result",
+          ).id;
+        }
+        expect((await loadTranscriptEvents(target)).slice(0, originalRows.length)).toEqual(
+          originalRows,
+        );
+        expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+        receipt.finish("cancelled");
+        expect(() => receipt.run(() => {})).toThrow("ownership ended");
+        expect(
+          await withSessionPendingInputPersistence(receipt, () =>
+            appendTranscriptMessage(target, { message: receipt.message }),
+          ),
+        ).toMatchObject({ appended: false, messageId: currentEntryId });
+      } finally {
+        receipt.finish("interrupted");
+      }
+    },
+  );
+
   it("branches from the first replaced message and re-appends the remaining suffix", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
 

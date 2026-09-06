@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -109,21 +109,6 @@ async function waitForProcessExit(
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
 }
 
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
-
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
@@ -215,7 +200,9 @@ describe("write-cli-startup-metadata", () => {
       });
 
       await rootHelpStarted;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(startedCommands).toEqual([]);
 
       releaseRootHelp();
@@ -338,7 +325,9 @@ describe("write-cli-startup-metadata", () => {
       });
       const deadline = Date.now() + 1_000;
       while (children.length < COMMAND_HELP_RENDER_CONCURRENCY && Date.now() < deadline) {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
       expect(children.map((child) => child.commandName)).toEqual(
         DEFAULT_COMMAND_HELP_NAMES.slice(0, COMMAND_HELP_RENDER_CONCURRENCY),
@@ -426,7 +415,9 @@ describe("write-cli-startup-metadata", () => {
             tasks: "Usage: openclaw tasks\n",
           }),
         });
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         child.stderr.write("primary browser failure\n");
         child.emit("close", 7, null);
 
@@ -737,10 +728,12 @@ describe("write-cli-startup-metadata", () => {
 
         runner.kill("SIGTERM");
 
-        await expect(waitForChildClose(runner)).resolves.toEqual({
-          code: null,
-          signal: "SIGTERM",
-        });
+        await expect(waitForChildClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS)).resolves.toEqual(
+          {
+            code: null,
+            signal: "SIGTERM",
+          },
+        );
         await waitForProcessExit(grandchildPid);
         const renderStateDir = readFileSync(renderStatePath, "utf8");
         expect(existsSync(renderStateDir)).toBe(false);
@@ -1029,7 +1022,9 @@ describe("write-cli-startup-metadata", () => {
         for (const suffix of ["", "-shm", "-wal"]) {
           writeFileSync(path.join(sqliteDir, `openclaw.sqlite${suffix}`), "fixture", "utf8");
         }
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         if (failRender) {
           throw new Error("browser help failed");
         }

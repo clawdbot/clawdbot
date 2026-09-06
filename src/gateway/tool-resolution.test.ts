@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -58,6 +59,31 @@ describe("resolveGatewayScopedTools", () => {
     expect(messageTool?.description).toContain("This turn visible reply");
   });
 
+  it.each(["profile", "gateway-deny", "surface-exclusion"] as const)(
+    "rejects collector mode after %s removes its reader",
+    async (restriction) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          agents: { entries: { main: { default: true } } },
+          tools: { profile: restriction === "profile" ? "messaging" : "coding" },
+          ...(restriction === "gateway-deny"
+            ? { gateway: { tools: { deny: ["agents_wait"] } } }
+            : {}),
+        },
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        ...(restriction === "surface-exclusion" ? { excludeToolNames: ["agents_wait"] } : {}),
+      });
+      const spawn = result.tools.find((tool) => tool.name === "sessions_spawn");
+      expect(spawn).toBeDefined();
+      expect(result.tools.some((tool) => tool.name === "agents_wait")).toBe(false);
+      expect(spawn?.parameters).not.toHaveProperty("properties.collect");
+      await expect(
+        spawn!.execute("uncollectable", { task: "inspect", collect: true }),
+      ).rejects.toThrow("Collector results are unavailable");
+    },
+  );
+
   it("keeps ordinary loopback turns under the configured profile", () => {
     const result = resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
@@ -106,6 +132,30 @@ describe("resolveGatewayScopedTools", () => {
     });
     expect(imageTool?.description).toContain("private model context");
   });
+
+  it.each([
+    { first: undefined, second: false },
+    { first: false, second: undefined },
+  ])(
+    "keeps unknown and disabled model vision distinct in cached tools: $first then $second",
+    async ({ first, second }) => {
+      const cache = new McpLoopbackToolCache();
+      const cfg: OpenClawConfig = { tools: { allow: ["computer"] } };
+      for (const modelHasVision of [first, second]) {
+        const result = await cache.resolve({
+          cfg,
+          context: {
+            sessionKey: "agent:main:vision-context",
+            senderIsOwner: true,
+            modelHasVision,
+          },
+        });
+        expect(result.tools.some((tool) => tool.name === "computer")).toBe(
+          modelHasVision !== false,
+        );
+      }
+    },
+  );
 
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
@@ -258,7 +308,6 @@ describe("resolveGatewayScopedTools", () => {
       expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
       expect(toolResult.details).toEqual({
         status: "yielded",
-        message: "waiting on subagents",
         acknowledgment: "I’m waiting on the subagents.",
       });
     } finally {

@@ -34,6 +34,43 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
+  it.skipIf(process.platform === "win32").each(["normal", "cooperative", "forced"] as const)(
+    "reports invocation cleanup and honors the initial SIGINT signal: %s",
+    async (mode) => {
+      const controller = new AbortController();
+      let ready!: () => void;
+      const started = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const program =
+        mode === "normal"
+          ? "process.stdout.write('ready'); process.exitCode=17;"
+          : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
+      const running = runCommandWithTimeout([process.execPath, "-e", program], {
+        signal: controller.signal,
+        killProcessTree: true,
+        killSignal: "SIGINT",
+        killGraceMs: 100,
+        timeoutMs: 5000,
+        onOutputChunk: () => {
+          ready();
+        },
+      });
+      await started;
+      if (mode !== "normal") {
+        controller.abort();
+      }
+      const result = await running;
+      expect(result.cleanup).toBe(mode);
+      if (mode !== "forced") {
+        expect(result.code).toBe(17);
+      }
+      if (mode === "cooperative") {
+        expect(result.stdout).toContain("interrupted");
+      }
+    },
+  );
+
   it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],

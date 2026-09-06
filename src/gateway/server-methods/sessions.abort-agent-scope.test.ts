@@ -215,6 +215,29 @@ function expectSessionsListActiveRun(respond: RespondFn, hasActiveRun: boolean):
   );
 }
 
+function mockListedSession(row: {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  hasActiveRun?: boolean;
+}): void {
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    targetsBySessionKey: new Map([
+      [
+        row.key,
+        {
+          agentId: row.agentId,
+          storeTarget: { agentId: row.agentId, storePath: "/tmp/openclaw-sessions.json" },
+        },
+      ],
+    ]),
+    durableTargets: [],
+    storePath: "/tmp/openclaw-sessions.json",
+    store: { [row.key]: { sessionId: row.sessionId, updatedAt: 1 } },
+  });
+  listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [row] });
+}
+
 async function expectListedGlobalSessionActiveRun(params: {
   activeRun: ActiveRun;
   runId: string;
@@ -227,8 +250,11 @@ async function expectListedGlobalSessionActiveRun(params: {
     globalScope: true,
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
-  listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
+  mockListedSession({
+    key: "global",
+    agentId: params.agentId,
+    sessionId: `sess-${params.agentId}-global`,
+    hasActiveRun: false,
   });
   const respond = await callSessions(
     "sessions.list",
@@ -252,7 +278,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
@@ -365,8 +391,10 @@ describe("sessions.abort agent scope", () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
-    listSessionsFromStoreAsyncMock.mockResolvedValue({
-      sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    mockListedSession({
+      key: "agent:main:openclaw-weixin:direct:user",
+      agentId: "main",
+      sessionId: "sess-weixin",
     });
     isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",

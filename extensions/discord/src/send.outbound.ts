@@ -1,4 +1,3 @@
-// Discord plugin module implements send.outbound behavior.
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -507,8 +506,8 @@ async function resolveDiscordStructuredSendContext(
     channelId,
     account: accountInfo,
   } = await resolveDiscordSendTarget(to, opts);
-  const content = opts.content?.trim();
-  const rewrittenContent = content
+  const content = opts.content;
+  const rewrittenContent = content?.trim()
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
         mentionAliases: accountInfo.config.mentionAliases,

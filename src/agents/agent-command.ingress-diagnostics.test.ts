@@ -15,25 +15,11 @@ const mocks = vi.hoisted(() => ({
   emitTrustedDiagnosticEvent: vi.fn(),
   isDiagnosticsEnabled: vi.fn(),
   getRuntimeConfig: vi.fn(),
-  resolveModelCostConfig: vi.fn(),
-  estimateAggregateUsageCost: vi.fn(),
 }));
 
-vi.mock("../infra/diagnostic-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/diagnostic-events.js")>(
-    "../infra/diagnostic-events.js",
-  );
-  return {
-    ...actual,
-    emitTrustedDiagnosticEvent: mocks.emitTrustedDiagnosticEvent,
-    isDiagnosticsEnabled: mocks.isDiagnosticsEnabled,
-  };
-});
-
-vi.mock("../utils/usage-format.js", () => ({
-  resolveModelCostConfig: (...args: Array<unknown>) => mocks.resolveModelCostConfig(...args),
-  estimateAggregateUsageCost: (...args: Array<unknown>) =>
-    mocks.estimateAggregateUsageCost(...args),
+vi.mock("../infra/diagnostic-events.js", () => ({
+  emitTrustedDiagnosticEvent: mocks.emitTrustedDiagnosticEvent,
+  isDiagnosticsEnabled: mocks.isDiagnosticsEnabled,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -43,9 +29,16 @@ vi.mock("../config/io.js", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.isDiagnosticsEnabled.mockReturnValue(true);
-  mocks.getRuntimeConfig.mockReturnValue({});
-  mocks.resolveModelCostConfig.mockReturnValue({});
-  mocks.estimateAggregateUsageCost.mockReturnValue(0.001);
+  mocks.getRuntimeConfig.mockReturnValue({
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          models: [{ id: "gpt-5.5", cost: { input: 1, output: 2.5, cacheRead: 0, cacheWrite: 0 } }],
+        },
+      },
+    },
+  });
 });
 
 afterEach(() => {
@@ -144,23 +137,6 @@ describe("emitIngressModelUsageDiagnostic", () => {
 
     emitIngressModelUsageDiagnostic(result, makeOpts(), "/state/agents/marie/agent");
 
-    expect(mocks.resolveModelCostConfig).toHaveBeenCalledWith({
-      provider: "openai",
-      model: "gpt-5.5",
-      config: {},
-      agentDir: "/state/agents/marie/agent",
-    });
-
-    expect(mocks.estimateAggregateUsageCost).toHaveBeenCalledWith({
-      usage: {
-        input: 900,
-        output: 300,
-        cacheRead: 70,
-        cacheWrite: 30,
-        total: 1300,
-      },
-      cost: {},
-    });
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         usage: {
@@ -173,6 +149,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
         },
         lastCallUsage: { input: 500, output: 200 },
         context: { limit: 128000, used: 1200 },
+        costUsd: 0.00165,
       }),
     );
   });
@@ -251,7 +228,6 @@ describe("emitIngressModelUsageDiagnostic", () => {
     { name: "cost-only positive total", usage: { cost: { total: 0.25 } }, cost: 0.25 },
     { name: "cost-only zero total", usage: { cost: { total: 0 } }, cost: 0 },
   ])("emits monetary diagnostics for $name", ({ usage, cost }) => {
-    mocks.estimateAggregateUsageCost.mockReturnValue(cost);
     const result = makeResult({
       agentMeta: { usage, promptTokens: undefined, lastCallUsage: undefined },
     });
@@ -259,13 +235,6 @@ describe("emitIngressModelUsageDiagnostic", () => {
 
     emitIngressModelUsageDiagnostic(result, opts);
 
-    expect(mocks.resolveModelCostConfig).toHaveBeenCalledWith({
-      provider: "openai",
-      model: "gpt-5.5",
-      config: expect.any(Object) as unknown,
-      agentDir: "/state/agents/main/agent",
-    });
-    expect(mocks.estimateAggregateUsageCost).toHaveBeenCalled();
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
     const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
     expect(event.costUsd).toBe(cost);

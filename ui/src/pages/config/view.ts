@@ -356,6 +356,7 @@ export function renderConfig(props: ConfigProps) {
                 ? html`<div class="config-mode-toggle">
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                      aria-pressed=${formMode === "form" ? "true" : "false"}
                       ?disabled=${props.schemaLoading || !props.schema || rawDraftPending}
                       title=${
                         rawDraftPending
@@ -370,6 +371,7 @@ export function renderConfig(props: ConfigProps) {
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                      aria-pressed=${formMode === "raw" ? "true" : "false"}
                       ?disabled=${!rawAvailable}
                       title=${
                         rawAvailable

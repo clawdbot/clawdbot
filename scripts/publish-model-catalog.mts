@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   MODEL_PRICING_SOURCES,
   normalizeModelPricingCatalog,
@@ -18,6 +19,7 @@ import { parseCerebrasPricingCatalog } from "../extensions/cerebras/pricing-api.
 import { parseChutesPricingCatalog } from "../extensions/chutes/pricing-api.js";
 import { parseDeepInfraPricingCatalog } from "../extensions/deepinfra/pricing-api.js";
 import { parseVenicePricingCatalog } from "../extensions/venice/pricing-api.js";
+import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogPricing,
@@ -29,7 +31,11 @@ type ModelCatalogManifestInput = {
   manifestPath: string;
   manifest: {
     providers?: string[];
-    modelCatalog?: { providers?: Record<string, unknown> };
+    modelCatalog?: {
+      providers?: Record<string, unknown>;
+      modelsDev?: Record<string, unknown>;
+      suppressions?: Array<{ provider?: string; model?: string; when?: unknown }>;
+    };
     modelPricing?: { providers?: Record<string, unknown> };
   };
 };
@@ -44,10 +50,19 @@ type LoadedPricingSource = PricingSource & {
   aliases: string[][];
 };
 type BundleValidator = (bundle: unknown) => PublishedModelCatalogBundle;
+type ModelsDevModel = Record<string, unknown> & {
+  id: string;
+  modalities: { input: unknown[]; output: unknown[] };
+  limit: Record<string, unknown>;
+};
+type ModelCatalogHydrationCounts = { added: number; filled: number; skipped: number };
+type ModelCatalogHydrationResult = Record<string, ModelCatalogHydrationCounts>;
+type ModelCatalogSourceLoader = (url: string, label: string) => Promise<unknown>;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
 
 const SCRIPT_LABEL = "publish-model-catalog";
+const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
@@ -386,6 +401,158 @@ async function readJsonResponse(response: Response, source: string) {
   return payload;
 }
 
+function createModelCatalogSourceLoader(fetchImpl: typeof fetch = fetch): ModelCatalogSourceLoader {
+  // Metadata and pricing consume the same response within one publication. A failed
+  // metadata request must not be retried as pricing and publish a smaller catalog.
+  const sources = new Map<string, Promise<unknown>>();
+  return (url, label) => {
+    let source = sources.get(url);
+    if (!source) {
+      source = fetchImpl(url, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS),
+      })
+        .then((response) => readJsonResponse(response, label))
+        .catch((cause: unknown) => {
+          throw new Error(`${label} catalog unavailable: ${String(cause)}`, { cause });
+        });
+      sources.set(url, source);
+    }
+    return source;
+  };
+}
+
+function isModelsDevModel(value: unknown, modelId: string): value is ModelsDevModel {
+  return (
+    isRecord(value) &&
+    value.id === modelId &&
+    isRecord(value.modalities) &&
+    Array.isArray(value.modalities.input) &&
+    Array.isArray(value.modalities.output) &&
+    isRecord(value.limit)
+  );
+}
+
+// Metadata only: cost stays with the provider pricing policy in enrichModelCatalogPricing.
+function translateModelsDevModel(model: ModelsDevModel): ModelCatalogModel {
+  const contextWindow = parseStrictFiniteNumber(model.limit.context);
+  const maxTokens = parseStrictFiniteNumber(model.limit.output);
+  return {
+    id: model.id,
+    ...(typeof model.name === "string" ? { name: model.name } : {}),
+    ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
+    input: [
+      ...new Set(
+        model.modalities.input.flatMap((value) =>
+          value === "text" || value === "image" ? value : value === "pdf" ? "document" : [],
+        ),
+      ),
+    ],
+    ...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}),
+    ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
+  };
+}
+
+const HYDRATED_MODEL_FIELDS = [
+  "name",
+  "reasoning",
+  "input",
+  "contextWindow",
+  "maxTokens",
+] as const satisfies readonly (keyof ModelCatalogModel)[];
+
+export async function hydrateModelCatalogFromModelsDev(options: {
+  bundle: PublishedModelCatalogBundle;
+  manifests: ModelCatalogManifestInput[];
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<ModelCatalogHydrationResult> {
+  const result: ModelCatalogHydrationResult = {};
+  const mappings = new Map<string, string>();
+  const suppressions = new Set<string>();
+  for (const { manifest } of options.manifests) {
+    const ownedProviders = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
+    const catalog = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders });
+    for (const [provider, source] of Object.entries(catalog?.modelsDev ?? {})) {
+      if (catalog?.providers?.[provider] && options.bundle.providers[provider]) {
+        mappings.set(provider, source);
+      }
+    }
+    // Endpoint-specific rules remain runtime-owned. Another plugin cannot veto
+    // an owner's imports through an unowned shared-catalog suppression.
+    for (const { provider, model, when } of catalog?.suppressions ?? []) {
+      if (ownedProviders.has(provider) && when === undefined) {
+        suppressions.add(`${provider}/${model.toLowerCase()}`);
+      }
+    }
+  }
+  if (mappings.size === 0) {
+    return result;
+  }
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const catalog = await loadSource(MODELS_DEV_CATALOG_URL, "models.dev");
+  if (!isRecord(catalog)) {
+    throw new Error("models.dev response is not a JSON object");
+  }
+  for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
+    const upstreamProviderId = mappings.get(providerId);
+    if (!upstreamProviderId) {
+      continue;
+    }
+    const upstreamProvider = catalog[upstreamProviderId];
+    if (
+      !isRecord(upstreamProvider) ||
+      upstreamProvider.id !== upstreamProviderId ||
+      !isRecord(upstreamProvider.models)
+    ) {
+      throw new Error(`models.dev catalog missing or malformed for provider ${upstreamProviderId}`);
+    }
+    if (provider.models.some((model) => model.api !== undefined)) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: skipping models.dev hydration for ${providerId}; its rows pick a transport per model\n`,
+      );
+      continue;
+    }
+    const existing = new Map(provider.models.map((model) => [model.id, model]));
+    let filled = 0;
+    let skipped = 0;
+    const additions = Object.entries(upstreamProvider.models).flatMap(([modelId, rawModel]) => {
+      // Agents need tool calling; models.dev rows without it are embeddings, image, guard, and
+      // safety models that would only clutter the picker.
+      if (
+        !isModelsDevModel(rawModel, modelId) ||
+        rawModel.tool_call !== true ||
+        !rawModel.modalities.output.includes("text") ||
+        rawModel.status === "deprecated" ||
+        rawModel.status === "retired" ||
+        suppressions.has(`${providerId}/${modelId.toLowerCase()}`)
+      ) {
+        skipped += 1;
+        return [];
+      }
+      const current = existing.get(modelId);
+      if (!current) {
+        return [translateModelsDevModel(rawModel)];
+      }
+      const translated = translateModelsDevModel(rawModel);
+      let modelFilled = false;
+      for (const key of HYDRATED_MODEL_FIELDS) {
+        if (current[key] === undefined && translated[key] !== undefined) {
+          Object.assign(current, { [key]: translated[key] });
+          modelFilled = true;
+        }
+      }
+      if (modelFilled) {
+        filled += 1;
+      }
+      return [];
+    });
+    provider.models.push(...additions);
+    result[providerId] = { added: additions.length, filled, skipped };
+  }
+  return result;
+}
+
 function parsePricingCatalog(
   source: PricingSource,
   body: unknown,
@@ -459,21 +626,19 @@ function parsePricingCatalog(
   return { ...source, catalog, aliases };
 }
 
-async function fetchPricingSources(fetchImpl: typeof fetch, policies: PricingPolicies) {
+async function fetchPricingSources(
+  loadSource: ModelCatalogSourceLoader,
+  policies: PricingPolicies,
+) {
   const sources = MODEL_PRICING_SOURCES.filter(
     (source) =>
       !source.authoritative ||
       [...policies.keys()].some((id) => sourcePolicy(policies, id, source)),
   );
-  const signal = AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS);
   const loaded = await Promise.all(
     sources.map(async (source) => {
       try {
-        const response = await fetchImpl(source.url, {
-          headers: { Accept: "application/json" },
-          signal,
-        });
-        const body = await readJsonResponse(response, source.label);
+        const body = await loadSource(source.url, source.label);
         return parsePricingCatalog(source, body, policies);
       } catch (cause) {
         return {
@@ -559,10 +724,13 @@ export async function enrichModelCatalogPricing(options: {
   bundle: PublishedModelCatalogBundle;
   manifests: ModelCatalogManifestInput[];
   fetchImpl?: typeof fetch;
-  validateBundle?: BundleValidator;
+  loadSource?: ModelCatalogSourceLoader;
 }): Promise<{ modelsEnriched: number; pricingEntries: number }> {
   const policies = readPricingPolicies(options.manifests);
-  const sources = await fetchPricingSources(options.fetchImpl ?? fetch, policies);
+  const sources = await fetchPricingSources(
+    options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl),
+    policies,
+  );
   let enriched = 0;
   const coveredKeys = new Set<string>();
   const metadataOwnedKeys = new Set<string>();
@@ -638,10 +806,6 @@ export async function enrichModelCatalogPricing(options: {
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, pricing]) => [key, compactPricing(pricing)]),
   );
-  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
-  const validated = validateBundle(options.bundle);
-  options.bundle.providers = validated.providers;
-  options.bundle.pricing = validated.pricing;
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
@@ -696,10 +860,16 @@ async function runPublishModelCatalog(
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
-  const bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
+  let bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
+  const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
+  const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const pricingResult = args.pricing
-    ? await enrichModelCatalogPricing({ bundle, manifests, fetchImpl: options.fetchImpl })
+    ? await enrichModelCatalogPricing({ bundle, manifests, loadSource })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  // Validate after all enrichment so metadata-only and dry-run output obey the
+  // same client contract as priced catalogs.
+  const validateBundle = await loadClientBundleValidator();
+  bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
@@ -713,9 +883,16 @@ async function runPublishModelCatalog(
       `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
+  const hydrationSummary = Object.entries(hydrationResult)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([providerId, { added, filled, skipped }]) =>
+        `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}\n`,
+    )
+    .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
-    process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n`);
+    process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}`);
     return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
   if (!args.out) {
@@ -724,7 +901,7 @@ async function runPublishModelCatalog(
   const outputFile = path.resolve(rootDir, args.out);
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   fs.writeFileSync(outputFile, serialized);
-  process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n`);
+  process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 

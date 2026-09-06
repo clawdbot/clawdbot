@@ -794,7 +794,7 @@ actor GatewayEndpointStore {
         switch next {
         case let .ready(mode, url, _, _, _):
             let modeDesc = String(describing: mode)
-            let urlDesc = url.absoluteString
+            let urlDesc = Self.diagnosticURLString(for: url)
             self.logger
                 .debug(
                     "resolved endpoint mode=\(modeDesc, privacy: .public) url=\(urlDesc, privacy: .public)")
@@ -1220,6 +1220,18 @@ extension GatewayEndpointStore {
             return "/"
         }
         return self.normalizeDashboardPath(controlUi["basePath"] as? String)
+    }
+
+    /// Dashboard fragments and Gateway URL userinfo can contain credentials.
+    /// Redact diagnostic output without changing the endpoint used for navigation.
+    static func diagnosticURLString(for url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "<unparseable-url>"
+        }
+        components.user = nil
+        components.password = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? "<unparseable-url>"
     }
 
     static func dashboardURL(

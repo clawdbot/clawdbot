@@ -48,7 +48,12 @@ describe("DeepInfra model discovery proxy policy", () => {
           release,
         };
       });
-      await discoverDeepInfraModels({ hasApiKey: true, env: {} });
+      const acquisition = discoverDeepInfraModels({ hasApiKey: true, env: {} });
+      if (scenario === "success") {
+        await expect(acquisition).resolves.toMatchObject([{ id: "fixture/chat" }]);
+      } else {
+        await expect(acquisition).rejects.toThrow();
+      }
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
       expect(new Set(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url))).toEqual(
         new Set([

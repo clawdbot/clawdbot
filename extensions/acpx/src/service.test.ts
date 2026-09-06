@@ -76,7 +76,6 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
         getStatus: vi.fn(async () => ({ summary: "ready" })),
         isHealthy: vi.fn(() => true),
         prepareFreshSession: vi.fn(async () => {}),
-        probeAvailability: vi.fn(async () => {}),
         runTurn: vi.fn(async function* () {}),
         setConfigOption: vi.fn(async () => {}),
         setMode: vi.fn(async () => {}),
@@ -318,10 +317,11 @@ describe("createAcpxRuntimeService", () => {
     const releaseProbe = createDeferred<void>();
     const events: string[] = [];
     const runtime = createMockRuntime({
-      probeAvailability: vi.fn(async () => {
+      doctor: vi.fn(async () => {
         events.push("probe");
         probeStarted.resolve();
         await releaseProbe.promise;
+        return { ok: true, message: "ok" };
       }),
     });
     const publish = vi.fn((backend: { runtime: unknown; healthy?: () => boolean }) => {
@@ -359,13 +359,13 @@ describe("createAcpxRuntimeService", () => {
     const workspaceDir = testWorkspace.dir;
     const stateDir = path.join(workspaceDir, "custom-state");
     const ctx = createServiceContext(workspaceDir);
-    const probeAvailability = vi.fn(async () => {
+    const doctor = vi.fn(async () => {
       await fs.access(stateDir);
+      return { ok: true, message: "ok" };
     });
     const runtime = createMockRuntime({
-      doctor: async () => ({ ok: true, message: "ok" }),
+      doctor,
       isHealthy: () => false,
-      probeAvailability,
     });
     const service = createAcpxRuntimeService(ctx, {
       pluginConfig: { stateDir },
@@ -375,7 +375,7 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     await fs.access(stateDir);
-    expect(probeAvailability).not.toHaveBeenCalled();
+    expect(doctor).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
 
     await service.stop?.(ctx);
@@ -387,15 +387,15 @@ describe("createAcpxRuntimeService", () => {
     const ctx = createServiceContext(workspaceDir);
     let releaseProbe!: () => void;
     const probeStarted = vi.fn();
-    const probeAvailability = vi.fn(
+    const doctor = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<{ ok: boolean; message: string }>((resolve) => {
           probeStarted();
-          releaseProbe = resolve;
+          releaseProbe = () => resolve({ ok: true, message: "ok" });
         }),
     );
     const runtime = createMockRuntime({
-      probeAvailability,
+      doctor,
       isHealthy: () => true,
     });
     const service = createAcpxRuntimeService(ctx, {
@@ -839,9 +839,9 @@ describe("createAcpxRuntimeService", () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    const probeAvailability = vi.fn(async () => {});
+    const doctor = vi.fn(async () => ({ ok: true, message: "ok" }));
     const runtime = createMockRuntime({
-      probeAvailability,
+      doctor,
       isHealthy: () => true,
     });
     const service = createAcpxRuntimeService(ctx, {
@@ -850,35 +850,50 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(probeAvailability).toHaveBeenCalledOnce();
+    expect(doctor).toHaveBeenCalledOnce();
+    expect(runtime.probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(true);
 
     await service.stop?.(ctx);
   });
 
-  it("bounds the opt-in embedded runtime startup probe wait with the configured timeout", async () => {
+  it("bounds startup diagnostics after an unhealthy probe", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
-    const workspaceDir = testWorkspace.dir;
-    const ctx = createServiceContext(workspaceDir);
-    const probeAvailability = vi.fn(() => new Promise<void>(() => {}));
+    const ctx = createServiceContext(testWorkspace.dir);
+    const doctorStarted = createDeferred<void>();
+    const releaseDoctor = createDeferred<{ ok: boolean; message: string }>();
     const runtime = createMockRuntime({
-      probeAvailability,
       isHealthy: () => false,
+      doctor: vi.fn(() => {
+        doctorStarted.resolve();
+        return releaseDoctor.promise;
+      }),
     });
     const service = createAcpxRuntimeService(ctx, {
       pluginConfig: { timeoutSeconds: 0.001 },
       runtimeFactory: () => runtime as never,
     });
-
-    await service.start(ctx);
-
-    expect(probeAvailability).toHaveBeenCalledOnce();
-    expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
-    );
-
-    await service.stop?.(ctx);
+    vi.useFakeTimers();
+    let settled = false;
+    const started = Promise.resolve(service.start(ctx)).then(() => {
+      settled = true;
+    });
+    try {
+      await doctorStarted.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(runtime.doctor).toHaveBeenCalledOnce();
+      expect(runtime.probeAvailability).not.toHaveBeenCalled();
+      expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
+      expect(ctx.logger.warn).toHaveBeenCalledWith(
+        "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
+      );
+    } finally {
+      releaseDoctor.resolve({ ok: false, message: "unavailable" });
+      await started;
+      await service.stop?.(ctx);
+      vi.useRealTimers();
+    }
   });
 
   it("passes the default runtime timeout to the embedded runtime factory", async () => {
@@ -945,11 +960,10 @@ describe("createAcpxRuntimeService", () => {
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    const probeAvailability = vi.fn(async () => {});
+    const doctor = vi.fn(async () => ({ ok: false, message: "nope" }));
     const runtime = createMockRuntime({
-      doctor: async () => ({ ok: false, message: "nope" }),
+      doctor,
       isHealthy: () => false,
-      probeAvailability,
     });
     const service = createAcpxRuntimeService(ctx, {
       runtimeFactory: () => runtime as never,
@@ -957,7 +971,7 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(probeAvailability).not.toHaveBeenCalled();
+    expect(doctor).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
 

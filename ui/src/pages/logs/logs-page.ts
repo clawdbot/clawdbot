@@ -143,13 +143,16 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsTaskQuiet = false;
       void this.logsTask.run([null, null, null, null, false, false]);
     },
-    onSnapshot: (change) => {
-      this.syncPolling();
-      if (change.becameConnected && this.logsFile !== null) {
-        void this.loadLogs({ reset: true, quiet: true });
-        return;
-      }
-      this.ensureInitialLogs();
+    onSnapshot: () => this.syncPolling(),
+    // Only connection/identity transitions own automatic resets. Metadata snapshots
+    // must not supersede an in-flight tail or reload a successfully empty log.
+    ensureInitialData: () => {
+      const quiet = this.logsStatus.hasLoaded;
+      void this.loadLogs({ reset: true, quiet }).then((current) => {
+        if (current && !quiet) {
+          this.streamFollow.schedule(true);
+        }
+      });
     },
   });
   private readonly streamFollow = new StreamAutoFollowController(this, {
@@ -214,17 +217,6 @@ class LogsPage extends OpenClawLightDomElement {
     this.polling.start();
   }
 
-  private ensureInitialLogs() {
-    if (!this.gateway.connected || !this.gateway.client || this.logsEntries.length > 0) {
-      return;
-    }
-    void this.loadLogs({ reset: true }).then((current) => {
-      if (current) {
-        this.streamFollow.schedule(true);
-      }
-    });
-  }
-
   private async loadLogs(opts?: { reset?: boolean; quiet?: boolean }): Promise<boolean> {
     const quiet = opts?.quiet === true;
     const gateway = this.gateway.gateway;
@@ -239,8 +231,11 @@ class LogsPage extends OpenClawLightDomElement {
     }
     this.logsTaskQuiet = quiet;
     this.logsStatus = beginPanelRefresh(this.logsStatus, { clearError: !quiet });
+    // Task suppresses stale results, but an old run can resolve after a new one.
+    // Keep completion-triggered scroll work in the request's connection epoch.
+    const epoch = this.gateway.epoch;
     await this.logsTask.run(this.logsTaskArgs(opts));
-    return this.logsTask.status === TaskStatus.COMPLETE;
+    return this.gateway.epoch === epoch && this.logsTask.status === TaskStatus.COMPLETE;
   }
 
   override render() {

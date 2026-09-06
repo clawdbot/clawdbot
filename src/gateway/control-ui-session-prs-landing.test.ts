@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as worktreeGit from "../agents/worktrees/git.js";
 import { resolveBranchLanding } from "./control-ui-session-prs-landing.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,7 +28,30 @@ describe("resolveBranchLanding", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("resolves an unpublished branch without reading an unused HEAD", async () => {
+    const base = await sha("HEAD");
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "a.txt"), "two\n");
+    await git("commit", "-am", "unpublished work");
+    const runGit = vi.spyOn(worktreeGit, "runGit");
+
+    expect(
+      await resolveBranchLanding(root, {
+        branch: "feature",
+        defaultBranch: "main",
+        mergedHeads: [],
+      }),
+    ).toEqual({
+      pushedSha: null,
+      statsBase: base,
+      hasLandedPullRequest: false,
+      provenNewPushedWork: false,
+    });
+    expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
   });
 
   it("marks a squash-landed tip and bases stats on the merged head", async () => {
@@ -85,6 +109,7 @@ describe("resolveBranchLanding", () => {
   it("selects the newest of three related baselines via the batched path", async () => {
     // Linear chain: fork point (merge base) -> merged head 1 -> merged head 2
     // -> HEAD; the maximal published baseline is merged head 2.
+    const base = await sha("HEAD");
     await git("checkout", "-b", "feature");
     await fs.appendFile(path.join(root, "a.txt"), "two\n");
     await git("add", "a.txt");
@@ -98,6 +123,7 @@ describe("resolveBranchLanding", () => {
     await git("add", "c.txt");
     await git("commit", "-m", "follow-up");
     await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const runGit = vi.spyOn(worktreeGit, "runGit");
 
     const landing = await resolveBranchLanding(root, {
       branch: "feature",
@@ -110,5 +136,6 @@ describe("resolveBranchLanding", () => {
 
     expect(landing.statsBase).toBe(head2);
     expect(landing.hasLandedPullRequest).toBe(true);
+    expect(runGit).not.toHaveBeenCalledWith(root, ["merge-base", "--is-ancestor", base, head2]);
   });
 });

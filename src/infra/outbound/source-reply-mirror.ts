@@ -323,13 +323,6 @@ function resolveTranscriptMirrorIdempotencyKey(params: {
   return `${params.idempotencyKey}:terminal-receipt:${params.sourceTurnId}`;
 }
 
-const THREAD_PLACEMENT_SOURCE_REPLY_ACTION_NAMES = new Set(["thread-reply"]);
-
-/** Thread-reply actions address a conversation/thread target, not a message id. */
-export function isThreadPlacementSourceReplyActionName(action: string): boolean {
-  return THREAD_PLACEMENT_SOURCE_REPLY_ACTION_NAMES.has(action.trim().toLowerCase());
-}
-
 function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
   if (!params.sessionKey?.trim()) {
     return false;
@@ -469,21 +462,22 @@ function isDeliveredThreadPlacementSourceReply(params: SourceReplyTranscriptMirr
   return resolveOwnerCurrentConversationMatch(params) ?? false;
 }
 
-/** Confirms that a successful send reached the exact trusted source conversation. */
+/** Confirms that a successful message action reached the exact trusted source conversation. */
 export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
   if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
     return false;
   }
-  return isThreadPlacementSourceReplyActionName(params.action)
-    ? isDeliveredThreadPlacementSourceReply(params)
-    : isExactCurrentSourceConversation(params);
-}
-
-const CURRENT_SOURCE_REPLY_ACTION_NAMES = new Set(["reply"]);
-
-/** Reply-type message actions address a message id rather than a conversation target. */
-export function isCurrentSourceReplyActionName(action: string): boolean {
-  return CURRENT_SOURCE_REPLY_ACTION_NAMES.has(action.trim().toLowerCase());
+  switch (params.action.trim().toLowerCase()) {
+    case "reply":
+      return isDeliveredCurrentSourceReplyAction(params);
+    case "thread-reply":
+      return isDeliveredThreadPlacementSourceReply(params);
+    default:
+      return (
+        (params.action === "send" || params.action === "poll") &&
+        isExactCurrentSourceConversation(params)
+      );
+  }
 }
 
 function normalizeMessageIdValue(value: unknown): string | undefined {
@@ -499,34 +493,9 @@ function normalizeMessageIdValue(value: unknown): string | undefined {
  * so target matching cannot apply; replying to the run's own inbound message is the
  * one implicit route that provably lands in the current source conversation.
  */
-export function isDeliveredCurrentSourceReplyAction(
-  params: SourceReplyTranscriptMirrorParams,
-): boolean {
-  if (!isCurrentSourceReplyActionName(params.action)) {
-    return false;
-  }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
-    return false;
-  }
-  if (!params.sessionKey?.trim()) {
-    return false;
-  }
+function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirrorParams): boolean {
   const toolContext = params.toolContext;
-  if (!toolContext) {
-    return false;
-  }
-  const accountId = normalizeOptionalString(params.accountId);
-  if (accountId) {
-    const currentAccountId = normalizeOptionalString(params.currentAccountId);
-    if (
-      !currentAccountId ||
-      normalizeAccountId(accountId) !== normalizeAccountId(currentAccountId)
-    ) {
-      return false;
-    }
-  }
-  const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
-  if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
+  if (!toolContext || !hasCurrentSourceContext(params)) {
     return false;
   }
   // Target params on reply actions are either agent-explicit or runner-resolved

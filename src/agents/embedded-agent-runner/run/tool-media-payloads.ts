@@ -33,7 +33,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   );
   const payloads = params.payloads?.length ? [...params.payloads] : [];
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning && !payload.isError);
-  const visiblePayload = payloads.at(payloadIndex);
+  const visiblePayload = payloads[payloadIndex];
   const isSourceReplyTranscriptMirror =
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     visiblePayload &&

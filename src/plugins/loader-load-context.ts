@@ -41,6 +41,7 @@ import {
   type PluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
@@ -185,6 +186,7 @@ function buildCacheKey(params: {
   artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
+  capabilityCatalogIdentity?: string;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
   runtimeBindingIdentity?: string;
@@ -237,6 +239,7 @@ function buildCacheKey(params: {
       installs,
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
+      capabilityCatalogIdentity: params.capabilityCatalogIdentity,
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
   )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
@@ -262,7 +265,7 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
-  if (sourceList.length === 0) {
+  if (runtimeList === sourceList || sourceList.length === 0) {
     return runtimeList;
   }
   const merged = [...runtimeList];
@@ -317,7 +320,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const activationSource = createPluginActivationSource({ config: activationSourceConfig });
+  // Identical plugin inputs may share facts; source channel policy keeps its own root config.
+  const activationSource = createPluginActivationSource({
+    config: activationSourceConfig,
+    plugins: cfg.plugins === activationSourceConfig.plugins ? normalized : undefined,
+  });
   const trustNormalized = mergeTrustPluginConfigFromActivationSource({
     normalized,
     activationSource,
@@ -386,6 +393,14 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
+    capabilityCatalogIdentity: options.capabilityCatalog
+      ? JSON.stringify([
+          options.capabilityCatalog.family,
+          resolveRuntimeBindingCacheId(options.capabilityCatalog.context),
+          resolveRuntimeBindingCacheId(getPluginCache()),
+          resolveRuntimeBindingCacheId(getPluginRegistryForContext() ?? undefined),
+        ])
+      : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
     runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),

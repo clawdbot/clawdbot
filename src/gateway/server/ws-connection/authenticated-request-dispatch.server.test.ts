@@ -228,11 +228,15 @@ describe("authenticated WebSocket request trace dispatch", () => {
       agentRuntimeIdentity: createTestAgentRuntimeIdentity("closed-before-result"),
     };
 
-    await dispatchInFreshMessageScope(dispatcher, client, "closed-before-result");
-    await invoked.promise;
-    expect(handler).toHaveBeenCalledOnce();
-    authorityActive = false;
-    held.resolve();
+    const dispatch = dispatchInFreshMessageScope(dispatcher, client, "closed-before-result");
+    try {
+      await invoked.promise;
+      expect(handler).toHaveBeenCalledOnce();
+      authorityActive = false;
+    } finally {
+      held.resolve();
+      await dispatch;
+    }
 
     expect(await awaitResponseFrame("closed-before-result")).toMatchObject({
       ok: false,
@@ -272,10 +276,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
         },
       },
     });
-    const closed = createDeferredCore();
-    harness.close.mockImplementation(() => closed.resolve());
     await warmDispatcher(harness, client);
-    await harness.dispatcher.dispatch(
+    const dispatch = harness.dispatcher.dispatch(
       { type: "req", id: "pending", method: "test.trace", params: {} },
       client,
     );
@@ -288,9 +290,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     } else {
       runtimeActive = false;
     }
-    // Baseline failures also finish: an unauthorized handler response is a verdict,
-    // not a reason to wait forever for the missing authority-close notification.
-    await Promise.race([closed.promise, harness.awaitResponseFrame("pending")]);
+    await dispatch;
     expect(pendingStarted).toBe(false);
     expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
     expect(harness.send).not.toHaveBeenCalledWith(
@@ -342,7 +342,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
       extraHandlers: { "test.trace": handler, [testCase.method]: handler },
     });
     await warmDispatcher(harness, client);
-    await harness.dispatcher.dispatch(
+    const dispatch = harness.dispatcher.dispatch(
       { type: "req", id: "pending", method: testCase.method, params: {} },
       client,
     );
@@ -350,14 +350,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     disconnected = true;
     socket.emit("close", 1000, Buffer.alloc(0));
 
-    // A later live request proves start scheduling progressed past the cancelled
-    // request without importing or mocking the scheduling implementation.
-    const probe = createDispatcher(handler);
-    await probe.dispatcher.dispatch(
-      { type: "req", id: "probe", method: "test.trace", params: {} },
-      createClient(),
-    );
-    expect(await probe.awaitResponseFrame("probe")).toMatchObject({ ok: true });
+    await dispatch;
     expect(pendingStarted).toBe(!testCase.cancel);
     if (!testCase.cancel) {
       expect(await harness.awaitResponseFrame("pending")).toMatchObject({ ok: true });
@@ -426,7 +419,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
   it("isolates concurrent request contexts on one connection", async () => {
     const requestBarrier = createDeferredCore();
     const bothObserved = createDeferredCore();
-    const bothCompleted = createDeferredCore();
     const observed = new Map<
       string,
       { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
@@ -442,9 +434,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
       }
       await requestBarrier.promise;
       observation.after = getActiveDiagnosticTraceContext();
-      if ([...observed.values()].every((entry) => entry.after)) {
-        bothCompleted.resolve();
-      }
     });
     const client = createClient();
 
@@ -452,20 +441,20 @@ describe("authenticated WebSocket request trace dispatch", () => {
     if (!parent) {
       throw new Error("expected open parent work admission");
     }
+    const dispatches = parent.run(() =>
+      Promise.all([
+        dispatchInFreshMessageScope(dispatcher, client, "first", TRACEPARENTS.first),
+        dispatchInFreshMessageScope(dispatcher, client, "second", TRACEPARENTS.second),
+      ]),
+    );
     try {
-      await parent.run(() =>
-        Promise.all([
-          dispatchInFreshMessageScope(dispatcher, client, "first", TRACEPARENTS.first),
-          dispatchInFreshMessageScope(dispatcher, client, "second", TRACEPARENTS.second),
-        ]),
-      );
       await bothObserved.promise;
       // The pending starts retain their traces but cannot borrow the parent root.
       expect(getActiveGatewayRootWorkCount()).toBe(3);
     } finally {
       requestBarrier.resolve();
       parent.release();
-      await bothCompleted.promise;
+      await dispatches;
     }
 
     expect(observed.get("first")?.before?.traceId).toBe("11111111111111111111111111111111");

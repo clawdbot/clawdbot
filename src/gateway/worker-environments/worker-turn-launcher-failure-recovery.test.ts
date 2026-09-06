@@ -12,7 +12,6 @@ import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-se
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
-import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
@@ -20,6 +19,7 @@ import {
   WorkerRunnerUnavailableError,
   type WorkerTunnelHandle,
 } from "./tunnel-contract.js";
+import { success } from "./tunnel.test-support.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
   ENVIRONMENT_ID,
@@ -58,7 +58,7 @@ describe("worker turn launcher failure recovery", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
@@ -410,8 +410,12 @@ describe("worker turn launcher failure recovery", () => {
         error: STALE_WORKER_BUILD_REASON,
       };
     });
-    const environments: WorkerTurnEnvironmentService & WorkerDispatchEnvironmentService = {
+    const environments: WorkerTurnEnvironmentService &
+      Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
       ...unusedEnvironments(),
+      recordError: vi.fn(() => {
+        throw new Error("unexpected provisioning interruption");
+      }),
       supportsProviderExecutionMode: vi.fn(() => true),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),
@@ -449,7 +453,7 @@ describe("worker turn launcher failure recovery", () => {
       workspaceOperations,
       resolveWorkspacePath: async () => root,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,

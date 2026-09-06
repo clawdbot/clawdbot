@@ -3,32 +3,32 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чат"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сеанс"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Модель"</string>
-    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Управление"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорить"</string>
-    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сбой аудио на часах"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Элементы управления"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Разговор"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ошибка аудио на часах"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Диктовать"</string>
-    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В прямом эфире"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В реальном времени"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ветка"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Открыть ветку"</string>
-    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Проведите пальцем →"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Смахните →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удерживайте"</string>
-    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Коснитесь"</string>
-    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Двойное нажатие"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нажать"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Двойное касание"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Показать новые сообщения"</string>
-    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустите Live, чтобы увидеть здесь переписку."</string>
-    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Новое"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустите общение в реальном времени, чтобы увидеть беседу здесь."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Новый"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введите текст"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение"</string>
-    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение агенту"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Написать агенту"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отправить"</string>
-    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поговорить с агентом"</string>
-    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Перестать говорить"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поговорите со своим агентом"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Остановить озвучивание"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучить последний ответ"</string>
-    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорит"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Озвучивание"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прослушивание"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключение"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Мышление"</string>
-    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Печатает"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Размышление"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ввод текста"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отправка"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Агент работает"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ошибка"</string>
@@ -36,26 +36,26 @@
     <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Вы"</string>
     <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Агент"</string>
     <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Система"</string>
-    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Начать разговор"</string>
-    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорите или вводите текст на часах. Сопряжённый телефон отправит сообщение через аутентифицированный сеанс OpenClaw."</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Начать беседу"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорите или вводите текст на часах. Сопряжённый телефон отправляет сообщение через свой сеанс OpenClaw с выполненной аутентификацией."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Текущий сеанс"</string>
     <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
     <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Закрыть"</string>
     <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Поиск"</string>
-    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Поиск сессий"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Поиск сеансов"</string>
     <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Поиск моделей"</string>
-    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Загрузить еще"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Загрузить ещё"</string>
     <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Активно на телефоне"</string>
     <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Открыть на часах"</string>
-    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Совпадений нет"</string>
-    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Найти сессию"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Нет совпадений"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Найти сеанс"</string>
     <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Найти модель"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Внешний вид"</string>
-    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Тёмное"</string>
-    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Светлое"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Тёмная"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Светлая"</string>
     <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Автоматически озвучивать ответы"</string>
     <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Уведомления об ответах"</string>
-    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Включить уведомления"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Включить оповещения"</string>
     <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прервать выполнение"</string>
     <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть настройки уведомлений"</string>
     <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Вкл."</string>
@@ -63,8 +63,8 @@
     <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключение"</string>
     <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Безопасность"</string>
-    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Управляется телефоном"</string>
-    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Учётные данные и идентификационные данные Gateway хранятся на сопряжённом телефоне. Часы используют только Wear Data Layer."</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Управляется с телефона"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Учётные и идентификационные данные Gateway остаются на сопряжённом телефоне. Часы используют только Wear Data Layer."</string>
     <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проверка телефона"</string>
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чтение агентов, сеансов и чата"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Телефон готов"</string>
@@ -72,14 +72,14 @@
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway не в сети"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Повторно подключите Gateway в OpenClaw на сопряжённом телефоне."</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть OpenClaw на телефоне"</string>
-    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Часы никогда не запускают и не аутентифицируют Gateway самостоятельно."</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Часы никогда не запускают Gateway и не выполняют его аутентификацию самостоятельно."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Телефон недоступен"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Держите сопряжённый телефон поблизости и установите соответствующее приложение OpenClaw."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Выбранный элемент больше недоступен"</string>
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Действие не принято"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Что-то пошло не так"</string>
-    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновите списки и повторите попытку."</string>
-    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Повторите попытку с часов."</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновите списки и попробуйте снова."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Попробуйте ещё раз с часов."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется обновление"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновите OpenClaw на телефоне и часах."</string>
     <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновить"</string>
@@ -89,36 +89,36 @@
     <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ответ OpenClaw"</string>
     <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ответ не отправлен"</string>
     <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Телефон недоступен. Нажмите «Ответить», чтобы повторить попытку."</string>
-    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть OpenClaw, чтобы ответить"</string>
-    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Предпочитаемый телефон изменён. Прежде чем отвечать, откройте приложение, чтобы перезагрузить сеанс."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть OpenClaw для ответа"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ваш предпочтительный телефон изменился. Откройте приложение, чтобы перезагрузить сеанс перед ответом."</string>
     <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открывайте сеансы и отвечайте через сопряжённый телефон"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ОТКРЫТЬ"</string>
-    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ПРОКСИ-ТЕЛЕФОН"</string>
-    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ПРОКСИ ТЕЛЕФОНА"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Пульс"</string>
     <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Фоновые задачи"</string>
-    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Рой сессий"</string>
-    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Требует внимания"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Рой сеансов"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Внимание"</string>
     <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Статус: %1$s"</string>
     <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Готово"</string>
     <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Обновление"</string>
     <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Недоступно"</string>
     <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Загрузка Pulse"</string>
-    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Чтение ограниченных агрегатов со связанного телефона."</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Чтение ограниченных сводных данных с сопряжённого телефона."</string>
     <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"В очереди"</string>
     <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Выполняется"</string>
-    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Выполнено"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Завершено"</string>
     <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Готово"</string>
     <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ошибка"</string>
     <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Группы"</string>
     <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ожидающие запросы"</string>
     <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ограниченный снимок активных и недавних"</string>
-    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Список активных задач достиг предела"</string>
-    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Список недавних задач достиг предела"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Достигнут лимит активных задач"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Достигнут предел списка недавних задач"</string>
     <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Активно"</string>
-    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Бездействует"</string>
-    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Фаза %1$d"</string>
-    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"В очереди %1$d, Выполняется %2$d, Готово %3$d, Ошибок %4$d, Скрыто %5$d"</string>
-    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Другие фазы не показаны"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ожидание"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Этап %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"В очереди %1$d, Выполняется %2$d, Завершено %3$d, С ошибкой %4$d, Скрыто %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Остальные этапы не показаны"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Неизвестно"</string>
 </resources>

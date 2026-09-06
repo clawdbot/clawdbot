@@ -1,3 +1,4 @@
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 // Setup inference verification owns the shared verify/repair loop used by onboarding imports.
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
@@ -26,7 +27,18 @@ export async function offerLiveModelVerification(params: {
   verified: boolean;
   modelRef?: string;
 }> {
-  if (!params.required) {
+  const requiresCandidateVerification = (config: OpenClawConfig) => {
+    const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
+    return (
+      params.opts.nonInteractive !== true &&
+      config.models?.providers?.[provider]?.localService !== undefined
+    );
+  };
+  let required =
+    params.required ||
+    (params.initialCandidate !== undefined &&
+      requiresCandidateVerification(params.initialCandidate.config));
+  if (!required) {
     const shouldTest = await params.prompter.confirm({
       message: t("wizard.setup.testAiAccess"),
       initialValue: true,
@@ -43,6 +55,7 @@ export async function offerLiveModelVerification(params: {
   const stagedEnv = params.stateDir
     ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
     : undefined;
+  let shouldPersistCandidate = params.initialCandidate !== undefined;
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const verification = withConsoleSubsystemsSuppressed(() =>
@@ -51,6 +64,7 @@ export async function offerLiveModelVerification(params: {
         config: migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig,
         runtime: params.runtime,
         authProfiles: candidate.authProfiles,
+        verifyAgentTools: shouldPersistCandidate && params.opts.nonInteractive !== true,
         ...(params.agentDir ? { agentDir: params.agentDir } : {}),
         ...(params.stateDir
           ? {
@@ -96,7 +110,6 @@ export async function offerLiveModelVerification(params: {
       authProfiles: [],
       persistAuthProfiles: async () => {},
     } satisfies SetupModelAuthCandidate);
-  let shouldPersistCandidate = params.initialCandidate !== undefined;
   while (true) {
     const result = await verify(candidate);
     if (result.ok) {
@@ -126,7 +139,7 @@ export async function offerLiveModelVerification(params: {
       return { config: params.config, attempted: true, persisted: false, verified: false };
     }
     if (
-      !params.required &&
+      !required &&
       (await params.prompter.select({
         message: t("wizard.setup.testAiFailureChoice"),
         options: [
@@ -148,5 +161,6 @@ export async function offerLiveModelVerification(params: {
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });
     shouldPersistCandidate = true;
+    required ||= requiresCandidateVerification(candidate.config);
   }
 }

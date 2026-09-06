@@ -11,6 +11,7 @@ export type InternalReplyResolverOptions = {
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];
 };
 
 export type PluginBindingTranscriptOwner = {

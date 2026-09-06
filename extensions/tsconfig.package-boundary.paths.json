@@ -900,6 +900,15 @@
       ],
       "openclaw/plugin-sdk/blob-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/blob-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-transcription-session": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription-session.d.ts"
+      ],
+      "openclaw/plugin-sdk/speech-provider": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/speech-provider.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-voice-provider": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-provider.d.ts"
       ]
     }
   }

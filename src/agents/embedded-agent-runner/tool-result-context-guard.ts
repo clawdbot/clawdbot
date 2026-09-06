@@ -17,6 +17,7 @@ import {
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
 import {
+  TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
@@ -205,9 +206,10 @@ function truncateToolResultToChars(
       ]);
     };
 
-    // Reserve non-text content first. The shared allocator keeps diagnostic tails
-    // and short text blocks within the same weighted cap, with or without images.
-    for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
+    // Image cost alone rules out larger prefixes. The allocator still reserves
+    // other non-text content and preserves diagnostic tails and short text blocks.
+    const maxRetainedImages = Math.min(imageCount, Math.floor(maxChars / TOOL_IMAGE_CHARS));
+    for (let retainedImages = maxRetainedImages; retainedImages >= 0; retainedImages -= 1) {
       let seenImages = 0;
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,

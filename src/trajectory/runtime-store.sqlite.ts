@@ -1,20 +1,22 @@
 // SQLite trajectory runtime store owns session-scoped runtime event rows.
 
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
 import type { TrajectoryEvent } from "./types.js";
@@ -48,11 +50,6 @@ type SqliteTrajectoryRuntimeEventRow = {
   seq: number;
 };
 
-type TrajectoryRuntimeRow = {
-  event_json: string;
-  seq: number;
-};
-
 type TrajectoryRuntimeRun = {
   newestCreatedAt: number;
   runId: string | null;
@@ -72,7 +69,7 @@ export function appendSqliteTrajectoryRuntimeEvents(
   if (events.length === 0) {
     return;
   }
-  const options = toDatabaseOptions(scope);
+  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   const maxRuntimeBytes = Math.max(
     1,
     Math.floor(scope.maxRuntimeBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
@@ -143,40 +140,43 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const read = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getTrajectoryKysely(database.db);
-    const tailEvents =
-      scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
-        ? Math.max(0, Math.floor(scope.tailEvents))
-        : undefined;
-    let query = db
-      .selectFrom("trajectory_runtime_events")
-      .select(["seq", "event_json"])
-      .where("session_id", "=", scope.sessionId)
-      .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-    const afterSeq = scope.afterSeq;
-    if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-      query = query.where("seq", ">", Math.floor(afterSeq));
-    }
-    const normalizedMaxEvents =
-      scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
-        ? Math.max(0, Math.floor(scope.maxEvents))
-        : undefined;
-    const maxEvents =
-      tailEvents === undefined
-        ? normalizedMaxEvents
-        : normalizedMaxEvents === undefined
-          ? tailEvents
-          : Math.min(tailEvents, normalizedMaxEvents);
-    if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-      query = query.limit(Math.max(0, Math.floor(maxEvents)));
-    }
-    const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
-      event: JSON.parse(row.event_json) as TrajectoryEvent,
-      seq: row.seq,
-    }));
-    return tailEvents === undefined ? rows : rows.toReversed();
-  }, toDatabaseOptions(scope));
+  const read = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      const db = getTrajectoryKysely(database.db);
+      const tailEvents =
+        scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
+          ? Math.max(0, Math.floor(scope.tailEvents))
+          : undefined;
+      let query = db
+        .selectFrom("trajectory_runtime_events")
+        .select(["seq", "event_json"])
+        .where("session_id", "=", scope.sessionId)
+        .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
+      const afterSeq = scope.afterSeq;
+      if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
+        query = query.where("seq", ">", Math.floor(afterSeq));
+      }
+      const normalizedMaxEvents =
+        scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
+          ? Math.max(0, Math.floor(scope.maxEvents))
+          : undefined;
+      const maxEvents =
+        tailEvents === undefined
+          ? normalizedMaxEvents
+          : normalizedMaxEvents === undefined
+            ? tailEvents
+            : Math.min(tailEvents, normalizedMaxEvents);
+      if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
+        query = query.limit(Math.max(0, Math.floor(maxEvents)));
+      }
+      const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+        event: JSON.parse(row.event_json) as TrajectoryEvent,
+        seq: row.seq,
+      }));
+      return tailEvents === undefined ? rows : rows.toReversed();
+    },
+    toDatabaseOptions(resolveSqliteReadScope(scope)),
+  );
   return read.found ? read.value : [];
 }
 
@@ -274,32 +274,6 @@ function getTrajectoryKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SqliteTrajectoryRuntimeDatabase>(database);
 }
 
-function toDatabaseOptions(scope: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  storePath: string;
-}): OpenClawAgentDatabaseOptions {
-  const requestedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : undefined;
-  const target = resolveSqliteTargetFromSessionStorePath(
-    scope.storePath,
-    requestedAgentId ? { agentId: requestedAgentId } : {},
-  );
-  if (requestedAgentId && target.agentId && requestedAgentId !== target.agentId) {
-    throw new Error(
-      `SQLite trajectory store path belongs to agent ${target.agentId}; requested agent ${requestedAgentId}.`,
-    );
-  }
-  const agentId = requestedAgentId ?? target.agentId;
-  if (!agentId) {
-    throw new Error("Trajectory store scope requires an explicit agent id.");
-  }
-  return {
-    agentId,
-    ...(scope.env ? { env: scope.env } : {}),
-    ...(target.path ? { path: target.path } : {}),
-  };
-}
-
 function readNextTrajectorySeq(database: OpenClawAgentDatabase, sessionId: string): number {
   const db = getTrajectoryKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -321,16 +295,26 @@ function trimSqliteTrajectoryRuntimeWindow(
   maxRuntimeBytes: number,
 ): void {
   const db = getTrajectoryKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("trajectory_runtime_events")
       .select(["seq", "event_json"])
       .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows;
-  const removableSeqs = oldestTrajectorySeqsPastByteWindow(rows, maxRuntimeBytes);
-  if (removableSeqs.length === 0) {
+      .orderBy("seq", "desc"),
+  );
+  let retainedBytes = 0;
+  let removeThroughSeq: number | undefined;
+  // Retention removes an oldest prefix. Stop once the newest suffix fills the
+  // UTF-8 byte budget, then close the iterator before deleting that prefix.
+  for (const row of rows) {
+    retainedBytes += Buffer.byteLength(row.event_json, "utf8") + 1;
+    if (!(retainedBytes <= maxRuntimeBytes)) {
+      removeThroughSeq = row.seq;
+      break;
+    }
+  }
+  if (removeThroughSeq === undefined) {
     return;
   }
   executeSqliteQuerySync(
@@ -338,28 +322,8 @@ function trimSqliteTrajectoryRuntimeWindow(
     db
       .deleteFrom("trajectory_runtime_events")
       .where("session_id", "=", sessionId)
-      .where("seq", "in", removableSeqs),
+      .where("seq", "<=", removeThroughSeq),
   );
-}
-
-function oldestTrajectorySeqsPastByteWindow(
-  rows: readonly TrajectoryRuntimeRow[],
-  maxRuntimeBytes: number,
-): number[] {
-  let totalBytes = rows.reduce((total, row) => total + trajectoryJsonlRowBytes(row.event_json), 0);
-  const removableSeqs: number[] = [];
-  for (const row of rows) {
-    if (totalBytes <= maxRuntimeBytes) {
-      break;
-    }
-    removableSeqs.push(row.seq);
-    totalBytes -= trajectoryJsonlRowBytes(row.event_json);
-  }
-  return removableSeqs;
-}
-
-function trajectoryJsonlRowBytes(eventJson: string): number {
-  return Buffer.byteLength(eventJson, "utf8") + 1;
 }
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {

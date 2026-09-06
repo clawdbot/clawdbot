@@ -58,6 +58,7 @@ export type SystemAgentCommandDeps = {
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
+  gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
   runPluginUninstall?: (
     pluginId: string,
     runtime: RuntimeEnv,
@@ -72,7 +73,7 @@ export type SystemAgentCommandDeps = {
     historyLimit?: number;
     message?: string;
   }) => Promise<TuiResult | void>;
-  /** Where setup side effects run; the gateway surface never manages its own daemon. */
+  /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
   verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
@@ -522,6 +523,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-activate-artifact" ||
     operation.kind === "plugin-uninstall" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
@@ -551,6 +553,8 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
+    case "plugin-activate-artifact":
+      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":

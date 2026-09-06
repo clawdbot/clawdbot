@@ -73,7 +73,10 @@ type FollowupDeliveryDecision =
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & { compactionNotice?: ReplyPayload };
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
@@ -276,6 +279,15 @@ export function resolveFollowupDeliveryDecision(params: {
       payloads: [accounting.compactionNotice],
     });
     payloads = [...compactionNotices, ...payloads];
+  }
+  if (accounting.diagnosticsPayload && payloads.length > 0) {
+    payloads = [
+      ...payloads,
+      ...resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [accounting.diagnosticsPayload],
+      }),
+    ];
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,

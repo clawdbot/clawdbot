@@ -208,6 +208,8 @@ describe("production lint suppressions", () => {
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
+        // Context preparation owns the mapped descriptor array until rendering.
+        "src/agents/system-prompt.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
@@ -220,11 +222,15 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
+        // Both list callers sort their own freshly filtered arrays.
+        "src/cron/service/list-page-sort.ts|unicorn/no-array-sort|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
+        // Undici invokes its method-shaped clientFactory callback without an options receiver.
+        "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
         // NUL delimiters identify protected code spans without colliding with escaped user text.
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
@@ -259,6 +265,8 @@ describe("production lint suppressions", () => {
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
+        // The public runner preserves task and error-hook rejection values, including non-Errors.
+        "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
         // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),

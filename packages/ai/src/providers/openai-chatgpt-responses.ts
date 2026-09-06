@@ -76,6 +76,7 @@ import {
   convertResponsesToolPayload,
   createResponsesAssistantOutput,
   resolveResponsesReasoningEffort,
+  resolveResponsesRequestReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -667,17 +668,15 @@ function buildRequestBody(
     }
   }
 
-  if (options?.reasoningEffort !== undefined) {
-    const effort =
-      options.reasoningEffort === "none"
-        ? (model.thinkingLevelMap?.off ?? "none")
-        : (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
-    if (effort !== null) {
-      body.reasoning = {
-        effort,
-        summary: options.reasoningSummary ?? "auto",
-      };
-    }
+  const effort =
+    options?.reasoningEffort === undefined
+      ? undefined
+      : resolveResponsesRequestReasoningEffort(model, options.reasoningEffort);
+  if (effort !== undefined) {
+    body.reasoning = {
+      effort,
+      summary: options?.reasoningSummary ?? "auto",
+    };
   }
 
   return body;

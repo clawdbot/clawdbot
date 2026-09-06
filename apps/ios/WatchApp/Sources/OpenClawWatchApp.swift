@@ -25,12 +25,17 @@ enum WatchScreenshotMode {
         || WatchScreenshotMode.approvals
 }
 
+enum WatchDestination: Hashable {
+    case standaloneVoice
+}
+
 @main
 struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
         requestNotificationAuthorization: !WatchScreenshotMode.enabled)
     @State private var directNode = WatchDirectNode()
+    @State private var navigationPath: [WatchDestination] = []
     @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
     @State private var execApprovalRefreshTask: Task<Void, Never>?
@@ -38,6 +43,7 @@ struct OpenClawWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchInboxView(
+                navigationPath: self.navigationPathBinding,
                 store: self.inboxStore,
                 directNode: self.directNode,
                 onAction: { action in
@@ -98,7 +104,7 @@ struct OpenClawWatchApp: App {
                     if self.receiver == nil {
                         let receiver = WatchConnectivityReceiver(
                             store: self.inboxStore,
-                            directNodeSetupHandler: { [weak directNode] setupCode, sentAtMs in
+                            directNodeSetupHandler: { [weak directNode = self.directNode] setupCode, sentAtMs in
                                 directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
                             })
                         receiver.activate()
@@ -111,20 +117,35 @@ struct OpenClawWatchApp: App {
                     self.refreshExecApprovalReview()
                     self.receiver?.replayChatDelivery()
                 }
-                .onChange(of: self.scenePhase) { _, newPhase in
-                    switch newPhase {
-                    case .active:
-                        self.directNode.connectForForeground()
-                        self.refreshAppSnapshot()
-                        self.refreshExecApprovalReview()
-                        self.receiver?.replayChatDelivery()
-                    case .inactive, .background:
-                        self.directNode.disconnectForBackground()
-                    @unknown default:
-                        break
-                    }
-                }
         }
+        .onChange(of: self.scenePhase) { _, newPhase in
+            switch newPhase {
+            case .active:
+                self.directNode.connectForForeground()
+                self.refreshAppSnapshot()
+                self.refreshExecApprovalReview()
+                self.receiver?.replayChatDelivery()
+            case .inactive:
+                self.directNode.disconnectForBackground()
+            case .background:
+                self.directNode.voiceCall.sceneDidEnterBackground()
+                self.directNode.disconnectForBackground()
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private var navigationPathBinding: Binding<[WatchDestination]> {
+        Binding(
+            get: { self.navigationPath },
+            set: { path in
+                // Destination removal is an intentional exit; background visibility is not.
+                if self.navigationPath.contains(.standaloneVoice), !path.contains(.standaloneVoice) {
+                    self.directNode.voiceCall.end()
+                }
+                self.navigationPath = path
+            })
     }
 
     private func refreshAppSnapshot() {

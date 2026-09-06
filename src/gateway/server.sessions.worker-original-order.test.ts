@@ -423,7 +423,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     resolveWorkspacePath: async () => localWorkspace,
     reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => undefined,
+    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
   });
 
   const active = await dispatch.dispatch({

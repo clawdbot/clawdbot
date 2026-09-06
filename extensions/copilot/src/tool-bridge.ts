@@ -37,6 +37,10 @@ type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSu
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
 >[0];
+type ScheduleToolExecution = (
+  executionMode: AnyAgentTool["executionMode"],
+  execute: () => Promise<ToolResultObject>,
+) => Promise<ToolResultObject>;
 
 /**
  * Mutable holder populated by `attempt.ts` *after* `client.createSession()`
@@ -66,7 +70,6 @@ interface CopilotSessionHolder {
  */
 type CopilotToolAttemptParams = Partial<Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities">> &
   Pick<EmbeddedRunAttemptParamsV2, "hostCapabilities">;
-type CopilotToolTerminalObserver = CopilotToolAttemptParams["observeToolTerminal"];
 
 type CopilotToolCompletion = {
   toolName: string;
@@ -201,6 +204,8 @@ export async function createCopilotToolBridge(
     config: attemptParams.config,
     codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
+    // Catalog calls are nested inside SDK controls; scheduling them again could
+    // make a control wait for its own completion.
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isRawCopilotModelRun(attemptParams),
@@ -291,14 +296,26 @@ export async function createCopilotToolBridge(
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
+  let sequentialBarrier = Promise.resolve();
+  const pendingCalls = new Set<Promise<void>>();
+  const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
+    // SDK handlers arrive independently. An exclusive call waits for earlier
+    // work across the attempt and blocks later calls, regardless of tool name.
+    const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
+    const run = ready.then(execute);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingCalls.add(settled);
+    void settled.then(() => pendingCalls.delete(settled));
+    if (executionMode === "sequential") {
+      sequentialBarrier = settled;
+    }
+    return run;
+  };
   const sdkTools = exposedTools.map((sourceTool) =>
-    convertOpenClawToolToSdkTool(sourceTool, {
-      abortSignal: input.abortSignal,
-      beforeExecute: input.beforeExecute,
-      onAgentToolResult: input.attemptParams?.onAgentToolResult,
-      onToolCompleted: input.onToolCompleted,
-      observeToolTerminal: input.attemptParams?.observeToolTerminal,
-    }),
+    convertOpenClawToolToSdkTool(sourceTool, input, scheduleToolExecution),
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
@@ -405,24 +422,6 @@ function buildOpenClawCodingToolsOptions(
           },
         }
       : {}),
-    toolBindings: a.toolBindings,
-    chatType: a.chatType,
-    agentAccountId: a.agentAccountId,
-    messageTo: a.messageTo,
-    messageThreadId: a.messageThreadId,
-    nativeChannelId: a.chatId,
-    messageActionTurnCapability: a.messageActionTurnCapability,
-    groupId: a.groupId,
-    groupChannel: a.groupChannel,
-    groupSpace: a.groupSpace,
-    memberRoleIds: a.memberRoleIds,
-    spawnedBy: a.spawnedBy,
-    senderId: a.senderId,
-    senderName: a.senderName,
-    senderUsername: a.senderUsername,
-    senderE164: a.senderE164,
-    senderIsOwner: a.senderIsOwner,
-    scheduledToolPolicy: a.scheduledToolPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
@@ -451,16 +450,9 @@ function buildOpenClawCodingToolsOptions(
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,
     }),
-    currentChannelId: a.currentChannelId,
-    currentMessagingTarget: a.currentMessagingTarget,
-    currentThreadTs: a.currentThreadTs,
-    currentMessageId: a.currentMessageId,
-    replyToMode: a.replyToMode,
-    hasRepliedRef: a.hasRepliedRef,
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
-    sourceReplyDeliveryMode: a.sourceReplyDeliveryMode,
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
     enableHeartbeatTool: a.enableHeartbeatTool,
@@ -498,13 +490,8 @@ function buildOpenClawCodingToolsOptions(
 
 function convertOpenClawToolToSdkTool(
   sourceTool: AnyAgentTool,
-  ctx: {
-    abortSignal?: AbortSignal;
-    beforeExecute?: CopilotToolBridgeInput["beforeExecute"];
-    onAgentToolResult?: CopilotToolAttemptParams["onAgentToolResult"];
-    onToolCompleted?: CopilotToolBridgeInput["onToolCompleted"];
-    observeToolTerminal?: CopilotToolTerminalObserver;
-  },
+  input: CopilotToolBridgeInput,
+  scheduleToolExecution: ScheduleToolExecution,
 ): SdkTool {
   if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
     throw new Error("[copilot-tool-bridge] tool name must be a non-empty string");
@@ -518,17 +505,16 @@ function convertOpenClawToolToSdkTool(
 
   const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
   const ownerMutation = ownerKey ? { ownerKey } : undefined;
-  let sequentialLock = Promise.resolve();
   const notifyToolResult = (result: unknown, isError: boolean) => {
     try {
-      ctx.onAgentToolResult?.({ toolName: sourceTool.name, result, isError });
+      input.attemptParams.onAgentToolResult?.({ toolName: sourceTool.name, result, isError });
     } catch (error) {
       console.warn("[copilot-tool-bridge] onAgentToolResult handler threw; continuing", error);
     }
   };
   const notifyToolCompleted = (completion: CopilotToolCompletion) => {
     try {
-      void Promise.resolve(ctx.onToolCompleted?.(completion)).catch((error: unknown) => {
+      void Promise.resolve(input.onToolCompleted?.(completion)).catch((error: unknown) => {
         console.warn("[copilot-tool-bridge] onToolCompleted handler threw; continuing", error);
       });
     } catch (error) {
@@ -544,9 +530,10 @@ function convertOpenClawToolToSdkTool(
     executionStarted: boolean,
   ): ToolResultObject => {
     const errorMessage = toCopilotToolError(error).message;
-    ctx.observeToolTerminal?.({
+    input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result: error,
       arguments: executedArgs,
       executionStarted,
       outcome: "failure",
@@ -574,13 +561,13 @@ function convertOpenClawToolToSdkTool(
     invocation: ToolInvocation,
   ): Promise<ToolResultObject> => {
     const startedAt = Date.now();
-    if (ctx.abortSignal?.aborted) {
+    if (input.abortSignal?.aborted) {
       const error = new Error("[copilot-tool-bridge] aborted before execution");
       return failureResult(args, invocation, startedAt, error.message, error, false);
     }
 
     try {
-      await ctx.beforeExecute?.({
+      await input.beforeExecute?.({
         args,
         invocation,
         sourceTool,
@@ -617,7 +604,7 @@ function convertOpenClawToolToSdkTool(
       result = await sourceTool.execute(
         invocation.toolCallId,
         preparedArgs,
-        ctx.abortSignal,
+        input.abortSignal,
         undefined,
       );
     } catch (error: unknown) {
@@ -639,9 +626,10 @@ function convertOpenClawToolToSdkTool(
       isError: resultIsError,
     });
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
-    ctx.observeToolTerminal?.({
+    input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result,
       arguments: preparedArgs,
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
@@ -660,48 +648,18 @@ function convertOpenClawToolToSdkTool(
     return sdkResult;
   };
 
-  const handler =
-    sourceTool.executionMode === "sequential"
-      ? (args: unknown, invocation: ToolInvocation) => {
-          const run = sequentialLock.then(
-            () => executeOnce(args, invocation),
-            () => executeOnce(args, invocation),
-          );
-          sequentialLock = run.then(
-            () => undefined,
-            () => undefined,
-          );
-          return run;
-        }
-      : executeOnce;
-
   return {
     description: sourceTool.description,
     defer: sourceTool.catalogMode === "direct-only" ? "never" : undefined,
-    handler,
+    handler: (args, invocation) =>
+      scheduleToolExecution(sourceTool.executionMode, () => executeOnce(args, invocation)),
     name: sourceTool.name,
-    // OpenClaw owns its bridged tools by design (the harness docs:
-    // "OpenClaw still owns ... OpenClaw dynamic tools (bridged)"). The bundled
-    // Copilot CLI ships built-in tools whose names (edit, read, write, bash,
-    // ...) collide with OpenClaw's coding-tool set. Mark every bridged tool as
-    // an explicit override so the SDK accepts the registration rather than
-    // throwing "External tool 'edit' conflicts with a built-in tool of the
-    // same name." OpenClaw's tool layer is the source of truth for these
-    // names within a copilot attempt.
+    // Copilot built-ins share coding-tool names. Explicit overrides keep calls
+    // on OpenClaw's host-bound tools instead of rejecting registration.
     overridesBuiltInTool: true,
     parameters: sourceTool.parameters as Record<string, unknown> | undefined,
-    // Bridged OpenClaw tools enforce their own permission/policy decisions
-    // inside `wrapToolWithBeforeToolCallHook` (see
-    // `src/agents/pi-tools.before-tool-call.ts` — the same hook PI itself
-    // uses, providing loop detection, trusted plugin policies,
-    // before-tool-call hooks, and two-phase plugin approvals via the
-    // gateway). Asking the SDK to fire `onPermissionRequest` for
-    // `kind: "custom-tool"` would either short-circuit OpenClaw's richer
-    // enforcement (if we allow-all) or block every call (if we
-    // reject-all) — neither matches PI parity. The in-tree codex harness
-    // takes the same approach: bridged OpenClaw tools are wrapped with
-    // `wrapToolWithBeforeToolCallHook` and the SDK gate is bypassed
-    // (see `extensions/codex/src/app-server/dynamic-tools.ts`).
+    // Host-bound tools enforce OpenClaw policy and approvals; an SDK custom-tool
+    // prompt would apply a second, independent permission decision.
     skipPermission: true,
   };
 }
@@ -737,6 +695,7 @@ async function executeCatalogTool(
     input.attemptParams?.observeToolTerminal?.({
       toolCallId: params.toolCallId,
       toolName: params.toolName,
+      result,
       arguments: preparedArgs,
       executionStarted,
       outcome: isError ? "failure" : "success",
@@ -765,6 +724,7 @@ async function executeCatalogTool(
       input.attemptParams?.observeToolTerminal?.({
         toolCallId: params.toolCallId,
         toolName: params.toolName,
+        result: error,
         arguments: preparedArgs,
         executionStarted,
         outcome: "failure",

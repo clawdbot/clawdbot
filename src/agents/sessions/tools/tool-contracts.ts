@@ -70,11 +70,11 @@ export interface GrepToolDetails {
 export interface LsToolInput {
   path?: string;
   limit?: number;
+  after?: string;
 }
 
 export interface LsToolDetails {
-  truncation?: TruncationResult;
-  entryLimitReached?: number;
+  nextAfter?: string;
 }
 
 export interface ReadToolInput {

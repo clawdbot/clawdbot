@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { AuthProfileFailureReason } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -19,20 +21,24 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
+import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import "./server-startup-outcomes.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 
 const hoisted = vi.hoisted(() => {
-  const startPluginServices = vi.fn<
-    (params: { onHandle?: (handle: PluginServicesHandle) => void }) => Promise<PluginServicesHandle>
-  >(async () => ({ stop: async () => {} }));
+  const startPluginServices = vi.fn<typeof import("../plugins/services.js").startPluginServices>(
+    async () => ({ reload: async () => {}, stop: async () => {} }),
+  );
   const startGmailWatcherWithLogs = vi.fn(async () => {});
-  const loadInternalHooks = vi.fn(async () => 0);
-  const setInternalHooksEnabled = vi.fn();
+  const commitInternalHooks = vi.fn(() => true);
+  const prepareInternalHooks = vi.fn(async () => ({ loadedCount: 0, commit: commitInternalHooks }));
   const hasInternalHookListeners = vi.fn(() => false);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
@@ -102,8 +108,8 @@ const hoisted = vi.hoisted(() => {
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
-    loadInternalHooks,
-    setInternalHooksEnabled,
+    prepareInternalHooks,
+    commitInternalHooks,
     hasInternalHookListeners,
     startupHookEvent,
     createInternalHookEvent,
@@ -173,12 +179,11 @@ vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
 vi.mock("../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: hoisted.createInternalHookEvent,
   hasInternalHookListeners: hoisted.hasInternalHookListeners,
-  setInternalHooksEnabled: hoisted.setInternalHooksEnabled,
   triggerInternalHook: hoisted.triggerInternalHook,
 }));
 
 vi.mock("../hooks/loader.js", () => ({
-  loadInternalHooks: hoisted.loadInternalHooks,
+  prepareInternalHooks: hoisted.prepareInternalHooks,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -267,7 +272,7 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
-vi.mock("../agents/tools/transcripts-tool.js", () => ({
+vi.mock("../transcripts/auto-start.js", () => ({
   createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
 }));
 
@@ -287,6 +292,7 @@ type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"
 type SidecarHandle = Parameters<SidecarPublisher>[0][number];
 type GatewaySidecarsResult = Awaited<ReturnType<typeof startGatewaySidecarsImpl>>;
 
+const publishedConnectionDependentSidecars = new Set<SidecarHandle>();
 const publishedGatewayLifetimeSidecars = new Set<SidecarHandle>();
 const publishedPostReadySidecars = new Set<SidecarHandle>();
 const transferredSidecars = new Set<SidecarHandle>();
@@ -321,6 +327,7 @@ async function startGatewaySidecars(
 }
 
 function transferBeforeStop(sidecar: SidecarHandle): void {
+  publishedConnectionDependentSidecars.delete(sidecar);
   publishedGatewayLifetimeSidecars.delete(sidecar);
   publishedPostReadySidecars.delete(sidecar);
   transferredSidecars.add(sidecar);
@@ -358,20 +365,17 @@ async function cleanupGatewayTestState(): Promise<void> {
     }
   };
 
-  const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
-  publishedGatewayLifetimeSidecars.clear();
-  const postReadySidecars = [...publishedPostReadySidecars];
-  publishedPostReadySidecars.clear();
-
-  for (const sidecar of lifetimeSidecars) {
-    transferredSidecars.add(sidecar);
-    await cleanup(() => sidecar.stop());
-  }
-  for (const sidecar of postReadySidecars) {
-    transferredSidecars.add(sidecar);
+  const sidecars = new Set([
+    ...publishedConnectionDependentSidecars,
+    ...publishedGatewayLifetimeSidecars,
+    ...publishedPostReadySidecars,
+  ]);
+  for (const sidecar of sidecars) {
+    transferBeforeStop(sidecar);
     await cleanup(() => sidecar.stop());
   }
 
+  publishedConnectionDependentSidecars.clear();
   publishedGatewayLifetimeSidecars.clear();
   publishedPostReadySidecars.clear();
   transferredSidecars.clear();
@@ -479,8 +483,8 @@ describe("startGatewayPostAttachRuntime", () => {
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
-    hoisted.loadInternalHooks.mockClear();
-    hoisted.setInternalHooksEnabled.mockClear();
+    hoisted.prepareInternalHooks.mockClear();
+    hoisted.commitInternalHooks.mockClear();
     hoisted.hasInternalHookListeners.mockReset();
     hoisted.hasInternalHookListeners.mockReturnValue(false);
     hoisted.createInternalHookEvent.mockClear();
@@ -611,8 +615,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
-    expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
+    expect(hoisted.prepareInternalHooks).toHaveBeenCalledWith(
+      { hooks: { internal: { enabled: false } } },
+      "/tmp/openclaw-workspace",
+      { failureMode: "best-effort" },
+    );
+    expect(hoisted.commitInternalHooks).toHaveBeenCalledWith({ initial: true });
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
@@ -636,13 +644,14 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("fences startup recovery as soon as its gateway close prelude begins", async () => {
     let closing = false;
+    const recoveryAllowed: (boolean | undefined)[] = [];
     const recoverySidecar = { stop: vi.fn(async () => {}) };
     const onGatewayLifetimeSidecars = vi.fn();
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
       (params: { shouldContinue?: () => boolean }) => {
-        expect(params.shouldContinue?.()).toBe(true);
+        recoveryAllowed.push(params.shouldContinue?.());
         closing = true;
-        expect(params.shouldContinue?.()).toBe(false);
+        recoveryAllowed.push(params.shouldContinue?.());
         return recoverySidecar;
       },
     );
@@ -654,8 +663,13 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
-    expect(recoverySidecar.stop).toHaveBeenCalledOnce();
+    expect(recoveryAllowed).toEqual([true, false]);
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith([recoverySidecar]);
+    expect(publishedGatewayLifetimeSidecars.has(recoverySidecar)).toBe(true);
+    expect(recoverySidecar.stop).not.toHaveBeenCalled();
+    await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+    expect(recoverySidecar.stop).toHaveBeenCalledOnce();
+    expect(publishedGatewayLifetimeSidecars.has(recoverySidecar)).toBe(false);
   });
 
   it("gates main-session recovery behind post-ready work", async () => {
@@ -764,7 +778,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
     const logHooks = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    hoisted.loadInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
+    hoisted.prepareInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
@@ -779,6 +793,37 @@ describe("startGatewayPostAttachRuntime", () => {
       .find((message) => message.startsWith("gateway startup outcomes:"));
     expect(outcomeMessage).toContain("internal-hooks=failed (see earlier log)");
     expect(outcomeMessage).not.toContain("private hook path");
+  });
+
+  it("does not publish an imported hook candidate after Gateway close starts", async () => {
+    const loading = createDeferred<{
+      loadedCount: number;
+      commit: typeof hoisted.commitInternalHooks;
+    }>();
+    let closing = false;
+    hoisted.prepareInternalHooks.mockReturnValueOnce(loading.promise);
+    const params = createPostAttachParams();
+    const starting = startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: true } } },
+      pluginRegistry: params.pluginRegistry,
+      defaultWorkspaceDir: params.defaultWorkspaceDir,
+      deps: params.deps,
+      startChannels: params.startChannels,
+      shouldStartChannels: () => !closing,
+      shouldCreatePostReadySidecars: () => !closing,
+      shouldStartPluginServices: () => !closing,
+      log: params.log,
+      logHooks: params.logHooks,
+      logChannels: params.logChannels,
+    });
+    await waitForGatewayTestState(() => {
+      expect(hoisted.prepareInternalHooks).toHaveBeenCalledOnce();
+    });
+    closing = true;
+    loading.resolve({ loadedCount: 1, commit: hoisted.commitInternalHooks });
+    await starting;
+    expect(hoisted.commitInternalHooks).not.toHaveBeenCalled();
+    expect(params.startChannels).not.toHaveBeenCalled();
   });
 
   it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
@@ -895,46 +940,78 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(events).toEqual(["startup-log-start", "sidecars", "startup-log-end"]);
   });
 
-  it("rejects deferred startup when logging fails while sidecars remain pending", async () => {
-    const startupError = new Error("startup logging failed");
-    let rejectStartupLog: ((error: Error) => void) | undefined;
-    let releaseSidecars: (() => void) | undefined;
-    let sidecarsCompleted = false;
-    const logGatewayStartup = vi.fn(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectStartupLog = reject;
-        }),
-    );
-    const startGatewaySidecarsScoped = vi.fn(
-      async () =>
-        await new Promise<{ pluginServices: null; postReadySidecars: [] }>((resolve) => {
-          releaseSidecars = () => {
-            sidecarsCompleted = true;
-            resolve({ pluginServices: null, postReadySidecars: [] });
-          };
-        }),
-    );
-    const runtime = await startGatewayPostAttachRuntime(
-      createPostAttachParams({ sidecarStartup: "defer" }),
-      createPostAttachRuntimeDeps({
-        logGatewayStartup,
-        startGatewaySidecars: startGatewaySidecarsScoped,
-      }),
-    );
+  it.each(["logging", "sidecars"] as const)(
+    "rejects deferred startup when %s fails but joins its pending peer",
+    async (failedOwner) => {
+      const startupError = new Error(`startup ${failedOwner} failed`);
+      const logging = createDeferred();
+      const sidecars = createDeferred<{ pluginServices: null; postReadySidecars: [] }>();
+      const loggingStarted = createDeferred();
+      const sidecarsStarted = createDeferred();
+      const completed: string[] = [];
+      const logged = logging.promise.then(() => {
+        completed.push("logging");
+      });
+      const sidecarsCompleted = sidecars.promise.then((result) => {
+        completed.push("sidecars");
+        return result;
+      });
+      const logGatewayStartup = vi.fn(() => {
+        expect(getAsyncWorkSignal()).toBeUndefined();
+        loggingStarted.resolve();
+        return logged;
+      });
+      const startGatewaySidecarsScoped = vi.fn(() => {
+        expect(getAsyncWorkSignal()).toBeUndefined();
+        sidecarsStarted.resolve();
+        return sidecarsCompleted;
+      });
+      const lifetime = new AsyncWorkScope();
+      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+        const operation = Promise.resolve().then(() => run(lifetime.signal));
+        return lifetime.track(() => operation);
+      };
+      const release = () => {
+        logging.resolve();
+        sidecars.resolve({ pluginServices: null, postReadySidecars: [] });
+      };
+      const runtime = await trackStartupWork(() =>
+        startGatewayPostAttachRuntime(
+          createPostAttachParams({ sidecarStartup: "defer", trackStartupWork }),
+          createPostAttachRuntimeDeps({
+            logGatewayStartup,
+            startGatewaySidecars: startGatewaySidecarsScoped,
+          }),
+        ),
+      );
 
-    await waitForGatewayTestState(() => {
-      expect(rejectStartupLog).toBeTypeOf("function");
-      expect(releaseSidecars).toBeTypeOf("function");
-    });
-    rejectStartupLog?.(startupError);
+      try {
+        await Promise.all([loggingStarted.promise, sidecarsStarted.promise]);
+        if (failedOwner === "logging") {
+          logging.reject(startupError);
+        } else {
+          sidecars.reject(startupError);
+        }
 
-    await expect(runtime.startupSettled).rejects.toBe(startupError);
-    expect(sidecarsCompleted).toBe(false);
-
-    releaseSidecars?.();
-    await waitForGatewayTestState(() => expect(sidecarsCompleted).toBe(true));
-  });
+        await expect(runtime.startupSettled).rejects.toBe(startupError);
+        expect(completed).toEqual([]);
+        const closed = vi.fn();
+        const closing = lifetime.drain().then(closed);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).not.toHaveBeenCalled();
+        release();
+        await closing;
+        expect(completed).toEqual([failedOwner === "logging" ? "sidecars" : "logging"]);
+        expect(closed).toHaveBeenCalledOnce();
+      } finally {
+        release();
+        await Promise.allSettled([logged, sidecarsCompleted]);
+        await lifetime.drain();
+      }
+    },
+  );
 
   it("uses the current runtime config for deferred model publication", async () => {
     const startupConfig = { hooks: { internal: { enabled: false } } } as never;
@@ -992,7 +1069,9 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => {
       expect(onPostReadySidecars).toHaveBeenCalledWith([postReadySidecar]);
     });
-    expect(postReadySidecar.stop).toHaveBeenCalledOnce();
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    await expect(stopTrackedSidecars(publishedPostReadySidecars)).rejects.toBe(cleanupError);
+    expect(publishedPostReadySidecars.has(postReadySidecar)).toBe(true);
 
     await cleanupGatewayTestState();
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(2);
@@ -1175,6 +1254,38 @@ describe("startGatewayPostAttachRuntime", () => {
     }
     await result.stopGatewayUpdateCheck();
     expect(updateCheck.stop).toHaveBeenCalledOnce();
+  });
+
+  it("joins update notices before releasing the update-check shutdown owner", async () => {
+    const notices = createDeferred();
+    const stopWatcher = vi.fn(() => notices.promise);
+    const watcherModule = await import("./update-run-watcher.js");
+    const startWatcher = vi
+      .spyOn(watcherModule, "startUpdateRunWatcher")
+      .mockReturnValue({ stop: stopWatcher });
+    const result = await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps(),
+    );
+    let stopped = false;
+    const stopping = result.stopGatewayUpdateCheck().then(() => {
+      stopped = true;
+    });
+    try {
+      expect(stopWatcher).toHaveBeenCalledOnce();
+      expect(hoisted.updateCheck.stop).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopped).toBe(false);
+      notices.resolve();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      notices.resolve();
+      await stopping;
+      startWatcher.mockRestore();
+    }
   });
 
   it("fences update discovery immediately and joins its pending initialization", async () => {
@@ -1412,6 +1523,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it.each([
     { name: "preparing", state: { kind: "preparing" } as const },
+    { name: "initially failed", state: { kind: "failed" } as const },
     {
       name: "already-ready bundled",
       state: { kind: "bundled", path: "/repo/dist/control-ui" } as const,
@@ -1423,15 +1535,15 @@ describe("startGatewayPostAttachRuntime", () => {
       const pluginStartup = new Promise<void>((resolve) => {
         finishPluginStartup = resolve;
       });
-      let buildSignal: AbortSignal | undefined;
+      const buildController = new AbortController();
+      const buildSignal = buildController.signal;
       const startControlUiBuild = vi.fn(
-        async (_isStopped: () => boolean, signal: AbortSignal) =>
+        async () =>
           await new Promise<void>((resolve) => {
-            buildSignal = signal;
-            signal.addEventListener("abort", () => resolve(), { once: true });
+            buildSignal.addEventListener("abort", () => resolve(), { once: true });
           }),
       );
-      const stopControlUiBuild = vi.fn(async () => {});
+      const stopControlUiBuild = vi.fn(async () => buildController.abort());
       const onGatewayLifetimeSidecars = vi.fn();
       const startGatewaySidecarsPending = vi.fn(async () => ({
         pluginServices: null,
@@ -1450,6 +1562,7 @@ describe("startGatewayPostAttachRuntime", () => {
           onGatewayLifetimeSidecars,
           controlUiRootLifecycle: {
             state,
+            setEnabled: vi.fn(),
             start: startControlUiBuild,
             stop: stopControlUiBuild,
           },
@@ -1748,7 +1861,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
+  it("skips rate-limit rewarms while retaining auth recovery without startup prewarm", async () => {
     vi.useFakeTimers();
     const onGatewayLifetimeSidecars = vi.fn();
 
@@ -1769,8 +1882,20 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      if (!hook) {
+        throw new Error("Expected provider auth failure hook to be registered");
+      }
+      hook("rate_limit");
+      hook("rate_limit");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      hook("auth");
+      hook("rate_limit");
       expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -1887,8 +2012,10 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       });
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      hook?.("auth");
       await waitForGatewayTestState(() => {
         expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
       });
@@ -1969,8 +2096,10 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
-      hook?.();
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
+      hook?.("auth");
       await vi.dynamicImportSettled();
       expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
@@ -2000,13 +2129,13 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
       });
       const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
-        | (() => void)
+        | ((reason: AuthProfileFailureReason) => void)
         | undefined;
       if (!failureHook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      failureHook();
+      failureHook("auth");
       markGatewayRestartDraining();
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.dynamicImportSettled();
@@ -2041,13 +2170,13 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
       });
       const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
-        | (() => void)
+        | ((reason: AuthProfileFailureReason) => void)
         | undefined;
       if (!failureHook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      failureHook();
+      failureHook("auth");
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(log.warn).toHaveBeenCalledWith(`provider auth state rewarm failed: ${String(error)}`);
@@ -2086,14 +2215,16 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       });
 
-      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | ((reason: AuthProfileFailureReason) => void)
+        | undefined;
       if (!hook) {
         throw new Error("Expected provider auth failure hook to be registered");
       }
 
-      hook();
+      hook("auth");
       currentCfg = afterFailureCfg;
-      hook();
+      hook("auth");
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
       expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(2);
 
@@ -2192,7 +2323,10 @@ describe("startGatewayPostAttachRuntime", () => {
       async () => {
         let releaseChannels: (() => void) | undefined;
         const events: string[] = [];
-        const pluginServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+        const pluginServices: PluginServicesHandle = {
+          reload: vi.fn(async () => {}),
+          stop: vi.fn(async () => {}),
+        };
         const onPluginServices = vi.fn();
         const onSidecarsReady = vi.fn();
         const startChannels = vi.fn(
@@ -2247,6 +2381,14 @@ describe("startGatewayPostAttachRuntime", () => {
           "plugin-services",
         ]);
         expect(onPluginServices).toHaveBeenCalledTimes(1);
+        const owner: PluginServicesHandle = onPluginServices.mock.calls[0]?.[0];
+        const config: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
+        const selected = new Set(["exporter"]);
+        await owner.reload(config, selected);
+        expect(pluginServices.reload).toHaveBeenCalledExactlyOnceWith(config, selected);
+        await owner.stop();
+        await expect(owner.reload(config, selected)).rejects.toThrow("stopping");
+        expect(pluginServices.reload).toHaveBeenCalledOnce();
       },
     );
   });
@@ -2294,59 +2436,228 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
-  it("stops plugin services that finish starting after deferred close begins", async () => {
-    await withEnvAsync(
-      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
-      async () => {
-        let shouldStartPluginServices = true;
-        let releasePluginServices: (() => void) | undefined;
-        const pluginServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
-        const onPluginServices = vi.fn();
-        hoisted.startPluginServices.mockImplementationOnce(
-          async (params) =>
-            (await new Promise<typeof pluginServices>((resolve) => {
-              params.onHandle?.(pluginServices);
-              releasePluginServices = () => resolve(pluginServices);
-            })) as never,
-        );
-
-        const sidecarsPromise = startGatewaySidecars({
-          cfg: { hooks: { internal: { enabled: false } } } as never,
-          pluginRegistry: createPostAttachParams().pluginRegistry,
-          defaultWorkspaceDir: "/tmp/openclaw-workspace",
-          deps: {} as never,
-          startChannels: vi.fn(async () => {}),
-          shouldStartPluginServices: () => shouldStartPluginServices,
-          onPluginServices,
-          log: { warn: vi.fn() },
-          logHooks: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
+  it.each(["Gateway close", "replacement reservation", "strict replacement"] as const)(
+    "keeps published service lifetime with its owner during %s",
+    async (boundary) => {
+      const actualServices =
+        await vi.importActual<typeof import("../plugins/services.js")>("../plugins/services.js");
+      hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
+      const registry = createEmptyPluginRegistry();
+      const siblingStarted = createDeferred();
+      const releaseSibling = createDeferred();
+      const serviceStop = vi.fn();
+      const broadcastPluginEvent = vi.fn();
+      let emit: (() => void) | undefined;
+      registry.services.push(
+        {
+          pluginId: "published-startup",
+          source: "test",
+          origin: "workspace",
+          service: {
+            id: "published-startup-service",
+            start: (context) => {
+              emit = () => context.gatewayEvents?.emit("ready", {}, { scope: "operator.read" });
+              registerPluginHttpRoute({
+                path: "/published-startup-service",
+                auth: "plugin",
+                handler: vi.fn(),
+              });
+            },
+            stop: serviceStop,
           },
-          logChannels: {
-            info: vi.fn(),
-            error: vi.fn(),
+        },
+        {
+          pluginId: "blocked-startup",
+          source: "test",
+          origin: "workspace",
+          service: {
+            id: "blocked-startup-service",
+            start: () => {
+              siblingStarted.resolve();
+              return releaseSibling.promise;
+            },
           },
-        });
-
-        await waitForGatewayTestState(() => {
-          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-        });
-        expect(onPluginServices).toHaveBeenCalledOnce();
-        expect(onPluginServices.mock.calls[0]?.[0]).toHaveProperty("stop");
-        shouldStartPluginServices = false;
-
-        if (!releasePluginServices) {
-          throw new Error("Expected plugin service release callback to be initialized");
+        },
+      );
+      let services: PluginServicesHandle | null = null;
+      const generation = createGatewayPluginRuntimeGeneration({
+        getServices: () => services,
+        setServices: (next) => {
+          services = next;
+        },
+      });
+      const claim = generation.currentClaim();
+      const onPluginServices = vi.fn((handle: PluginServicesHandle | null) => {
+        generation.publishServices(claim, handle);
+      });
+      let closing = false;
+      const base = createPostAttachParams();
+      const sidecarsPromise = startGatewaySidecars({
+        cfg: base.cfgAtStart,
+        pluginRegistry: registry,
+        defaultWorkspaceDir: base.defaultWorkspaceDir,
+        deps: base.deps,
+        startChannels: vi.fn(async () => {}),
+        shouldStartPluginServices: () => !closing && claim.isCurrent(),
+        shouldCreatePostReadySidecars: () => false,
+        pluginRuntimeClaim: claim,
+        onPluginServices,
+        broadcastPluginEvent,
+        log: base.log,
+        logHooks: base.logHooks,
+        logChannels: base.logChannels,
+      });
+      let reservation: ReturnType<typeof generation.reserve> | undefined;
+      let stopping: Promise<void> | undefined;
+      try {
+        await siblingStarted.promise;
+        const owner = generation.currentServices();
+        if (!owner) {
+          throw new Error("plugin service owner was not published before startup yielded");
         }
-        releasePluginServices();
-        await expect(sidecarsPromise).resolves.toMatchObject({ pluginServices: null });
+        expect(registry.httpRoutes.map((route) => route.path)).toEqual([
+          "/published-startup-service",
+        ]);
+        emit?.();
+        expect(broadcastPluginEvent).toHaveBeenCalledOnce();
 
-        expect(pluginServices.stop).toHaveBeenCalledTimes(1);
-        expect(onPluginServices).toHaveBeenCalledWith(null);
+        if (boundary === "Gateway close") {
+          closing = true;
+        } else {
+          reservation = generation.reserve();
+          if (boundary === "strict replacement") {
+            stopping = owner.stop({ strict: true, deadlineAtMs: Date.now() + 5_000 });
+          }
+        }
+        releaseSibling.resolve();
+        const result = await sidecarsPromise;
+        await stopping;
+
+        expect(result.pluginServices).not.toBeNull();
+        expect(generation.currentServices()).toBe(owner);
+        expect(onPluginServices).toHaveBeenLastCalledWith(owner);
+        if (boundary === "strict replacement") {
+          expect(serviceStop).toHaveBeenCalledOnce();
+          expect(registry.httpRoutes).toEqual([]);
+          expect(() => emit?.()).toThrow("no longer active");
+        } else {
+          expect(serviceStop).not.toHaveBeenCalled();
+          expect(registry.httpRoutes.map((route) => route.path)).toEqual([
+            "/published-startup-service",
+          ]);
+          emit?.();
+          expect(broadcastPluginEvent).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        releaseSibling.resolve();
+        reservation?.reject();
+        await Promise.allSettled([sidecarsPromise, stopping]);
+        await generation.currentServices()?.stop();
+      }
+    },
+  );
+
+  it("releases tracked startup after strict timeout while retaining service cleanup", async () => {
+    vi.useFakeTimers();
+    const actualServices =
+      await vi.importActual<typeof import("../plugins/services.js")>("../plugins/services.js");
+    hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
+    const startupEntered = createDeferred();
+    const startup = createDeferred();
+    const cleanup = createDeferred();
+    const serviceStop = vi.fn(() => cleanup.promise);
+    const registry = createEmptyPluginRegistry();
+    registry.services.push({
+      pluginId: "retained-startup-cleanup",
+      source: "test",
+      origin: "workspace",
+      service: {
+        id: "retained-startup-cleanup",
+        start: () => {
+          startupEntered.resolve();
+          return startup.promise;
+        },
+        stop: serviceStop,
       },
+    });
+    const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
+    const generation = createGatewayPluginRuntimeGeneration({
+      getServices: () => publishedOwner.current,
+      setServices: (handle) => {
+        publishedOwner.current = handle;
+      },
+    });
+    const claim = generation.currentClaim();
+    const connectionWork = new GatewayConnectionWork();
+    const base = createPostAttachParams();
+    const operation = Promise.resolve().then(() =>
+      startGatewaySidecars({
+        cfg: base.cfgAtStart,
+        pluginRegistry: registry,
+        defaultWorkspaceDir: base.defaultWorkspaceDir,
+        deps: base.deps,
+        startChannels: vi.fn(async () => {}),
+        shouldCreatePostReadySidecars: () => false,
+        pluginRuntimeClaim: claim,
+        onPluginServices: (handle) => {
+          generation.publishServices(claim, handle);
+        },
+        log: base.log,
+        logHooks: base.logHooks,
+        logChannels: base.logChannels,
+      }),
     );
+    const starting = connectionWork.track(() => operation);
+    let replacing: Promise<unknown> | undefined;
+    let draining: Promise<void> | undefined;
+    let finalCleanup: Promise<void> | undefined;
+    let reservation: ReturnType<typeof generation.reserve> | undefined;
+
+    try {
+      await startupEntered.promise;
+      const owner = generation.currentServices();
+      if (!owner) {
+        throw new Error("plugin service owner was not published before startup yielded");
+      }
+      reservation = generation.reserve();
+      replacing = owner
+        .stop({
+          strict: true,
+          deadlineAtMs: Date.now() + actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(await replacing).toBeInstanceOf(AggregateError);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      reservation.reject();
+      startup.resolve();
+
+      let drained = false;
+      draining = connectionWork.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(true);
+      expect(generation.currentServices()).toBe(owner);
+
+      let cleanupSettled = false;
+      finalCleanup = owner.stop().then(() => {
+        cleanupSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanupSettled).toBe(false);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      await finalCleanup;
+      expect(cleanupSettled).toBe(true);
+      expect(serviceStop).toHaveBeenCalledOnce();
+    } finally {
+      reservation?.reject();
+      startup.resolve();
+      cleanup.resolve();
+      await Promise.allSettled([starting, replacing, draining, finalCleanup]);
+      await generation.currentServices()?.stop();
+    }
   });
 
   it("publishes plugin cleanup ownership before lazy service loading", async () => {
@@ -2379,7 +2690,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await stopping;
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
     expect(sidecars.pluginServices).toBeNull();
-    expect(onPluginServices).toHaveBeenLastCalledWith(null);
+    expect(onPluginServices).toHaveBeenCalledOnce();
   });
 
   it.each(["settles", "times out"] as const)(
@@ -2394,7 +2705,7 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         return cleanup.promise;
       });
-      const startedServices = { stop: serviceStop };
+      const startedServices = { reload: vi.fn(async () => {}), stop: serviceStop };
       const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
       hoisted.startPluginServices.mockImplementationOnce(async (params) => {
         params.onHandle?.(startedServices);
@@ -2497,9 +2808,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 4_900);
       });
-      return await actualServices.startPluginServices(
-        params as Parameters<typeof actualServices.startPluginServices>[0],
-      );
+      return await actualServices.startPluginServices(params);
     });
     const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
     let stopping: Promise<void> | undefined;
@@ -3264,6 +3573,176 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
 
+  it.each(["direct close", "restart drain"] as const)(
+    "retires queued producers during %s before received work permits sidecar cleanup",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const postReadyWork = createDeferred();
+      const received = createDeferred();
+      const connectionWork = new GatewayConnectionWork();
+      const events: string[] = [];
+      const cleanupOwner = {
+        stop: vi.fn(() => {
+          events.push("cleanup");
+        }),
+      };
+      const config: OpenClawConfig = {
+        hooks: {
+          enabled: true,
+          internal: { enabled: false },
+          gmail: { account: "fixture@example.test", model: "openai/gpt-5.4" },
+        },
+        transcripts: {
+          autoStart: [{ providerId: "discord-voice", guildId: "g", channelId: "c" }],
+        },
+      };
+      hoisted.hasInternalHookListeners.mockReturnValueOnce(true);
+      hoisted.resolveHooksGmailModel.mockReturnValueOnce({ provider: "openai", model: "gpt-5.4" });
+      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+        const operation = Promise.resolve().then(() => run(connectionWork.signal));
+        return connectionWork.track(() => operation);
+      };
+      const params = createPostAttachParams({
+        cfgAtStart: config,
+        gatewayPluginConfigAtStart: config,
+        sidecarStartup: "defer",
+        isClosing: () => connectionWork.isClosing,
+        waitForPostReadyWork: () => postReadyWork.promise,
+        trackStartupWork,
+      });
+      const runtime = await startGatewayPostAttachRuntime(
+        params,
+        createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      );
+      let closing: Promise<void> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        await runtime.startupSettled;
+        adoptSidecars(publishedGatewayLifetimeSidecars, [cleanupOwner]);
+        void connectionWork.track(async () => {
+          events.push("received");
+          await received.promise;
+          events.push("received-completed");
+        });
+        connectionWork.beginClose();
+        if (boundary === "restart drain") {
+          markGatewayRestartDraining();
+        }
+        await runtime.stopGatewayUpdateCheck();
+        closing = connectionWork.drain().then(async () => {
+          events.push("drained");
+          await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+          await stopTrackedSidecars(publishedPostReadySidecars);
+        });
+        postReadyWork.resolve();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.dynamicImportSettled();
+
+        expect.soft(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+        expect.soft(hoisted.loadModelCatalog).not.toHaveBeenCalled();
+        expect.soft(hoisted.transcriptsAutoStartService.start).not.toHaveBeenCalled();
+        expect.soft(hoisted.triggerInternalHook).not.toHaveBeenCalled();
+        expect.soft(params.log.warn).not.toHaveBeenCalled();
+        expect.soft(params.logHooks.warn).not.toHaveBeenCalled();
+        expect(events).toEqual(["received"]);
+        expect(cleanupOwner.stop).not.toHaveBeenCalled();
+
+        received.resolve();
+        await closing;
+        expect(events).toEqual(["received", "received-completed", "drained", "cleanup"]);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        postReadyWork.resolve();
+        received.resolve();
+        await runtime.startupSettled;
+        await closing;
+        await runtime.stopGatewayUpdateCheck();
+        await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+        await stopTrackedSidecars(publishedPostReadySidecars);
+        await connectionWork.drain();
+      }
+    },
+  );
+
+  it("rechecks a queued Control UI producer after suspension admission resumes", async () => {
+    vi.useFakeTimers();
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const postReadyWork = createDeferred();
+    let closing = false;
+    const startAssets = vi.fn(async () => {});
+    const stopAssets = vi.fn(async () => {});
+    const runtime = await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        sidecarStartup: "defer",
+        isClosing: () => closing,
+        waitForPostReadyWork: () => postReadyWork.promise,
+        controlUiRootLifecycle: {
+          state: { kind: "preparing" },
+          setEnabled: vi.fn(),
+          start: startAssets,
+          stop: stopAssets,
+        },
+      }),
+      createPostAttachRuntimeDeps(),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startAssets).not.toHaveBeenCalled();
+      closing = true;
+      suspension?.release();
+      await vi.advanceTimersByTimeAsync(100);
+      await runtime.startupSettled;
+      expect(startAssets).not.toHaveBeenCalled();
+      expect(stopAssets).not.toHaveBeenCalled();
+    } finally {
+      suspension?.release();
+      postReadyWork.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      await runtime.startupSettled;
+      await runtime.stopGatewayUpdateCheck();
+      await stopTrackedSidecars(publishedGatewayLifetimeSidecars);
+    }
+    expect(stopAssets).toHaveBeenCalledOnce();
+  });
+
+  it("reports an admitted startup hook failure during close before its sidecar stops", async () => {
+    vi.useFakeTimers();
+    const hook = createDeferred();
+    const failure = new Error("admitted startup hook failed");
+    let closing = false;
+    hoisted.hasInternalHookListeners.mockReturnValueOnce(true);
+    hoisted.triggerInternalHook.mockReturnValueOnce(hook.promise);
+    const params = createPostAttachParams();
+    const result = await startGatewaySidecars({
+      cfg: params.cfgAtStart,
+      pluginRegistry: params.pluginRegistry,
+      defaultWorkspaceDir: params.defaultWorkspaceDir,
+      deps: params.deps,
+      startChannels: params.startChannels,
+      shouldCreatePostReadySidecars: () => !closing,
+      log: params.log,
+      logHooks: params.logHooks,
+      logChannels: params.logChannels,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hoisted.triggerInternalHook).toHaveBeenCalledOnce();
+      closing = true;
+      hook.reject(failure);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(params.logHooks.warn).toHaveBeenCalledExactlyOnceWith(
+        `gateway startup hook failed: ${String(failure)}`,
+      );
+    } finally {
+      hook.resolve();
+      await Promise.allSettled([hook.promise]);
+      for (const sidecar of result.postReadySidecars) {
+        await stopTrackedSidecar(sidecar);
+      }
+    }
+  });
+
   it("logs post-ready Gmail watcher failures without delaying sidecar readiness", async () => {
     const log = { warn: vi.fn() };
     hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("boom"));
@@ -3328,60 +3807,71 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
 
-  it("cancels a post-ready Gmail watcher after the immediate enters", async () => {
-    let releaseImport: (() => void) | undefined;
-    vi.doMock("../hooks/gmail-watcher-lifecycle.js", async () => {
-      await new Promise<void>((resolve) => {
-        releaseImport = resolve;
+  it.each(["sidecar stop", "close prelude"] as const)(
+    "cancels a post-ready Gmail watcher after the immediate enters through %s",
+    async (boundary) => {
+      let releaseImport: (() => void) | undefined;
+      let closing = false;
+      vi.doMock("../hooks/gmail-watcher-lifecycle.js", async () => {
+        await new Promise<void>((resolve) => {
+          releaseImport = resolve;
+        });
+        return {
+          startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
+        };
       });
-      return {
-        startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
-      };
-    });
-    vi.resetModules();
-    try {
-      const { startGatewaySidecars: startGatewaySidecarsWithDelayedImport } =
-        await import("./server-startup-post-attach.js");
-
-      const result = adoptPostReadyResult(
-        await startGatewaySidecarsWithDelayedImport({
-          cfg: {
-            hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-          } as never,
-          pluginRegistry: createPostAttachParams().pluginRegistry,
-          defaultWorkspaceDir: "/tmp/openclaw-workspace",
-          deps: {} as never,
-          startChannels: vi.fn(async () => {}),
-          log: { warn: vi.fn() },
-          logHooks: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
-          logChannels: {
-            info: vi.fn(),
-            error: vi.fn(),
-          },
-        }),
-      );
-
-      await waitForGatewayTestState(() => {
-        expect(releaseImport).toBeDefined();
-      });
-      for (const sidecar of result.postReadySidecars) {
-        await stopTrackedSidecar(sidecar);
-      }
-      releaseImport?.();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-    } finally {
-      vi.doUnmock("../hooks/gmail-watcher-lifecycle.js");
       vi.resetModules();
-    }
-  });
+      try {
+        const { startGatewaySidecars: startGatewaySidecarsWithDelayedImport } =
+          await import("./server-startup-post-attach.js");
+
+        const result = adoptPostReadyResult(
+          await startGatewaySidecarsWithDelayedImport({
+            cfg: {
+              hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+            } as never,
+            pluginRegistry: createPostAttachParams().pluginRegistry,
+            defaultWorkspaceDir: "/tmp/openclaw-workspace",
+            deps: {} as never,
+            startChannels: vi.fn(async () => {}),
+            shouldCreatePostReadySidecars: () => !closing,
+            log: { warn: vi.fn() },
+            logHooks: {
+              info: vi.fn(),
+              warn: vi.fn(),
+              error: vi.fn(),
+            },
+            logChannels: {
+              info: vi.fn(),
+              error: vi.fn(),
+            },
+          }),
+        );
+
+        await waitForGatewayTestState(() => {
+          expect(releaseImport).toBeDefined();
+        });
+        if (boundary === "sidecar stop") {
+          for (const sidecar of result.postReadySidecars) {
+            await stopTrackedSidecar(sidecar);
+          }
+        } else {
+          closing = true;
+        }
+        releaseImport?.();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+
+        expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+      } finally {
+        releaseImport?.();
+        await vi.dynamicImportSettled();
+        vi.doUnmock("../hooks/gmail-watcher-lifecycle.js");
+        vi.resetModules();
+      }
+    },
+  );
 
   it("runs Gmail model validation after sidecars are ready", async () => {
     hoisted.resolveHooksGmailModel.mockReturnValueOnce({
@@ -3504,7 +3994,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const onGatewayLifetimeSidecars = vi.fn();
     const startWorkerEnvironmentRuntime = vi.fn(async () => {
       startupOrder.push("worker-reconcile");
-      onGatewayLifetimeSidecars([workerSidecar]);
+      adoptSidecars(publishedConnectionDependentSidecars, [workerSidecar]);
       await reconcileReady;
       startupOrder.push("worker-ready");
       return workerSidecar;
@@ -3560,10 +4050,8 @@ describe("startGatewayPostAttachRuntime", () => {
       "gateway-sidecars",
     ]);
     expect([...unavailableGatewayMethods]).toEqual([]);
-    const workerPublications = onGatewayLifetimeSidecars.mock.calls.filter(([sidecars]) =>
-      sidecars.includes(workerSidecar),
-    );
-    expect(workerPublications).toEqual([[[workerSidecar]]]);
+    expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
+    expect(onGatewayLifetimeSidecars).not.toHaveBeenCalledWith([workerSidecar]);
   });
 
   it("stops worker placement runtime when channel and sidecar startup fails", async () => {
@@ -3573,11 +4061,10 @@ describe("startGatewayPostAttachRuntime", () => {
     };
     const startupError = new Error("sidecar startup failed");
     const onGatewayLifetimeSidecars = vi.fn();
-    const unregisterGatewayLifetimeSidecar = vi.fn();
-    let ownedWorkerSidecar: typeof workerSidecar | undefined;
+    const unregisterConnectionDependentSidecar = vi.fn();
     const params = createPostAttachParams({
       onGatewayLifetimeSidecars,
-      unregisterGatewayLifetimeSidecar,
+      unregisterConnectionDependentSidecar,
     });
 
     await expect(
@@ -3585,8 +4072,7 @@ describe("startGatewayPostAttachRuntime", () => {
         {
           ...params,
           startWorkerEnvironmentRuntime: vi.fn(() => {
-            ownedWorkerSidecar = workerSidecar;
-            onGatewayLifetimeSidecars([workerSidecar]);
+            adoptSidecars(publishedConnectionDependentSidecars, [workerSidecar]);
             return workerSidecar;
           }),
         },
@@ -3599,13 +4085,14 @@ describe("startGatewayPostAttachRuntime", () => {
     ).rejects.toBe(startupError);
 
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
-    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith([workerSidecar]);
-    expect(unregisterGatewayLifetimeSidecar).not.toHaveBeenCalled();
+    expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
+    expect(onGatewayLifetimeSidecars).not.toHaveBeenCalledWith([workerSidecar]);
+    expect(unregisterConnectionDependentSidecar).not.toHaveBeenCalled();
     expect(params.log.warn).toHaveBeenCalledWith(
       `worker environment cleanup after sidecar startup failure failed: ${String(cleanupError)}`,
     );
 
-    await ownedWorkerSidecar?.stop();
+    await stopTrackedSidecars(publishedConnectionDependentSidecars);
     expect(workerSidecar.stop).toHaveBeenCalledTimes(2);
   });
 
@@ -3748,10 +4235,12 @@ describe("startGatewayPostAttachRuntime", () => {
     const recoveryLoadStarted = new Promise<void>((resolve) => {
       markRecoveryLoadStarted = resolve;
     });
-    const pluginServices = { stop: vi.fn(async () => {}) } as PluginServicesHandle;
+    const pluginServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
     const postReadySidecar = { stop: vi.fn(async () => {}) };
     const workerSidecar = { stop: vi.fn(async () => {}) };
-    let ownedWorkerSidecar: typeof workerSidecar | undefined;
     const unlockStartupMethods = vi.fn();
     const activateSubagentRegistry = vi.fn();
     const onPluginServices = vi.fn();
@@ -3762,8 +4251,7 @@ describe("startGatewayPostAttachRuntime", () => {
         sidecarStartup: "defer",
         isClosing: () => closeStarted,
         startWorkerEnvironmentRuntime: vi.fn(() => {
-          ownedWorkerSidecar = workerSidecar;
-          onGatewayLifetimeSidecars([workerSidecar]);
+          adoptSidecars(publishedConnectionDependentSidecars, [workerSidecar]);
           return workerSidecar;
         }),
         onGatewayLifetimeSidecars,
@@ -3774,6 +4262,7 @@ describe("startGatewayPostAttachRuntime", () => {
         startGatewaySidecars: vi.fn(
           async (params: Parameters<typeof startGatewaySidecarsImpl>[0]) => {
             params.onPostReadySidecars?.([postReadySidecar]);
+            params.onPluginServices?.(pluginServices);
             return { pluginServices, postReadySidecars: [postReadySidecar] };
           },
         ),
@@ -3793,11 +4282,16 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(activateSubagentRegistry).not.toHaveBeenCalled();
     expect(unlockStartupMethods).toHaveBeenCalledOnce();
     expect(workerSidecar.stop).not.toHaveBeenCalled();
-    expect(pluginServices.stop).toHaveBeenCalledOnce();
-    expect(postReadySidecar.stop).toHaveBeenCalledOnce();
-    expect(onPluginServices).toHaveBeenLastCalledWith(null);
-    await ownedWorkerSidecar?.stop();
+    expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
+    expect(pluginServices.stop).not.toHaveBeenCalled();
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
+    await stopTrackedSidecars(publishedConnectionDependentSidecars);
+    await stopTrackedSidecars(publishedPostReadySidecars);
+    await pluginServices.stop();
     expect(workerSidecar.stop).toHaveBeenCalledOnce();
+    expect(postReadySidecar.stop).toHaveBeenCalledOnce();
+    expect(pluginServices.stop).toHaveBeenCalledOnce();
   });
 
   it("returns before loading startup plugins with deferred sidecars", async () => {
@@ -3879,7 +4373,7 @@ describe("startGatewayPostAttachRuntime", () => {
         },
       });
 
-      expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
+      expect(hoisted.commitInternalHooks).toHaveBeenCalledWith({ initial: true });
       expect(hoisted.hasInternalHookListeners).toHaveBeenCalledWith("gateway", "startup");
 
       await vi.advanceTimersByTimeAsync(250);
@@ -3995,6 +4489,308 @@ describe("startGatewayPostAttachRuntime", () => {
         ["backend", "acpx"],
       ],
     });
+  });
+
+  it.each(["suspension", "backend readiness", "manager import", "reconciliation"] as const)(
+    "retires unstarted ACP reconciliation when close wins during %s",
+    async (boundary) => {
+      const managerModule = await import("../acp/control-plane/manager.js");
+      const importEntered = createDeferred();
+      const releaseImport = createDeferred();
+      const scan = createDeferred<{ checked: number; resolved: number; failed: number }>();
+      let closing = false;
+      let healthy = boundary !== "backend readiness";
+      const suspension =
+        boundary === "suspension" ? tryBeginGatewaySuspendAdmission(() => {}) : undefined;
+      if (suspension) {
+        expect(suspension.commit()).toBe(true);
+      }
+      hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
+        id: id ?? "acpx",
+        runtime: {},
+        healthy: () => healthy,
+      }));
+      if (boundary === "reconciliation") {
+        hoisted.reconcilePendingSessionIdentities.mockReturnValueOnce(scan.promise);
+      }
+      if (boundary !== "manager import") {
+        releaseImport.resolve();
+      }
+      const params = createPostAttachParams();
+      vi.resetModules();
+      try {
+        const { startGatewaySidecars: startFreshGatewaySidecars } =
+          await import("./server-startup-post-attach.js");
+        vi.doMock("../acp/control-plane/manager.js", async () => {
+          importEntered.resolve();
+          await releaseImport.promise;
+          return managerModule;
+        });
+        adoptPostReadyResult(
+          await startFreshGatewaySidecars({
+            cfg: { ...params.cfgAtStart, acp: { enabled: true, backend: "acpx" } },
+            pluginRegistry: params.pluginRegistry,
+            defaultWorkspaceDir: params.defaultWorkspaceDir,
+            deps: params.deps,
+            startChannels: params.startChannels,
+            shouldCreatePostReadySidecars: () => !closing,
+            log: params.log,
+            logHooks: params.logHooks,
+            logChannels: params.logChannels,
+          }),
+        );
+        if (boundary === "backend readiness") {
+          await waitForGatewayTestState(() =>
+            expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx"),
+          );
+        } else if (boundary === "manager import") {
+          await importEntered.promise;
+        } else if (boundary === "reconciliation") {
+          await waitForGatewayTestState(() =>
+            expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledOnce(),
+          );
+        }
+        closing = true;
+        suspension?.release();
+        healthy = true;
+        releaseImport.resolve();
+        if (boundary === "reconciliation") {
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+        }
+        scan.resolve({ checked: 0, resolved: 0, failed: 0 });
+        await vi.dynamicImportSettled();
+        await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        if (boundary === "reconciliation") {
+          expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledOnce();
+        } else {
+          expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+        }
+        expect(params.log.warn).not.toHaveBeenCalled();
+      } finally {
+        closing = true;
+        healthy = true;
+        suspension?.release();
+        releaseImport.resolve();
+        scan.resolve({ checked: 0, resolved: 0, failed: 0 });
+        await vi.dynamicImportSettled();
+        await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await stopTrackedSidecars(publishedPostReadySidecars);
+        vi.doMock("../acp/control-plane/manager.js", () => managerModule);
+        vi.resetModules();
+      }
+    },
+  );
+
+  it.each([
+    { label: "before restart-sentinel refresh starts", closeAfterRefreshStarts: false },
+    { label: "during restart-sentinel refresh", closeAfterRefreshStarts: true },
+  ])("retains the startup tail when close begins $label", async ({ closeAfterRefreshStarts }) => {
+    const refreshStarted = createDeferred();
+    const releaseRefresh = createDeferred();
+    const connectionWork = new GatewayConnectionWork();
+    const events: string[] = [];
+    const refreshLatestUpdateRestartSentinel = vi.fn(async () => {
+      events.push("refresh-started");
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      events.push("refresh-completed");
+      return null;
+    });
+    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+      const operation = Promise.resolve().then(() => run(connectionWork.signal));
+      return connectionWork.track(() => operation);
+    };
+    const runtime = await trackStartupWork(() =>
+      startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          isClosing: () => connectionWork.isClosing,
+          trackStartupWork,
+        }),
+        createPostAttachRuntimeDeps({ refreshLatestUpdateRestartSentinel }),
+      ),
+    );
+
+    try {
+      if (closeAfterRefreshStarts) {
+        await refreshStarted.promise;
+      }
+      connectionWork.beginClose();
+      const closing = connectionWork.drain().then(() => {
+        events.push("metadata-retired");
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      if (closeAfterRefreshStarts) {
+        expect.soft(events).toEqual(["refresh-started"]);
+      } else {
+        expect.soft(refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+      }
+      releaseRefresh.resolve();
+      await runtime.startupSettled;
+      await closing;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(events).toEqual(
+        closeAfterRefreshStarts
+          ? ["refresh-started", "refresh-completed", "metadata-retired"]
+          : ["metadata-retired"],
+      );
+    } finally {
+      releaseRefresh.resolve();
+      await connectionWork.drain();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  });
+
+  it.each(["sentinel", "gateway_start"] as const)(
+    "retires startup %s admission parked behind suspension when the Gateway closes",
+    async (stage) => {
+      const { createHookRunner } = await import("../plugins/hooks.js");
+      const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.typedHooks.push({
+        pluginId: "startup-suspension-test",
+        hookName: "gateway_start",
+        handler: gatewayStart,
+        source: "startup-suspension-test",
+      });
+      const hookRunner = createHookRunner(pluginRegistry);
+      const postReadyWork = createDeferred();
+      const hookLoadStarted = createDeferred();
+      const releaseHookLoad = createDeferred();
+      const connectionWork = new GatewayConnectionWork();
+      const refresh = vi.fn(async () => null);
+      const sidecarsReady = vi.fn();
+      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+        const operation = Promise.resolve().then(() => run(connectionWork.signal));
+        return connectionWork.track(() => operation);
+      };
+      const runtime = await trackStartupWork(() =>
+        startGatewayPostAttachRuntime(
+          createPostAttachParams({
+            pluginRegistry,
+            isClosing: () => connectionWork.isClosing,
+            trackStartupWork,
+            onSidecarsReady: sidecarsReady,
+            waitForPostReadyWork: () => postReadyWork.promise,
+          }),
+          createPostAttachRuntimeDeps({
+            refreshLatestUpdateRestartSentinel: refresh,
+            getGlobalHookRunner: async () => {
+              hookLoadStarted.resolve();
+              if (stage === "gateway_start") {
+                await releaseHookLoad.promise;
+                return hookRunner;
+              }
+              return null;
+            },
+          }),
+        ),
+      );
+      let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+      let closing: Promise<void> | undefined;
+      try {
+        expect(sidecarsReady).toHaveBeenCalledOnce();
+        if (stage === "gateway_start") {
+          postReadyWork.resolve();
+          await hookLoadStarted.promise;
+        }
+        suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension?.commit()).toBe(true);
+        postReadyWork.resolve();
+        await hookLoadStarted.promise;
+        releaseHookLoad.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        let drained = false;
+        connectionWork.beginClose();
+        closing = connectionWork.drain().then(() => {
+          drained = true;
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect.soft(drained, "startup admission retires without reopening suspension").toBe(true);
+        suspension?.release();
+        await closing;
+        expect(gatewayStart).not.toHaveBeenCalled();
+        expect(refresh).toHaveBeenCalledTimes(stage === "sentinel" ? 0 : 1);
+      } finally {
+        suspension?.release();
+        postReadyWork.resolve();
+        releaseHookLoad.resolve();
+        await runtime.startupSettled;
+        await connectionWork.drain();
+        await closing;
+      }
+    },
+  );
+
+  it("retains gateway_start loading until close can retire plugin metadata", async () => {
+    const { createHookRunner } = await import("../plugins/hooks.js");
+    const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.typedHooks.push({
+      pluginId: "startup-lifetime-test",
+      hookName: "gateway_start",
+      handler: gatewayStart,
+      source: "startup-lifetime-test",
+    });
+    const hookRunner = createHookRunner(pluginRegistry);
+    const hookLoadStarted = createDeferred();
+    const releaseHookLoad = createDeferred();
+    const connectionWork = new GatewayConnectionWork();
+    const retirePluginMetadata = vi.fn();
+    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+      const operation = Promise.resolve().then(() => run(connectionWork.signal));
+      return connectionWork.track(() => operation);
+    };
+    const runtime = await trackStartupWork(() =>
+      startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          sidecarStartup: "defer",
+          pluginRegistry,
+          isClosing: () => connectionWork.isClosing,
+          trackStartupWork,
+        }),
+        createPostAttachRuntimeDeps({
+          getGlobalHookRunner: async () => {
+            hookLoadStarted.resolve();
+            await releaseHookLoad.promise;
+            return hookRunner;
+          },
+        }),
+      ),
+    );
+
+    try {
+      await hookLoadStarted.promise;
+      connectionWork.beginClose();
+      const closing = connectionWork.drain().then(retirePluginMetadata);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect.soft(retirePluginMetadata).not.toHaveBeenCalled();
+      releaseHookLoad.resolve();
+      await runtime.startupSettled;
+      await closing;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(gatewayStart).not.toHaveBeenCalled();
+      expect(retirePluginMetadata).toHaveBeenCalledOnce();
+    } finally {
+      releaseHookLoad.resolve();
+      await connectionWork.drain();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
   });
 
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
@@ -4148,6 +4944,7 @@ function createPostAttachRuntimeDeps(
 }
 
 function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): PostAttachParams {
+  const startupSignal = new AbortController().signal;
   return {
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
@@ -4177,7 +4974,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     deps: {} as never,
     startChannels: vi.fn(async () => {}),
     recoveryRuntime: {
-      abortAgent: vi.fn(),
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),
@@ -4194,10 +4990,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     },
     unlockStartupMethods: vi.fn(),
     providerAuthPrewarm: { enabled: false },
-    unregisterGatewayLifetimeSidecar: vi.fn(),
-    stopRegisteredPostReadySidecars: () => stopTrackedSidecars(publishedPostReadySidecars),
-    stopRegisteredGatewayLifetimeSidecars: () =>
-      stopTrackedSidecars(publishedGatewayLifetimeSidecars),
+    unregisterConnectionDependentSidecar: vi.fn(),
+    trackStartupWork: (run) => run(startupSignal),
     ...overrides,
   };
 }

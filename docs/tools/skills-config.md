@@ -28,7 +28,6 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { mode: "auto" },
-      allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -365,7 +364,7 @@ different visible skill set per agent.
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path and runs daily collection cleanup that can
+  scanner-gated Workshop apply path and runs weekly collection cleanup that can
   rewrite or drop eligible writable skills. User-prompted skill creation,
   `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
@@ -378,15 +377,8 @@ proposal-only permissions, and troubleshooting.
   additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
-<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
-  Allow Skill Workshop apply to write through workspace skill symlinks whose
-  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep
-  this disabled unless generated proposal applies should mutate that shared
-  skill root.
-</ParamField>
-
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace (allowed
+  Maximum pending and quarantined proposals retained per agent (allowed
   range: 1-200).
 </ParamField>
 
@@ -423,22 +415,9 @@ is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
 
-Skill Workshop apply does not write through those symlinks by default. To
-let Workshop apply mutate skills under already-trusted symlink targets, opt
-in separately:
-
-```json5
-{
-  skills: {
-    load: {
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
-    },
-    workshop: {
-      allowSymlinkTargetWrites: true,
-    },
-  },
-}
-```
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`
+containment boundary. It does not use `allowSymlinkTargets`, and it rejects
+symlinked skills that resolve outside that directory.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks unconditionally (per-skill

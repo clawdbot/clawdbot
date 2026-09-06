@@ -61,8 +61,6 @@ vi.mock("../utils/message-channel.js", () => {
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
     INTERNAL_MESSAGE_CHANNEL,
-    isNativeApprovalChannel: (value?: string | null) =>
-      value === INTERNAL_MESSAGE_CHANNEL || value === "discord",
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
       return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");
@@ -329,6 +327,7 @@ async function expectGatewayAskAlwaysPrompt(options: {
     host: "gateway",
     ask: "always",
     security: "full",
+    approvalFollowupMode: "agent",
     approvalRunningNoticeMs: 0,
   });
 
@@ -431,6 +430,8 @@ describe("exec approvals", () => {
   let tempCaseIndex = 0;
 
   beforeAll(async () => {
+    // Detached assertions exercise delivery, not cold loading of the recovery graph.
+    await import("./bash-tools.exec-approval-followup.js");
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
   });
 
@@ -467,7 +468,7 @@ describe("exec approvals", () => {
     }
   });
 
-  it("reuses approval id as the node runId", async () => {
+  it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
     let invokeParams: unknown;
     let agentParams: unknown;
 
@@ -491,6 +492,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "node",
       ask: "always",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:main",
     });
@@ -864,19 +866,14 @@ describe("exec approvals", () => {
       command,
     });
 
-    expect(first.details.status).toBe("approval-pending");
+    expect(first.details.status).toBe("completed");
+    expect(getResultText(first)).toContain("allow-always");
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
 
-    await expect
-      .poll(
-        () =>
-          loadExecApprovals().agents?.main?.allowlist?.some(
-            (entry) => entry.source === "allow-always",
-          ) === true,
-        { timeout: 2000, interval: 1 },
-      )
-      .toBe(true);
+    expect(
+      loadExecApprovals().agents?.main?.allowlist?.some((entry) => entry.source === "allow-always"),
+    ).toBe(true);
 
     calls.length = 0;
 
@@ -921,6 +918,7 @@ describe("exec approvals", () => {
       host: "node",
       ask: "always",
       security: "full",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
     });
 
@@ -996,16 +994,9 @@ describe("exec approvals", () => {
 
   it("requires approval for elevated ask when allowlist misses", async () => {
     const calls: string[] = [];
-    let resolveApproval: (() => void) | undefined;
-    const approvalSeen = new Promise<void>((resolve) => {
-      resolveApproval = resolve;
-    });
-
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
-        resolveApproval?.();
-        // Return registration confirmation
         return acceptedApprovalResponse(params);
       }
       if (method === "exec.approval.waitDecision") {
@@ -1017,8 +1008,11 @@ describe("exec approvals", () => {
     const tool = createElevatedAllowlistExecTool();
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
-    expectPendingApprovalText(result, { command: "echo ok", host: "gateway" });
-    await approvalSeen;
+    expect(result.details.status).toBe("failed");
+    const approvalId = requireExecApprovalRequestCall().params.id;
+    expect(getResultText(result)).toContain(
+      `Exec denied (gateway id=${String(approvalId)}, user-denied): echo ok`,
+    );
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
   });
@@ -1052,6 +1046,7 @@ describe("exec approvals", () => {
         ask: "always",
         security: "full",
         allowBackground: false,
+        approvalFollowupMode: "agent",
         approvalRunningNoticeMs: 0,
       });
 
@@ -1066,7 +1061,7 @@ describe("exec approvals", () => {
     },
   );
 
-  it("starts an internal agent follow-up after approved gateway exec completes without an external route", async () => {
+  it("starts an explicitly requested agent follow-up after gateway exec completes without an external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -1078,6 +1073,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:main",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
@@ -1095,7 +1091,7 @@ describe("exec approvals", () => {
     expect(agentCall.deliver).toBe(false);
   });
 
-  it("continues the original agent session after approved gateway exec completes with a non-native external route", async () => {
+  it("delivers an explicitly requested agent follow-up through the original external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -1107,6 +1103,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:feishu:channel:123",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
@@ -1192,65 +1189,38 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("waits for native webchat approval and returns approved gateway output as a foreground result", async () => {
-    const agentCalls: Array<Record<string, unknown>> = [];
+  it.each([undefined, "webchat"])(
+    "returns approved gateway output inline with messageProvider=%s",
+    async (messageProvider) => {
+      const agentCalls: Array<Record<string, unknown>> = [];
 
-    mockAcceptedApprovalFlow({
-      onAgent: (params) => {
-        agentCalls.push(params);
-      },
-    });
+      mockAcceptedApprovalFlow({
+        onAgent: (params) => {
+          agentCalls.push(params);
+        },
+      });
 
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      sessionKey: "agent:main:main",
-      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
-      messageProvider: "webchat",
-    });
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "always",
+        approvalRunningNoticeMs: 0,
+        sessionKey: "agent:main:main",
+        elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+        messageProvider,
+      });
 
-    const result = await tool.execute("call-gw-native-webchat", {
-      command: "printf webchat-ok",
-      workdir: process.cwd(),
-    });
+      const result = await tool.execute("call-gw-native-webchat", {
+        command: "printf webchat-ok",
+        workdir: process.cwd(),
+      });
 
-    expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain("webchat-ok");
-    expect(agentCalls).toHaveLength(0);
-  });
+      expect(result.details.status).toBe("completed");
+      expect(getResultText(result)).toContain("webchat-ok");
+      expect(agentCalls).toHaveLength(0);
+    },
+  );
 
-  it("keeps approved internal commands asynchronous without a webchat turn source", async () => {
-    const agentCalls: Array<Record<string, unknown>> = [];
-
-    mockAcceptedApprovalFlow({
-      onAgent: (params) => {
-        agentCalls.push(params);
-      },
-    });
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      sessionKey: "agent:main:main",
-      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
-    });
-
-    const result = await tool.execute("call-gw-followup-webchat", {
-      command: "printf webchat-ok",
-      workdir: process.cwd(),
-    });
-
-    expect(result.details.status).toBe("approval-pending");
-
-    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    const agentCall = requireRecord(agentCalls[0], "agent followup call");
-    expectAuthenticatedExecFollowup(agentCall, "agent:main:main");
-    expect(agentCall.deliver).toBe(false);
-  });
-
-  it("routes denied approval status through the originating session", async () => {
+  it("routes denied approval status through an explicitly requested agent follow-up", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1270,6 +1240,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:main",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
@@ -1333,8 +1304,10 @@ describe("exec approvals", () => {
       elevated: true,
     });
 
-    expect(first.details.status).toBe("approval-pending");
-    expect(second.details.status).toBe("approval-pending");
+    expect(first.details.status).toBe("completed");
+    expect(getResultText(first)).toContain("approval-one");
+    expect(second.details.status).toBe("completed");
+    expect(getResultText(second)).toContain("approval-two");
     expect(requestCommands).toEqual(["printf approval-one", "printf approval-two"]);
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).not.toBe(requestIds[1]);
@@ -1359,6 +1332,7 @@ describe("exec approvals", () => {
       host: "gateway",
       ask: "on-miss",
       security: "allowlist",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
     });
 
@@ -1502,7 +1476,9 @@ describe("exec approvals", () => {
         workdir: tempDir,
       });
 
-      expectPendingCommandText(result, command);
+      expect(result.details.status).toBe("failed");
+      expect(getResultText(result)).toContain("user-denied");
+      expect(requireExecApprovalRequestCall().params.command).toBe(command);
       expect(calls).toContain("exec.approval.request");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1527,6 +1503,7 @@ describe("exec approvals", () => {
       host: "node",
       ask: "always",
       security: "full",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
     });
 
@@ -1560,6 +1537,7 @@ describe("exec approvals", () => {
       host: "gateway",
       ask: "on-miss",
       security: "allowlist",
+      approvalFollowupMode: "agent",
       approvalRunningNoticeMs: 0,
     });
 

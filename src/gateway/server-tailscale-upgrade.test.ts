@@ -63,6 +63,11 @@ describe("managed Tailscale upgrade", () => {
   });
 
   it.each([
+    [
+      "foreground claim",
+      { Foreground: { "fixture-session": legacyRoute(false, 8096) } },
+      /Foreground session fixture-session.*fixture\.tailnet\.ts\.net:443[\s\S]*stop the confirmed owning process/,
+    ],
     ["foreign target", legacyRoute(false, 8096)],
     [
       "foreign sibling hostname",
@@ -90,7 +95,7 @@ describe("managed Tailscale upgrade", () => {
         },
       },
     ],
-  ])("does not modify a %s", async (_label, config) => {
+  ])("does not modify a %s", async (_label, config, recovery = /--https=443 --set-path=\/ off/) => {
     const env = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
@@ -106,7 +111,7 @@ describe("managed Tailscale upgrade", () => {
       logTailscale: { info: () => undefined, warn: () => undefined },
     });
     try {
-      await expect(exposure).rejects.toThrow("--https=443 --set-path=/ off");
+      await expect(exposure).rejects.toThrow(recovery);
       expect(await readFile(marker, "utf8")).toBe(before);
     } finally {
       await exposure.then(

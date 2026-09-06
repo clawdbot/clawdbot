@@ -354,9 +354,9 @@ export function collectGatewayConfigFindings(
       findings.push({
         checkId: "gateway.trusted_proxy_device_auto_approve",
         severity: "warn",
-        title: "Trusted-proxy browser device auto-approval enabled",
+        title: "Trusted-proxy operator device auto-approval enabled",
         detail:
-          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new browser and native UI operator device pairing entirely to the reverse-proxy identity.",
         remediation:
           "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
       });
@@ -371,7 +371,7 @@ export function collectGatewayConfigFindings(
           severity: "critical",
           title: "Trusted-proxy device auto-approval allows full admin",
           detail:
-            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new operator device with full admin; requests without scopes receive full admin automatically.",
           remediation:
             "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
         });

@@ -5,13 +5,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
-import {
-  generateAttachmentId,
-  getChatAttachmentBlob,
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { generateAttachmentId, getChatAttachmentBlob } from "./attachment-payload-store.ts";
 
 export type DurableChatComposerSnapshot = {
   scope: DurableComposerDraftScope;
@@ -84,27 +78,6 @@ export function chatAttachmentDraftSignature(
   ]);
 }
 
-function blobFromDataUrl(dataUrl: string): Blob | null {
-  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const metadata = match[1] ?? "";
-  const payload = match[2] ?? "";
-  try {
-    if (metadata.toLowerCase().includes(";base64")) {
-      const binary = atob(payload.replace(/\s+/gu, ""));
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
-    }
-    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
-      type: metadata.split(";", 1)[0],
-    });
-  } catch {
-    return null;
-  }
-}
-
 export function readBlobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -123,28 +96,12 @@ export function readBlobAsDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function restoreChatAttachmentPayload(params: {
-  attachment: ChatAttachment;
-  blob: Blob;
-}): Promise<ChatAttachment> {
-  const blob =
-    params.blob.type === params.attachment.mimeType
-      ? params.blob
-      : params.blob.slice(0, params.blob.size, params.attachment.mimeType);
-  const dataUrl = await readBlobAsDataUrl(blob);
-  const file = new File([blob], params.attachment.fileName ?? "attachment", {
-    type: params.attachment.mimeType,
-  });
-  return registerChatAttachmentPayload({ attachment: params.attachment, dataUrl, file });
-}
-
 export function captureDurableChatAttachments(
   attachments: readonly ChatAttachment[],
 ): DurableComposerDraftAttachment[] | null {
   const stored: DurableComposerDraftAttachment[] = [];
   for (const attachment of attachments) {
-    const dataUrl = getChatAttachmentDataUrl(attachment);
-    const blob = getChatAttachmentBlob(attachment) ?? (dataUrl ? blobFromDataUrl(dataUrl) : null);
+    const blob = getChatAttachmentBlob(attachment);
     if (!blob) {
       return null;
     }
@@ -164,31 +121,21 @@ export function captureDurableChatAttachments(
 export async function hydrateDurableComposerAttachments(
   stored: readonly DurableComposerDraftAttachment[],
 ): Promise<ChatAttachment[]> {
-  const hydrated: ChatAttachment[] = [];
-  try {
-    for (const attachment of stored) {
-      hydrated.push(
-        await restoreChatAttachmentPayload({
-          attachment: {
-            id: generateAttachmentId(),
-            mimeType: attachment.mimeType,
-            ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
-            ...(typeof attachment.sizeBytes === "number"
-              ? { sizeBytes: attachment.sizeBytes }
-              : {}),
-            ...(attachment.browserAnnotation
-              ? { browserAnnotation: { ...attachment.browserAnnotation } }
-              : {}),
-          },
-          blob: attachment.blob,
-        }),
-      );
-    }
-    return hydrated;
-  } catch (error) {
-    releaseChatAttachmentPayloads(hydrated);
-    throw error;
-  }
+  // No registry or URL ownership until the complete batch reaches a live owner.
+  return Promise.all(
+    stored.map(async ({ blob, ...metadata }) => {
+      const source =
+        blob.type === metadata.mimeType ? blob : blob.slice(0, blob.size, metadata.mimeType);
+      return {
+        ...metadata,
+        id: generateAttachmentId(),
+        ...(metadata.browserAnnotation
+          ? { browserAnnotation: { ...metadata.browserAnnotation } }
+          : {}),
+        dataUrl: await readBlobAsDataUrl(source),
+      };
+    }),
+  );
 }
 
 export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
@@ -348,13 +295,11 @@ export class DurableChatComposerPersistence {
       try {
         attachments = await hydrateDurableComposerAttachments(result.draft.attachments);
       } catch {
-        releaseChatAttachmentPayloads(attachments);
         reportDurableComposerStorageError(baseline.scope, this.onStorageError);
         return;
       }
     }
     if (!this.isBaselineCurrent(baseline, generation, current())) {
-      releaseChatAttachmentPayloads(attachments);
       return;
     }
     apply({

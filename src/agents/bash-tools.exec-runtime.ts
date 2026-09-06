@@ -37,6 +37,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
@@ -388,10 +389,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {
-    mainKey: session.mainKey,
-    sessionScope: session.sessionScope,
-  };
+  const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
   const eventOptions = {
     sessionKey: eventSessionKey,
@@ -683,15 +681,6 @@ export async function runExecProcess({
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
-  /** `session.mainKey` from the runtime config; snapshotted onto the
-   *  ProcessSession so background-exit notifications can remap cron-run
-   *  keys without an ambient config load. Long-running background exits use
-   *  this start-time value even if config changes while the process runs. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; snapshotted alongside
-   *  `mainKey` so the cron-run remap can route global-scope agents to
-   *  the "global" queue instead of agent-main. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -706,6 +695,8 @@ export async function runExecProcess({
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 }): Promise<ExecProcessHandle> {
+  let assertSourceActive: (() => void) | undefined =
+    captureAgentToolSourceExecutionGuard(initialStartupSignal);
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
@@ -722,8 +713,6 @@ export async function runExecProcess({
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
     eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
@@ -754,7 +743,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let startupSignal = initialStartupSignal;
   let beforeSpawn = initialBeforeSpawn;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
@@ -881,8 +869,6 @@ export async function runExecProcess({
         // retain it, including when a task callback or notification throws.
         delete session.sessionKey;
         delete session.agentId;
-        delete session.mainKey;
-        delete session.sessionScope;
         delete session.eventRouting;
         delete session.notifyDeliveryContext;
         delete session.notifyOnExit;
@@ -961,27 +947,30 @@ export async function runExecProcess({
   };
 
   const assertPreSpawnAuthorized = async () => {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const denied = await beforeSpawn?.();
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
   const spawn = (input: SpawnInput) => {
-    // No await between the final cancellation check and supervisor admission.
-    startupSignal?.throwIfAborted();
-    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+    // No await between source authority validation and supervisor admission.
+    assertSourceActive?.();
+    return withoutGatewayToolCallerIdentity(() =>
+      supervisor.spawn({ ...input, assertCurrent: assertSourceActive }),
+    );
   };
 
   try {
-    startupSignal?.throwIfAborted();
+    assertSourceActive?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
       sessionId: opts.sessionKey?.trim() || sessionId,
       backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
+      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
       env: spawnSpec.env,
@@ -999,7 +988,7 @@ export async function runExecProcess({
           argv: spawnSpec.argv,
         });
       } catch (err) {
-        startupSignal?.throwIfAborted();
+        assertSourceActive?.();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -1037,8 +1026,8 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
-    startupSignal = undefined;
     beforeSpawn = undefined;
+    assertSourceActive = undefined;
   }
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;

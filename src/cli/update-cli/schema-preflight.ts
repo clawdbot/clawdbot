@@ -29,10 +29,10 @@ export function formatSchemaRefusalLines(
   ];
 }
 
-export function checkTargetDatabaseSchemas(
+export async function checkTargetDatabaseSchemas(
   supportedVersions: OpenClawSchemaVersions | undefined,
   env: NodeJS.ProcessEnv = process.env,
-): OpenClawDatabaseSchemaPreflight {
+): Promise<OpenClawDatabaseSchemaPreflight> {
   return supportedVersions
     ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
     : { incompatible: [], indeterminate: [] };

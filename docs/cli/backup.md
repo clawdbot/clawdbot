@@ -222,6 +222,11 @@ openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> -
 
 Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
 
+Git backup creation, restore, and verification stream table data instead of
+retaining complete table dumps in memory. Restores still require space for the
+materialized Git files and the private SQLite staging copy; verification does
+not write a second set of table dumps.
+
 ## Schedule backups
 
 Provision one Gateway-owned automation with a fixed name:

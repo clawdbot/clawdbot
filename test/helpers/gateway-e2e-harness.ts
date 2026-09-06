@@ -1,12 +1,14 @@
 // Gateway E2E harness starts test gateway processes and HTTP probes.
 import { request as httpRequest } from "node:http";
 import path from "node:path";
-import { GatewayClient } from "../../src/gateway/client.js";
+import type { GatewayClient } from "../../src/gateway/client.js";
 import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
 import { sleep } from "../../src/utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
+import { acquireGatewayTestClient, GatewayTestClientCleanupError } from "./gateway-client.js";
 import { createOpenClawTestInstance, type OpenClawTestInstance } from "./openclaw-test-instance.js";
+import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 export type GatewayInstance = OpenClawTestInstance;
 
@@ -146,26 +148,8 @@ export async function connectGatewayStatusClient(
   inst: GatewayInstance,
   timeoutMs = GATEWAY_CONNECT_STATUS_TIMEOUT_MS,
 ): Promise<GatewayClient> {
-  let settled = false;
-  let timer: NodeJS.Timeout | null = null;
-
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    const finish = (err?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(client);
-    };
-
-    const client = new GatewayClient({
+  return await acquireGatewayTestClient(
+    {
       url: `ws://127.0.0.1:${inst.port}`,
       connectChallengeTimeoutMs: 0,
       token: inst.gatewayToken,
@@ -174,21 +158,13 @@ export async function connectGatewayStatusClient(
       clientVersion: "1.0.0",
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.CLI,
-      onHelloOk: () => {
-        finish();
-      },
-      onConnectError: (err) => finish(err),
-      onClose: (code, reason) => {
-        finish(new Error(`gateway closed (${code}): ${reason}`));
-      },
-    });
-
-    timer = setTimeout(() => {
-      finish(new Error(`timeout waiting for status client hello for ${inst.name}`));
-    }, timeoutMs);
-
-    client.start();
-  });
+    },
+    {
+      timeoutMs,
+      timeoutMessage: `timeout waiting for status client hello for ${inst.name}`,
+      closeMessage: "gateway closed",
+    },
+  );
 }
 
 export async function waitForNodeStatus(
@@ -199,38 +175,52 @@ export async function waitForNodeStatus(
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    let client: GatewayClient | undefined;
-    while (Date.now() < deadline) {
-      try {
-        client = await connectGatewayStatusClient(
-          inst,
-          Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
-        );
-        break;
-      } catch (error) {
-        lastError = error;
-        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
-      }
-    }
-    if (!client) {
-      break;
-    }
+    let client: GatewayClient;
     try {
-      while (Date.now() < deadline) {
-        const list = (await client.request("node.list", {})) as {
-          nodes?: Array<{ nodeId: string; connected?: boolean; paired?: boolean }>;
-        };
-        const match = list.nodes?.find((n) => n.nodeId === nodeId);
-        if (match?.connected && match?.paired) {
-          return;
-        }
-        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
-      }
+      client = await connectGatewayStatusClient(
+        inst,
+        Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+      );
     } catch (error) {
+      if (error instanceof GatewayTestClientCleanupError) {
+        throw error;
+      }
       lastError = error;
       await sleep(GATEWAY_NODE_STATUS_POLL_MS);
-    } finally {
-      client.stop();
+      continue;
+    }
+    let connected = false;
+    let cleanupJoined = false;
+    try {
+      await runQaGatewayFixture(
+        async () => {
+          while (Date.now() < deadline) {
+            const list = await client.request<{
+              nodes?: Array<{ nodeId: string; connected?: boolean; paired?: boolean }>;
+            }>("node.list", {});
+            const match = list.nodes?.find((n) => n.nodeId === nodeId);
+            if (match?.connected && match?.paired) {
+              connected = true;
+              return;
+            }
+            await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+          }
+        },
+        async () => {
+          await client.stopAndWait({ timeoutMs: 1_000 });
+          cleanupJoined = true;
+        },
+      );
+    } catch (error) {
+      // Only a joined owner can be replaced; preserve cleanup failure even when polling failed too.
+      if (!cleanupJoined) {
+        throw error;
+      }
+      lastError = error;
+      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+    }
+    if (connected) {
+      return;
     }
   }
   const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
