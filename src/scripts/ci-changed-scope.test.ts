@@ -621,7 +621,7 @@ describe("detectChangedScope", () => {
       runMacosNode: false,
       runIosBuild: false,
       runAndroid: false,
-      runWindows: false,
+      runWindows: true,
       runSkillsPython: false,
       runChangedSmoke: true,
       runControlUiI18n: false,
@@ -833,13 +833,11 @@ describe("detectChangedScope", () => {
     expect(
       detectNodeFastScope([
         "scripts/check-changed.mjs",
-        "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mts",
         "scripts/test-projects.test-support.mts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.control-ui.test.ts",
         "src/scripts/ci-changed-scope.native-i18n.test.ts",
-        "src/scripts/ci-changed-scope.test.ts",
         "src/scripts/ci-changed-scope.windows.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/run-vitest.test.ts",
@@ -850,6 +848,16 @@ describe("detectChangedScope", () => {
       runFastOnly: true,
       runPluginContracts: false,
       runCiRouting: true,
+    });
+  });
+
+  it("routes scope-owner edits out of fast-only CI so Windows coverage runs", () => {
+    expect(
+      detectNodeFastScope(["scripts/ci-changed-scope.mjs", "src/scripts/ci-changed-scope.test.ts"]),
+    ).toEqual({
+      runFastOnly: false,
+      runPluginContracts: false,
+      runCiRouting: false,
     });
   });
 

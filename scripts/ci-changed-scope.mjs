@@ -255,6 +255,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     if (
+      path === "scripts/ci-changed-scope.mjs" ||
       windowsCiTests.has(path) ||
       WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE.test(path) ||
       WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
@@ -595,7 +596,10 @@ export function detectNodeFastScope(changedPaths) {
     runPluginContracts ||= NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.test(path);
     runCiRouting ||= NODE_FAST_CI_ROUTING_SCOPE_RE.test(path);
 
-    if (!NODE_FAST_SCOPE_RE.test(path)) {
+    // The scope router owns native-lane selection; its edits must exercise that lane.
+    const isScopeOwnerPath =
+      path === "scripts/ci-changed-scope.mjs" || path === "src/scripts/ci-changed-scope.test.ts";
+    if (!NODE_FAST_SCOPE_RE.test(path) || isScopeOwnerPath) {
       return { runFastOnly: false, runPluginContracts: false, runCiRouting: false };
     }
   }

@@ -11331,6 +11331,34 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it("routes changed-scope owner edits through the Windows manifest matrix", () => {
+    const changedPaths = ["scripts/ci-changed-scope.mjs", "src/scripts/ci-changed-scope.test.ts"];
+    const scopeEnv = Object.fromEntries(
+      Object.entries(runCiChangedScopeFixture(changedPaths)).map(([key, value]) => [
+        "OPENCLAW_CI_" + key.toUpperCase(),
+        value,
+      ]),
+    );
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      changedPaths,
+      scopeEnv: { ...scopeEnv, OPENCLAW_CI_DOCS_CHANGED: "false" },
+    });
+
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(scopeEnv.OPENCLAW_CI_RUN_WINDOWS).toBe("true");
+    expect(scopeEnv.OPENCLAW_CI_RUN_NODE_FAST_ONLY).toBe("false");
+    expect(manifest.outputs.run_checks_windows).toBe("true");
+    expect(
+      JSON.parse(expectDefined(manifest.outputs.checks_windows_matrix, "Windows matrix")).include,
+    ).toEqual([
+      { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
+      { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
+    ]);
+  });
+
   it.each<{
     label: string;
     changedPath: string;
