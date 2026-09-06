@@ -161,7 +161,7 @@ function resolveProject(options?: GoogleVertexOptions): string {
     normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
     throw new Error(
-      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
+      "Gemini Enterprise Agent Platform (Vertex AI) requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
     );
   }
   return project;
@@ -173,7 +173,7 @@ function resolveLocation(options?: GoogleVertexOptions): string {
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
+      "Gemini Enterprise Agent Platform (Vertex AI) requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
     );
   }
   return location;
