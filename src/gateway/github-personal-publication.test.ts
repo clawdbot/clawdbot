@@ -31,7 +31,7 @@ import {
   createForeignPublicationSession,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
-  personalPublicationReplayCases,
+  expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
 import {
   BRANCH,
@@ -455,23 +455,10 @@ describe("personal publication authority and recovery", () => {
   });
 
   it("replays only the original personal selection and content without new publication work", async () => {
-    const cases = personalPublicationReplayCases(generation);
-    const published = await coordinator.requestPersonalForSession(cases.request, action);
-    expect(published.status).toBe("published");
-    const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
-    const commandCount = commands.length;
-    await expect(coordinator.requestPersonalForSession(cases.caseOnly, action)).resolves.toEqual(
-      published,
-    );
-    for (const changed of cases.mismatches) {
-      await expect(coordinator.requestPersonalForSession(changed, action)).rejects.toThrow(
-        "My GitHub publication idempotency key was reused with a different selection.",
-      );
-    }
-    expect(commands).toHaveLength(commandCount);
-    expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
-      receipt,
-    );
+    await expectPersonalPublicationReplay({ generation, coordinator, action }, (requestId) => ({
+      receipt: readPersonalGitHubPublication(owner, { requestId }),
+      commandCount: commands.length,
+    }));
   });
 
   it("keeps credential locations out of publication errors when refresh materialization fails", async () => {
