@@ -174,7 +174,7 @@ describe("sessionsCommand default store agent selection", () => {
 
     await sessionsCommand({ allAgents: true, json: true, active: "2", limit: 2 }, runtime);
 
-    expect(JSON.parse(logs[0])).toMatchObject({
+    expect(JSON.parse(logs[0] ?? "{}")).toMatchObject({
       count: 2,
       totalCount: 3,
       hasMore: true,
