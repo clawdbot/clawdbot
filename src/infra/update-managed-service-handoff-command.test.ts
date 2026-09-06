@@ -70,7 +70,11 @@ beforeEach(async () => {
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
-  spawnSyncMock.mockReset();
+  spawnSyncMock
+    .mockReset()
+    .mockImplementation(
+      (await vi.importActual<typeof import("node:child_process")>("node:child_process")).spawnSync,
+    );
   spawnMock.mockImplementation(createReadyChild);
 });
 
