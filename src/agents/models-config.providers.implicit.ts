@@ -34,14 +34,14 @@ import {
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
 import {
-  resolveImplicitProviderDiscoveryScope,
-  type ProviderDiscoveryScope,
-} from "./models-config.providers.discovery-scope.js";
-import {
   buildPluginCatalogConfig,
   prepareProviderCatalogRun,
   reportProviderCatalogSecretFailure,
 } from "./models-config.providers.catalog-context.js";
+import {
+  resolveImplicitProviderDiscoveryScope,
+  type ProviderDiscoveryScope,
+} from "./models-config.providers.discovery-scope.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -375,7 +375,10 @@ async function runProviderCatalogWithTimeout(
       }
     },
   };
-  const runCatalog = async () => runProviderCatalog(await prepareProviderCatalogRun(catalogParams));
+  const runCatalog = async () => {
+    const prepared = await prepareProviderCatalogRun(catalogParams);
+    return active ? runProviderCatalog(prepared) : undefined;
+  };
   try {
     if (!timeoutMs) {
       return await runCatalog();

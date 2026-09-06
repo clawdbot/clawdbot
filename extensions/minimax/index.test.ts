@@ -9,6 +9,7 @@ import {
   runProviderCatalog,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
@@ -33,6 +34,7 @@ const minimaxProviderPlugin = {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  clearLiveCatalogCacheForTests();
 });
 
 describe("minimax provider hooks", () => {
@@ -65,6 +67,11 @@ describe("minimax provider hooks", () => {
   });
 
   it("keeps explicit portal API keys ahead of stored OAuth profiles", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
       id: "minimax",
@@ -99,45 +106,60 @@ describe("minimax provider hooks", () => {
 
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.apiKey).toBe("explicit-key");
-  });
-
-  it("keeps API-key profile precedence through the shared catalog wrapper", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
-    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
-
-    const result = await runProviderCatalog({
-      provider: portalProvider,
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({
-        apiKey: "api-profile-key",
-        discoveryApiKey: "api-profile-key",
-        profileId: "minimax-portal:api",
-      }),
-      resolveProviderAuth: () => ({
-        apiKey: MINIMAX_OAUTH_MARKER,
-        discoveryApiKey: "oauth-profile-token",
-        mode: "oauth",
-        profileId: "minimax-portal:oauth",
-        source: "profile",
-      }),
-    });
-
-    const provider = result && "provider" in result ? result.provider : undefined;
-    expect(provider?.apiKey).toBe("api-profile-key");
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("x-api-key")).toBe("api-profile-key");
+    expect(headers.get("x-api-key")).toBe("explicit-key");
     expect(headers.get("authorization")).toBeNull();
   });
+
+  it.each([
+    { name: "API-key profile without mode metadata", mode: undefined, bearer: false },
+    { name: "API-key profile", mode: "api_key", bearer: false },
+    { name: "token profile", mode: "token", bearer: true },
+    { name: "OAuth profile", mode: "oauth", bearer: true },
+  ] as const)(
+    "uses the selected $name ahead of another OAuth profile through the shared catalog wrapper",
+    async ({ mode, bearer }) => {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+      const apiKey = mode === "oauth" ? MINIMAX_OAUTH_MARKER : "selected-profile-credential";
+
+      const result = await runProviderCatalog({
+        provider: portalProvider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey,
+          discoveryApiKey: "selected-profile-credential",
+          profileId: "minimax-portal:selected",
+          ...(mode ? { mode } : {}),
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: MINIMAX_OAUTH_MARKER,
+          discoveryApiKey: "other-oauth-credential",
+          mode: "oauth",
+          profileId: "minimax-portal:other-oauth",
+          source: "profile",
+        }),
+      });
+
+      const provider = result && "provider" in result ? result.provider : undefined;
+      expect(provider?.apiKey).toBe(apiKey);
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-api-key")).toBe(bearer ? null : "selected-profile-credential");
+      expect(headers.get("authorization")).toBe(
+        bearer ? "Bearer selected-profile-credential" : null,
+      );
+    },
+  );
 
   it("uses Bearer discovery auth for MINIMAX_OAUTH_TOKEN", async () => {
     const fetchMock = vi.fn(
@@ -158,6 +180,7 @@ describe("minimax provider hooks", () => {
       resolveProviderApiKey: () => ({
         apiKey: "MINIMAX_OAUTH_TOKEN",
         discoveryApiKey: "oauth-token",
+        mode: "api_key",
       }),
       resolveProviderAuth: () => ({
         apiKey: "MINIMAX_OAUTH_TOKEN",

@@ -32,7 +32,11 @@ import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
-import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import {
+  ProviderAuthError,
+  resolveDirectProviderCredentialMode,
+  type ResolvedProviderAuth,
+} from "./model-auth-runtime-shared.js";
 import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
@@ -313,7 +317,7 @@ export async function resolveApiKeyForProviderCore(params: {
       params.skipSetupProviderFallback,
     );
     if (envResolved) {
-      const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+      const resolvedMode = resolveDirectProviderCredentialMode({
         cfg,
         provider,
         inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -539,7 +543,7 @@ export async function resolveApiKeyForProviderCore(params: {
     params.skipSetupProviderFallback,
   );
   if (envResolved) {
-    const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+    const resolvedMode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -612,7 +616,7 @@ export async function resolveApiKeyForProviderCore(params: {
     secretSentinels: params.secretSentinels,
   });
   if (customKey) {
-    const mode = authConfig.resolveDirectProviderCredentialMode({
+    const mode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: "api-key",

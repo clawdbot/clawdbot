@@ -111,6 +111,7 @@ export async function prepareProviderCatalogOAuthAuth(
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
+  let preparedProfile: { profileId: string; apiKey: string } | undefined;
   while (true) {
     let auth: ReturnType<ProviderAuthResolver>;
     try {
@@ -138,6 +139,7 @@ export async function prepareProviderCatalogOAuthAuth(
         allowProfileFallback: false,
       });
       if (resolved?.apiKey) {
+        preparedProfile = { profileId: auth.profileId, apiKey: resolved.apiKey };
         break;
       }
     } catch {
@@ -146,9 +148,15 @@ export async function prepareProviderCatalogOAuthAuth(
     }
     failedProfileIds.push(auth.profileId);
   }
-  return (requestedProvider?: string, options?: { oauthMarker?: string }) =>
-    resolveProviderAuth(requestedProvider?.trim() || provider, {
+  return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
+    const auth = resolveProviderAuth(requestedProvider?.trim() || provider, {
       ...options,
       excludeProfileIds: failedProfileIds,
     });
+    // Refresh owns a separate store; the captured catalog snapshot can still
+    // contain the old token. Carry the resolved value for this exact profile.
+    return preparedProfile && auth.profileId === preparedProfile.profileId
+      ? { ...auth, discoveryApiKey: preparedProfile.apiKey }
+      : auth;
+  };
 }

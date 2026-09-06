@@ -42,6 +42,7 @@ type ProfileApiKeyResolution = {
 export type ProviderApiKeyResolver = (provider: string) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
+  mode?: "api_key" | "oauth" | "token";
   profileId?: string;
 };
 

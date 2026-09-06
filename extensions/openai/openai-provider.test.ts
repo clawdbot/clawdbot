@@ -34,7 +34,7 @@ type OpenAITestCatalogResult = {
 async function runCatalogWithFetchGuard(params: {
   fetchGuard: LiveModelCatalogFetchGuard;
   auth: {
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     apiKey: string;
     discoveryApiKey?: string;
     profileId?: string;
@@ -654,6 +654,19 @@ describe("buildOpenAIProvider", () => {
       },
     ]);
   });
+
+  it.each(["oauth", "token"] as const)(
+    "does not send an unmaterialized direct %s credential marker",
+    async (mode) => {
+      const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
+      const result = await runCatalogWithFetchGuard({
+        fetchGuard,
+        auth: { mode, apiKey: "secretref-managed", source: "none" },
+      });
+      expect(fetchGuard).not.toHaveBeenCalled();
+      expect(result.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+    },
+  );
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);

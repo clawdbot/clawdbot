@@ -981,8 +981,17 @@ export function buildOpenAIProvider(): ProviderPlugin {
           };
         }
         if (!auth.profileId && isCodexCatalogAuthMode(auth.mode) && auth.apiKey) {
+          const discoveryApiKey =
+            auth.discoveryApiKey ??
+            (isNonSecretApiKeyMarker(auth.apiKey) ? undefined : auth.apiKey);
+          if (!discoveryApiKey) {
+            return {
+              providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+              outcomes: [{ provider: PROVIDER_ID, status: "unavailable" }],
+            };
+          }
           const catalog = await buildOpenAICodexLiveProviderConfig({
-            discoveryApiKey: auth.discoveryApiKey ?? auth.apiKey,
+            discoveryApiKey,
           });
           return {
             providers: { [PROVIDER_ID]: catalog.provider },

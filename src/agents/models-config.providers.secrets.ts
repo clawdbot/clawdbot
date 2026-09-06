@@ -19,6 +19,7 @@ import {
   resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
+import { resolveDirectProviderCredentialMode } from "./model-auth-runtime-shared.js";
 import {
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
@@ -71,6 +72,15 @@ function resolveCatalogAuthProfileOrder(params: {
   });
 }
 
+function resolveCatalogDirectAuthMode(config: OpenClawConfig | undefined, provider: string) {
+  const mode = resolveDirectProviderCredentialMode({
+    cfg: config,
+    provider,
+    inferredMode: "api-key",
+  });
+  return mode === "oauth" || mode === "token" ? mode : "api_key";
+}
+
 /** Create a resolver over the credential map already selected for one lifecycle generation. */
 export function createProviderApiKeyResolverFromPreparedCredentials(
   env: NodeJS.ProcessEnv,
@@ -98,6 +108,7 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
       return {
         apiKey: resolveOAuthApiKeyMarker(authProvider),
         discoveryApiKey: toDiscoveryApiKey(credential.access),
+        mode: "oauth",
       };
     }
     if (credential.type === "token") {
@@ -110,6 +121,7 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
       return {
         apiKey: credential.token,
         discoveryApiKey: toDiscoveryApiKey(credential.token),
+        mode: "token",
       };
     }
     if (!credential.key.trim()) {
@@ -118,6 +130,7 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
     return {
       apiKey: credential.key,
       discoveryApiKey: toDiscoveryApiKey(credential.key),
+      mode: "api_key",
     };
   };
 }
@@ -177,6 +190,7 @@ export function createProviderApiKeyResolver(
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: resolveCatalogDirectAuthMode(config, authProvider),
       };
     }
     const fromConfig = resolveConfigBackedProviderAuth({
@@ -191,6 +205,7 @@ export function createProviderApiKeyResolver(
       return {
         apiKey: fromConfig.apiKey,
         discoveryApiKey: fromConfig.discoveryApiKey,
+        mode: fromConfig.mode,
       };
     }
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
@@ -210,6 +225,7 @@ export function createProviderApiKeyResolver(
           apiKey: fromProfiles.apiKey,
           discoveryApiKey: fromProfiles.discoveryApiKey,
           profileId: fromProfiles.profileId,
+          mode: authStore.profiles[fromProfiles.profileId].type,
         }
       : { apiKey: undefined, discoveryApiKey: undefined };
   };
@@ -275,7 +291,7 @@ export function createProviderAuthResolver(
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: "api_key" as const,
+        mode: resolveCatalogDirectAuthMode(config, authProvider),
         source: "env" as const,
       };
     }
@@ -316,10 +332,11 @@ function resolveConfigBackedProviderAuth(params: {
   | {
       apiKey: string;
       discoveryApiKey?: string;
-      mode: "api_key";
+      mode: ReturnType<typeof resolveCatalogDirectAuthMode>;
     }
   | undefined {
   const authProvider = params.provider;
+  const mode = resolveCatalogDirectAuthMode(params.config, authProvider);
   const apiKeyPath = `models.providers.${authProvider}.apiKey`;
   const sourceRef = resolveConfigSecretRef({
     config: params.sourceConfigForSecrets,
@@ -344,7 +361,7 @@ function resolveConfigBackedProviderAuth(params: {
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(sourceRef.source),
       discoveryApiKey,
-      mode: "api_key",
+      mode,
     };
   }
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
@@ -365,7 +382,7 @@ function resolveConfigBackedProviderAuth(params: {
     return {
       apiKey: isNonSecretApiKeyMarker(apiKey) ? apiKey : resolveNonEnvSecretRefApiKeyMarker("file"),
       discoveryApiKey: toDiscoveryApiKey(apiKey),
-      mode: "api_key",
+      mode,
     };
   }
 
@@ -387,13 +404,13 @@ function resolveConfigBackedProviderAuth(params: {
         ? {
             apiKey: envVar,
             discoveryApiKey: toDiscoveryApiKey(envValue),
-            mode: "api_key",
+            mode,
           }
         : undefined;
     }
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
-      mode: "api_key",
+      mode,
     };
   }
   if (typeof configuredProviderApiKey !== "string") {
@@ -409,7 +426,7 @@ function resolveConfigBackedProviderAuth(params: {
       return {
         apiKey: configuredApiKey,
         discoveryApiKey: toDiscoveryApiKey(envValue),
-        mode: "api_key",
+        mode,
       };
     }
     return undefined;
@@ -417,6 +434,6 @@ function resolveConfigBackedProviderAuth(params: {
   return {
     apiKey: configuredApiKey,
     discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
-    mode: "api_key",
+    mode,
   };
 }

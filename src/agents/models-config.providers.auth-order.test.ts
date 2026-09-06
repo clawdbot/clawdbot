@@ -18,7 +18,7 @@ vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => [],
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: { "proof-alias": "openai" },
-    envCandidateMap: {},
+    envCandidateMap: { openai: ["OPENAI_API_KEY"] },
     authEvidenceMap: {},
   }),
 }));
@@ -60,6 +60,7 @@ describe("provider catalog auth order", () => {
     });
     expect(createProviderApiKeyResolver({}, store, config)("openai")).toMatchObject({
       apiKey: "key-b",
+      mode: "api_key",
       profileId: profileB,
     });
 
@@ -118,6 +119,74 @@ describe("provider catalog auth order", () => {
       });
     }
   });
+
+  it("keeps the static credential kind separate from the preferred OAuth profile", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "minimax-portal:token": {
+          type: "token",
+          provider: "minimax-portal",
+          token: "catalog-token",
+        },
+        "minimax-portal:oauth": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+    };
+    expect(createProviderApiKeyResolver({}, store)("minimax-portal")).toMatchObject({
+      apiKey: "catalog-token",
+      discoveryApiKey: "catalog-token",
+      mode: "token",
+      profileId: "minimax-portal:token",
+    });
+    expect(createProviderAuthResolver({}, store)("minimax-portal")).toMatchObject({
+      mode: "oauth",
+      profileId: "minimax-portal:oauth",
+    });
+  });
+
+  it.each(["oauth", "token"] as const)(
+    "preserves configured %s mode for direct catalog credentials",
+    (mode) => {
+      const store: AuthProfileStore = { version: 1, profiles: {} };
+      const provider = {
+        auth: mode,
+        apiKey: "literal-catalog-token",
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+      };
+      const config: OpenClawConfig = {
+        models: { providers: { openai: provider } },
+      };
+      const envConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              ...provider,
+              apiKey: { source: "env", provider: "default", id: "CATALOG_TOKEN" },
+            },
+          },
+        },
+      };
+      for (const resolve of [createProviderAuthResolver, createProviderApiKeyResolver]) {
+        expect(resolve({}, store, config)("openai")).toMatchObject({
+          mode,
+          discoveryApiKey: "literal-catalog-token",
+        });
+        expect(
+          resolve({ CATALOG_TOKEN: "env-catalog-token" }, store, envConfig)("openai"),
+        ).toMatchObject({ mode, discoveryApiKey: "env-catalog-token" });
+        expect(
+          resolve({ OPENAI_API_KEY: "direct-env-token" }, store, config)("openai"),
+        ).toMatchObject({ mode, discoveryApiKey: "direct-env-token" });
+      }
+    },
+  );
 
   it("keeps unresolved OAuth refs selected for locked catalog resolution", () => {
     const profileId = "openai:oauth-ref";

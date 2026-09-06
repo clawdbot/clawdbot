@@ -817,6 +817,7 @@ describe("models-config provider auth provenance", () => {
     expect(auth("vllm")).toEqual({
       apiKey: "proof-key",
       discoveryApiKey: "proof-key",
+      mode: "api_key",
     });
   });
 
@@ -846,6 +847,7 @@ describe("models-config provider auth provenance", () => {
     expect(auth("vllm")).toEqual({
       apiKey: "MY_VLLM_KEY",
       discoveryApiKey: "resolved-vllm-key",
+      mode: "api_key",
     });
   });
 
@@ -927,6 +929,7 @@ describe("models-config provider auth provenance", () => {
     expect(auth("vllm")).toEqual({
       apiKey: "ALLCAPS_SAMPLE",
       discoveryApiKey: "ALLCAPS_SAMPLE",
+      mode: "api_key",
     });
   });
 
@@ -971,7 +974,8 @@ describe("models-config provider auth provenance", () => {
       expect(auth("openai")).toEqual({
         apiKey: NON_ENV_SECRETREF_MARKER,
         discoveryApiKey: undefined,
-        ...(mode === "full-auth" ? { mode: "api_key", source: "none" } : {}),
+        mode: "api_key",
+        ...(mode === "full-auth" ? { source: "none" } : {}),
       });
     },
   );
@@ -984,7 +988,7 @@ describe("models-config provider auth provenance", () => {
         { OPENAI_API_KEY: "unselected-env" },
         { openai: { type: "api_key", key } },
       );
-      expect(auth("openai")).toEqual({ apiKey: key, discoveryApiKey: undefined });
+      expect(auth("openai")).toEqual({ apiKey: key, discoveryApiKey: undefined, mode: "api_key" });
     }
   });
 });

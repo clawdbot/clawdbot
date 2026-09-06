@@ -10,7 +10,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
-import { fetchLiveProviderModelIds } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   discoverAuthStorage,
@@ -19,7 +18,6 @@ import {
 } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { isRateLimitErrorMessage } from "./failover/classify.js";
@@ -43,7 +41,6 @@ import {
 } from "./model-auth.js";
 import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
   appendPrioritizedDynamicLiveModels,
@@ -120,13 +117,6 @@ type OllamaRuntimeApi = {
 };
 
 const describeLive = LIVE ? describe : describe.skip;
-const openAiLiveSelected =
-  LIVE &&
-  Boolean(process.env.OPENAI_API_KEY?.trim()) &&
-  (process.env.OPENCLAW_LIVE_PROVIDERS ?? "")
-    .split(",")
-    .some((provider) => normalizeProviderId(provider) === "openai");
-const describeOpenAiLive = openAiLiveSelected ? describe : describe.skip;
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
@@ -1629,43 +1619,6 @@ async function runExtraTurnProbes(params: {
     },
   });
 }
-
-describeOpenAiLive("OpenAI live catalog profile selection", () => {
-  it("uses only the configured selected profile for the vendor catalog request", async () => {
-    const liveKey = expectDefined(process.env.OPENAI_API_KEY?.trim(), "OpenAI live API key");
-    const selectedProfileId = "openai:live-selected-b";
-    const excludedProfileId = "openai:live-excluded-a";
-    const excludedKey = "sk-excluded-profile-a-not-real";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [excludedProfileId]: { type: "api_key", provider: "openai", key: excludedKey },
-        [selectedProfileId]: { type: "api_key", provider: "openai", key: liveKey },
-      },
-    };
-    const config: OpenClawConfig = {
-      auth: { order: { openai: [selectedProfileId, excludedProfileId] } },
-    };
-    const auth = createProviderAuthResolver({}, store, config)("openai");
-    expect(auth.profileId).toBe(selectedProfileId);
-    expect(auth.discoveryApiKey === liveKey).toBe(true);
-    expect(auth.discoveryApiKey === excludedKey).toBe(false);
-
-    const modelIds = await fetchLiveProviderModelIds({
-      providerId: "openai",
-      endpoint: "https://api.openai.com/v1/models",
-      apiKey: auth.apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-      timeoutMs: 30_000,
-      auditContext: "openai-live-configured-profile-proof",
-    });
-
-    expect(modelIds.length).toBeGreaterThan(0);
-    logProgress(
-      `[live-models] profile-selection selectedProfile=${selectedProfileId} selectedRequests=1 excludedRequests=0 endpoint=/v1/models outcome=ready modelCount=${modelIds.length}`,
-    );
-  }, 180_000);
-});
 
 describeLive("live models (profile keys)", () => {
   it(
