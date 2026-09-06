@@ -189,6 +189,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
           ...skill,
           filePath: materialized.readPath,
           baseDir: path.posix.dirname(materialized.readPath),
+          hostFilePath: materialized.skillFile,
         };
       });
       if (!resolvedSkills) {

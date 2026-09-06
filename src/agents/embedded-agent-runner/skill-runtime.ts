@@ -110,6 +110,11 @@ export function prepareEmbeddedSkills(params: {
     const sandbox = params.sandbox;
     const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
       ? async ({ location, signal }) => {
+          if (location.startsWith("node://")) {
+            throw new Error(
+              `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(location)}`,
+            );
+          }
           const bridge = sandbox.fsBridge;
           if (!bridge) {
             throw new Error("Sandbox filesystem bridge is unavailable for skill reads.");

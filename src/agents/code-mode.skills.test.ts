@@ -28,6 +28,7 @@ function skillCandidate(params: {
   description: string;
   filePath: string;
   readContent?: string;
+  hostFilePath?: string;
 }): Skill {
   return {
     ...params,
@@ -256,6 +257,49 @@ describe("Code Mode skills and read tools", () => {
     await expect(
       readCodeModeSkill({ ...skill, reader: undefined }, undefined, "modules/x.md"),
     ).rejects.toThrow(/node-hosted skill relative reads require a node skill reader/);
+  });
+
+  it("reads a sandbox companion from the materialized host root, not the container locator", async () => {
+    const tmpParent = await fs.realpath(
+      await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-sandbox-root-")),
+    );
+    const hostRoot = nodePath.join(tmpParent, "materialized");
+    await fs.mkdir(nodePath.join(hostRoot, "modules"), { recursive: true });
+    await fs.writeFile(nodePath.join(hostRoot, "SKILL.md"), "# skill\n", "utf8");
+    await fs.writeFile(nodePath.join(hostRoot, "modules", "during-dining.md"), "HOST_OK", "utf8");
+    // Unrelated host directory that happens to match the container locator.
+    const unrelatedRoot = nodePath.join(tmpParent, "unrelated");
+    await fs.mkdir(nodePath.join(unrelatedRoot, "modules"), { recursive: true });
+    await fs.writeFile(
+      nodePath.join(unrelatedRoot, "modules", "during-dining.md"),
+      "UNRELATED",
+      "utf8",
+    );
+
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Demo skill",
+      filePath: nodePath.join(unrelatedRoot, "SKILL.md"),
+      hostFilePath: nodePath.join(hostRoot, "SKILL.md"),
+    });
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Demo</description>",
+        `    <location>${nodePath.join(unrelatedRoot, "SKILL.md")}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo],
+    });
+
+    expect(codeModeSkills[0]?.source.filePath).toBe(nodePath.join(hostRoot, "SKILL.md"));
+    await expect(
+      readCodeModeSkill(codeModeSkills[0]!, undefined, "modules/during-dining.md"),
+    ).resolves.toBe("HOST_OK");
+    await fs.rm(tmpParent, { recursive: true, force: true });
   });
 
   it("does not advertise companion reads when every selected skill is node-hosted", () => {

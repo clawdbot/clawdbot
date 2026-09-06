@@ -120,6 +120,51 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ]);
   });
 
+  it("preserves the materialized host path for sandboxed library companions", () => {
+    const librarySnapshot: SkillSnapshot = {
+      ...snapshot,
+      librarySelections: [
+        {
+          skillId: "00000000-0000-4000-8000-000000000001",
+          revision: "a".repeat(64),
+          name: "demo",
+          ownerProfileId: null,
+        },
+      ],
+    };
+    const result = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsEligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: () => true,
+            hasAnyBin: () => true,
+            note: "sandbox",
+          },
+        },
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        workspaceAccess: "rw",
+        skillUsagePaths: [
+          {
+            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+            skillFile: hostSkillPath,
+            skillName: "demo",
+            skillSource: "bundled",
+          },
+        ],
+      },
+      skillsAnchorWorkspace: "/workspace",
+      skillsSnapshot: librarySnapshot,
+    });
+
+    expect(result.skillsSnapshot?.resolvedSkills?.[0]).toMatchObject({
+      filePath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      hostFilePath: hostSkillPath,
+    });
+  });
+
   it.each([
     { label: "rebuilds sandbox prompts from materialized skill paths", skillsSnapshot: snapshot },
     {
