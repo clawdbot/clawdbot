@@ -650,6 +650,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["update.report", "update", "operator.admin", "2026.9", { controlPlaneWrite: true }],
   ["skills.workshop.read", "skills", "operator.read", "2026.9"],
+  ["transcripts.export", "transcripts", "operator.read", "2026.9"],
+  ["transcripts.status", "transcripts", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

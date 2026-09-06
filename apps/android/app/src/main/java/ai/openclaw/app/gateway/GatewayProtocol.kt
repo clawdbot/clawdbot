@@ -923,6 +923,8 @@ enum class GatewayMethod(
   GatewaySuspendHandoff("gateway.suspend.handoff"),
   UpdateReport("update.report"),
   SkillsWorkshopRead("skills.workshop.read"),
+  TranscriptsExport("transcripts.export"),
+  TranscriptsStatus("transcripts.status"),
 }
 
 enum class GatewayEvent(

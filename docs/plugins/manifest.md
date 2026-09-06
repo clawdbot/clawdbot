@@ -174,6 +174,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](#dashboard-reference).                                                                                                                                                                              |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](#mcp-server-reference).                                                                                                   |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                                                                                                                       |
+| `transcriptSources`                  | No       | `Record<string, object>`     | Static transcript source names and auto-start locator requirements for IDs declared in `contracts.transcriptSourceProviders`. See [Transcript sources reference](#transcript-sources-reference).                                                                                                                                                                                                 |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](#configcontracts-reference).                                                                                                                                                                           |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`     | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                                                                                                                                                                                         |
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
@@ -249,6 +250,40 @@ distributed separately. This lets `doctor --fix` migrate older configuration
 before plugin installation or capability consent. An installed plugin's doctor
 contract remains authoritative; retained entrypoints do not expose state
 migrations, install plugins, or grant capabilities.
+
+## Transcript sources reference
+
+`transcriptSources` maps provider IDs to static setup descriptors. Each key must
+also appear in this plugin's `contracts.transcriptSourceProviders`; descriptors
+for undeclared IDs are ignored. Names and setup controls are available from the
+prepared manifest snapshot without importing provider runtime.
+
+```json
+{
+  "contracts": { "transcriptSourceProviders": ["captions"] },
+  "transcriptSources": {
+    "captions": {
+      "name": "Captions",
+      "autoStart": { "accountId": "optional", "meetingUrl": "required" }
+    }
+  }
+}
+```
+
+`name` is an optional display name. `autoStart` advertises setup controls to
+Gateway clients through `transcripts.status`. Its only keys are `accountId`,
+`guildId`, `channelId`, and `meetingUrl`; each value must be `"required"` or
+`"optional"`. An explicit empty object supports setup without locator controls.
+Omit `autoStart` for sources that only attach to an already-active meeting bot.
+Malformed objects, unknown locator keys, or invalid modes do not advertise
+partial setup. Title and custom session ID remain existing configuration fields, not locator
+descriptor keys.
+
+Setup requires an enabled plugin. Runtime capabilities remain observed facts:
+an absent `canStart` does not hide the manifest descriptor, while an observed
+`canStart: false` prevents new setup. The descriptor does not change acceptance
+of existing `transcripts.autoStart` config or provider start semantics. Existing
+source edits preserve configured fields when metadata is unavailable.
 
 ## backupResources reference
 

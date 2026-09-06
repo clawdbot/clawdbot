@@ -15,6 +15,10 @@ const meeting: TranscriptSessionSummary = {
   startedAt: "2026-08-12T17:00:00Z",
   stoppedAt: "2026-08-12T17:45:00Z",
   active: false,
+  activeSubscription: false,
+  agentId: "main",
+  updatedAt: "2026-08-12T17:45:00Z",
+  lastUtteranceAt: "2026-08-12T17:44:00Z",
   utteranceCount: 42,
   participants: ["Ada", "Sam", "Jo", "Alex"],
   hasSummary: true,
@@ -23,6 +27,7 @@ const meeting: TranscriptSessionSummary = {
 };
 const detail: TranscriptsGetResult = {
   session: meeting,
+  nextCursor: null,
   summary: {
     generatedAt: "2026-08-12T17:45:00Z",
     overview: meeting.overview!,
@@ -30,6 +35,7 @@ const detail: TranscriptsGetResult = {
     actionItems: [],
     risks: [],
     participants: meeting.participants,
+    utteranceCount: meeting.utteranceCount,
     source: "model",
     markdown:
       "# Design review\n\n## Overview\nAgreed on a simpler onboarding flow and a focused launch checklist.\n\n## Participants\n- Ada\n- Sam\n- Jo\n- Alex\n\n## Decisions\n- Keep the first-run setup to three steps.\n- Ship the accessible navigation before launch.\n\n## Action Items\n- Ada: prepare the revised prototype.\n- Sam: review keyboard navigation.\n\n## Risks\n- Leave time for mobile testing.\n\n## Transcript\n- Ada: Let's keep the setup simple.",
@@ -44,6 +50,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "transcripts.list": {
+              nextCursor: null,
               sessions: [
                 meeting,
                 {
@@ -135,7 +142,7 @@ suite.define(() => {
   it("shows an actionable empty state and refreshes without hiding errors", async () => {
     await suite.withPage({ viewport: { width: 1200, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        methodResponses: { "transcripts.list": { sessions: [] } },
+        methodResponses: { "transcripts.list": { sessions: [], nextCursor: null } },
       });
       await page.goto(`${suite.server.baseUrl}meetings`);
       const view = page.locator("openclaw-meetings-page");
