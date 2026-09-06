@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { TalkSchema } from "../../config/zod-schema.root-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -271,6 +272,16 @@ function createTalkConfig(apiKey: unknown): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
+}
+
+function createRealtimeTalkConfig(
+  realtime: TalkRealtimeConfig | undefined,
+  legacy?: Pick<TalkRealtimeConfig, "provider" | "providers">,
+): OpenClawConfig {
+  return {
+    ...(realtime ? { talk: { realtime } } : {}),
+    ...(legacy ? { plugins: { entries: { "voice-call": { config: { realtime: legacy } } } } } : {}),
+  };
 }
 
 type TalkHandlerCallOptions = {
@@ -1300,19 +1311,12 @@ describe("talk.config handler", () => {
   });
 
   it("projects inactive legacy auth without locking the active Auto Talk provider", async () => {
-    const config: OpenClawConfig = {
-      talk: { realtime: { provider: "openai", providers: { openai: {} } } },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: { realtime: { providers: { google: { authMethod: "api-key" } } } },
-          },
-        },
-      },
-    };
+    const config = createRealtimeTalkConfig(
+      { provider: "openai", providers: { openai: {} } },
+      { providers: { google: { authMethod: "api-key" } } },
+    );
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
     mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, config });
-    // This is a valid legacy provider-owned row, not a conflicting Talk-local selection.
     expect(buildTalkRealtimeConfig(config, "google").provider).toBe("google");
     const respond = vi.fn();
     await callTalkHandler("talk.config", {
@@ -1322,18 +1326,20 @@ describe("talk.config handler", () => {
       context: { getRuntimeConfig: () => config },
     });
     expect(expectRespondOk(respond)).toEqual({
-      config: {
-        talk: {
-          realtime: {
-            provider: "openai",
-            providers: { google: { authMethod: "api-key" }, openai: {} },
-          },
-        },
-      },
+      config: createRealtimeTalkConfig({
+        provider: "openai",
+        providers: { google: { authMethod: "api-key" }, openai: {} },
+      }),
     });
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    selected?: string;
+    requested?: string;
+    reverse: boolean;
+    expected: Record<string, unknown>;
+  }>([
     { name: "canonical with alias last", selected: "xai", reverse: false, expected: {} },
     { name: "canonical with alias first", selected: "xai", reverse: true, expected: {} },
     {
@@ -1366,93 +1372,66 @@ describe("talk.config handler", () => {
       reverse: true,
       expected: { authMethod: "api-key", voice: "selected-alias" },
     },
-  ] satisfies Array<{
-    name: string;
-    selected?: string;
-    requested?: string;
-    reverse: boolean;
-    expected: Record<string, unknown>;
-  }>)("projects runtime raw-config precedence: $name", async (row) => {
-    const provider = { id: "xai", aliases: ["xai-realtime-voice", "grok-voice"] };
-    const entries: Array<[string, Record<string, unknown>]> = [
-      ["xai", {}],
-      [" XAI ", { ignoredUnselectedField: true }],
-      ["xai-realtime-voice", { authMethod: "api-key", voice: "preferred-alias" }],
-      ["grok-voice", { authMethod: "api-key", voice: "selected-alias" }],
-    ];
-    const selected = "selected" in row ? row.selected : undefined;
-    const requested = "requested" in row ? row.requested : undefined;
-    const config: OpenClawConfig = {
-      talk: { realtime: selected ? { provider: selected } : {} },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              realtime: {
-                providers: Object.fromEntries(row.reverse ? entries.toReversed() : entries),
-              },
-            },
-          },
-        },
-      },
-    };
-    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
-    mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, config });
-    const runtime = buildTalkRealtimeConfig(config, requested);
-    expect(
-      resolveProviderRawConfig({
-        providerId: provider.id,
-        providerAliases: provider.aliases,
-        configuredProviderId: runtime.provider,
-        providerConfigs: runtime.providers,
-      }),
-    ).toEqual(row.expected);
-    const respond = vi.fn();
-    await mocks.canonicalizeRealtimeVoiceProviderId.withImplementation(
-      (id) => {
-        const normalized = id?.trim().toLowerCase();
-        return normalized && provider.aliases.includes(normalized) ? provider.id : normalized;
-      },
-      () =>
-        callTalkHandler("talk.config", {
-          params: requested ? { realtimeProvider: requested } : {},
-          client: { connect: { scopes: ["operator.read"] } },
-          respond,
-          context: { getRuntimeConfig: () => config },
+  ])(
+    "projects runtime raw-config precedence: $name",
+    async ({ selected, requested, reverse, expected }) => {
+      const provider = { id: "xai", aliases: ["xai-realtime-voice", "grok-voice"] };
+      const entries: Array<[string, Record<string, unknown>]> = [
+        ["xai", {}],
+        [" XAI ", { ignoredUnselectedField: true }],
+        ["xai-realtime-voice", { authMethod: "api-key", voice: "preferred-alias" }],
+        ["grok-voice", { authMethod: "api-key", voice: "selected-alias" }],
+      ];
+      const config = createRealtimeTalkConfig(selected ? { provider: selected } : {}, {
+        providers: Object.fromEntries(reverse ? entries.toReversed() : entries),
+      });
+      mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+      mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, config });
+      const runtime = buildTalkRealtimeConfig(config, requested);
+      expect(
+        resolveProviderRawConfig({
+          providerId: provider.id,
+          providerAliases: provider.aliases,
+          configuredProviderId: runtime.provider,
+          providerConfigs: runtime.providers,
         }),
-    );
-    const result = expectRespondOk(respond) as {
-      config: {
-        talk: {
-          realtime: {
-            provider?: string;
-            providers: Record<string, unknown>;
+      ).toEqual(expected);
+      const respond = vi.fn();
+      await mocks.canonicalizeRealtimeVoiceProviderId.withImplementation(
+        (id) => {
+          const normalized = id?.trim().toLowerCase();
+          return normalized && provider.aliases.includes(normalized) ? provider.id : normalized;
+        },
+        () =>
+          callTalkHandler("talk.config", {
+            params: requested ? { realtimeProvider: requested } : {},
+            client: { connect: { scopes: ["operator.read"] } },
+            respond,
+            context: { getRuntimeConfig: () => config },
+          }),
+      );
+      const result = expectRespondOk(respond) as {
+        config: {
+          talk: {
+            realtime: {
+              provider?: string;
+              providers: Record<string, unknown>;
+            };
           };
         };
       };
-    };
-    expect(result.config.talk.realtime.provider).toBe(selected || requested ? "xai" : undefined);
-    expect(result.config.talk.realtime.providers).toEqual({ xai: row.expected });
-  });
+      expect(result.config.talk.realtime.provider).toBe(selected || requested ? "xai" : undefined);
+      expect(result.config.talk.realtime.providers).toEqual({ xai: expected });
+    },
+  );
 
   it.each([false, true])(
     "preserves selected legacy auth with same-key Talk replacement=%s",
     async (replace) => {
-      const config: OpenClawConfig = {
-        ...(replace ? { talk: { realtime: { providers: { openai: {} } } } } : {}),
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                realtime: {
-                  provider: "openai",
-                  providers: { openai: { authMethod: "api-key" } },
-                },
-              },
-            },
-          },
-        },
-      };
+      const config = createRealtimeTalkConfig(replace ? { providers: { openai: {} } } : undefined, {
+        provider: "openai",
+        providers: { openai: { authMethod: "api-key" } },
+      });
       mocks.listRealtimeVoiceProviders.mockReturnValue([]);
       mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, config });
       const respond = vi.fn();
@@ -1463,14 +1442,10 @@ describe("talk.config handler", () => {
         context: { getRuntimeConfig: () => config },
       });
       expect(expectRespondOk(respond)).toEqual({
-        config: {
-          talk: {
-            realtime: {
-              provider: "openai",
-              providers: { openai: replace ? {} : { authMethod: "api-key" } },
-            },
-          },
-        },
+        config: createRealtimeTalkConfig({
+          provider: "openai",
+          providers: { openai: replace ? {} : { authMethod: "api-key" } },
+        }),
       });
     },
   );
@@ -1478,36 +1453,25 @@ describe("talk.config handler", () => {
   it.each(["openai", "openai-realtime", "google"])(
     "keeps a strict selected alias and source SecretRef for per-call %s",
     async (requested) => {
-      const sourceConfig: OpenClawConfig = {
-        talk: {
-          realtime: {
-            provider: "openai-realtime",
-            providers: {
-              openai: { speakerVoice: "canonical" },
-              "openai-realtime": {
-                authMethod: "api-key",
-                speakerVoice: "selected-alias",
-                apiKey: { source: "env", provider: "default", id: "FIXTURE_REALTIME_KEY" },
-              },
-            },
+      const aliasConfig = { authMethod: "api-key", speakerVoice: "selected-alias" };
+      const sourceRealtime: TalkRealtimeConfig = {
+        provider: "openai-realtime",
+        providers: {
+          openai: { speakerVoice: "canonical" },
+          "openai-realtime": {
+            ...aliasConfig,
+            apiKey: { source: "env", provider: "default", id: "FIXTURE_REALTIME_KEY" },
           },
         },
       };
-      const runtimeConfig: OpenClawConfig = {
-        talk: {
-          realtime: {
-            ...sourceConfig.talk!.realtime,
-            providers: {
-              ...sourceConfig.talk!.realtime!.providers,
-              "openai-realtime": {
-                authMethod: "api-key",
-                speakerVoice: "selected-alias",
-                apiKey: "fixture-materialized-not-a-credential",
-              },
-            },
-          },
+      const sourceConfig = createRealtimeTalkConfig(sourceRealtime);
+      const runtimeConfig = createRealtimeTalkConfig({
+        ...sourceRealtime,
+        providers: {
+          ...sourceRealtime.providers,
+          "openai-realtime": { ...aliasConfig, apiKey: "fixture-materialized-not-a-credential" },
         },
-      };
+      });
       expect(TalkSchema.safeParse(sourceConfig.talk).success).toBe(true);
       expect(TalkSchema.safeParse(runtimeConfig.talk).success).toBe(true);
       mocks.listRealtimeVoiceProviders.mockReturnValue([
@@ -3523,22 +3487,16 @@ describe("talk.client.create handler", () => {
           respond,
           context: {
             getRuntimeConfig: () =>
-              ({
-                talk: {
-                  realtime: {
-                    provider: "openai",
-                    // The lock exists only for an explicit strict auth selection; legacy
-                    // Auto keeps per-call overrides and is covered by the Auto tests.
-                    providers: {
-                      openai: {
-                        authMethod: "api-key",
-                        ...(location === "provider" ? { model } : {}),
-                      },
-                    },
-                    ...(location === "top" ? { model } : {}),
+              createRealtimeTalkConfig({
+                provider: "openai",
+                providers: {
+                  openai: {
+                    authMethod: "api-key",
+                    ...(location === "provider" ? { model } : {}),
                   },
                 },
-              }) as OpenClawConfig,
+                ...(location === "top" ? { model } : {}),
+              }),
           },
         });
         expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -3575,21 +3533,15 @@ describe("talk.client.create handler", () => {
   });
 
   it("preserves deliberate per-call overrides for legacy Auto while saved defaults stay the fallback", () => {
-    const config = {
-      talk: {
-        realtime: {
-          provider: "openai",
-          model: "gpt-realtime-2.1",
-          providers: { openai: { apiKey: "***" } },
-        },
-      },
-    } as OpenClawConfig;
-    // Auto: per-call provider/model requests are accepted instead of rejected.
+    const config = createRealtimeTalkConfig({
+      provider: "openai",
+      model: "gpt-realtime-2.1",
+      providers: { openai: { apiKey: "***" } },
+    });
     expect(buildTalkRealtimeConfig(config, "openai", "gpt-realtime-2.2").model).toBe(
       "gpt-realtime-2.1",
     );
     expect(buildTalkRealtimeConfig(config).model).toBe("gpt-realtime-2.1");
-    // Fresh/upgrade config without strict auth never locks.
     expect(
       buildTalkRealtimeConfig(
         { talk: { realtime: {} } } as OpenClawConfig,
@@ -3600,15 +3552,11 @@ describe("talk.client.create handler", () => {
   });
 
   it("locks per-call provider/model identity only for an explicit strict auth selection", () => {
-    const config = {
-      talk: {
-        realtime: {
-          provider: "openai",
-          model: "gpt-realtime-2.1",
-          providers: { openai: { apiKey: "***", authMethod: "api-key" } },
-        },
-      },
-    } as OpenClawConfig;
+    const config = createRealtimeTalkConfig({
+      provider: "openai",
+      model: "gpt-realtime-2.1",
+      providers: { openai: { apiKey: "***", authMethod: "api-key" } },
+    });
     expect(() => buildTalkRealtimeConfig(config, "openai", "other-model")).toThrow(
       "Talk model is selected on the Gateway",
     );
@@ -3637,26 +3585,22 @@ describe("talk.client.create handler", () => {
       "Talk provider is selected on the Gateway",
     );
     expect(() =>
-      buildTalkRealtimeConfig({
-        talk: {
-          realtime: {
-            providers: {
-              openai: { authMethod: "oauth" },
-              other: { authMethod: "api-key" },
-            },
+      buildTalkRealtimeConfig(
+        createRealtimeTalkConfig({
+          providers: {
+            openai: { authMethod: "oauth" },
+            other: { authMethod: "api-key" },
           },
-        },
-      } as OpenClawConfig),
+        }),
+      ),
     ).toThrow("Talk strict authentication requires one selected provider");
     expect(() =>
-      buildTalkRealtimeConfig({
-        talk: {
-          realtime: {
-            provider: "other",
-            providers: { openai: { authMethod: "oauth" } },
-          },
-        },
-      } as OpenClawConfig),
+      buildTalkRealtimeConfig(
+        createRealtimeTalkConfig({
+          provider: "other",
+          providers: { openai: { authMethod: "oauth" } },
+        }),
+      ),
     ).toThrow("Talk strict authentication conflicts with the selected provider");
   });
 
@@ -3690,23 +3634,15 @@ describe("talk.client.create handler", () => {
       ...(row.agentModel
         ? { agents: { defaults: { voiceModel: { primary: "acme/" + row.agentModel } } } }
         : {}),
-      talk: {
-        realtime: {
+      ...createRealtimeTalkConfig(
+        {
           providers: {
             [key]: { authMethod: "api-key", ...(row.localModel ? { model: row.localModel } : {}) },
           },
           ...(row.topModel ? { model: row.topModel } : {}),
         },
-      },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              realtime: { providers: { [row.legacyId ?? "acme"]: { model: "legacy-model" } } },
-            },
-          },
-        },
-      },
+        { providers: { [row.legacyId ?? "acme"]: { model: "legacy-model" } } },
+      ),
     };
     const createBrowserSession = vi.fn(async (input: { model?: string }) => ({
       provider: "acme",
@@ -3813,14 +3749,10 @@ describe("talk.client.create handler", () => {
         ["fixture-voice", { authMethod: "api-key", model: "canonical-model" }],
         ["fixture-voice-alias", { authMethod: "api-key", model: "alias-model" }],
       ] as const;
-      const config: OpenClawConfig = {
-        talk: {
-          realtime: {
-            provider: saved,
-            providers: Object.fromEntries(reverse ? entries.toReversed() : entries),
-          },
-        },
-      };
+      const config = createRealtimeTalkConfig({
+        provider: saved,
+        providers: Object.fromEntries(reverse ? entries.toReversed() : entries),
+      });
       expect(TalkSchema.safeParse(config.talk).success).toBe(true);
       const selected = saved.trim().toLowerCase();
       const model = selected === "fixture-voice" ? "canonical-model" : "alias-model";
@@ -3857,20 +3789,16 @@ describe("talk.client.create handler", () => {
           isConfigured: () => true,
         },
       ] as never);
-      const config: OpenClawConfig = {
-        talk: {
-          realtime: {
-            provider: conflict === "selected row has no auth" ? "selected-alias" : "fixture-voice",
-            providers: {
-              "fixture-voice": { authMethod: "api-key" },
-              "fixture-voice-alias": {
-                authMethod: conflict === "different auth methods" ? "oauth" : "api-key",
-              },
-              "selected-alias": {},
-            },
+      const config = createRealtimeTalkConfig({
+        provider: conflict === "selected row has no auth" ? "selected-alias" : "fixture-voice",
+        providers: {
+          "fixture-voice": { authMethod: "api-key" },
+          "fixture-voice-alias": {
+            authMethod: conflict === "different auth methods" ? "oauth" : "api-key",
           },
+          "selected-alias": {},
         },
-      };
+      });
       expect(TalkSchema.safeParse(config.talk).success).toBe(true);
       expect(() => buildTalkRealtimeConfig(config)).toThrow("Talk strict authentication");
     },
@@ -3893,14 +3821,10 @@ describe("talk.client.create handler", () => {
           [selected, { model: "selected-model" }],
           [other, { authMethod: "api-key", model: "strict-model" }],
         ] as const;
-        const config: OpenClawConfig = {
-          talk: {
-            realtime: {
-              provider: selected,
-              providers: Object.fromEntries(reverse ? entries.toReversed() : entries),
-            },
-          },
-        };
+        const config = createRealtimeTalkConfig({
+          provider: selected,
+          providers: Object.fromEntries(reverse ? entries.toReversed() : entries),
+        });
         expect(TalkSchema.safeParse(config.talk).success).toBe(true);
         for (const requested of [undefined, selected, other]) {
           expect(() => buildTalkRealtimeConfig(config, requested)).toThrow(
@@ -3920,13 +3844,9 @@ describe("talk.client.create handler", () => {
         isConfigured: () => true,
       },
     ] as never);
-    const config: OpenClawConfig = {
-      talk: {
-        realtime: {
-          providers: { "fixture-voice": { authMethod: "api-key", model: "strict-model" } },
-        },
-      },
-    };
+    const config = createRealtimeTalkConfig({
+      providers: { "fixture-voice": { authMethod: "api-key", model: "strict-model" } },
+    });
     expect(TalkSchema.safeParse(config.talk).success).toBe(true);
     expect(buildTalkRealtimeConfig(config)).toMatchObject({
       provider: "fixture-voice",

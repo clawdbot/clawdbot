@@ -83,15 +83,8 @@ class TalkRealtimeClientLifecycleTest {
         try {
           // The existing JNI tests cover held callbacks. Accept speech first, then
           // join actual physical retirement without advancing the virtual RPC clock.
-          val peer =
-            client.javaClass
-              .getDeclaredField("peer")
-              .apply { isAccessible = true }
-              .get(client) as TalkRealtimePeer
-          client.javaClass
-            .getDeclaredField("voiceSessionId")
-            .apply { isAccessible = true }
-            .set(client, "voice-drain")
+          val peer = realtimeTestField(client, "peer").get(client) as TalkRealtimePeer
+          realtimeTestField(client, "voiceSessionId").set(client, "voice-drain")
           val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
           for (index in 1..4) {
             val previous = if (index == 1) "null" else "\"u${index - 1}\""

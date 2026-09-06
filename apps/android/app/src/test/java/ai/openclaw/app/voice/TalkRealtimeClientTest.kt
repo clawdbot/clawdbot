@@ -30,6 +30,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.lang.reflect.Field
 import java.util.concurrent.locks.Condition
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -47,11 +48,7 @@ class TalkRealtimeClientTest {
       val lease = GatewaySession.RequestLease("fixture", requestImpl = { _, _, _, _ -> "{}" })
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, {}, { selected }, { requests.add(it) })
       try {
-        val peer =
-          client.javaClass
-            .getDeclaredField("peer")
-            .apply { isAccessible = true }
-            .get(client)
+        val peer = realtimeTestField(client, "peer").get(client)
         val readPreference =
           peer.javaClass
             .getDeclaredField("preferredAudioInputDevice")
@@ -76,11 +73,7 @@ class TalkRealtimeClientTest {
       val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
       event.invoke(client, """{"type":"turn.done","turn":{"id":"provider:item/ü","role":"user","transcript":"hello"}}""")
       @Suppress("UNCHECKED_CAST")
-      val finals =
-        client.javaClass
-          .getDeclaredField("finalTranscripts")
-          .apply { isAccessible = true }
-          .get(client) as Set<String>
+      val finals = realtimeTestField(client, "finalTranscripts").get(client) as Set<String>
       assertTrue("user:native-1" in finals)
       assertFalse(finals.any { "provider:item" in it })
       client.close()
@@ -99,10 +92,7 @@ class TalkRealtimeClientTest {
         })
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, {})
       try {
-        client.javaClass
-          .getDeclaredField("voiceSessionId")
-          .apply { isAccessible = true }
-          .set(client, "voice-fixture")
+        realtimeTestField(client, "voiceSessionId").set(client, "voice-fixture")
         val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
         event.invoke(client, """{"type":"input_audio_buffer.committed","item_id":"u1","previous_item_id":null}""")
         event.invoke(client, """{"type":"conversation.item.created","previous_item_id":"u1","item":{"id":"a1","type":"message","role":"assistant","content":[{"type":"audio"}]}}""")
@@ -138,10 +128,7 @@ class TalkRealtimeClientTest {
         })
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, {})
       try {
-        client.javaClass
-          .getDeclaredField("voiceSessionId")
-          .apply { isAccessible = true }
-          .set(client, "voice-fixture")
+        realtimeTestField(client, "voiceSessionId").set(client, "voice-fixture")
         val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
         for (payload in fixture.getValue("events").jsonArray) event.invoke(client, payload.toString())
         runCurrent()
@@ -176,10 +163,7 @@ class TalkRealtimeClientTest {
           }
         })
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, { failures.add(it) })
-      client.javaClass
-        .getDeclaredField("voiceSessionId")
-        .apply { isAccessible = true }
-        .set(client, "voice-fixture")
+      realtimeTestField(client, "voiceSessionId").set(client, "voice-fixture")
       val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
       event.invoke(client, """{"type":"input_audio_buffer.committed","item_id":"u1","previous_item_id":null}""")
       event.invoke(client, """{"type":"conversation.item.input_audio_transcription.completed","item_id":"u1","transcript":"question"}""")
@@ -273,14 +257,8 @@ class TalkRealtimeClientTest {
         client.setCaptureEnabled(true)
         assertEquals(listOf("Connecting"), states)
         // Resume behavior is isolated from allocation; seed the paired ready facts.
-        client.javaClass
-          .getDeclaredField("started")
-          .apply { isAccessible = true }
-          .setBoolean(client, true)
-        client.javaClass
-          .getDeclaredField("snapshot")
-          .apply { isAccessible = true }
-          .set(client, TalkRealtimeSnapshot("example", "synthetic-model", "api-key", "voice", "webrtc"))
+        realtimeTestField(client, "started").setBoolean(client, true)
+        realtimeTestField(client, "snapshot").set(client, TalkRealtimeSnapshot("example", "synthetic-model", "api-key", "voice", "webrtc"))
         val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
         for ((payload, expected) in listOf(
           """{"type":"response.created","response":{"id":"response"}}""" to "Thinking",
@@ -313,20 +291,13 @@ class TalkRealtimeClientTest {
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", { states.add(it) }, { _, _, _ -> }, { failures.add(it) })
       try {
         val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
-        val state =
-          client.javaClass
-            .getDeclaredField("responseState")
-            .apply { isAccessible = true }
-            .get(client) as TalkRealtimeResponseState
+        val state = realtimeTestField(client, "responseState").get(client) as TalkRealtimeResponseState
         state.requesting("create-event")
         event.invoke(client, """{"type":"error","event_id":"evt-1","error":{"type":"invalid_request_error","message":"recoverable","event_id":"create-event"}}""")
         event.invoke(client, """{"type":"conversation.item.input_audio_transcription.failed","event_id":"evt-2"}""")
         assertTrue(failures.isEmpty())
         assertFalse(
-          client.javaClass
-            .getDeclaredField("closed")
-            .apply { isAccessible = true }
-            .getBoolean(client),
+          realtimeTestField(client, "closed").getBoolean(client),
         )
         assertEquals("Listening", states.last())
         assertFalse(state.createInFlight)
@@ -354,10 +325,7 @@ class TalkRealtimeClientTest {
             event.invoke(client, """{"type":"response.done","response":{"id":"automatic-response","status":"$status","output":[]}}""")
             assertEquals(listOf("Realtime response failed or incomplete"), failures)
             assertTrue(
-              client.javaClass
-                .getDeclaredField("closed")
-                .apply { isAccessible = true }
-                .getBoolean(client),
+              realtimeTestField(client, "closed").getBoolean(client),
             )
             runCurrent()
           } finally {
@@ -378,11 +346,7 @@ class TalkRealtimeClientTest {
       try {
         val event = client.javaClass.getDeclaredMethod("handleProviderEvent", String::class.java).apply { isAccessible = true }
         event.invoke(client, """{"type":"input_audio_buffer.speech_stopped"}""")
-        val state =
-          client.javaClass
-            .getDeclaredField("responseState")
-            .apply { isAccessible = true }
-            .get(client) as TalkRealtimeResponseState
+        val state = realtimeTestField(client, "responseState").get(client) as TalkRealtimeResponseState
         assertTrue(state.createInFlight)
         assertNull(state.cancel())
         // A client event without its own event_id produces an uncorrelated error.
@@ -447,26 +411,11 @@ class TalkRealtimeClientTest {
           "{}"
         })
       val client = TalkRealtimeClient(RuntimeEnvironment.getApplication(), this, lease, "main", {}, { _, _, _ -> }, {})
-      client.javaClass
-        .getDeclaredField("voiceSessionId")
-        .apply { isAccessible = true }
-        .set(client, "voice-retirement")
-      val peer =
-        client.javaClass
-          .getDeclaredField("peer")
-          .apply { isAccessible = true }
-          .get(client) as TalkRealtimePeer
-      val callbackLock =
-        peer.javaClass
-          .getDeclaredField("callbackLock")
-          .apply { isAccessible = true }
-          .get(peer) as ReentrantLock
-      val callbacksDrained =
-        peer.javaClass
-          .getDeclaredField("callbacksDrained")
-          .apply { isAccessible = true }
-          .get(peer) as Condition
-      val callbacksInFlight = peer.javaClass.getDeclaredField("callbacksInFlight").apply { isAccessible = true }
+      realtimeTestField(client, "voiceSessionId").set(client, "voice-retirement")
+      val peer = realtimeTestField(client, "peer").get(client) as TalkRealtimePeer
+      val callbackLock = realtimeTestField(peer, "callbackLock").get(peer) as ReentrantLock
+      val callbacksDrained = realtimeTestField(peer, "callbacksDrained").get(peer) as Condition
+      val callbacksInFlight = realtimeTestField(peer, "callbacksInFlight")
       // Hold the real JNI callback-drain boundary without loading native WebRTC.
       callbackLock.withLock { callbacksInFlight.setInt(peer, 1) }
       val first = async { client.close() }
@@ -542,3 +491,8 @@ class TalkRealtimeClientTest {
       }
     }
 }
+
+internal fun realtimeTestField(
+  target: Any,
+  name: String,
+): Field = target.javaClass.getDeclaredField(name).apply { isAccessible = true }

@@ -64,21 +64,13 @@ class TalkRealtimePeerAudioTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
       val failures = mutableListOf<String>()
       val peer = TalkRealtimePeer(RuntimeEnvironment.getApplication(), this, {}, { failures.add(it) })
-      val record =
-        peer.javaClass
-          .getDeclaredField("audioRecordErrors")
-          .apply { isAccessible = true }
-          .get(peer) as AudioRecordErrorCallback
+      val record = realtimeTestField(peer, "audioRecordErrors").get(peer) as AudioRecordErrorCallback
       record.onWebRtcAudioRecordInitError("redacted")
       runCurrent()
       assertEquals(listOf("Realtime microphone initialization failed"), failures)
       peer.close()
       val trackPeer = TalkRealtimePeer(RuntimeEnvironment.getApplication(), this, {}, { failures.add(it) })
-      val track =
-        trackPeer.javaClass
-          .getDeclaredField("audioTrackErrors")
-          .apply { isAccessible = true }
-          .get(trackPeer) as AudioTrackErrorCallback
+      val track = realtimeTestField(trackPeer, "audioTrackErrors").get(trackPeer) as AudioTrackErrorCallback
       track.onWebRtcAudioTrackError("redacted")
       runCurrent()
       assertEquals("Realtime speaker failed", failures.last())
@@ -94,11 +86,7 @@ class TalkRealtimePeerAudioTest {
       val peer = TalkRealtimePeer(RuntimeEnvironment.getApplication(), this, { received += it }, {})
       try {
         @Suppress("UNCHECKED_CAST")
-        val events =
-          peer.javaClass
-            .getDeclaredField("events")
-            .apply { isAccessible = true }
-            .get(peer) as Channel<String>
+        val events = realtimeTestField(peer, "events").get(peer) as Channel<String>
         assertTrue(events.trySend("accepted-before-close").isSuccess)
         val closing = launch { peer.close() }
         runCurrent()
