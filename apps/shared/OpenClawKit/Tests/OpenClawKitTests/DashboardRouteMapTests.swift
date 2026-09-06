@@ -7,9 +7,7 @@ struct DashboardRouteMapTests {
         #expect(DashboardRouteMap.settingsPath == "/settings")
         #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
         #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
-        #expect(DashboardRouteMap.updatesSettingsPath == "/settings/updates")
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
-        #expect(DashboardRouteMap.talkSettingsPath == "/settings/talk")
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
         #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
@@ -17,7 +15,7 @@ struct DashboardRouteMapTests {
     }
 
     @Test(arguments: [
-        DashboardRouteMap.channelsSettingsPath, DashboardRouteMap.talkSettingsPath,
+        DashboardRouteMap.channelsSettingsPath,
         DashboardRouteMap.skillsPagePath, DashboardRouteMap.cronJobsPagePath,
         DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
         DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
@@ -52,7 +50,6 @@ struct DashboardRouteMapTests {
         DashboardRouteMap.settingsPath,
         DashboardRouteMap.deviceSettingsPath,
         DashboardRouteMap.devicePermissionsSettingsPath,
-        DashboardRouteMap.updatesSettingsPath,
         DashboardRouteMap.activityPagePath,
         DashboardRouteMap.workboardPagePath,
         DashboardRouteMap.skillWorkshopPagePath,
