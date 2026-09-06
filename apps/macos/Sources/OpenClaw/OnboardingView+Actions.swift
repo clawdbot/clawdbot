@@ -79,10 +79,6 @@ extension OnboardingView {
         return local == persisted ? local : persisted
     }
 
-    func openSettings(tab: SettingsTab) {
-        AppNavigationActions.openSettings(tab: tab)
-    }
-
     func handleBack() {
         withAnimation {
             self.currentPage = max(0, self.currentPage - 1)

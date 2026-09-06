@@ -192,6 +192,10 @@ self-hosted endpoint with `models: []` remains eligible for discovery;
 `models.providers.ollama.apiKey` alone does not select that provider for Gateway
 model browsing.
 
+Failed discovery records an unavailable or catalog-authentication failure and
+keeps the last successful inventory for the same endpoint and credentials. A
+successful empty response clears discovered models. Manual models stay separate.
+
 Hosted `https://ollama.com` entries skip discovery because Ollama Cloud models
 are provider-managed. Without an explicit Ollama endpoint, a custom provider
 with `api: "ollama"` and a non-loopback `baseUrl` suppresses ambient localhost

@@ -371,12 +371,13 @@ describe("session transcript tree helpers", () => {
       { type: "custom", id: "visible", parentId: null },
       { type: "custom", id: "inactive", parentId: null },
       { type: "metadata", id: "append-metadata", parentId: "inactive" },
+      { type: "metadata", id: "append-tail", parentId: "append-metadata" },
       {
         type: "leaf",
         id: "active-leaf",
         parentId: "inactive",
         targetId: "visible",
-        appendParentId: "append-metadata",
+        appendParentId: "append-tail",
       },
     ];
     const tree = scanSessionTranscriptTree(entries);
@@ -389,8 +390,9 @@ describe("session transcript tree helpers", () => {
     expect(merged.nodes.map((node) => [node.id, node.selectedParentId])).toEqual([
       ["visible", null],
       ["append-metadata", "visible"],
+      ["append-tail", "append-metadata"],
     ]);
-    expect(merged.appendParentId).toBe("append-metadata");
+    expect(merged.appendParentId).toBe("append-tail");
   });
 
   it("ignores leaf controls with dangling references", () => {

@@ -48,14 +48,14 @@ export function coordinateWorkerPlacementDispatch(
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
 } {
-  type PlacementFence = { promise: Promise<void> };
+  type PlacementFence = { promise: Promise<void>; dispatchCohort: readonly symbol[] };
   type ReconciliationSweep = PlacementFence & {
     predecessor: PlacementFence | undefined;
     full: boolean;
     acceptingJoins: boolean;
     joinedRecoveries: Set<Promise<void>>;
   };
-  let activeDispatchCount = 0;
+  const activeDispatches = new Set<symbol>();
   let placementFence: PlacementFence | undefined;
   // A sweep can join an environment pass that began before the sweep. Keep its predecessor
   // separate from the fence tail so recovery waits for older exclusive work, never the sweep
@@ -63,7 +63,7 @@ export function coordinateWorkerPlacementDispatch(
   const reconciliationSweeps = new Set<ReconciliationSweep>();
   const dispatchIdleWaiters = new Set<() => void>();
   const waitForDispatchIdle = (): Promise<void> => {
-    if (activeDispatchCount === 0) {
+    if (activeDispatches.size === 0) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -78,6 +78,7 @@ export function coordinateWorkerPlacementDispatch(
     const predecessor = placementFence;
     const sweep: ReconciliationSweep = {
       predecessor,
+      dispatchCohort: predecessor?.dispatchCohort ?? [...activeDispatches],
       full,
       promise: Promise.resolve(),
       acceptingJoins: true,
@@ -108,11 +109,12 @@ export function coordinateWorkerPlacementDispatch(
   const runExclusivePlacementOperation = <T>(
     operation: () => Promise<T>,
     signal?: AbortSignal,
+    joinsActiveDispatch = false,
   ): Promise<T> => {
+    const predecessor = placementFence;
     const ready = (async () => {
-      const pendingFence = placementFence;
-      if (pendingFence) {
-        await pendingFence.promise.catch(() => undefined);
+      if (predecessor) {
+        await predecessor.promise.catch(() => undefined);
       }
       await waitForDispatchIdle();
     })();
@@ -124,7 +126,12 @@ export function coordinateWorkerPlacementDispatch(
     // A canceled waiter releases its admission immediately, but its fence must still
     // carry older work forward so later requests cannot overtake the predecessor.
     const barrier = Promise.allSettled([ready, current]).then(() => undefined);
-    const exclusive: PlacementFence = { promise: barrier };
+    const exclusive: PlacementFence = {
+      promise: barrier,
+      dispatchCohort: joinsActiveDispatch
+        ? (predecessor?.dispatchCohort ?? [...activeDispatches])
+        : [],
+    };
     placementFence = exclusive;
     void barrier.then(() => {
       if (placementFence === exclusive) {
@@ -140,7 +147,9 @@ export function coordinateWorkerPlacementDispatch(
     for (;;) {
       signal?.throwIfAborted();
       const pendingFence = placementFence;
-      if (!pendingFence) {
+      // Only the original dispatch cohort keeps maintenance admission open. Later joins
+      // cannot extend it indefinitely, and hard predecessors carry an empty cohort.
+      if (!pendingFence || pendingFence.dispatchCohort.some((id) => activeDispatches.has(id))) {
         break;
       }
       await racePromiseWithAbortSignal(
@@ -148,12 +157,13 @@ export function coordinateWorkerPlacementDispatch(
         signal,
       );
     }
-    activeDispatchCount += 1;
+    const operationId = Symbol("dispatch");
+    activeDispatches.add(operationId);
     try {
       return await operation();
     } finally {
-      activeDispatchCount -= 1;
-      if (activeDispatchCount === 0) {
+      activeDispatches.delete(operationId);
+      if (activeDispatches.size === 0) {
         const waiters = [...dispatchIdleWaiters];
         dispatchIdleWaiters.clear();
         for (const resolve of waiters) {
@@ -331,14 +341,14 @@ export function coordinateWorkerPlacementDispatch(
           if (sweep.predecessor) {
             await sweep.predecessor.promise.catch(() => undefined);
           }
-          // The sweep fence blocks new dispatches. Its environment pass still joins only after
-          // dispatches admitted before that fence and older exclusive work have drained.
+          // Recovery waits for every admitted dispatch and older exclusive operation,
+          // including later dispatches admitted while the original cohort was active.
           await waitForDispatchIdle();
           await recover();
         })();
         sweep.joinedRecoveries.add(queued);
       } else {
-        queued = runExclusivePlacementOperation(recover);
+        queued = runExclusivePlacementOperation(recover, undefined, true);
       }
       void queued.catch(ready.reject);
       const tracked = trackPlacementOperation(async (report) => {

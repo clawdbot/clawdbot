@@ -2,15 +2,12 @@ import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
+import type { ConfigSchemaShape } from "./schema.field-metadata.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-
-type ConfigSchemaShape<T extends object> = {
-  [Key in keyof T]-?: z.ZodType<T[Key]>;
-};
 
 const EdgeAuthHeadersSchema = z
   .record(z.string(), SecretInputSchema.register(sensitive))

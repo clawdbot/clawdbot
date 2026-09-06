@@ -1,5 +1,5 @@
 // Covers shell environment fallback loading.
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -111,7 +111,7 @@ describe("shell env fallback", () => {
     const etcShellsContent = `${shells.join("\n")}\n`;
     const readFileSyncSpy = vi
       .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding) => {
+      .mockImplementation((filePath, encoding?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
         if (filePath === "/etc/shells" && encoding === "utf8") {
           return etcShellsContent;
         }
@@ -673,6 +673,43 @@ describe("shell env fallback", () => {
     });
     expect(exec).toHaveBeenCalledOnce();
   });
+
+  it.skipIf(process.platform !== "linux" || !fs.existsSync("/bin/bash"))(
+    "runs the login-shell probe in its own session",
+    () => {
+      const shell = "/bin/bash";
+      const env: NodeJS.ProcessEnv = { SHELL: shell };
+      const realExec = execFileSync;
+      const probe = vi
+        .spyOn(childProcess, "execFileSync")
+        .mockImplementation((file, args, options) => {
+          expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
+          return realExec(
+            file,
+            [
+              "-lic",
+              'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0',
+            ],
+            options,
+          );
+        });
+      try {
+        withEtcShells([shell], () => {
+          expect(
+            loadShellEnvFallback({
+              enabled: true,
+              env,
+              expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
+              exec: childProcess.execFileSync,
+            }),
+          ).toEqual({ ok: true, applied: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"] });
+        });
+        expect(env.OPENCLAW_PROBE_SID?.trim()).toBe(env.OPENCLAW_PROBE_PID);
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
 
   it("keeps Bash PATH discovery noninteractive and cached separately from env imports", () => {
     const shell = "/bin/bash";

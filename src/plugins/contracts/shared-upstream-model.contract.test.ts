@@ -8,12 +8,9 @@ import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const MANIFEST_BASENAME = "openclaw.plugin.json";
 const CODE_MODE_TIER_LITERAL = /codeMode:\s*"(?:preferred|capable)"/;
-// Catalogs still built in plugin source instead of `modelCatalog` manifest rows,
-// so the manifest scan below cannot see their tiers. Moving them is not free:
-// `google` rows would newly feed model visibility and pre-discovery thinking
-// metadata through `loadManifestModelCatalog`, and `minimax` resolves cost per
-// provider surface, so its rows cannot live in one manifest catalog.
-const UNCONVERTED_SOURCE_CATALOG_PLUGINS = ["google", "minimax"];
+// Minimax resolves cost per provider surface, so its rows cannot live in one
+// manifest catalog and remain invisible to the manifest scan below.
+const UNCONVERTED_SOURCE_CATALOG_PLUGINS = ["minimax"];
 
 type CatalogEntry = {
   /** `provider/model` ref used in failure output. */

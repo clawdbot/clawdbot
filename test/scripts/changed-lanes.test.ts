@@ -1437,7 +1437,7 @@ describe("scripts/changed-lanes", () => {
         "src/gateway/node-registry.ts",
         "src/gateway/node-registry.invoke-stream.ts",
         "src/gateway/server-methods/nodes.invoke.ts",
-        "src/gateway/server-methods/nodes.invoke-deadline.ts",
+        "src/gateway/server-methods/nodes.ts",
         "src/node-host/runtime.ts",
         "src/node-host/runner.ts",
         "src/plugins/provider-self-hosted-setup.ts",

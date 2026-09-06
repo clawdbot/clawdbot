@@ -21,6 +21,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import {
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
@@ -598,6 +599,42 @@ describe("gateway tool runtime identity", () => {
       }
     },
   );
+
+  it.each([
+    ["apply", "allow-once"],
+    ["reject", "deny"],
+    ["quarantine", "allow-once"],
+    ["restore_collection", "deny"],
+  ] as const)("signs the Skill Workshop %s approval owner (%s)", async (action, decision) => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "workshop-approval", decision });
+    const operationalRunInstance = createOperationalRunInstanceRef("workshop-run");
+    const caller = {
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:group:-1001234567890",
+      operationalRunInstance,
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+      turnSourceAccountId: "default",
+    };
+    const result = await withActiveGatewayToolCallerIdentity(caller, () =>
+      resolveSkillWorkshopApprovalForFinalParams({
+        toolName: "skill_workshop",
+        params: { action },
+        ctx: { config: { skills: { workshop: { approvalPolicy: "pending" } } } },
+      }),
+    );
+
+    expect(result?.blocked).toBe(decision === "deny");
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.request");
+    expect(call.params).not.toHaveProperty("pluginId");
+    await expect(
+      verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken),
+    ).resolves.toMatchObject({
+      ...caller,
+      approvalOwnerPluginId: "workspace-skills",
+    });
+  });
 
   it.for(
     ["exec.approval.request", "plugin.approval.request"].flatMap((method) =>

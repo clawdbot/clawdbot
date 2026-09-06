@@ -13,10 +13,12 @@ type CreateOpenClawToolsArg = {
   agentAccountId?: string;
   agentChannel?: string;
   clientCaps?: string[];
+  pinnedWidgetAuthoring?: boolean;
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  questionPrompt?: { send: (payload: unknown) => unknown; messageChannel?: string };
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
   gatewayCallerAccountId?: string;
@@ -129,15 +131,50 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     return args;
   }
 
-  it("passes gateway client capabilities into tool construction", () => {
+  it.each(["loopback", "http"] as const)(
+    "passes client capabilities but restricts pinned authoring on the %s surface",
+    (surface) => {
+      resolveGatewayScopedTools({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:direct:test",
+        surface,
+        clientCaps: ["tool-events", "inline-widgets"],
+        pinnedWidgetAuthoring: true,
+      });
+
+      expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+      expect(readCreateToolsArgs().pinnedWidgetAuthoring).toBe(
+        surface === "loopback" ? true : undefined,
+      );
+    },
+  );
+
+  it("hands loopback ask_user the originating-channel prompt sender", () => {
     resolveGatewayScopedTools({
       cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:direct:test",
+      sessionKey: "agent:main:telegram:direct:1",
+      messageProvider: "telegram",
+      currentChannelId: "1",
+      accountId: "default",
       surface: "loopback",
-      clientCaps: ["tool-events", "inline-widgets"],
     });
 
-    expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(readCreateToolsArgs().questionPrompt).toEqual(
+      expect.objectContaining({
+        messageChannel: "telegram",
+        send: expect.any(Function),
+      }),
+    );
+  });
+
+  it("does not invent a prompt sender without a deliverable channel", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().questionPrompt).toBeUndefined();
   });
 
   it("passes immutable source-reply authority into message-tool construction", () => {

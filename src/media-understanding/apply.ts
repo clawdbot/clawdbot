@@ -1,10 +1,5 @@
 // Applies media-understanding outputs to inbound message context, including
 // attachment normalization, provider execution, file text extraction, and echoing.
-import {
-  attachmentClassFromMime,
-  type AttachmentClassification,
-} from "@openclaw/media-core/attachment-classify";
-import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
@@ -15,28 +10,16 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromBuffer } from "../media/input-files.js";
-import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
+import { extractFileContext, type LocalPathSelfServeUpgrade } from "./file-context.js";
+import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
 import {
-  type FileAttachmentOutcome,
-  isSkippedFileOutcome,
-  renderFileAttachmentOutcome,
-  sanitizeMimeType,
-} from "./file-attachment-outcomes.js";
-import {
-  type FileExtractionLimits,
-  resolveFileExtractionLimits,
-} from "./file-extraction-limits.js";
-import {
-  MAX_SKIPPED_FILE_MARKERS,
+  applyAttachmentMarkerBudget,
+  type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
-  renderSkippedFileOverflowSummary,
 } from "./media-attachment-outcomes.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
@@ -82,255 +65,6 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
-}
-
-type ClassifiedFileAttachment = {
-  outcome: FileAttachmentOutcome;
-  filename?: string;
-  mimeType?: string;
-};
-
-type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
-type LocalPathSelfServeUpgrade = {
-  attachmentIndex: number;
-  fallback: string;
-  render: (path?: string) => string | undefined;
-};
-
-// URL attachments may carry signed query credentials; only the pathname
-// basename is safe to surface as a model-visible display name.
-function attachmentUrlDisplayName(url: string): string | undefined {
-  try {
-    const base = new URL(url).pathname.split("/").findLast((segment) => segment.length > 0);
-    return base || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function classifyFileAttachment(params: {
-  attachment: MediaAttachment;
-  cache: ReturnType<typeof createMediaAttachmentCache>;
-  cfg: OpenClawConfig;
-  limits: FileExtractionLimits;
-  skipAttachmentIndexes?: Set<number>;
-}): Promise<ClassifiedFileAttachment> {
-  const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
-  const attachmentFilename =
-    attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
-  // The staged copy is written under a generated name, so its basename cannot
-  // answer a question that names the attachment. Prefer the sender's own name
-  // for anything the model reads; classification below deliberately stays on the
-  // staged path, because a sender-controlled name must not steer format detection.
-  const displayFilename = attachment.fileName ?? attachmentFilename;
-  if (skipAttachmentIndexes?.has(attachment.index)) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  const extensionMime = mimeTypeFromFilePath(attachmentFilename);
-  const forcedTextMime =
-    attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
-  const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-  if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  if (
-    !limits.allowUrl &&
-    attachment.url &&
-    !attachment.path &&
-    !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
-  ) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "url-sources-disabled" }, filename: displayFilename };
-  }
-  let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
-  try {
-    bufferResult = await cache.getBuffer({
-      attachmentIndex: attachment.index,
-      maxBytes: limits.maxBytes,
-      timeoutMs: limits.timeoutMs,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename: displayFilename };
-  }
-  const filename = attachment.fileName ?? bufferResult?.fileName;
-  const classification: AttachmentClassification = bufferResult.classification;
-  // Marker mime prefers the sender-declared type; never the name-forced text mime,
-  // which would mislabel binary bytes inside a text-named file as a text format.
-  // Both candidates pass strict token validation so raw header text never
-  // reaches model context; undefined drops the mime from block and marker.
-  const classifiedMime = sanitizeMimeType(classification.mime);
-  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? classifiedMime;
-  // Preserve only the cache's root-approved local read. Rendering still waits
-  // for the reply runtime's final filesystem capability (#122411).
-  const selfServeLocalPath = bufferResult.localPath;
-  if (
-    classification.class !== "text" &&
-    !(classification.class === "document" && classification.mime === "application/pdf")
-  ) {
-    // An operator-pinned allowlist that excludes this type is a policy "no";
-    // it must win before any self-serve directive can name the file.
-    if (
-      limits.allowedMimesConfigured &&
-      !(classifiedMime && limits.allowedMimes.has(classifiedMime))
-    ) {
-      return {
-        outcome: { kind: "policy-rejected", mime: classifiedMime ?? binaryMime },
-        filename,
-        mimeType: classifiedMime ?? binaryMime,
-      };
-    }
-    return {
-      outcome: {
-        kind: "unsupported-format",
-        mime: binaryMime,
-        ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-      },
-      filename,
-      mimeType: binaryMime,
-    };
-  }
-  const mimeType = sanitizeMimeType(classification.mime);
-  if (
-    classification.class === "text" &&
-    attachment.mime &&
-    normalizeMimeType(attachment.mime) !== classification.mime
-  ) {
-    logVerbose(
-      `media: MIME override from "${attachment.mime}" to "${classification.mime}" for index=${attachment.index}`,
-    );
-  }
-  if (!mimeType) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "unsupported-format" }, filename };
-  }
-  const allowedMimes = new Set(limits.allowedMimes);
-  if (!limits.allowedMimesConfigured && classification.class === "text") {
-    allowedMimes.add(mimeType);
-  }
-  if (!allowedMimes.has(mimeType)) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
-      );
-    }
-    // Operator-pinned allowlists reject as policy; the default allowlist
-    // rejects as a capability gap. The markers differ so the prompt never
-    // claims support the active configuration disables.
-    const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
-      ? { kind: "policy-rejected", mime: mimeType }
-      : {
-          kind: "unsupported-format",
-          mime: mimeType,
-          ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-        };
-    return { outcome, filename, mimeType };
-  }
-  let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
-  try {
-    const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-    extracted = await extractFileContentFromBuffer({
-      // Extractor plugins receive owned mutable bytes, never the attachment cache's buffer.
-      buffer: Buffer.from(bufferResult.buffer),
-      filename: bufferResult.fileName,
-      limits: { ...baseLimits, allowedMimes },
-      config: cfg,
-      classification,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename, mimeType };
-  }
-  const text = extracted?.text?.trim() ?? "";
-  const extractedImages = extracted?.images ?? [];
-  if (text) {
-    return { outcome: { kind: "extracted", text, images: extractedImages }, filename, mimeType };
-  }
-  if (extractedImages.length > 0) {
-    return { outcome: { kind: "rendered-to-images", images: extractedImages }, filename, mimeType };
-  }
-  return { outcome: { kind: "no-extractable-text" }, filename, mimeType };
-}
-
-async function extractFileContext(params: {
-  attachments: ReturnType<typeof normalizeMediaAttachments>;
-  cache: ReturnType<typeof createMediaAttachmentCache>;
-  cfg: OpenClawConfig;
-  limits: FileExtractionLimits;
-  skipAttachmentIndexes?: Set<number>;
-  selfServePathsEnabled: boolean;
-}) {
-  const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
-  if (!attachments || attachments.length === 0) {
-    return { blocks: [], images: [], localPathSelfServeUpgrades: [] };
-  }
-  const blocks: AttachmentContextBlock[] = [];
-  const images: ExtractedFileImage[] = [];
-  const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
-  for (const attachment of attachments) {
-    if (!attachment) {
-      continue;
-    }
-    const { outcome, filename, mimeType } = await classifyFileAttachment({
-      attachment,
-      cache,
-      cfg,
-      limits,
-      skipAttachmentIndexes,
-    });
-    if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
-      images.push(
-        ...outcome.images.map((image) => ({
-          ...image,
-          attachmentIndex: attachment.index,
-        })),
-      );
-    }
-    const blockText = renderFileAttachmentOutcome(outcome, {
-      selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
-    });
-    if (blockText === null) {
-      continue;
-    }
-    const renderBlock = (content: string) =>
-      renderFileContextBlock({
-        filename,
-        fallbackName: `file-${attachment.index + 1}`,
-        mimeType,
-        content,
-      });
-    const text = renderBlock(blockText);
-    blocks.push({
-      text,
-      consumesMarkerBudget: isSkippedFileOutcome(outcome),
-    });
-    if (outcome.kind === "unsupported-format" && outcome.localPath) {
-      const fallback = renderFileAttachmentOutcome(outcome, { selfServeLocalPath: false });
-      const selfServe = renderFileAttachmentOutcome(outcome);
-      if (fallback && selfServe) {
-        localPathSelfServeUpgrades.push({
-          attachmentIndex: attachment.index,
-          fallback: renderBlock(fallback),
-          render: (path) => {
-            const rendered = renderFileAttachmentOutcome(
-              outcome,
-              path ? { selfServeLocalPath: path } : undefined,
-            );
-            return rendered ? renderBlock(rendered) : undefined;
-          },
-        });
-      }
-    }
-  }
-  return { blocks, images, localPathSelfServeUpgrades };
 }
 
 const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
@@ -398,21 +132,6 @@ function renderMediaAttachmentMarkers(params: {
     const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
     return text ? [{ text, consumesMarkerBudget: true }] : [];
   });
-}
-
-function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
-  const rendered: string[] = [];
-  let markers = 0;
-  let overflow = 0;
-  for (const block of blocks) {
-    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
-      overflow += 1;
-      continue;
-    }
-    markers += Number(block.consumesMarkerBudget);
-    rendered.push(block.text);
-  }
-  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
 }
 
 export async function applyMediaUnderstanding(params: {

@@ -13,6 +13,7 @@ import {
   requireRecord,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -41,11 +42,7 @@ async function createReasoningProofPage(scope: string) {
 
 suite.define(() => {
   it("patches a selectable Claude CLI context window", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:session-a";
     const contextWindows = [
@@ -113,11 +110,7 @@ suite.define(() => {
   });
 
   it("settles permission patches before reflecting changes and observes remote updates", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:session-a",
@@ -249,11 +242,7 @@ suite.define(() => {
   });
 
   it("keeps picker menus in the viewport while preferring the space above", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       models: Array.from({ length: 12 }, (_, index) => ({
@@ -335,11 +324,7 @@ suite.define(() => {
   });
 
   it("routes runtime-aware model commands through the server directive path", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey: "agent:main:main",
@@ -364,11 +349,7 @@ suite.define(() => {
   });
 
   it("keeps high-velocity model scrolling inside the picker", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const models = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -524,11 +505,7 @@ suite.define(() => {
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -603,11 +580,7 @@ suite.define(() => {
   });
 
   it("restores the selected agent model after clearing a session override", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const agentsList = {
       agents: [
@@ -895,11 +868,7 @@ suite.define(() => {
       patch: { permissionMode: "full" },
     },
   ])("shows a pending send while a $label update is still pending", async (setting) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.patch"],
@@ -958,11 +927,7 @@ suite.define(() => {
   });
 
   it("previews reasoning and provider choices before committing them", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:session-a";
     const session = {

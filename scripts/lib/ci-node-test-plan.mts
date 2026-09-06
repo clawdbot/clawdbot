@@ -2607,6 +2607,59 @@ export function packNodeTestGroups<Group>(
   return bins;
 }
 
+function packHostedToolingRunnerTails(jobs: CompactNodeTestShard[]) {
+  const runnerRanks = new Map([
+    [BUNDLED_NODE_TEST_RUNNER, 0],
+    [DEFAULT_NODE_TEST_RUNNER, 1],
+    [EXTRA_LARGE_NODE_TEST_RUNNER, 2],
+  ]);
+  const isToolingTail = (job: CompactNodeTestShard) =>
+    job.planConcurrency === 1 &&
+    !job.requiresDist &&
+    job.pretestBuildMode === undefined &&
+    job.groups.length > 0 &&
+    job.groups.every(
+      (group) =>
+        /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name) &&
+        group.configs.includes(TOOLING_CONFIG),
+    );
+  const tails = jobs
+    .filter(isToolingTail)
+    .toSorted((a, b) => (a.predictedSeconds ?? 0) - (b.predictedSeconds ?? 0));
+  for (const source of tails) {
+    const sourceIndex = jobs.indexOf(source);
+    const sourceRank = runnerRanks.get(source.runner);
+    if (sourceIndex === -1 || sourceRank === undefined) {
+      continue;
+    }
+    const target = tails.find((candidate) => {
+      const targetRank = runnerRanks.get(candidate.runner);
+      const groups = [...candidate.groups, ...source.groups];
+      const families = groups
+        .map(compactStripeFamily)
+        .filter((family): family is string => family !== undefined);
+      return (
+        candidate !== source &&
+        jobs.includes(candidate) &&
+        targetRank !== undefined &&
+        targetRank > sourceRank &&
+        groups.length <= COMPACT_NODE_TEST_JOB_GROUPS &&
+        new Set(families).size === families.length &&
+        (candidate.predictedSeconds ?? 0) + (source.predictedSeconds ?? 0) <=
+          COMPACT_EXCLUSIVE_JOB_SECONDS
+      );
+    });
+    if (!target) {
+      continue;
+    }
+    // Smaller tooling can use an already-required larger runner. Keep the
+    // high-memory owner first so the emitted runner and check identity stay stable.
+    target.groups.push(...source.groups);
+    target.predictedSeconds = (target.predictedSeconds ?? 0) + (source.predictedSeconds ?? 0);
+    jobs.splice(sourceIndex, 1);
+  }
+}
+
 function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
@@ -2629,14 +2682,16 @@ function createCompactNodeTestShardBundles(
       runner,
       shard_name: shard.shardName,
     });
-    const partition =
-      group.pretestBuildMode && group.includePatterns
-        ? partitionRuntimeTestFiles(group.configs, group.includePatterns)
-        : undefined;
+    const partitionFiles = group.pretestBuildMode
+      ? (group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.())
+      : undefined;
+    const partition = partitionFiles
+      ? partitionRuntimeTestFiles(group.configs, partitionFiles)
+      : undefined;
     const runtimePartition =
       partition?.runtimeFiles.length && partition.otherFiles.length ? partition : undefined;
-    // Mixed selections keep their build consumers together. Whole-config
-    // consumers still use the complete-file splitter for oversized test work.
+    // Resolve whole-config ownership before splitting so ordinary files do not
+    // inherit a runtime build. Keep consumers together and split the remaining work.
     const plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
       COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
@@ -2735,9 +2790,6 @@ function createCompactNodeTestShardBundles(
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
-      // CLI runtime children retain separate serial processes but can share the
-      // prerequisite within the full 150s budget. Fixed stripe families stay apart.
-      const sharesCliRuntimeBuild = combined.every((entry) => entry.pretestBuildMode === "runtime");
       // A later unrelated member can revoke an earlier complete-CLI exemption.
       // Recheck every sibling collision against the final bin's eligibility.
       const preservesStripeFamilies = combined.every((entry, index) => {
@@ -2745,16 +2797,7 @@ function createCompactNodeTestShardBundles(
         return (
           family === undefined ||
           sharesSerialCliBudget ||
-          combined
-            .slice(0, index)
-            .every(
-              (previous) =>
-                compactStripeFamily(previous) !== family ||
-                (sharesCliRuntimeBuild &&
-                  [previous, entry].every((sibling) =>
-                    /^agentic-cli-process-hosted-\d+$/u.test(sibling.shard_name),
-                  )),
-            )
+          combined.slice(0, index).every((previous) => compactStripeFamily(previous) !== family)
         );
       });
       return (
@@ -2805,6 +2848,9 @@ function createCompactNodeTestShardBundles(
     }
   }
 
+  if (compactMode === "pull-request" && options.runnerBackend === "github") {
+    packHostedToolingRunnerTails(compactJobs);
+  }
   if (compactJobs.length > COMPACT_NODE_TEST_JOB_CAP) {
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,

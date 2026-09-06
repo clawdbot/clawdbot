@@ -4,9 +4,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { writeConfigMachineState } from "../../state/config-machine-state.js";
+import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-readonly-location.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../../utils.js";
@@ -105,29 +109,56 @@ export function readSharedAuthLegacyRowsFromDatabase(database: DatabaseSync): Sh
   return { store, state };
 }
 
-export function inspectSharedAuthLegacyRowsReadOnly(sourcePath: string): SharedAuthLegacyRows {
+export function inspectSharedAuthLegacyRowsReadOnly(
+  sourcePath: string,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): SharedAuthLegacyRows {
   if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
     return { store: null, state: null };
   }
-  let database: DatabaseSync;
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    database = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+    // Prepare in a child: closing the original inode here can release this
+    // process's live auth writer locks on Linux, even through a read-only handle.
+    prepared = behavior.artifactPreservingReadOnly
+      ? prepareSqliteReadOnlyLocationSync(sourcePath)
+      : undefined;
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
   }
   try {
-    return readSharedAuthLegacyRowsFromDatabase(database);
-  } catch (error) {
-    throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+    let database: DatabaseSync;
+    try {
+      database = openNodeSqliteDatabase(prepared?.location ?? sourcePath, { readOnly: true });
+    } catch (error) {
+      throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
+    }
+    try {
+      return readSharedAuthLegacyRowsFromDatabase(database);
+    } catch (error) {
+      throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+    } finally {
+      database.close();
+    }
   } finally {
-    database.close();
+    prepared?.cleanup();
   }
 }
 
-export function hasPendingSharedAuthCleanup(env: NodeJS.ProcessEnv, sourcePath: string): boolean {
+export function hasPendingSharedAuthCleanup(
+  env: NodeJS.ProcessEnv,
+  sourcePath: string,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): boolean {
+  const read = behavior.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
+    : withExistingOpenClawStateDatabaseReadOnly;
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
+    read(
       ({ db: database }) => {
+        if (behavior.artifactPreservingReadOnly && !tableExists(database, "migration_sources")) {
+          return false;
+        }
         const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
         const row = executeSqliteQueryTakeFirstSync(
           database,

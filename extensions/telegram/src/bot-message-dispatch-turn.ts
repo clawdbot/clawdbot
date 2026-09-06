@@ -150,6 +150,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           replyOptions: {
             skillFilter: context.skillFilter,
             disableBlockStreaming: turn.disableBlockStreaming,
+            preserveProgressCallbackStartOrder: true,
             abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
             turnAdoptionLifecycle: turn.turnAdoptionLifecycle
               ? {
@@ -222,9 +223,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   const queued = enqueueDraftEvent(turn, async () => {
                     resetReasoningStepState(turn);
                     turn.finalAnswerDelivered = false;
-                    if (turn.streamMode !== "progress") {
-                      turn.progressCompositor.reset();
-                    }
+                    turn.progressCompositor.beginAssistantMessage();
                     if (turn.answerLane.finalized) {
                       await rotateLaneForNewMessage(turn, turn.answerLane);
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
@@ -245,7 +244,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
                     turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
-                    turn.progressCompositor.reset();
+                    turn.progressCompositor.resetReasoningProgress();
                   });
                   return queued.then(() => false);
                 }
@@ -264,10 +263,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             suppressDefaultToolProgressMessages:
               !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
             suppressToolProgressMessages: !toolProgressEnabled,
-            forceToolResultProgress:
-              Boolean(turn.answerLane.stream) &&
-              turn.streamMode === "progress" &&
-              toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(turn.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {

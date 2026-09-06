@@ -212,6 +212,7 @@ describe("media-understanding runtime", () => {
         outcome: "disabled",
         attachments: [],
         attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        attachmentProcessing: { 0: "omitted" },
         nativeVisionActive: false,
       },
     });

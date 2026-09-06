@@ -52,7 +52,6 @@ describe.each([
       agents: { entries: { main: {} } },
       gateway: {
         terminal: { enabled: true },
-        cliAgents: { enabled: true },
         nodes: { commands: { allow: [command] } },
       },
     };
@@ -98,7 +97,7 @@ describe.each([
           { restartPending: true },
         );
       } else if (change === "CLI starts disabled") {
-        config.gateway!.cliAgents!.enabled = false;
+        config.gateway!.cliAgents = { enabled: false };
       } else if (change === "connection closed") {
         isConnectionActive.mockReturnValue(false);
       } else if (change === "command removed") {

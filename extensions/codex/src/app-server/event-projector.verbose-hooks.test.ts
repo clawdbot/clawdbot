@@ -123,7 +123,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(text).not.toContain("sk-1234567890abcdefZZZZ");
   });
 
-  it("uses argument details instead of lifecycle status in verbose tool summaries", async () => {
+  it("preserves argument details in dynamic tool summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -131,21 +131,11 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onToolResult,
     });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "lcm_grep",
-          arguments: { query: "inProgress text" },
-          status: "inProgress",
-          contentItems: null,
-          success: null,
-          durationMs: null,
-        },
-      }),
-    );
+    projector.recordDynamicToolCall({
+      callId: "tool-1",
+      tool: "lcm_grep",
+      arguments: { query: "inProgress text" },
+    });
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
@@ -153,7 +143,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     });
   });
 
-  it("hides command arguments from dynamic tool summaries unless verbose is full", async () => {
+  it("hides command arguments from ordinary verbose dynamic tool summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -161,27 +151,17 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onToolResult,
     });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "dynamicToolCall",
-          id: "tool-command-1",
-          namespace: null,
-          tool: "server.exec",
-          arguments: { command: "cat /private/operator-file" },
-          status: "inProgress",
-          contentItems: null,
-          success: null,
-          durationMs: null,
-        },
-      }),
-    );
+    projector.recordDynamicToolCall({
+      callId: "tool-command-1",
+      tool: "server.exec",
+      arguments: { command: "cat /private/operator-file" },
+    });
 
     expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
-  it("emits completed tool output only when verbose full is enabled", async () => {
+  it("emits a summary and completed dynamic tool output when verbose is full", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -189,28 +169,24 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onToolResult,
     });
 
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "read",
-          arguments: { path: "README.md" },
-          status: "completed",
-          contentItems: [{ type: "inputText", text: "file contents" }],
-          success: true,
-          durationMs: 12,
-        },
-      ]),
-    );
+    projector.recordDynamicToolCall({
+      callId: "tool-1",
+      tool: "read",
+      arguments: { path: "README.md" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "tool-1",
+      tool: "read",
+      contentItems: [{ type: "inputText", text: "file contents" }],
+      success: true,
+    });
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      text: "📖 Read\n```txt\nfile contents\n```",
     });
   });
 
@@ -222,24 +198,20 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onToolResult,
     });
 
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "bash",
-          arguments: { command: "ls /tmp/missing" },
-          status: "failed",
-          contentItems: [{ type: "inputText", text: "No such file or directory" }],
-          success: false,
-          durationMs: 12,
-        },
-      ]),
-    );
+    projector.recordDynamicToolCall({
+      callId: "tool-1",
+      tool: "bash",
+      arguments: { command: "ls /tmp/missing" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "tool-1",
+      tool: "bash",
+      contentItems: [{ type: "inputText", text: "No such file or directory" }],
+      success: false,
+    });
 
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "🛠️ `list files in /tmp/missing`\n```txt\nNo such file or directory\n```",
+      text: "🛠️ Bash\n```txt\nNo such file or directory\n```",
       isError: true,
     });
   });
@@ -252,24 +224,20 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onToolResult,
     });
 
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "read",
-          arguments: { path: "README.md" },
-          status: "completed",
-          contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
-          success: true,
-          durationMs: 12,
-        },
-      ]),
-    );
+    projector.recordDynamicToolCall({
+      callId: "tool-1",
+      tool: "read",
+      arguments: { path: "README.md" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "tool-1",
+      tool: "read",
+      contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
+      success: true,
+    });
 
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+      text: "📖 Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
     });
   });
 

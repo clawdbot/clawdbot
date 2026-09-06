@@ -12,6 +12,7 @@ import {
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -1124,6 +1125,7 @@ export function startDiagnosticHeartbeat(
   startDiagnosticRunActivityTracking();
   startDiagnosticStabilityRecorder();
   installDiagnosticStabilityFatalHook();
+  reconcileDiagnosticGcObserver();
   if (heartbeatInterval) {
     return;
   }
@@ -1136,6 +1138,8 @@ export function startDiagnosticHeartbeat(
     opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   lastDiagnosticHeartbeatTickAt = Date.now();
   heartbeatInterval = setInterval(() => {
+    // Reuse this tick for exporter demand changes; GC collection never adds a timer.
+    reconcileDiagnosticGcObserver();
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
       try {
@@ -1287,6 +1291,7 @@ export function startDiagnosticHeartbeat(
 }
 
 export function stopDiagnosticHeartbeat() {
+  stopDiagnosticGcObserver();
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;

@@ -4,7 +4,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { captureUiProof, expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -115,7 +115,7 @@ suite.define(() => {
               },
             },
           });
-          const expandTools = async () => {
+          const expandHistoryTools = async () => {
             for (const summary of await page.locator(".chat-activity-group__summary").all()) {
               if ((await summary.getAttribute("aria-expanded")) !== "true") {
                 await summary.click();
@@ -131,7 +131,7 @@ suite.define(() => {
           await page.getByText("History is ready.", { exact: true }).waitFor();
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-          await expandTools();
+          await expandHistoryTools();
           if (includeHistory) {
             for (const output of [
               "Standalone ordinary output 0",
@@ -147,7 +147,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "Send message" }).click();
           const send = await gateway.waitForRequest("chat.send");
           const runId = asNullableRecord(send.params)?.idempotencyKey;
-          expect(typeof runId).toBe("string");
+          expect.assert(typeof runId === "string");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           let seq = 0;
           const emitTool = (data: Record<string, unknown>) =>
@@ -171,20 +171,51 @@ suite.define(() => {
               },
             });
           }
-          // History disclosures can collapse when a new turn starts. Wait for
-          // the consumed live output, not a count of currently mounted rows.
-          const expectToolOutput = async (text: string) => {
-            await expect
-              .poll(async () => {
-                await expandTools();
-                return page.getByText(text, { exact: true }).isVisible();
-              })
-              .toBe(true);
+          const liveTurn = page.locator(`.chat-group[data-chat-row-key*="${runId}"]`);
+          const expectToolOutput = async (toolCallId: string, text: string) => {
+            // Keep the former poll's overall budget; every native action owns only
+            // the remaining time. Never pass zero: Playwright treats it as unlimited.
+            const deadline = performance.now() + 15_000;
+            const remainingTimeout = () => {
+              const remaining = deadline - performance.now();
+              if (remaining <= 0) {
+                throw new Error(`Timed out waiting for live tool output: ${toolCallId}`);
+              }
+              return remaining;
+            };
+            // Live calls can regroup and unmount individual rows on the next frame.
+            // Wait for this run's disclosure, then act on the exact tool identity.
+            const activity = liveTurn.locator(".chat-activity-group__summary");
+            await activity.waitFor({ timeout: remainingTimeout() });
+            const activityExpanded = await activity.getAttribute("aria-expanded", {
+              timeout: remainingTimeout(),
+            });
+            if (activityExpanded !== "true") {
+              await activity.click({ timeout: remainingTimeout() });
+            }
+            const tool = liveTurn.locator(`[data-message-id^="tool:assistant:${toolCallId}:"]`);
+            const summary = tool.locator(".chat-tool-msg-summary");
+            const toolExpanded = await summary.getAttribute("aria-expanded", {
+              timeout: remainingTimeout(),
+            });
+            if (toolExpanded !== "true") {
+              await summary.click({ timeout: remainingTimeout() });
+            }
+            const output = tool.getByText(text, { exact: true });
+            await output.waitFor({ timeout: remainingTimeout() });
+            await output.scrollIntoViewIfNeeded({ timeout: remainingTimeout() });
+            remainingTimeout();
           };
-          await expectToolOutput("Live ordinary output 0");
-          await expectToolOutput("Live ordinary output 1");
+          await expectToolOutput("live-0", "Live ordinary output 0");
+          await expectToolOutput("live-1", "Live ordinary output 1");
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
+          await captureUiProof(
+            suite,
+            page,
+            "browser-route-handoff",
+            `history-${includeHistory}-live.png`,
+          );
 
           await openChatSidePanelType(page, "Browser");
           const panel = page.locator("section.bp");
@@ -199,7 +230,7 @@ suite.define(() => {
               details,
             },
           });
-          await expectToolOutput("Live output after opening Browser");
+          await expectToolOutput("live-after-open", "Live output after opening Browser");
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await panel.locator('.bp-shot[alt="Configured default"]').isVisible()).toBe(true);
           const requests = await gateway.getRequests("browser.request");
@@ -212,6 +243,13 @@ suite.define(() => {
             expect(request.params).not.toHaveProperty("query.profile");
             expect(asNullableRecord(request.params)?.path).not.toBe("/tabs/focus");
           }
+
+          await captureUiProof(
+            suite,
+            page,
+            "browser-route-handoff",
+            `history-${includeHistory}-panel.png`,
+          );
 
           // The same live transport must still carry actionable browser results.
           await emitTool({

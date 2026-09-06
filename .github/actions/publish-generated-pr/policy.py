@@ -154,37 +154,33 @@ def report_push_failure():
         print("::error::Generated branch moved concurrently; refusing to overwrite the newer head.", flush=True)
 
 
-def neutralize_stale_pr():
-    reason, _ = stale_reason()
+def preserve_stale_pr():
     stale_pr_url, stale_pr_head = find_open_pr()
     if not stale_pr_url:
-        return reason
-    current_head = read_remote_head()
-    if not current_head:
-        summary("Stale generated pull request is already unmergeable because its branch is absent.")
-        return reason
-    if current_head != stale_pr_head:
-        fail("Generated branch moved before stale pull request retirement.")
-    # Move the exact stale branch to base under a lease. No unsafe close mutation
-    # can race a newer publisher using the deterministic branch.
-    git("switch", "-C", head_branch, base_ref)
-    code = push_generated_branch(stale_pr_head)
-    if code:
-        report_push_failure()
-        raise PublicationFailure(code)
-    base_head = git("rev-parse", base_ref, capture=True).rstrip("\n")
-    if read_remote_head() != base_head:
-        fail("Generated branch moved during stale pull request retirement.")
-    summary(f"Neutralized stale generated pull request: {stale_pr_url}")
-    return reason
+        return
+    if read_remote_head() != stale_pr_head:
+        fail("Generated branch moved before stale auto-merge reconciliation.")
+    record = gh("read_auto_merge_record_for_head", stale_pr_head, stale_pr_url, capture=True)
+    if record.split("\t", 1)[1]:
+        # Disarming has no head-CAS API. It can conservatively pause a concurrent
+        # successor, but must never overwrite its commits or enable stale output.
+        gh("disable_auto_merge", stale_pr_url)
+        record = gh("read_auto_merge_record_for_head", stale_pr_head, stale_pr_url, capture=True)
+        if record.split("\t", 1)[1]:
+            fail("Stale generated pull request still has auto-merge enabled.")
+    if read_remote_head() != stale_pr_head:
+        fail("Generated branch moved during stale auto-merge reconciliation; rerun the publisher.")
+    summary(f"Preserved stale generated pull request with auto-merge disabled: {stale_pr_url}. "
+            "A fresh generator run will update it and restore the configured auto-merge policy.")
 
 
 def finish_nonpublication(reason):
-    current = neutralize_stale_pr()
+    current, _ = stale_reason()
     if reason in ("no-change", "merged"):
         if current == "current":
             return
         reason = current
+    preserve_stale_pr()
     detail = (f"generator inputs changed on {base_branch}" if reason == "stale-input"
               else f"owned generated paths changed on {base_branch}")
     if os.environ["OVERLAP_POLICY"] == "fail":
@@ -234,6 +230,10 @@ def verify_publication(published_commit):
 
 def enable_auto_merge(published_commit, published_pr_url):
     if os.environ["AUTO_MERGE"] != "true" or not published_pr_url:
+        return
+    reason, _ = stale_reason()
+    if reason != "current":
+        finish_nonpublication(reason)
         return
     try:
         record = gh("read_auto_merge_record_for_head", published_commit, published_pr_url, capture=True)
