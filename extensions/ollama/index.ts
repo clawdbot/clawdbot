@@ -558,7 +558,6 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
   const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, {
     ...(apiKey ? { apiKey } : {}),
     discoveryMode: "strict",
-    quiet: true,
   });
   if (
     !discovered.models.length ||

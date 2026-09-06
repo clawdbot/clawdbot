@@ -1185,11 +1185,10 @@ describe("ollama plugin", () => {
     });
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
       discoveryMode: "strict",
-      quiet: false,
     });
   });
 
-  it("keeps stored ollama-local marker auth on the quiet ambient path", async () => {
+  it("keeps stored ollama-local marker auth during discovery", async () => {
     const provider = registerProvider();
     mockDiscoveredOllamaProvider([], { once: true });
 
@@ -1206,7 +1205,6 @@ describe("ollama plugin", () => {
     expect(resultProvider.models).toEqual([]);
     expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
       discoveryMode: "strict",
-      quiet: true,
     });
   });
 
@@ -2228,7 +2226,6 @@ describe("ollama plugin", () => {
       expect(resultProvider.api).toBe("ollama");
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
         discoveryMode: "strict",
-        quiet: false,
       });
     },
   );
@@ -2414,7 +2411,6 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
       apiKey: "cloud-key",
       discoveryMode: "strict",
-      quiet: true,
     });
     expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
     expect(result?.provider.models).toEqual(
@@ -2443,7 +2439,6 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
       apiKey: "cloud-key",
       discoveryMode: "strict",
-      quiet: true,
     });
     expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith("https://ollama.com", "glm-5.2", {
       apiKey: "cloud-key",

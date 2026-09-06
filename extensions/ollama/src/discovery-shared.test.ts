@@ -79,10 +79,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     params: { num_ctx: 48_000 },
   } satisfies ModelProviderConfig["models"][number];
 
-  const buildMockProvider = async (
-    _configuredBaseUrl?: string,
-    _opts?: { quiet?: boolean },
-  ): Promise<ModelProviderConfig> => ({
+  const buildMockProvider = async (): Promise<ModelProviderConfig> => ({
     baseUrl: "https://ollama.com",
     api: "ollama",
     models: [discoveredModel],
@@ -480,7 +477,6 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
 
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
         discoveryMode: "strict",
-        quiet: false,
         apiKey: "resolved-ollama-discovery-token",
       });
       expect(result).toMatchObject({
@@ -539,7 +535,6 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
 
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
         discoveryMode: "strict",
-        quiet: false,
         apiKey: secretValue,
       });
       expect(result).toMatchObject({
