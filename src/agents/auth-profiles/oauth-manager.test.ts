@@ -28,7 +28,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "./store.js";
+} from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {

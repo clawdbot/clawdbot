@@ -16,7 +16,7 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
-import { createImportedCodexSession } from "./app-server/session-history-import.js";
+import type { createImportedCodexSession } from "./app-server/session-history-import.js";
 import {
   adoptionSessionKeyRest,
   continueOperations,
@@ -272,6 +272,7 @@ async function createOrReuseAdoptedSession(params: {
       sourceThreadId: params.sourceThread.id,
       ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
     };
+    const { createImportedCodexSession } = await import("./app-server/session-history-import.js");
     const created = await createImportedCodexSession({
       runtime: params.api.runtime,
       bindingStore: params.bindingStore,

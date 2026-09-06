@@ -71,6 +71,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -560,7 +561,10 @@ export async function runClawsRemoveCommand(
     : opts.removeUnused
       ? { mode: "remove-if-unused" as const }
       : { mode: "retain" as const };
-  const plan = await buildClawRemovePlan(target, { referencedCleanup });
+  const plan = await buildClawRemovePlan(target, {
+    referencedCleanup,
+    monitorGateway: clawMonitorCleanupGateway,
+  });
   if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
@@ -589,6 +593,7 @@ export async function runClawsRemoveCommand(
   }
   try {
     const result = await applyClawRemovePlan(plan, {
+      monitorGateway: clawMonitorCleanupGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {

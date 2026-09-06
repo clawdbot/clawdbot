@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import {
   isPathOwnedBySurvivingAgent,
@@ -21,7 +22,7 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
-  readAttachedCronJobs,
+  readClawRemoveCronInventory,
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
   workspaceContainsUntrackedEntries,
@@ -38,9 +39,9 @@ import {
 } from "./lifecycle-remove-contract.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
+import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
 import { projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
-import { updateClawInstallRecordStatus } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
@@ -166,7 +167,10 @@ export async function buildClawRemovePlan(
       record.install.workspace,
       trackedWorkspacePaths,
     );
-    const attachedJobs = readAttachedCronJobs(record.install.agentId, options);
+    const { attachedJobs, monitors, inspectionUnavailable } = await readClawRemoveCronInventory(
+      record.install.agentId,
+      options,
+    );
     const ownedSchedulerJobIds = new Set(
       record.cronJobs
         .filter((cron) => cron.status !== "removed" && cron.schedulerJobId)
@@ -262,9 +266,21 @@ export async function buildClawRemovePlan(
         : {}),
     });
     for (const job of attachedJobs.filter((candidate) => !ownedSchedulerJobIds.has(candidate.id))) {
+      if (monitors.some((monitor) => isDeepStrictEqual(monitor, job))) {
+        actions.push({
+          kind: "scheduledJob",
+          id: job.id,
+          action: "remove",
+          target: `cron_jobs:${job.id}`,
+          blocked: false,
+          reason: "Config-owned monitor; Gateway cancellation and drainage precede local cleanup.",
+          details: { ...job },
+        });
+        continue;
+      }
       blockers.push({
         code: "agent_job_attached",
-        message: `Cron job ${JSON.stringify(job.id)} still references agent ${JSON.stringify(record.install.agentId)}; reassign or remove it first.`,
+        message: `Cron job ${JSON.stringify(job.id)} still references agent ${JSON.stringify(record.install.agentId)}; reassign or remove independent work, or reconnect to the serving Gateway to verify monitor ownership.`,
       });
       actions.push({
         kind: "scheduledJob",
@@ -272,8 +288,10 @@ export async function buildClawRemovePlan(
         action: "retain",
         target: `cron_jobs:${job.id}`,
         blocked: true,
-        reason: "Operator-owned scheduled work must be reassigned or removed explicitly.",
+        reason:
+          "Scheduled work without verified Claw or config ownership must be handled explicitly.",
         details: {
+          ...(inspectionUnavailable ? { monitorInspection: "unavailable" } : {}),
           name: job.name,
           enabled: job.enabled,
           agentId: job.agentId,
@@ -414,6 +432,13 @@ export async function applyClawRemovePlan(
   if (plan.blockers.length > 0 || !plan.agentId) {
     throw new ClawRemoveError("remove_blocked", "The Claw remove plan contains blockers.");
   }
+  const monitorGateway = options.monitorGateway;
+  if (!monitorGateway) {
+    throw new ClawRemoveError(
+      "monitor_gateway_required",
+      "Claw removal requires the serving Gateway to establish safe cancellation and drainage.",
+    );
+  }
   const currentPlan = await buildClawRemovePlan(plan.target, options);
   if (currentPlan.planIntegrity !== plan.planIntegrity) {
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
@@ -472,10 +497,31 @@ export async function applyClawRemovePlan(
   if (JSON.stringify(plannedMcpServers) !== JSON.stringify(currentMcpServers)) {
     throw new ClawRemoveError("remove_changed", "MCP ownership changed after remove planning.");
   }
+  const result: ClawRemoveResult = {
+    schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    dryRun: false,
+    status: "partial",
+    agentId,
+    agentRemoved: false,
+    workspaceFiles: [],
+    packages: [],
+    mcpServers: [],
+    cronJobs: [],
+    packageRefsReleased: 0,
+  };
+  const partial = (code: string, message: string): ClawRemoveResult => ({
+    ...result,
+    error: { code, message },
+  });
+  const monitors = currentPlan.actions
+    .filter((action) => action.kind === "scheduledJob" && action.action === "remove")
+    .map((action) => clawMonitorSnapshotSchema.parse(action.details));
   return await withClawAgentConfigRemoval<ClawRemoveResult>(
     {
       agentId,
       expectedDigest: record.install.agentConfigDigest,
+      expectedInstall: record.orphaned ? null : record.install,
       expectedRemovalSurfaceDigest,
       expectedState: record.agentState,
       fallbackWorkspace: record.install.workspace,
@@ -485,25 +531,10 @@ export async function applyClawRemovePlan(
       trashPath: options.trashPath,
       onModified: () =>
         new ClawRemoveError("agent_modified", "Agent config changed during remove."),
+      quiesceMonitors: (operationId) => monitorGateway.quiesce(agentId, operationId, monitors),
+      drainMonitors: async (operationId) => await monitorGateway.drain(agentId, operationId),
     },
     async (commitRemoval) => {
-      const result: ClawRemoveResult = {
-        schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        dryRun: false,
-        status: "partial",
-        agentId,
-        agentRemoved: false,
-        workspaceFiles: [],
-        packages: [],
-        mcpServers: [],
-        cronJobs: [],
-        packageRefsReleased: 0,
-      };
-      const partial = (code: string, message: string): ClawRemoveResult => {
-        updateClawInstallRecordStatus(agentId, "partial", options);
-        return { ...result, error: { code, message } };
-      };
       const mcpRemoval = await removeClawMcpServers({
         agentId,
         servers: record.mcpServers,
@@ -542,8 +573,7 @@ export async function applyClawRemovePlan(
               try {
                 await options.cronGateway!.remove(cron.schedulerJobId!);
               } catch (removeError) {
-                // A transport failure can lose a successful cron.remove response. Re-read the
-                // gateway before preserving ownership so retries can converge on confirmed absence.
+                // Re-read after transport loss; a durable removal may have succeeded.
                 const afterRemove = await options.cronGateway!.get!(cron.schedulerJobId!);
                 if (afterRemove != null) {
                   throw removeError;
@@ -570,10 +600,14 @@ export async function applyClawRemovePlan(
         }
       }
       const configRemoval = await commitRemoval();
-      const { cleanupTargets, configBeforeDelete } = configRemoval;
+      const { cleanupTargets, configBeforeDelete, completeDeletion } = configRemoval;
       result.agentRemoved = configRemoval.agentRemoved;
-      const committedNextConfig = configRemoval.nextConfig;
-      const completeDeletion = configRemoval.completeDeletion;
+      try {
+        await configRemoval.drainMonitors();
+        configRemoval.assertCurrent();
+      } catch (error) {
+        return partial("monitor_cleanup_failed", coerceErrorMessage(error));
+      }
       if (!options.commitConfig || options.purgeSessions) {
         const purgeSessions =
           options.purgeSessions ??
@@ -606,8 +640,10 @@ export async function applyClawRemovePlan(
       }
       const workspaceFiles = result.workspaceFiles;
       for (const file of record.workspaceFiles) {
+        configRemoval.assertCurrent();
         workspaceFiles.push(await removeClawWorkspaceFile(file));
       }
+      configRemoval.assertCurrent();
       const bootstrap = await removeClawBootstrap(record);
       const cleanupErrors = workspaceFiles
         .filter((file) => file.action === "error")
@@ -615,15 +651,16 @@ export async function applyClawRemovePlan(
       if (bootstrap?.action === "error") {
         cleanupErrors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
       }
-      if (cleanupErrors.length === 0 && cleanupTargets && committedNextConfig) {
+      if (cleanupErrors.length === 0 && cleanupTargets) {
         const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
           cleanupTargets.workspaceDir,
           record.workspaceFiles.map((file) => file.path),
         );
+        configRemoval.assertCurrent();
         cleanupErrors.push(
           ...(await cleanupClawAgentFilesystem({
             agentId,
-            nextConfig: committedNextConfig,
+            nextConfig: configRemoval.nextConfig,
             targets: cleanupTargets,
             runtime: clawRemoveQuietRuntime,
             trashPath: options.trashPath,
@@ -635,11 +672,14 @@ export async function applyClawRemovePlan(
           })),
         );
       }
-      const complete = cleanupErrors.length === 0;
-      if (!complete) {
-        updateClawInstallRecordStatus(agentId, "partial", options);
-      }
-      releaseClawRemoveRows(agentId, workspaceFiles, complete, completeDeletion, options);
+      const complete = releaseClawRemoveRows(
+        agentId,
+        workspaceFiles,
+        cleanupErrors,
+        configRemoval.assertCurrent,
+        completeDeletion,
+        options,
+      );
       return {
         ...result,
         status: complete ? "complete" : "partial",
@@ -655,5 +695,10 @@ export async function applyClawRemovePlan(
             }),
       };
     },
+  ).catch((error: unknown) =>
+    partial(
+      error instanceof ClawRemoveError ? error.code : "monitor_cleanup_failed",
+      coerceErrorMessage(error),
+    ),
   );
 }

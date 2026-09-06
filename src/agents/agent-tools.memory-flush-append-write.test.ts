@@ -6,6 +6,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const RELATIVE_PATH = "memory/2026-08-08.md";
 
@@ -63,6 +64,53 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     );
     return (result as { details?: unknown }).details;
   }
+
+  it.each(["revoked", "replaced", "active"] as const)(
+    "checks %s source authority after provenance work before appending",
+    async (authority) => {
+      const absolute = path.join(root, RELATIVE_PATH);
+      await fs.mkdir(path.dirname(absolute), { recursive: true });
+      await fs.writeFile(absolute, "seed\n");
+      const originalClaim = {};
+      let claim: object | undefined = originalClaim;
+      let reachedCommit = false;
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+        root,
+        relativePath: RELATIVE_PATH,
+        memoryWriteProvenance: {
+          classifies: async () => true,
+          write: async ({ commit }) => {
+            reachedCommit = true;
+            if (authority === "revoked") {
+              claim = undefined;
+            }
+            if (authority === "replaced") {
+              claim = {};
+            }
+            await commit();
+          },
+          clearAfterDelete: async () => {},
+        },
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:memory-flush-authority",
+          receiptAuthority: () => claim === originalClaim,
+        },
+        () => wrapped.execute("source-append", { path: RELATIVE_PATH, content: "hello" }),
+      );
+      if (authority === "active") {
+        await expect(pending).resolves.toMatchObject({ details: { changed: true } });
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+      }
+      expect(reachedCommit).toBe(true);
+      expect(await fs.readFile(absolute, "utf8")).toBe(
+        authority === "active" ? "seed\nhello" : "seed\n",
+      );
+    },
+  );
 
   it("returns write-schema-conforming details when creating the memory file", async () => {
     const details = await runAppend();

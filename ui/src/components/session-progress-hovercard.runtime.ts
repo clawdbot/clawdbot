@@ -203,6 +203,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleSessionUpdate = () => {
+    this.sessionLinkTitler.refresh();
     if (this.open && this.hovercard.held) {
       this.showCurrent();
     }

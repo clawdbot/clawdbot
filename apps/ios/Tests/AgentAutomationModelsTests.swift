@@ -5,15 +5,36 @@ import Testing
 
 struct AgentAutomationModelsTests {
     @Test func `draft decodes editable gateway fields`() throws {
-        let draft = try #require(AgentAutomationDraft(job: Self.job()))
+        let cases: [(schedule: String, expected: AgentAutomationScheduleDraft)] = [
+            (
+                #"{"kind":"every","everyMs":86400000,"anchorMs":1783468800000}"#,
+                .every(everyMs: "86400000", anchorMs: "1783468800000")),
+            (
+                #"{"kind":"every","everyMs":"86400000","anchorMs":"1783468800000"}"#,
+                .every(everyMs: "86400000", anchorMs: "1783468800000")),
+            (#"{"kind":"every","everyMs":86400000}"#, .every(everyMs: "86400000", anchorMs: "")),
+            (
+                #"{"kind":"cron","expr":"0 9 * * *","staggerMs":300000}"#,
+                .cron(expression: "0 9 * * *", timezone: "", staggerMs: "300000")),
+            (
+                #"{"kind":"cron","expr":"0 9 * * *","staggerMs":"300000"}"#,
+                .cron(expression: "0 9 * * *", timezone: "", staggerMs: "300000")),
+            (
+                #"{"kind":"cron","expr":"0 9 * * *"}"#,
+                .cron(expression: "0 9 * * *", timezone: "", staggerMs: "")),
+        ]
+        for testCase in cases {
+            let schedule = try JSONDecoder().decode(AnyCodable.self, from: Data(testCase.schedule.utf8))
+            let draft = try #require(AgentAutomationDraft(job: Self.job(schedule: schedule)))
 
-        #expect(draft.name == "Release briefing")
-        #expect(draft.sessionTarget == "isolated")
-        #expect(draft.schedule == .every(everyMs: "86400000", anchorMs: "1783468800000"))
-        #expect(draft.payload == .agentTurn(
-            message: "Summarize release readiness.",
-            model: "openai/gpt-5.2",
-            thinking: ""))
+            #expect(draft.name == "Release briefing")
+            #expect(draft.sessionTarget == "isolated")
+            #expect(draft.schedule == testCase.expected)
+            #expect(draft.payload == .agentTurn(
+                message: "Summarize release readiness.",
+                model: "openai/gpt-5.2",
+                thinking: ""))
+        }
     }
 
     @Test func `update includes exact revision and only normalized changes`() throws {

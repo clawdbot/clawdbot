@@ -15,6 +15,47 @@ const scope: SessionProjectionScope = {
 
 describe("session projection Gateway run events", () => {
   it.each([
+    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 11, resumes: false },
+    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 12, resumes: false },
+    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 13, resumes: true },
+    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: undefined, resumes: false },
+    { terminalSeq: undefined, repeatedSeq: undefined, deltaSeq: 13, resumes: false },
+    { terminalSeq: 10, repeatedSeq: undefined, deltaSeq: 13, resumes: false },
+    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: Infinity, resumes: false },
+  ])("requires newer run-event order before resuming an error: %j", (scenario) => {
+    let projection = createSessionProjection(scope);
+    const message = { role: "assistant", content: [], stopReason: "error" };
+    for (const event of [
+      { state: "delta", seq: 8 },
+      { state: "error", seq: scenario.terminalSeq, message },
+      { state: "error", seq: scenario.repeatedSeq, message },
+    ]) {
+      const result = reduceSessionProjectionRunEvent(projection, {
+        ...event,
+        runId: "shared-run",
+        errorMessage: "provider unavailable",
+      });
+      if (!result) {
+        throw new Error("Expected a run projection");
+      }
+      projection = result.projection;
+    }
+    const delta = {
+      runId: "shared-run",
+      state: "delta",
+      seq: scenario.deltaSeq,
+      message: { role: "assistant", content: "resumed output" },
+    };
+    const resumed = reduceSessionProjectionRunEvent(projection, delta);
+    expect(resumed?.currentRun?.status).toBe(scenario.resumes ? "streaming" : "error");
+    if (!scenario.resumes) {
+      expect(resumed?.projection).toBe(projection);
+      expect(resumed?.currentRun?.message).toBe(message);
+      expect(resumed?.currentRun?.errorMessage).toBe("provider unavailable");
+    }
+  });
+
+  it.each([
     { name: "regular final", event: { state: "final" }, status: "completed" },
     {
       name: "yielded end turn",

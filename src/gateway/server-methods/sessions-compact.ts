@@ -20,6 +20,7 @@ import {
   readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -437,8 +438,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   if (result.compactionKind === "context-engine") {
                     clearAllCliSessions(entryToUpdate);
                   }
-                  delete entryToUpdate.inputTokens;
-                  delete entryToUpdate.outputTokens;
+                  Object.assign(entryToUpdate, COMPACTION_RUN_USAGE_CLEAR_PATCH);
                   delete entryToUpdate.contextBudgetStatus;
                   if (
                     typeof result.result?.tokensAfter === "number" &&

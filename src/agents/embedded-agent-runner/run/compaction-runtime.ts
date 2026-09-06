@@ -123,6 +123,7 @@ export async function compactEmbeddedRunForRecovery(
       messageChannel: runParams.messageChannel,
       messageProvider: runParams.messageProvider,
       clientCaps: runParams.clientCaps,
+      pinnedWidgetAuthoring: runParams.pinnedWidgetAuthoring,
       chatType: runParams.chatType,
       agentAccountId: runParams.agentAccountId,
       conversationRoutePeerId: runParams.conversationRoutePeerId,
@@ -536,7 +537,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (
       contextEngine.info.ownsCompaction !== true ||
       !compactResult.ok ||
-      !compactResult.compacted ||
       !hookRunner?.hasHooks("after_compaction")
     ) {
       return;
@@ -545,7 +545,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
-          compactedCount: -1,
+          compactedCount: compactResult.compacted ? -1 : 0,
           tokenCount: compactResult.result?.tokensAfter,
           sessionFile:
             resolveCompactionSuccessorTranscript(compactResult).sessionFile ??

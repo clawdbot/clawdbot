@@ -15,7 +15,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
-import { MID_TURN_PRECHECK_ERROR_MESSAGE } from "./midturn-precheck.js";
+import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
@@ -24,34 +24,35 @@ export function flushSessionManagerTranscript(sessionManager: AttemptSessionMana
   sessionManager.flushPendingPersistence();
 }
 
-function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  return message.stopReason === "error" && message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
-}
-
 export function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   sessionManager: AttemptSessionManager;
 }): void {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
+  const preserveTrailing = (entry: ReturnType<AttemptSessionManager["getEntries"]>[number]) =>
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info" ||
+    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
+  const persistedTail = params.sessionManager
+    .getEntries()
+    .findLast((entry) => !preserveTrailing(entry));
+  // New guarded writes omit the signal. Retain cleanup for an already-persisted legacy error.
+  const hasPersistedError =
+    persistedTail?.type === "message" && isMidTurnPrecheckAssistantError(persistedTail.message);
   const removedPersistedError =
+    hasPersistedError &&
     params.sessionManager.removeTrailingEntries(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
       {
-        preserveTrailing: (entry) =>
-          entry.type === "custom" ||
-          entry.type === "label" ||
-          entry.type === "session_info" ||
-          (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+        preserveTrailing,
       },
     ) > 0;
   if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
-  if (removedActiveError && !removedPersistedError) {
+  if (hasPersistedError && removedActiveError && !removedPersistedError) {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );

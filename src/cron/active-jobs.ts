@@ -66,6 +66,7 @@ export function bindCronSelfRemovalCommitGuard(
 
 export type CronActiveJobMarker = {
   jobId: string;
+  agentId?: string;
   declarationKey?: string;
   generation: number;
   token: number;
@@ -152,7 +153,7 @@ function notifyCronJobInactive(marker: CronActiveJobMarker) {
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
 export function markCronJobActive(
   jobId: string,
-  opts?: { declarationKey?: string; preserveAcrossGenerationAdvance?: boolean },
+  opts?: { agentId?: string; declarationKey?: string; preserveAcrossGenerationAdvance?: boolean },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
     return undefined;
@@ -162,6 +163,7 @@ export function markCronJobActive(
   state.nextToken += 1;
   const marker: CronActiveJobMarker = {
     jobId,
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     generation: state.generation,
     token,
@@ -281,6 +283,16 @@ export function requestActiveCronJobCancellationByDeclarationKeyPrefix(
 /** Returns whether the given cron job id is currently executing in this process. */
 export function isCronJobActive(jobId: string) {
   return getCurrentCronActiveJobMarker(jobId) !== undefined;
+}
+
+/** Includes admitted runs that have not entered their executing core yet. */
+export function hasActiveCronJobsForAgent(agentId: string): boolean {
+  for (const marker of getCronActiveJobState().activeJobs.values()) {
+    if (!marker.inactiveNotified && (!marker.agentId || marker.agentId === agentId)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Runs a callback when the exact cron job no longer has an active in-process run. */

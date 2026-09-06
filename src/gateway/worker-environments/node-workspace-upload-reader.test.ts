@@ -1,67 +1,100 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import path from "node:path";
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  NodeWorkspaceTransferInvalidError,
-  RequestByteReader,
+  nodeWorkspaceTransferInvalidReason,
+  readNodeWorkspaceUpload,
 } from "./node-workspace-upload-reader.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
-function createReader(chunks: Buffer[]): RequestByteReader {
-  const request = Readable.from(chunks) as unknown as IncomingMessage;
-  return new RequestByteReader(request, new AbortController().signal, () => {});
+const temporary = useAutoCleanupTempDirTracker(afterEach);
+
+function fixture() {
+  const temporaryRoot = temporary.make("workspace-upload-reader-");
+  const file = Buffer.from("file\0bytes");
+  const baseRaw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
+  const currentRaw = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: null,
+    entries: [
+      {
+        path: "result.bin",
+        type: "file",
+        mode: 0o644,
+        size: file.length,
+        sha256: createHash("sha256").update(file).digest("hex"),
+      },
+    ],
+  });
+  const bodies = [Buffer.from(baseRaw), Buffer.from(currentRaw), file];
+  const payload = Buffer.concat(
+    bodies.flatMap((body, index) => {
+      const header = Buffer.alloc(index === 2 ? 8 : 4);
+      if (header.length === 8) {
+        header.writeBigUInt64BE(BigInt(body.length));
+      } else {
+        header.writeUInt32BE(body.length);
+      }
+      return [header, body];
+    }),
+  );
+  const upload = (chunks: Buffer[], contentLength = payload.length) => {
+    const request = Readable.from(chunks) as unknown as IncomingMessage;
+    request.headers = { "content-length": String(contentLength) };
+    return readNodeWorkspaceUpload({
+      request,
+      baseManifestRef: `sha256:${createHash("sha256").update(baseRaw).digest("hex")}`,
+      temporaryRoot,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+      isAuthorized: () => true,
+    });
+  };
+  return { temporaryRoot, file, baseRaw, currentRaw, payload, upload };
 }
 
 describe("workspace upload byte stream", () => {
   it.each(["coalesced", "fragmented"])(
-    "preserves consecutive headers and bodies in %s chunks",
+    "stages consecutive manifest headers and file bodies in %s chunks",
     async (chunking) => {
-      const bodies = [
-        Buffer.from("base manifest"),
-        Buffer.from("current manifest"),
-        Buffer.from("file\0bytes"),
-      ];
-      const headers = bodies.map((body, index) => {
-        const header = Buffer.alloc(index === 2 ? 8 : 4);
-        if (header.length === 8) {
-          header.writeBigUInt64BE(BigInt(body.length));
-        } else {
-          header.writeUInt32BE(body.length);
-        }
-        return header;
-      });
-      const parts = bodies.flatMap((body, index) => [headers[index]!, body]);
-      const payload = Buffer.concat(parts);
+      const f = fixture();
       const chunks =
-        chunking === "coalesced" ? [payload] : Array.from(payload, (byte) => Buffer.from([byte]));
-      const reader = createReader(chunks);
+        chunking === "coalesced"
+          ? [f.payload]
+          : Array.from(f.payload, (byte) => Buffer.from([byte]));
+      const result = await f.upload(chunks);
 
-      for (const part of parts) {
-        await expect(reader.readExactly(part.length)).resolves.toEqual(part);
-      }
-      await expect(reader.readExactly(0)).resolves.toEqual(Buffer.alloc(0));
-      await expect(reader.assertEnd()).resolves.toBeUndefined();
-      expect(reader.bytesRead).toBe(payload.length);
+      expect(result.baseRaw).toBe(f.baseRaw);
+      expect(result.currentRaw).toBe(f.currentRaw);
+      expect(await fs.readFile(path.join(result.stagingRoot, "result.bin"))).toEqual(f.file);
     },
   );
 
   it("rejects premature EOF across chunk boundaries", async () => {
-    const reader = createReader([Buffer.from("ab"), Buffer.from("c")]);
+    const f = fixture();
 
-    await expect(reader.readExactly(4)).rejects.toMatchObject({
-      constructor: NodeWorkspaceTransferInvalidError,
-      reason: "premature_eof",
-    });
+    await expect(
+      f
+        .upload([f.payload.subarray(0, 2), f.payload.subarray(2, 3)])
+        .catch(nodeWorkspaceTransferInvalidReason),
+    ).resolves.toBe("premature_eof");
+    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
   });
 
   it.each(["buffered", "next chunk"])("rejects trailing bytes in the %s suffix", async (suffix) => {
-    const reader = createReader(
-      suffix === "buffered" ? [Buffer.from("abc!")] : [Buffer.from("abc"), Buffer.from("!")],
-    );
+    const f = fixture();
+    const chunks =
+      suffix === "buffered"
+        ? [Buffer.concat([f.payload, Buffer.from("!")])]
+        : [f.payload, Buffer.from("!")];
 
-    await expect(reader.readExactly(3)).resolves.toEqual(Buffer.from("abc"));
-    await expect(reader.assertEnd()).rejects.toMatchObject({
-      constructor: NodeWorkspaceTransferInvalidError,
-      reason: "trailing_bytes",
-    });
+    await expect(
+      f.upload(chunks, f.payload.length + 1).catch(nodeWorkspaceTransferInvalidReason),
+    ).resolves.toBe("trailing_bytes");
+    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
   });
 });

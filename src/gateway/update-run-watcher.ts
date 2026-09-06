@@ -6,7 +6,6 @@ import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
 const UPDATE_RUN_POLL_MS = 2_000;
-const UPDATE_RUN_WATCH_LIMIT_MS = 45 * 60_000;
 let wakeCurrentWatcher: (() => void) | undefined;
 
 /** Wake the Gateway-owned watcher when this process admits an update. */
@@ -21,9 +20,7 @@ export function startUpdateRunWatcher(params: {
 }): { stop: () => Promise<void> } {
   const work = new AsyncWorkScope();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let watched:
-    | { runId: string; startedAtMs: number; revision?: number; phase?: UpdateRunPhase }
-    | undefined;
+  let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
   let notices = Promise.resolve();
 
   const poll = () => {
@@ -37,10 +34,9 @@ export function startUpdateRunWatcher(params: {
         watched = undefined;
         return;
       }
-      watched ??= { runId: run.runId, startedAtMs: Date.now() };
-      const expired = Date.now() - watched.startedAtMs >= UPDATE_RUN_WATCH_LIMIT_MS;
+      watched ??= { runId: run.runId };
       const terminal = run.status !== "running";
-      if (watched.revision !== run.updatedAtMs || terminal || expired) {
+      if (watched.revision !== run.updatedAtMs || terminal) {
         params.broadcast(GATEWAY_EVENT_UPDATE_RUN_CHANGED, {
           runId: run.runId,
           phase: run.phase,
@@ -74,15 +70,14 @@ export function startUpdateRunWatcher(params: {
           );
         }
       }
-      if (terminal || expired) {
+      if (terminal) {
         watched = undefined;
-        if (terminal) {
-          poll();
-        }
+        poll();
         return;
       }
       // Named freshness-poll exception: the detached orchestrator writes the
-      // shared update ledger. Only active runs are polled, for at most 45 minutes.
+      // shared ledger. Observe one active run until terminal or teardown so a
+      // late repair still clears the clients' update-in-progress state.
       timer = setTimeout(poll, UPDATE_RUN_POLL_MS);
       timer.unref?.();
     } catch (error) {

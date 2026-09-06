@@ -48,8 +48,6 @@ describe("installGatewayDaemonNonInteractive", () => {
     serviceReadCommand.mockResolvedValue(null);
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       warnings: [],
     });
     buildGatewayInstallPlan.mockResolvedValue({
@@ -133,8 +131,6 @@ describe("installGatewayDaemonNonInteractive", () => {
 
   it("aborts with actionable error when SecretRef is unresolved", async () => {
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
       warnings: [],
     });

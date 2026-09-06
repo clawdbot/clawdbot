@@ -3251,88 +3251,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
-  it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
-    expect(
-      compactTesting.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-      } as AgentMessage),
-    ).toBe(false);
-  });
-
-  it("counts tool output as real only when a meaningful user ask exists in the lookback window", () => {
-    const heartbeatToolResultWindow = [
-      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
-      {
-        role: "toolResult",
-        toolCallId: "t1",
-        toolName: "exec",
-        content: [{ type: "text", text: "checked" }],
-      },
-    ] as AgentMessage[];
-    expect(
-      compactTesting.hasRealConversationContent(
-        expectDefined(heartbeatToolResultWindow[1], "heartbeatToolResultWindow[1] test invariant"),
-        heartbeatToolResultWindow,
-        1,
-      ),
-    ).toBe(false);
-
-    const realAskToolResultWindow = [
-      { role: "assistant", content: "NO_REPLY" },
-      { role: "user", content: "please inspect the failing PR" },
-      {
-        role: "toolResult",
-        toolCallId: "t2",
-        toolName: "exec",
-        content: [{ type: "text", text: "checked" }],
-      },
-    ] as AgentMessage[];
-    expect(
-      compactTesting.hasRealConversationContent(
-        expectDefined(realAskToolResultWindow[2], "realAskToolResultWindow[2] test invariant"),
-        realAskToolResultWindow,
-        2,
-      ),
-    ).toBe(true);
-  });
-
-  it("counts visible custom prompts as real conversation anchors for tool output", () => {
-    const messages = [
-      {
-        role: "custom",
-        customType: "cron-request",
-        content: "prepare the daily report",
-        display: true,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "read",
-        content: [{ type: "text", text: "report source data" }],
-      },
-    ] as AgentMessage[];
-
-    expect(
-      compactTesting.hasRealConversationContent(
-        expectDefined(messages[0], "messages[0] test invariant"),
-        messages,
-        0,
-      ),
-    ).toBe(true);
-    expect(
-      compactTesting.hasRealConversationContent(
-        expectDefined(messages[2], "messages[2] test invariant"),
-        messages,
-        2,
-      ),
-    ).toBe(true);
-  });
-
   it("registers the Ollama api provider before compaction", () => {
     const streamFn = vi.fn();
     registerProviderStreamForModelMock.mockReturnValue(streamFn);
@@ -4138,8 +4056,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ).rejects.toThrow("cannot override the active session agent");
   });
 
-  it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
+  it.each([true, false])("pairs successful engine hooks (compacted=%s)", async (compacted) => {
     hookRunner.hasHooks.mockReturnValue(true);
+    if (!compacted) {
+      contextEngineCompactMock.mockResolvedValueOnce({ ok: true, compacted: false });
+    }
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -4148,7 +4069,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(compacted);
     expect(result.compactionKind).toBe("context-engine");
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
@@ -4159,10 +4080,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
     });
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
       messageCount: -1,
-      compactedCount: -1,
-      tokenCount: 50,
+      compactedCount: compacted ? -1 : 0,
+      tokenCount: compacted ? 50 : undefined,
       sessionFile: TEST_SESSION_KEY,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {

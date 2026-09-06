@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -266,6 +266,7 @@ vi.mock("../session-utils.js", async () => {
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
+      storeKeys: [canonicalKey],
     };
   };
   return {
@@ -1356,13 +1357,12 @@ async function runNonStreamingChatSend(params: {
     return undefined;
   }
 
-  await waitForAssertion(() => {
-    expect(params.context.broadcast.mock.calls.length).toBe(1);
-  });
-
-  const chatCall = mockCallAt(params.context.broadcast, 0);
-  expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1] as Record<string, any> | undefined;
+  const terminalCalls = () =>
+    params.context.broadcast.mock.calls.filter(
+      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+    );
+  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
+  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectUnpersistedAgentRunFinal(params: {
@@ -4662,6 +4662,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(broadcastText).toContain("Trajectory exports can include");
     expect(broadcastText).toContain("through exec approval");
     expect(broadcastText).toContain("Approve once");
+    await waitForAssertion(() =>
+      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+    );
   });
 
   it("keeps slash-command block text when the final payload only adds media", async () => {

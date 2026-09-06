@@ -9,6 +9,7 @@ import {
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -811,7 +812,10 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      plugins: [createStateSchemaInlinePlugin()],
+      // Explicit ESM chunks avoid repeated package-format parsing in Node;
+      // named entrypoints retain their public .js paths.
+      outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
+      plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
     },
     false,
   ),

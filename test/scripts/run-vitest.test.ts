@@ -123,7 +123,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       // The JS shim creates another Node process; inject at the inherited dependency
       // boundary, and retain a bounded empty selection even if injection regresses.
       const result = spawnSync(
-        process.execPath,
+        process.versions.bun ? "node" : process.execPath,
         [
           nodePath.resolve(`scripts/run-vitest.${extension}`),
           "run",
@@ -1154,7 +1154,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       expect(snapshot).toEqual({
         groupStopped: true,
         noOutputTimedOut: false,
-        result: { code: 0, signal: null },
+        result: { code: 0, signal: null, groupJoined: true },
       });
     } finally {
       lines.close();

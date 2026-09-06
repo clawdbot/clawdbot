@@ -17,11 +17,13 @@ import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
+import {
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
-  saveAuthProfileStore,
-  updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";

@@ -544,6 +544,8 @@ async function compactResolvedContextEngine(
     provider: ceProvider,
     modelId: ceModelId,
     config: params.config,
+    workspaceDir: resolvedWorkspaceDir,
+    metadataSnapshot: preparedModelRuntime.metadataSnapshot,
     model: ceRuntimeModel,
     forceResolve:
       providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),

@@ -18,7 +18,7 @@ Install Rust with the official [rustup installer](https://rustup.rs/), then inst
 the exact toolchain used by the module:
 
 ```sh
-rustup toolchain install nightly-2026-08-31 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src
 ```
 
 The pinned nightly is required because Rust classifies `arm64_32` Watch and Intel
@@ -62,7 +62,7 @@ transitive versions.
 Run the pinned native engine tests without opening network sockets:
 
 ```sh
-cargo +nightly-2026-08-31 test --locked --manifest-path apps/shared/OpenClawWatchRTC/Cargo.toml --lib -- --test-threads=1
+cargo +nightly-2026-09-05 test --locked --manifest-path apps/shared/OpenClawWatchRTC/Cargo.toml --lib -- --test-threads=1
 ```
 
 The iOS CI test phase runs these tests too. They exchange authenticated Opus

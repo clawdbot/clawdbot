@@ -448,6 +448,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
 }): Promise<{
   committed: ConfigReplaceResult | void;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
@@ -518,7 +519,11 @@ async function commitPluginInstallRecordsWithWriter(params: {
         ]),
       });
       const committed = await params.commit(params.nextConfig, writeOptions);
-      return { committed, nextInstallRecords: prepared.nextInstallRecords };
+      return {
+        committed,
+        nextInstallRecords: prepared.nextInstallRecords,
+        indexWrite: tentativeWrite,
+      };
     } catch (error) {
       const tentative = tentativeWrite;
       if (tentative) {
@@ -557,8 +562,8 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
   beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<void> {
-  await commitPluginInstallRecordsWithWriter({
+}): Promise<InstalledPluginIndexWriteReceipt> {
+  const result = await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??
@@ -576,6 +581,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       });
     },
   });
+  return result.indexWrite;
 }
 
 /** Persist plugin install records without rewriting the user-authored config file. */
@@ -584,8 +590,8 @@ export async function commitPluginInstallRecordsOnly(params: {
   nextInstallRecords: Record<string, PluginInstallRecord>;
   nextConfig: OpenClawConfig;
   verifyConfigFresh?: () => Promise<void>;
-}): Promise<void> {
-  await commitPluginInstallRecordsWithWriter({
+}): Promise<InstalledPluginIndexWriteReceipt> {
+  const result = await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??
@@ -598,6 +604,7 @@ export async function commitPluginInstallRecordsOnly(params: {
       return undefined;
     },
   });
+  return result.indexWrite;
 }
 
 /** Commit config while migrating any pending install records into the install index. */

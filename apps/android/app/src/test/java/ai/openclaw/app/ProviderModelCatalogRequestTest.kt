@@ -54,7 +54,7 @@ class ProviderModelCatalogRequestTest {
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { paramsJson ->
+        requestProviderModelConfig(agentId = "beta", refresh = true) { paramsJson ->
           requests += paramsJson
           throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
@@ -63,7 +63,10 @@ class ProviderModelCatalogRequestTest {
       }
 
       assertTrue(actual is ProviderModelConfigUnsupported)
-      assertEquals(listOf("""{"view":"provider-config"}"""), requests)
+      assertEquals(
+        listOf(Json.parseToJsonElement("""{"view":"provider-config","agentId":"beta","refresh":true}""")),
+        requests.map(Json::parseToJsonElement),
+      )
     }
 
   @Test
@@ -73,7 +76,7 @@ class ProviderModelCatalogRequestTest {
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { throw expected }
+        requestProviderModelConfig(agentId = "beta") { throw expected }
       } catch (err: Throwable) {
         actual = err
       }

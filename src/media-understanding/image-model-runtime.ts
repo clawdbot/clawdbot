@@ -34,6 +34,7 @@ type ImageRuntimeParams = {
   model: string;
   profile?: string;
   preferredProfile?: string;
+  signal?: AbortSignal;
   authStore?: ImageDescriptionRequest["authStore"];
   agentId?: string;
   workspaceDir?: string;
@@ -135,6 +136,7 @@ async function prepareResolvedImageRuntime(
     store: params.authStore,
     secretSentinels: true,
   });
+  params.signal?.throwIfAborted();
   if (
     providerUsesCredentialScopedModelMetadata({
       provider: model.provider,
@@ -164,6 +166,7 @@ async function prepareResolvedImageRuntime(
             : {}),
       },
     );
+    params.signal?.throwIfAborted();
     model = requireImageCapableModel({
       model: authoritative.model,
       resolvedProvider: model.provider,
@@ -182,25 +185,27 @@ async function prepareResolvedImageRuntime(
     return bindResolvedImageRuntime(params, "", bindPreparedModel(model));
   }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
-  const preparedAuth = protectPreparedProviderRuntimeAuth({
+  const runtimeAuth = await prepareProviderRuntimeAuth({
     provider: model.provider,
-    preparedAuth: await prepareProviderRuntimeAuth({
-      provider: model.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: process.env,
-      context: {
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-        apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: apiKeyInfo.profileId,
-      },
-    }),
+      provider: model.provider,
+      modelId: model.id,
+      model,
+      apiKey,
+      authMode: apiKeyInfo.mode,
+      profileId: apiKeyInfo.profileId,
+    },
+  });
+  params.signal?.throwIfAborted();
+  const preparedAuth = protectPreparedProviderRuntimeAuth({
+    provider: model.provider,
+    preparedAuth: runtimeAuth,
   });
   apiKey = preparedAuth?.apiKey?.trim() || apiKey;
   model = applyPreparedRuntimeAuthToModel(model, preparedAuth);
@@ -242,7 +247,7 @@ export async function resolveImageRuntime(
           ],
         },
         // The request already chose a model; full inventory discovery must stay outside setup.
-        { catalogMode: "static" },
+        { catalogMode: "static", abortSignal: params.signal },
       );
   let leaseRetained = false;
   const retainLease = (resolved: PreparedImageRuntime): ResolvedImageRuntime => {
@@ -250,6 +255,7 @@ export async function resolveImageRuntime(
     return { ...resolved, release: preparedRuntimeLease.release };
   };
   try {
+    params.signal?.throwIfAborted();
     const preparedRuntime = preparedRuntimeLease.snapshot;
     const preparedWorkspaceDir = preparedRuntime.workspaceDir ?? runtimeParams.workspaceDir;
     const preparedParams: ImageRuntimeParams = {
@@ -280,6 +286,8 @@ export async function resolveImageRuntime(
         preparedParams.cfg,
         resolveOptions,
       );
+      // Setup may have closed during model lookup; do not start auth for a late result.
+      params.signal?.throwIfAborted();
       const model = requireImageCapableModel({
         model: resolved.model,
         resolvedProvider: resolvedRef.provider,

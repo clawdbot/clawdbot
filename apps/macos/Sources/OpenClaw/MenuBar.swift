@@ -111,7 +111,6 @@ struct OpenClawApp: App {
                     AppNavigationActions.openAbout()
                 }
             }
-            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -131,6 +130,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }
+            DashboardGatewayCommands()
         }
     }
 
@@ -352,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewaysMainMenu.shared.install()
             BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()

@@ -580,6 +580,7 @@ export async function executeQueuedCronRun(params: {
     });
     const taskRunId = taskRun?.runId;
     const activeJobMarker = markCronJobActive(executionJob.id, {
+      agentId: started.runReceipt.agentId,
       declarationKey: executionJob.declarationKey,
       preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
     });

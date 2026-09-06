@@ -8,6 +8,7 @@ import {
 import type { Model } from "../llm/types.js";
 import { escapeHtml } from "../shared/html-escape.js";
 
+export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
 export {
   decodeOpenAICodexJwtPayload,
   resolveOpenAICodexAuthIdentity,
