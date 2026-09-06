@@ -184,9 +184,19 @@ describe("legacy state migration snapshot identity", () => {
       } else {
         expect(identity.configDigest).toBeUndefined();
         expect(identity.stateDigest).toBeUndefined();
-        expect(identity.warnings).toEqual([
-          expect.stringContaining("Snapshot entry changed while hashing:"),
-        ]);
+        if (mutation === "nested-entry") {
+          // A child addition can leave directory metadata unchanged at the
+          // filesystem's observed precision; the final child-list check still refuses it.
+          expect(identity.warnings).toHaveLength(1);
+          expect([
+            `Could not bind copied snapshot: Snapshot entry changed while hashing: ${earlyDirectory}`,
+            `Could not bind copied snapshot: Snapshot directory changed while hashing: ${earlyDirectory}`,
+          ]).toContain(identity.warnings[0]);
+        } else {
+          expect(identity.warnings).toEqual([
+            expect.stringContaining("Snapshot entry changed while hashing:"),
+          ]);
+        }
       }
     },
   );
