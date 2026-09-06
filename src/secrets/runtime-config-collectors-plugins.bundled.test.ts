@@ -19,6 +19,79 @@ const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+  it("resolves default-enabled ACPX MCP SecretRefs without reinterpreting materialized strings", async () => {
+    const acpx = findBundledPluginMetadataById("acpx", {
+      includeChannelConfigs: false,
+      includeSyntheticChannelConfigs: false,
+    });
+    expect(acpx?.manifest.enabledByDefault).toBe(true);
+    expect(acpx?.manifest.configContracts?.secretInputs?.bundledDefaultEnabled).toBe(true);
+
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                proof: {
+                  command: "node",
+                  env: {
+                    TOKEN: envRef("MCP_TOKEN"),
+                    BARE: "$BARE_TOKEN",
+                    BRACED: "${BRACED_TOKEN}",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const env = {
+      MCP_TOKEN: "resolved-token",
+      BARE_TOKEN: "$OTHER",
+      BRACED_TOKEN: "${OTHER}",
+    };
+    const context = createResolverContext({ sourceConfig: config, env });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["acpx", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.acpx.config.mcpServers.proof.env.TOKEN",
+      "plugins.entries.acpx.config.mcpServers.proof.env.BARE",
+      "plugins.entries.acpx.config.mcpServers.proof.env.BRACED",
+    ]);
+    expect(context.warnings).toEqual([]);
+
+    const inlineRefs = context.assignments.slice(1).map((assignment) => assignment.ref);
+    await expect(
+      resolveSecretRefValues(inlineRefs, {
+        config,
+        env: {},
+        cache: createResolverContext({ sourceConfig: config, env: {} }).cache,
+      }),
+    ).rejects.toThrow('Environment variable "BARE_TOKEN" is missing or empty.');
+
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(config.plugins?.entries?.acpx?.config).toMatchObject({
+      mcpServers: {
+        proof: {
+          env: { TOKEN: "resolved-token", BARE: "$OTHER", BRACED: "${OTHER}" },
+        },
+      },
+    });
+  });
+
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
     expect(
       findBundledPluginMetadataById("webhooks", {

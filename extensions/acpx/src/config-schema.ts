@@ -2,6 +2,7 @@
  * ACPX plugin configuration schema and public config types. Runtime setup uses
  * this file as the single source of truth for validation and defaulting.
  */
+import { buildSecretInputSchema, type SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
@@ -19,7 +20,7 @@ export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 export type McpServerConfig = {
   command: string;
   args?: string[];
-  env?: Record<string, string>;
+  env?: Record<string, SecretInput>;
 };
 
 /** Normalized MCP server config emitted to the ACPX runtime process. */
@@ -73,8 +74,8 @@ const McpServerConfigSchema = z.object({
     .optional()
     .describe("Arguments to pass to the command"),
   env: z
-    .record(z.string(), z.string({ error: "env values must be strings" }), {
-      error: "env must be an object of strings",
+    .record(z.string(), buildSecretInputSchema(), {
+      error: "env must be an object of secret inputs",
     })
     .optional()
     .describe("Environment variables for the MCP server"),

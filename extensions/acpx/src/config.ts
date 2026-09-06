@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
@@ -219,10 +220,18 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
     name,
     command: server.command,
     args: [...(server.args ?? [])],
-    env: Object.entries(server.env ?? {}).map(([envName, value]) => ({
-      name: envName,
-      value,
-    })),
+    env: Object.entries(server.env ?? {}).map(([envName, input]) => {
+      const configPath = `plugins.entries.acpx.config.mcpServers.${name}.env.${envName}`;
+      // Snapshot preparation owns inline refs; materialized strings can resemble refs.
+      const value =
+        typeof input === "string"
+          ? input
+          : normalizeResolvedSecretInputString({ value: input, path: configPath });
+      if (value === undefined) {
+        throw new Error(`${configPath} must be a string or resolved SecretRef.`);
+      }
+      return { name: envName, value };
+    }),
   }));
 }
 

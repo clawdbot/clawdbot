@@ -85,7 +85,73 @@
             },
             "env": {
               "type": "object",
-              "additionalProperties": { "type": "string" },
+              "additionalProperties": {
+                "anyOf": [
+                  { "type": "string" },
+                  {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string", "const": "env" },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                          }
+                        },
+                        "required": ["source", "provider", "id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string", "const": "store" },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                          }
+                        },
+                        "required": ["source", "provider", "id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string", "const": "file" },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": { "type": "string" }
+                        },
+                        "required": ["source", "provider", "id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string", "const": "exec" },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": { "type": "string" }
+                        },
+                        "required": ["source", "provider", "id"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                ]
+              },
               "description": "Environment variables for the MCP server"
             }
           },
@@ -172,7 +238,7 @@
       }
     ],
     "secretInputs": {
-      "bundledDefaultEnabled": false,
+      "bundledDefaultEnabled": true,
       "paths": [
         {
           "path": "mcpServers.*.env.*",

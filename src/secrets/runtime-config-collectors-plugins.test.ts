@@ -127,7 +127,7 @@ describe("collectPluginConfigAssignments", () => {
           legacyPluginIds: [],
           configContracts: {
             secretInputs: {
-              bundledDefaultEnabled: false,
+              bundledDefaultEnabled: true,
               paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
             },
           },
@@ -504,8 +504,15 @@ describe("collectPluginConfigAssignments", () => {
     expectInactiveAcpxConfig(createAcpxMcpSecretConfig({ entry: { enabled: false } }));
   });
 
-  it("treats bundled acpx SecretRef surfaces as inactive until enabled", () => {
-    expectInactiveAcpxConfig(createAcpxMcpSecretConfig({ plugins: { enabled: true } }));
+  it("collects bundled acpx SecretRefs when the plugin is enabled by default", () => {
+    const context = collectAcpxConfigAssignments(
+      createAcpxMcpSecretConfig({ plugins: { enabled: true } }),
+    );
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.acpx.config.mcpServers.s1.env.K",
+    ]);
+    expect(context.warnings).toEqual([]);
   });
 
   it("skips assignments when plugin is in denylist", () => {
@@ -535,6 +542,13 @@ describe("collectPluginConfigAssignments", () => {
     expect(context.assignments).toHaveLength(1);
   });
 
+  it("keeps installed ACPX SecretRefs active without explicit plugin enablement", () => {
+    const context = collectAssignments(createAcpxMcpSecretConfig({}), [["acpx", "config"]]);
+
+    expect(context.assignments).toHaveLength(1);
+    expect(context.warnings).toEqual([]);
+  });
+
   it("ignores plain string env values", () => {
     const config = createPluginConfig("acpx", {
       mcpServers: {
@@ -556,7 +570,7 @@ describe("collectPluginConfigAssignments", () => {
           command: "node",
           env: {
             INLINE: "${INLINE_KEY}",
-            SECOND: "${SECOND_KEY}",
+            SECOND: "$SECOND_KEY",
             LITERAL: "hello",
           },
         },
