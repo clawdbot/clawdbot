@@ -129,7 +129,6 @@ export function registerRecoveryTests(params: {
       });
 
       const activated = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",

@@ -297,7 +297,6 @@ export async function rollbackFailedUpdate(params: {
     const restartOutcome = await maybeRestartService({
       shouldRestart: true,
       result,
-      channel: "stable",
       opts,
       refreshServiceEnv: false,
       serviceUpdateVerdict: verdict,

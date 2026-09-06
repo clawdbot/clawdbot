@@ -65,42 +65,38 @@ describe("maybeRestartService", () => {
     });
   });
 
-  it.each(["dev", "stable", "beta"] as const)(
-    "enforces the built Git identity for the %s channel",
-    async (channel) => {
-      const result = {
-        status: "ok",
-        mode: "git",
-        root: "/tmp/openclaw-configured-ui-update",
-        after: { buildId: "new-build" },
-        steps: [],
-        durationMs: 0,
-      } satisfies UpdateRunResult;
+  it("enforces the built Git identity after restart", async () => {
+    const result = {
+      status: "ok",
+      mode: "git",
+      root: "/tmp/openclaw-configured-ui-update",
+      after: { buildId: "new-build" },
+      steps: [],
+      durationMs: 0,
+    } satisfies UpdateRunResult;
 
-      await expect(
-        maybeRestartService({
-          shouldRestart: true,
-          result,
-          channel,
-          opts: { json: true },
-          refreshServiceEnv: false,
-          serviceEnv: { HOME: "/home/operator" },
-          serviceInstallEnv: {},
-          gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toBe("ok");
+    await expect(
+      maybeRestartService({
+        shouldRestart: true,
+        result,
+        opts: { json: true },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/home/operator" },
+        serviceInstallEnv: {},
+        gatewayPort: 18789,
+        restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe("ok");
 
-      expect(mocks.runRestartScript).toHaveBeenCalledWith(
-        "/tmp/openclaw-configured-ui-restart.sh",
-        1_000,
-      );
-      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-        expect.objectContaining({ expectedBuildId: "new-build" }),
-      );
-    },
-  );
+    expect(mocks.runRestartScript).toHaveBeenCalledWith(
+      "/tmp/openclaw-configured-ui-restart.sh",
+      1_000,
+    );
+    expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBuildId: "new-build" }),
+    );
+  });
 
   it("does not infer activation from a detached script when the expected Git build is never observed", async () => {
     mocks.runRestartScript.mockResolvedValueOnce(false);
@@ -129,7 +125,6 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
-        channel: "dev",
         opts: { json: true },
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
@@ -162,7 +157,6 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
-        channel: "dev",
         opts: { json: true },
         refreshServiceEnv,
         serviceEnv: { HOME: "/home/operator" },
@@ -202,7 +196,6 @@ describe("maybeRestartService", () => {
       maybeRestartService({
         shouldRestart: true,
         result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
-        channel: "stable",
         opts: { json: true },
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
@@ -228,7 +221,6 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
-        channel: "stable",
         opts: { json: true },
         refreshServiceEnv: false,
         gatewayPort: 18789,
