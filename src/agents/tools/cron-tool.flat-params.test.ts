@@ -71,6 +71,23 @@ describe("cron tool flat-params", () => {
     ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 1,
+            jobs: [{ id: "one" }],
+            visibility: "caller-scoped",
+            scopeNotice:
+              "Totals and jobs are limited to this caller's authority; other automations may exist on the gateway.",
+          },
+        },
+      ),
+    ).toEqual({
+      text: "Automations listed.\nCount: 1\nTotals and jobs are limited to this caller's authority; other automations may exist on the gateway.",
+    });
+    expect(
+      terminalPresentation(
         { action: "add" },
         { content: [], details: { id: "three", name: "private reminder" } },
       ),
