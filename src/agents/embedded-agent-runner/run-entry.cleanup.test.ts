@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import { captureContextEngineRegistryStateForTests } from "../../context-engine/registry.test-support.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
@@ -15,8 +16,8 @@ it.each(cleanupCases)(
   "settles $kind replies and cleanup ownership for $settlement",
   async ({ kind, settlement }) => {
     const restoreRegistry = captureContextEngineRegistryStateForTests();
-    const disposal = Promise.withResolvers<void>();
-    const disposalStarted = Promise.withResolvers<void>();
+    const disposal = createDeferred();
+    const disposalStarted = createDeferred();
     const dispose = vi.fn(async () => {
       disposalStarted.resolve();
       await disposal.promise;

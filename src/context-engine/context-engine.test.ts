@@ -1,6 +1,7 @@
 // Context engine tests cover context extraction and prompt context assembly.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createContextEngineLogicalTurnLease,
   selectContextEngineForTranscriptHost,
@@ -827,8 +828,8 @@ describe("Default engine selection", () => {
     "disposes once after retained turn work settles with %s",
     async (settlement) => {
       const engineId = uniqueEngineId("logical-turn-retained-work");
-      const hold = Promise.withResolvers<void>();
-      const disposed = Promise.withResolvers<void>();
+      const hold = createDeferred();
+      const disposed = createDeferred();
       const engine = new MockContextEngine();
       const dispose = vi.spyOn(engine, "dispose").mockImplementation(async () => {
         disposed.resolve();
@@ -862,8 +863,8 @@ describe("Default engine selection", () => {
       const registry = await import("./registry.js");
       const configured = new MockContextEngine();
       const fallback = new MockContextEngine();
-      const configuredGate = Promise.withResolvers<void>();
-      const fallbackGate = Promise.withResolvers<void>();
+      const configuredGate = createDeferred();
+      const fallbackGate = createDeferred();
       const configuredDispose = vi.spyOn(configured, "dispose").mockImplementation(async () => {
         if (fastFailure) {
           throw new Error("configured engine disposal failed");
