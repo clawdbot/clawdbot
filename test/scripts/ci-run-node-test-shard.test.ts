@@ -23,6 +23,7 @@ import {
   resolveTestProjectsEntrypoint,
   runShardPlans,
 } from "../../scripts/ci-run-node-test-shard.mts";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import { createDeferred } from "../helpers/promise.js";
 
@@ -94,6 +95,32 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     });
     expect(singlePlans).toHaveLength(1);
     expect(singlePlans[0]).toMatchObject({ kind: "group", name: "solo" });
+  });
+
+  it("unpacks the manifest's packed groups ahead of plain JSON groups", () => {
+    const groups = [
+      {
+        configs: ["one.config.ts"],
+        includePatterns: ["src/one.test.ts", "src/two.test.ts"],
+        shard_name: "one",
+        timing_key: "one#include-2-abcd",
+      },
+      { configs: ["two.config.ts"], env: { OPENCLAW_VITEST_MAX_WORKERS: "2" }, shard_name: "two" },
+    ];
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(groups),
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([{ configs: ["stale.config.ts"] }]),
+    });
+    expect(plans).toEqual([
+      { kind: "group", name: "one", plan: groups[0], timingKey: "one#include-2-abcd" },
+      { kind: "group", name: "two", plan: groups[1], timingKey: "two" },
+    ]);
+    // A corrupt envelope must fail the job rather than silently run whole configs.
+    expect(() =>
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "bm90LWd6aXA=",
+      }),
+    ).toThrow();
   });
 
   it("builds child env with per-plan cache isolation, includes, and env overlays", () => {

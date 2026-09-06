@@ -71,6 +71,7 @@ describe("test runtime prerequisites", () => {
       ["src/cli/update-cli/update-command-post-update-recovery.test.ts"],
       "runtime",
     ],
+    ["update repair", ["src/cli/update-cli/update-command-post-update-repair.test.ts"], "runtime"],
     [
       "update service recovery",
       ["src/cli/update-cli/update-command-service.integration.test.ts"],
@@ -2552,6 +2553,7 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/cli/update-cli/update-command-migrated.test.ts",
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
     "src/cli/one-shot-exit.test.ts",
     "src/cli/program/subcli-descriptors.test.ts",

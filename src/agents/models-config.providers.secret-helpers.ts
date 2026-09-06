@@ -59,6 +59,7 @@ export type ProviderAuthResolver = (
   mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
   source: "env" | "profile" | "none";
   profileId?: string;
+  preparationFailed?: boolean;
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;

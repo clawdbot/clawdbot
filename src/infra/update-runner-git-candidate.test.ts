@@ -598,6 +598,42 @@ describe("Git candidate activation", () => {
     expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
   });
 
+  it.each(["working", "staged", "committed"] as const)(
+    "refuses activation when validation repairs %s source outside the selected commit",
+    async (repairState) => {
+      await fs.writeFile(
+        path.join(remote, "openclaw.mjs"),
+        "throw new Error('broken launcher');\n",
+      );
+      const target = await advanceRemote();
+      let validated = false;
+      const result = await update({
+        devTarget: { mode: "detached", ref: target },
+        validateCandidate: async (candidateRoot) => {
+          const launcher = path.join(candidateRoot, "openclaw.mjs");
+          await fs.writeFile(launcher, "export {};\n");
+          if (repairState !== "working") {
+            await git(candidateRoot, "add", "openclaw.mjs");
+          }
+          if (repairState === "committed") {
+            await git(candidateRoot, "commit", "-m", "repair launcher");
+          }
+          const probe = await runCommandWithTimeout([process.execPath, launcher], {
+            timeoutMs: 5000,
+          });
+          expect(probe.code).toBe(0);
+          validated = true;
+        },
+      });
+      expect(validated).toBe(true);
+      expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+      expect(stopped).toBe(false);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      expect(await fs.readFile(path.join(root, "openclaw.mjs"), "utf8")).toBe("export {};\n");
+      expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
+    },
+  );
+
   it.each([
     { layout: "node_modules/.pnpm", restoreSource: true, restoreRuntime: true },
     { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true },

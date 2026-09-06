@@ -80,7 +80,8 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
   if (!currentPromptEntry) {
     return "";
   }
-  if (historyEntries.length === 0) {
+  // A completed tool call still needs its identity when its output is empty.
+  if (historyEntries.length === 0 && currentConversationEntry.role !== "tool") {
     return currentPromptEntry.body;
   }
 

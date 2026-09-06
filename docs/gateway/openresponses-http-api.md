@@ -102,6 +102,8 @@ Provide tools with `tools: [{ type: "function", name, description?, parameters? 
 
 If the agent calls a tool, the response returns a `function_call` output item. Send a follow-up request with `function_call_output` to continue the turn.
 
+If a tool produces no text, return `output: ""` with its `call_id`. The empty result still completes that tool call and can be the only new input item in a continuation.
+
 Clients that manage their own history can append `response.output` to `input`, then append new user messages or `function_call_output` items. Keep returned assistant metadata and function-call IDs, names, and arguments unchanged. Alternatively, supply `previous_response_id` and only the new input items.
 
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.

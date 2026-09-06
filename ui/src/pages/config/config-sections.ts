@@ -12,7 +12,7 @@ export type ConfigPageId =
   | "ai-agents"
   | "advanced";
 
-const COMMUNICATION_SECTION_KEYS = ["messages", "tts"] as const;
+const COMMUNICATION_SECTION_KEYS = ["messages", "tts", "transcripts"] as const;
 
 // Curated Talk home: catalog-driven provider/model/voice pickers render above
 // the talk schema section (talk.ts / talk-page.ts).

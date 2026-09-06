@@ -3843,7 +3843,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy voice wake triggers");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(triggersPath)).resolves.toBeUndefined();
+    await fs.access(triggersPath);
     await expectMissingPath(`${triggersPath}.migrated`);
   });
 
@@ -3943,7 +3943,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy voice wake routing");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(routingPath)).resolves.toBeUndefined();
+    await fs.access(routingPath);
     await expectMissingPath(`${routingPath}.migrated`);
   });
 
@@ -4593,7 +4593,7 @@ describe("state migrations", () => {
     expect(result.changes).toContain("plugin state migrated");
     expect(detectedStateDirs).toStrictEqual([canonicalStateDir]);
     expect(migratedStateDirs).toStrictEqual([canonicalStateDir]);
-    await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
+    await fs.access(path.join(canonicalStateDir, "legacy.txt"));
   });
 
   it("routes explicit Doctor repair through the APNs SQLite importer", async () => {
@@ -5067,7 +5067,7 @@ describe("state migrations", () => {
       },
     ]);
     await expectMissingPath(sourcePath);
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
   });
 
   it("removes a regenerated config health source when its archive already exists", async () => {
@@ -5118,7 +5118,7 @@ describe("state migrations", () => {
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy config health state");
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
@@ -5428,7 +5428,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy plugin binding approvals");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
@@ -5513,8 +5513,8 @@ describe("state migrations", () => {
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.changes.some((change) => change.includes("exec approvals"))).toBe(false);
     expect(result.changes.some((change) => change.includes("plugin binding approval"))).toBe(false);
-    await expect(fs.access(execApprovalsPath)).resolves.toBeUndefined();
-    await expect(fs.access(pluginApprovalsPath)).resolves.toBeUndefined();
+    await fs.access(execApprovalsPath);
+    await fs.access(pluginApprovalsPath);
     await expectMissingPath(path.join(stateDir, "exec-approvals.json"));
     expect(readPluginBindingApprovalRows(env)).toEqual([]);
   });
@@ -5795,7 +5795,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy current-conversation bindings");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 

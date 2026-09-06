@@ -2355,7 +2355,7 @@ describe("runGatewayUpdate", () => {
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: "preflight build clean check (upstream)",
+        name: "preflight candidate clean check (upstream)",
         exitCode: 1,
         stdoutTail: diagnostic,
       }),

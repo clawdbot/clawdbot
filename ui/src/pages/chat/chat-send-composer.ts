@@ -15,19 +15,8 @@ import {
 import { excludeComposerAttachments, removeQueuedMessageWithoutReleasing } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-
-function attachmentSubmitSignature(attachment: ChatAttachment): string {
-  const dataUrl = getChatAttachmentDataUrl(attachment);
-  return JSON.stringify([
-    attachment.id,
-    attachment.mimeType,
-    attachment.fileName ?? "",
-    attachment.sizeBytes ?? 0,
-    dataUrl?.length ?? 0,
-    dataUrl?.slice(0, 64) ?? "",
-  ]);
-}
 
 export function chatSubmitKey(
   host: ChatHost,
@@ -39,9 +28,7 @@ export function chatSubmitKey(
   return JSON.stringify([
     kind,
     host.sessionKey,
-    message.trim(),
-    mentions ?? [],
-    attachments.map(attachmentSubmitSignature),
+    chatAttachmentDraftSignature(message.trim(), attachments, undefined, mentions),
   ]);
 }
 
@@ -52,17 +39,14 @@ export function clearSubmittedComposerState(
   submittedMentions: readonly HumanMention[] | undefined,
   preserveBrowserAnnotations = false,
 ) {
-  const attachmentsUnchanged =
-    host.chatAttachments.length === submittedAttachments.length &&
-    host.chatAttachments.every(
-      (attachment, index) =>
-        attachmentSubmitSignature(attachment) ===
-        attachmentSubmitSignature(submittedAttachments[index]!),
-    );
   if (
-    host.chatMessage !== submittedDraft ||
-    JSON.stringify(host.chatMentions ?? []) !== JSON.stringify(submittedMentions ?? []) ||
-    !attachmentsUnchanged
+    chatAttachmentDraftSignature(
+      host.chatMessage,
+      host.chatAttachments,
+      undefined,
+      host.chatMentions,
+    ) !==
+    chatAttachmentDraftSignature(submittedDraft, submittedAttachments, undefined, submittedMentions)
   ) {
     return {};
   }

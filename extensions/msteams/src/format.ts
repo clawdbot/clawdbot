@@ -47,6 +47,10 @@ function createTokenPrefix(text: string, label: string): string {
 }
 
 function restoreTokens(text: string, prefix: string, values: readonly string[]): string {
+  // Empty value tables can still have matching markers after normalization.
+  if (!text.includes(prefix)) {
+    return text;
+  }
   const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   return text.replace(
     new RegExp(`${escapedPrefix}(\\d+)${TOKEN_END}`, "gu"),
@@ -57,22 +61,20 @@ function restoreTokens(text: string, prefix: string, values: readonly string[]):
 type TextEdit = { start: number; end: number; text: string };
 
 function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly TextEdit[]): MarkdownIR {
-  const ordered = [...edits].toSorted((a, b) => a.start - b.start);
+  const ordered = edits.toSorted((a, b) => a.start - b.start);
+  const cumulativeDeltas: number[] = [];
+  const exactEdits = new Map<string, TextEdit>();
   let text = "";
   let cursor = 0;
+  let delta = 0;
   for (const edit of ordered) {
     text += ir.text.slice(cursor, edit.start) + edit.text;
     cursor = edit.end;
-  }
-  text += ir.text.slice(cursor);
-
-  const cumulativeDeltas: number[] = [];
-  let delta = 0;
-  for (const edit of ordered) {
     delta += edit.text.length - (edit.end - edit.start);
     cumulativeDeltas.push(delta);
+    exactEdits.set(`${edit.start}:${edit.end}`, edit);
   }
-  const exactEdits = new Map(ordered.map((edit) => [`${edit.start}:${edit.end}`, edit]));
+  text += ir.text.slice(cursor);
   const mapOffset = (offset: number): number => {
     let low = 0;
     let high = ordered.length;
@@ -486,6 +488,9 @@ function protectMSTeamsCode(
 }
 
 export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTableMode): string {
+  if (markdown === "") {
+    return markdown;
+  }
   const rawTables: string[] = [];
   const escapedMarkdown: string[] = [];
   const codeRegions: string[] = [];

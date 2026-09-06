@@ -5,7 +5,10 @@ import {
   codeModeRetentionEntrypoint,
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
-import { cliRecoveryEntrypoints } from "../../src/cli/cli-entrypoint.test-support.ts";
+import {
+  cliRecoveryEntrypoints,
+  gatewayDirectStopEntrypoints,
+} from "../../src/cli/cli-entrypoint.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
@@ -29,6 +32,7 @@ export const vitestWorkerBuildEntries = {
       codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...Object.values(cliRecoveryEntrypoints),
+      ...Object.values(gatewayDirectStopEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),

@@ -349,6 +349,14 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Static transcript setup metadata; runtime registration does not gate configuration. */
+export type PluginManifestTranscriptSource = {
+  name?: string;
+  autoStart?: Partial<
+    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+  >;
+};
+
 /** Declarative backup ownership rooted at host-managed state or each configured agent. */
 export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
@@ -456,6 +464,8 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
+  transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
   mediaUnderstandingProviderMetadata?: Record<
     string,

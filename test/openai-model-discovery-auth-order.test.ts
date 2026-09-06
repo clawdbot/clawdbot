@@ -10,6 +10,7 @@ import {
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
+import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
@@ -39,6 +40,10 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
+    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
+      async ({ provider, context }) =>
+        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
+    );
   });
 
   afterEach(async () => {
@@ -350,50 +355,311 @@ describe("Provider model discovery auth preparation", () => {
     }
   });
 
-  it("does not start a live catalog after OAuth preparation times out", async () => {
-    const { config, store, refreshedCredential } = await createChutesCatalogFixture();
-    const refreshResult =
-      createDeferredCore<
-        Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
-      >();
-    const refresh = vi
-      .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-      .mockImplementation(() => refreshResult.promise);
-    const preparation = vi.spyOn(catalogContext, "prepareProviderCatalogRun");
-    const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(Response.json({ data: [{ id: "late-account-model" }] }));
-    const outcomes: ProviderCatalogOutcome[] = [];
+  it.each([
+    { providerId: "chutes", profileCount: 1 },
+    { providerId: "chutes", profileCount: 2 },
+    { providerId: "openai", profileCount: 1 },
+  ])(
+    "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
+    async ({ providerId, profileCount }) => {
+      if (providerId === "chutes") {
+        chutesPlugin.register(
+          createTestPluginApi({
+            registerProvider: (provider) => {
+              discovery.providers = [provider];
+            },
+          }),
+        );
+      }
+      const profileIds = Array.from(
+        { length: profileCount },
+        (_, index) => `${providerId}:oauth-${index}`,
+      );
+      const profiles = Object.fromEntries(
+        profileIds.map((profileId) => [
+          profileId,
+          {
+            type: "oauth" as const,
+            provider: providerId,
+            access: `expired-${profileId}`,
+            refresh: `refresh-${profileId}`,
+            expires: Date.now() - 60_000,
+          },
+        ]),
+      );
+      const store: AuthProfileStore = { version: 1, profiles };
+      const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
+      await state.writeAuthProfiles(store);
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockRejectedValue(new Error("synthetic OAuth refresh failure"));
+      const runtimeAuth = vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider");
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+      const outcomes: ProviderCatalogOutcome[] = [];
+      const previousProfileId = profileIds[profileIds.length - 1];
+      const previousCredential = previousProfileId && profiles[previousProfileId];
+      if (!previousProfileId || !previousCredential) {
+        throw new Error("OAuth fixture requires a previous profile");
+      }
+      const auth = {
+        authStore: store,
+        authModes: { [providerId]: "oauth" as const },
+        credentials: { [providerId]: previousCredential },
+      };
+      const priorModel = {
+        id: "prior-account-only-model",
+        name: "Prior Account Model",
+        provider: providerId,
+      };
+      const previous = prepareModelCatalogPublication(
+        {
+          entries: [priorModel],
+          routeVariants: [],
+          providerOutcomes: [
+            { provider: providerId, profileId: previousProfileId, status: "ready" },
+          ],
+        },
+        undefined,
+        auth,
+        (provider) => provider,
+      );
 
-    try {
-      const plan = await planCatalog(config, store, {
+      const plan = await planCatalog(config, store, { providerId, outcomes });
+      const published = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          staticEntries: readPlannedProvider(plan, providerId)?.models.map((model) =>
+            Object.assign(model, { provider: providerId }),
+          ),
+          providerOutcomes: outcomes,
+        },
+        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        auth,
+        (provider) => provider,
+      );
+
+      expect(published.catalog.entries).toContainEqual(priorModel);
+      expect(published.discoveryOrigins).toEqual(previous.discoveryOrigins);
+      expect(outcomes).toEqual(
+        profileIds.map((profileId) => ({ provider: providerId, profileId, status: "unavailable" })),
+      );
+      expect(refresh).toHaveBeenCalledTimes(profileCount);
+      expect(runtimeAuth).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { completion: "success", timedOut: true },
+    { completion: "failure", timedOut: true },
+    { completion: "failure", timedOut: false },
+  ] as const)(
+    "keeps OAuth preparation bounded after $completion (timeout: $timedOut)",
+    async ({ completion, timedOut }) => {
+      const { profileId, config, store, capturedCredential, refreshedCredential } =
+        await createChutesCatalogFixture();
+      const fallbackProfileId = "chutes:fallback";
+      const fallbackCredential: OAuthCredential = {
+        type: "oauth",
+        provider: "chutes",
+        access: "expired-fallback-access",
+        refresh: "fallback-refresh-token",
+        expires: Date.now() - 60_000,
+      };
+      const refreshedFallback: OAuthCredential = {
+        ...fallbackCredential,
+        access: "refreshed-fallback-access",
+        refresh: "rotated-fallback-refresh-token",
+        expires: Date.now() + 3_600_000,
+      };
+      config.auth = { order: { chutes: [profileId, fallbackProfileId] } };
+      store.profiles[fallbackProfileId] = fallbackCredential;
+      await state.writeAuthProfiles(store);
+      const persistedBefore = readAuthProfileStoreForTest(agentDir);
+      const persistedFirstProfile = persistedBefore.profiles[profileId];
+      if (!persistedFirstProfile) {
+        throw new Error("missing persisted first-profile fixture");
+      }
+      const refreshStarted = createDeferredCore();
+      const refreshResult =
+        createDeferredCore<
+          Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
+        >();
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockImplementation(async ({ credential }) => {
+          if (credential.access !== fallbackCredential.access) {
+            refreshStarted.resolve();
+            return refreshResult.promise;
+          }
+          return {
+            status: "available",
+            credential: refreshedFallback,
+            apiKey: refreshedFallback.access,
+          };
+        });
+      const preparation = vi.spyOn(catalogContext, "prepareProviderCatalogRun");
+      const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ data: [{ id: "late-account-model" }] }));
+      const outcomes: ProviderCatalogOutcome[] = [];
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const planning = planCatalog(config, store, {
         providerId: "chutes",
-        timeoutMs: 25,
+        timeoutMs: timedOut ? 25 : undefined,
         outcomes,
       });
 
-      expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
-      expect(readPlannedProvider(plan, "chutes")?.models.length).toBeGreaterThan(0);
-      expect(fetch).not.toHaveBeenCalled();
-    } finally {
-      refreshResult.resolve({
-        status: "available",
-        credential: refreshedCredential,
-        apiKey: refreshedCredential.access,
-      });
-      // Drain the real preparation and any erroneously started catalog before checking late I/O.
-      const completedPreparation = await Promise.allSettled(
-        preparation.mock.results.map((result) => result.value),
-      );
-      await Promise.allSettled(catalog.mock.results.map((result) => result.value));
-      expect(completedPreparation).toEqual([expect.objectContaining({ status: "fulfilled" })]);
-    }
+      try {
+        await refreshStarted.promise;
+        if (timedOut) {
+          await vi.advanceTimersByTimeAsync(25);
+          const plan = await planning;
+          expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
+          expect(readPlannedProvider(plan, "chutes")?.models.length).toBeGreaterThan(0);
+        }
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        try {
+          if (completion === "success") {
+            refreshResult.resolve({
+              status: "available",
+              credential: refreshedCredential,
+              apiKey: refreshedCredential.access,
+            });
+          } else {
+            refreshResult.reject(new Error("synthetic OAuth refresh failure"));
+          }
+          // Join the real refresh owner so late credential persistence and I/O are observable.
+          const completedPreparation = await Promise.allSettled(
+            preparation.mock.results.map((result) => result.value),
+          );
+          await Promise.allSettled(catalog.mock.results.map((result) => result.value));
+          expect(completedPreparation).toEqual([expect.objectContaining({ status: "fulfilled" })]);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(preparation).toHaveBeenCalledOnce();
-    expect(catalog).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-    expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
-  });
+      const plan = await planning;
+      expect(refresh.mock.calls.map(([params]) => params.credential)).toEqual(
+        timedOut ? [capturedCredential] : [capturedCredential, fallbackCredential],
+      );
+      const persisted = readAuthProfileStoreForTest(agentDir);
+      expect(persisted.profiles[profileId]).toMatchObject(
+        completion === "success" ? refreshedCredential : persistedFirstProfile,
+      );
+      expect(persisted.profiles[fallbackProfileId]).toMatchObject(
+        timedOut ? fallbackCredential : refreshedFallback,
+      );
+      expect(store.profiles[profileId]).toEqual(capturedCredential);
+      expect(store.profiles[fallbackProfileId]).toEqual(fallbackCredential);
+      expect(preparation).toHaveBeenCalledOnce();
+      if (timedOut) {
+        expect(catalog).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+        expect(outcomes).toEqual([{ provider: "chutes", status: "unavailable" }]);
+      } else {
+        expect(catalog).toHaveBeenCalledOnce();
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+          `Bearer ${refreshedFallback.access}`,
+        );
+        expect(outcomes).toEqual([
+          { provider: "chutes", profileId: fallbackProfileId, status: "ready" },
+        ]);
+        expect(readPlannedProvider(plan, "chutes")?.models.map((model) => model.id)).toContain(
+          "late-account-model",
+        );
+      }
+    },
+  );
+
+  it.each(["outcome", "provider"] as const)(
+    "preserves a plugin-owned %s after probing exhausted OAuth",
+    async (resultKind) => {
+      const { config, store } = await createChutesCatalogFixture();
+      const otherProfileId = "openai:other-source";
+      store.profiles[otherProfileId] = {
+        type: "api_key",
+        provider: "openai",
+        key: "independent-source-key",
+      };
+      await state.writeAuthProfiles(store);
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
+        new Error("synthetic OAuth refresh failure"),
+      );
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+      const provider = discovery.providers[0];
+      if (!provider) {
+        throw new Error("Chutes fixture did not register a provider");
+      }
+      const independentModel = {
+        id: "independent-source-model",
+        name: "Independent Source Model",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8_192,
+      };
+      const explicitOutcome: ProviderCatalogOutcome = {
+        provider: "chutes",
+        profileId: otherProfileId,
+        status: "unavailable",
+      };
+      let reads = 0;
+      provider.catalog = {
+        order: "profile",
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("CHUTES");
+          const other = ctx.resolveProviderAuth("openai");
+          expect(other.profileId).toBe(otherProfileId);
+          expect(other.preparationFailed).not.toBe(true);
+          if (resultKind === "outcome") {
+            return {
+              providers: {},
+              get outcomes() {
+                return reads++ === 0 ? [explicitOutcome] : [];
+              },
+            };
+          }
+          return {
+            get provider() {
+              return {
+                baseUrl: "https://api.chutes.ai/v1",
+                apiKey: other.apiKey,
+                models: reads++ === 0 ? [independentModel] : [],
+              };
+            },
+          };
+        },
+      };
+      const outcomes: ProviderCatalogOutcome[] = [];
+
+      const plan = await planCatalog(config, store, { providerId: "chutes", outcomes });
+
+      if (resultKind === "outcome") {
+        expect(outcomes).toEqual([explicitOutcome]);
+      } else {
+        expect(outcomes).toEqual([]);
+        expect(readPlannedProvider(plan, "chutes")?.models.map((model) => model.id)).toContain(
+          independentModel.id,
+        );
+      }
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 });

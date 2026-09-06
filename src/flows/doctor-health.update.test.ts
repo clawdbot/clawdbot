@@ -166,7 +166,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           const restart = vi.fn();
           restartUpdatedInstall.mockImplementation(async () => {
             running = true;
-            return true;
+            return "accepted";
           });
           mocks.service.mockReturnValue({
             readCommand: async () => ({

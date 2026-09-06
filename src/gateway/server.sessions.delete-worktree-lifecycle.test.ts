@@ -419,7 +419,7 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
     successorWorktreeId = successorWorktree.id;
     expect(successorSessionId).not.toBe(predecessorSessionId);
     expect(successorWorktree.id).not.toBe(predecessorWorktree.id);
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(getRegistryWorktree(process.env, successorWorktree.id)?.id).toBe(successorWorktree.id);
     expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
     const persisted = loadSessionEntry({ sessionKey: key, storePath });
@@ -544,7 +544,7 @@ test.each([
       await expect(fs.access(worktree.path)).rejects.toThrow();
     } else {
       expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await fs.access(worktree.path);
     }
   } finally {
     removeSpy.mockRestore();
@@ -598,7 +598,7 @@ test("sessions.delete reports a busy preserved worktree while a live run lease e
       },
     });
     expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-    await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+    await fs.access(worktree.path);
   } finally {
     await runLease?.release();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
@@ -667,7 +667,7 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
       ownerId: "foreign-owner",
     });
     expect(getRegistryWorktree(process.env, foreignWorktree.id)?.removedAt).toBeUndefined();
-    await expect(fs.access(foreignWorktree.path)).resolves.toBeUndefined();
+    await fs.access(foreignWorktree.path);
   } finally {
     removeSpy.mockRestore();
     if (getRegistryWorktree(process.env, foreignWorktree.id)?.removedAt === undefined) {

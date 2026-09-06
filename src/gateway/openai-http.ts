@@ -410,34 +410,27 @@ function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
 }
 
-function extractTextContent(content: unknown): string {
+function extractTextContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
   if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-        const type = (part as { type?: unknown }).type;
-        const text = (part as { text?: unknown }).text;
-        const inputText = (part as { input_text?: unknown }).input_text;
-        if (type === "text" && typeof text === "string") {
-          return text;
-        }
-        if (type === "input_text" && typeof text === "string") {
-          return text;
-        }
-        if (typeof inputText === "string") {
-          return inputText;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
+    const parts = content.map((part) => {
+      if (!part || typeof part !== "object") {
+        return undefined;
+      }
+      const type = (part as { type?: unknown }).type;
+      const text = (part as { text?: unknown }).text;
+      const inputText = (part as { input_text?: unknown }).input_text;
+      if ((type === "text" || type === "input_text") && typeof text === "string") {
+        return text;
+      }
+      return typeof inputText === "string" ? inputText : undefined;
+    });
+    const text = parts.filter(Boolean).join("\n");
+    return text.trim() || parts.every((part) => part !== undefined) ? text : undefined;
   }
-  return "";
+  return undefined;
 }
 
 function stringifyToolCallArguments(value: unknown): string {
@@ -646,7 +639,9 @@ function buildAgentPrompt(
       continue;
     }
     const role = normalizeOptionalString(msg.role) ?? "";
-    const content = extractTextContent(msg.content).trim();
+    const content = (
+      role === "function" && msg.content === null ? "" : extractTextContent(msg.content)
+    )?.trim();
     if (!role) {
       continue;
     }
@@ -677,12 +672,18 @@ function buildAgentPrompt(
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
       .filter((part): part is string => Boolean(part))
       .join("\n");
-    if (!messageContent) {
+    const name = normalizeOptionalString(msg.name) ?? "";
+    const toolCallId = normalizeOptionalString(msg.tool_call_id) ?? "";
+    // Empty output completes a named call; absent or malformed content does not.
+    const isToolResult =
+      normalizedRole === "tool" &&
+      Boolean(role === "function" ? name : toolCallId) &&
+      content !== undefined &&
+      (role !== "function" || typeof msg.content === "string" || msg.content === null);
+    if (!messageContent && !isToolResult) {
       continue;
     }
 
-    const name = normalizeOptionalString(msg.name) ?? "";
-    const toolCallId = normalizeOptionalString(msg.tool_call_id) ?? "";
     const sender =
       normalizedRole === "assistant"
         ? "Assistant"

@@ -938,6 +938,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (auth.preparationFailed) {
+          return null;
+        }
         const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         let runtimeAuth: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;

@@ -120,6 +120,9 @@ those installations; the durable run report remains available after reconnect.
 Runs with an internal origin session, including Control UI and webchat, receive
 these notices directly in that session's transcript. Passing only `sessionKey`
 is enough; the caller does not need to supply `deliveryContext`.
+Before stopping the managed service, the updater waits for the serving Gateway
+to finish its restart notice attempt. That wait is capped at 10 seconds so a
+stalled notice cannot block activation.
 
 The report includes the outcome, recorded phase durations, failed steps,
 verification facts, and the next action when needed. A run sends each notice
@@ -680,10 +683,13 @@ The bounded inference check is advisory:
 `inference: unavailable` by itself does not trigger rollback.
 
 If configuration content or a schema version changed, rollback is refused with
-`state-migrated-no-rollback`. A reachable candidate remains running so it can be
-diagnosed; an unreachable candidate remains stopped. Preserve the current state
-and use `openclaw triage` or the printed repair command before considering an
-older version.
+`state-migrated-no-rollback`. The updater attempts
+[bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
+on the installed candidate, preserving migrated state. The same repair slot can
+run if rollback itself fails, targeting the previous release if its package was
+already restored. If repair cannot pass verification, the update
+fails with the original reason and recorded repair attempts. Use `openclaw triage`
+or the printed repair command before considering an older version.
 Automatic rollback restores code, not a full state snapshot.
 The candidate's temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
@@ -881,6 +887,11 @@ alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command
 formatting and installation targeting.
 
+Triage keeps the failed update's report intact. An update started during repair
+creates its own history entry. After package replacement, restart commands run
+from the updated installation. A restart accepted by the service owner can still
+fail readiness checks; inspect `openclaw gateway status --deep` before retrying.
+
 Keep a stopped, unverified Gateway stopped and preserve migrated state during
 repair. A reachable candidate retained after a schema migration can continue
 serving while you diagnose it.
@@ -890,16 +901,77 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
-To repair using OpenClaw's configured inference, run `openclaw triage --run`
-in a terminal on the Gateway host. It checks Doctor lint, then runs up to one
-embedded repair turn with time and tool-call limits and checks Doctor again.
-It uses the system-agent owner's model and configured fallbacks before trying
-other agents' authenticated routes. Operator-owned updates and explicit repair requests
+### Unattended repair on your own inference
+
+The updater enters the optional `repairing` phase when candidate Doctor lint,
+config validation, plugin resolution, or canary startup fails. It repairs the
+staged candidate and reruns the failed check while the old Gateway keeps serving.
+Only a passing validation allows activation; otherwise the update fails and
+discards the candidate without stopping the service.
+Before activation, repair shares one disposable rehearsal state/config snapshot
+across its turns and validation, then independently validates surviving candidate
+changes before activation; configuration changes are never promoted and
+stop as `repair-requires-config-change`, naming the changed top-level keys for
+the operator to inspect with `openclaw triage` or apply with `openclaw doctor --fix`.
+
+Git source updates keep the selected source revision. Repair may restore
+dependencies, generated runtime files, or state, but a candidate with changed
+tracked source fails before the Gateway stops; fix the source revision before retrying.
+
+After activation, the updater can also enter `repairing` when verification fails
+and changed configuration content or a schema migration prevents rollback, or
+when rollback itself fails. This repair targets the runtime that remains
+installed and preserves migrated state. After each turn, the updater starts or
+restarts a stopped or unhealthy service once, then reruns the service, version,
+and `/readyz` checks. A verified candidate repair allows the run to succeed. If
+rollback already restored the previous release, successful repair finishes
+`rolled-back` and the command still exits nonzero. Otherwise the original failure
+and repair summary remain in the final report.
+
+During finalization on Windows, the updater restores Scheduled Task autostart
+for activation and suspends it again if final verification fails. This ownership
+survives the fresh-process handoff required after a state migration. See
+[Failed update recovery](/gateway/restart-recovery#recovery-after-a-failed-update).
+
+Repair uses the same embedded loop as `openclaw triage --run`, without a terminal
+or an external coding-agent CLI. It uses the system-agent owner's default model,
+its `model.fallbacks`, then other configured agents' authenticated routes,
+skipping models without tool support and routes without usable authentication.
+It reports unavailable inference instead of waiting for a login or approval
+prompt. Operator-owned updates and explicit repair requests
 replace interactive exec approval with a prompt-free run scoped to the installation
 or staged candidate root (`fs.workspaceOnly: true`), preserving safe-bin and tool
 allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
-and an `openclaw triage` external handoff. See [Triage](/cli/triage#installation-target-and-embedded-handoff)
-for the repair contract, installation targeting, and validation results.
+and an `openclaw triage` external handoff.
+
+Chat-requested updates recheck the requester's command ownership before repair
+effects and service activation. If configuration or plugin loading fails, the
+update stops and records the load error. Fix that error before retrying; only a
+successful policy check can report that the requester is no longer an owner.
+
+The default limits are three turns, ten minutes total, five minutes per turn,
+and 40 tool calls per turn. The updater supplies a validation check before the
+first turn and after each attempt. Repair stops when validation succeeds, a
+budget is reached, or a turn fails to improve the result; a regression is
+reported as unrepaired. The model's `REPAIR_RESULT` summary does not replace
+these checks.
+
+The agent may diagnose and repair the target install or staged candidate and
+its OpenClaw state, including running Doctor lint, `doctor --fix`, and health
+checks. Its repair contract forbids changing credentials or auth stores,
+deleting state or databases, package-manager writes outside the target root,
+and service or Gateway lifecycle commands. The orchestrator retains control of
+activation, restart, and rollback. The repair loop does not take snapshots or undo
+changes. Attempts appear live in the Control UI's phase and step details and in
+`openclaw update status`; the final report includes their summaries. JSON run
+records retain the `repair` attempt list. Repairing stays hidden in the Control
+UI when the run never entered that phase.
+
+For an explicit repair using configured inference, run `openclaw triage --run`
+in a terminal on the Gateway host. Interactive triage checks Doctor lint, runs
+up to one embedded repair turn with time and tool-call limits, and checks Doctor
+again. See [Triage](/cli/triage#installation-target-and-embedded-handoff) for the
+repair contract, installation targeting, and validation results.
 
 ## Related
 

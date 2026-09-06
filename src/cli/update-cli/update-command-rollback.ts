@@ -18,6 +18,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import {
   maybeRestartService,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -247,7 +248,15 @@ export async function rollbackFailedUpdate(params: {
       return failed("previous-version-unverified");
     }
     failureReason = "service-revalidation-failed";
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped, true);
+    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+      stopped,
+      true,
+      createWindowsTaskAutoStartGuard({
+        root: params.previousRoot,
+        before: stopped,
+        timeoutMs: params.timeoutMs,
+      }),
+    );
     // A failed candidate does not authorize its restart. The previous package's
     // pre-activation verification authorizes restarting this schema-neutral restoration.
     const verdict = stopped.serviceUpdateVerdict ?? before?.serviceUpdateVerdict;
@@ -285,7 +294,7 @@ export async function rollbackFailedUpdate(params: {
     }
     failureReason = "restart-unhealthy";
     let verifiedAtMs: number | undefined;
-    const healthy = await maybeRestartService({
+    const restartOutcome = await maybeRestartService({
       shouldRestart: true,
       result,
       channel: "stable",
@@ -305,6 +314,7 @@ export async function rollbackFailedUpdate(params: {
         verifiedAtMs = at;
       },
     });
+    const healthy = restartOutcome === "ok";
     return {
       result: {
         ...result,

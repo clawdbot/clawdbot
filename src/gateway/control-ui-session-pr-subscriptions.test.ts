@@ -194,6 +194,26 @@ describe("control UI session PR subscriptions", () => {
     ).toEqual(["only-a", "only-b", "shared"]);
   });
 
+  it("keeps a delivered audience snapshot when a send disconnects a watcher", async () => {
+    let revision = 0;
+    const load = vi.fn(async () => ({ ...READY, rateLimited: revision > 0 }));
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    await active.replace("conn-a", ["shared"]);
+    await active.replace("conn-b", ["shared"]);
+    broadcastToConnIds.mockClear();
+    broadcastToConnIds.mockImplementationOnce(() => active!.unsubscribe("conn-b"));
+
+    revision++;
+    await active.pollNow();
+
+    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-a", "conn-b"]));
+    broadcastToConnIds.mockClear();
+    revision = 0;
+    await active.pollNow();
+    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-a"]));
+  });
+
   it("shares the four-load limit across connections, hydration, and polling", async () => {
     vi.useFakeTimers();
     const releases: Array<() => void> = [];

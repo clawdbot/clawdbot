@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
+import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
@@ -21,6 +22,7 @@ import {
 
 afterEach(() => {
   vi.doUnmock("ws");
+  vi.doUnmock("../../packages/gateway-client/src/websocket.js");
   vi.doUnmock("./server.js");
   vi.doUnmock("../test-utils/ports.js");
   vi.doUnmock("../infra/device-pairing.js");
@@ -64,8 +66,10 @@ async function withAcquisitionPeer(
   const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
   // Observe the real dependency; keep otherwise-unhandled errors local to this case.
   // Counting the remaining listeners makes a removed owner handler observable.
-  vi.doMock("ws", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("ws")>();
+  const observeWebSocket = async () => {
+    const actual = await vi.importActual<
+      typeof import("../../packages/gateway-client/src/websocket.js")
+    >("../../packages/gateway-client/src/websocket.js");
     class ObservedWebSocket extends actual.WebSocket {
       constructor(...args: ConstructorParameters<typeof WebSocket>) {
         super(...args);
@@ -80,8 +84,15 @@ async function withAcquisitionPeer(
         });
       }
     }
-    return { ...actual, default: ObservedWebSocket, WebSocket: ObservedWebSocket };
-  });
+    return {
+      ...actual,
+      default: ObservedWebSocket,
+      WebSocket: ObservedWebSocket,
+      WebSocketServer,
+    };
+  };
+  vi.doMock("ws", observeWebSocket);
+  vi.doMock("../../packages/gateway-client/src/websocket.js", observeWebSocket);
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   let receivedUpgrade = false;

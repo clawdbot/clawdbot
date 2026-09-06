@@ -691,7 +691,7 @@ extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/idb-persistence.ts	4
 extensions/matrix/src/matrix/sdk/transport.ts	3
 extensions/matrix/src/matrix/sdk/verification-manager.ts	3
-extensions/matrix/src/matrix/send.ts	12
+extensions/matrix/src/matrix/send.ts	9
 extensions/matrix/src/matrix/send/chunking.ts	4
 extensions/matrix/src/matrix/send/client.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
@@ -901,11 +901,9 @@ extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
 extensions/openai/video-generation-provider.ts	3
-extensions/opencode-go/provider-policy-api.ts	1
 extensions/opencode-go/reasoning-sanitizer.ts	2
 extensions/opencode-go/stream-termination.ts	9
 extensions/opencode/provider-catalog.ts	2
-extensions/opencode/provider-policy-api.ts	1
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
 extensions/openrouter/music-generation-provider.ts	2
@@ -1136,7 +1134,7 @@ extensions/slack/src/monitor/events/messages.ts	14
 extensions/slack/src/monitor/events/pins.ts	1
 extensions/slack/src/monitor/events/reactions.ts	2
 extensions/slack/src/monitor/ingress.ts	8
-extensions/slack/src/monitor/media.ts	2
+extensions/slack/src/monitor/media.ts	1
 extensions/slack/src/monitor/message-handler.ts	2
 extensions/slack/src/monitor/message-handler/dispatch-helpers.ts	2
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
@@ -1585,7 +1583,6 @@ src/acp/control-plane/manager.runtime-resume-state.ts	2
 src/acp/control-plane/manager.ts	1
 src/acp/control-plane/manager.utils.ts	1
 src/acp/control-plane/runtime-options.ts	2
-src/acp/event-ledger.ts	5
 src/acp/event-ledger.types.ts	1
 src/acp/event-mapper.ts	1
 src/acp/permission-relay.ts	1
@@ -1659,7 +1656,7 @@ src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
 src/agents/bash-tools.exec-runtime.ts	2
 src/agents/bash-tools.exec-script-preflight.ts	2
-src/agents/bash-tools.process.ts	6
+src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
@@ -2145,7 +2142,7 @@ src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
-src/auto-reply/reply/model-selection.ts	3
+src/auto-reply/reply/model-selection.ts	2
 src/auto-reply/reply/queue/drain.ts	2
 src/auto-reply/reply/queue/enqueue.ts	1
 src/auto-reply/reply/queue/settings.ts	1
@@ -2451,7 +2448,6 @@ src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
-src/commands/doctor-whatsapp-responsiveness.ts	1
 src/commands/doctor-workspace.ts	4
 src/commands/doctor/channel-capabilities.ts	1
 src/commands/doctor/cron/dreaming-payload-migration.ts	3
@@ -2741,7 +2737,7 @@ src/gateway/call.ts	6
 src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
-src/gateway/chat-display-projection.canvas.ts	14
+src/gateway/chat-display-projection.canvas.ts	13
 src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
@@ -2877,7 +2873,7 @@ src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
-src/gateway/server-methods/update.ts	2
+src/gateway/server-methods/update.ts	1
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
@@ -3256,10 +3252,10 @@ src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
-src/node-host/node-worker-transfer-client.ts	3
+src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
-src/node-host/node-worker-workspace.ts	6
+src/node-host/node-worker-workspace.ts	5
 src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/runtime.ts	2
@@ -3374,7 +3370,7 @@ src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	7
 src/plugins/host-hook-state.ts	8
 src/plugins/host-hooks.ts	1
-src/plugins/install-managed-npm-state.ts	7
+src/plugins/install-managed-npm-state.ts	5
 src/plugins/install-npm-metadata.ts	1
 src/plugins/install-npm-pack.ts	2
 src/plugins/install-persistence.ts	1
@@ -3422,8 +3418,8 @@ src/plugins/plugin-config-trust.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-module-loader-cache.ts	1
 src/plugins/plugin-package-update.ts	1
-src/plugins/plugin-peer-link.ts	6
-src/plugins/plugin-sdk-native-resolver.ts	3
+src/plugins/plugin-peer-link.ts	4
+src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-api-key-auth.ts	2
 src/plugins/provider-auth-choice-helpers.ts	12
@@ -3736,7 +3732,7 @@ src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	2
 src/worker/inference-stream.runtime.ts	5
 src/worker/launch-descriptor.ts	6
-src/worker/node-workspace-protocol.ts	3
+src/worker/node-workspace-protocol.ts	1
 src/worker/worker-command.runtime.ts	1
 src/worker/worker-connection-admission.ts	2
 src/worker/worker-connection-frames.ts	4
@@ -4009,7 +4005,6 @@ ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
-ui/src/pages/skill-workshop/skill-workshop-page.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	3
 ui/src/pages/usage/heatmap.ts	1

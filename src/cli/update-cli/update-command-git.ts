@@ -20,6 +20,7 @@ import {
   type CommandRunner as GlobalCommandRunner,
 } from "../../infra/update-global.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import {
   readBranchName,
@@ -511,11 +512,8 @@ export async function updateGitInstall(params: {
       inspectGitTarget: params.inspectGitTarget,
       publishGitCheckout,
       validateCandidate: params.validateCandidate,
-      prepareGitExposure: params.switchToGit
+      prepareGitExposure: installTarget
         ? async (candidateRoot, candidateSha, candidateEnv) => {
-            if (!installTarget) {
-              throw new Error("global install target missing after package-to-Git preflight");
-            }
             const packageName =
               (await readPackageName(installTarget.packageRoot ?? params.root)) ??
               DEFAULT_PACKAGE_NAME;
@@ -531,9 +529,6 @@ export async function updateGitInstall(params: {
               installCwd: candidateRoot,
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,
-              // Exact source/runtime verification runs inside package staging; the Git
-              // owner runs the canary after package lifecycle work and before activation.
-              validateCandidate: async () => [],
               onTransaction: params.onTransaction,
               postVerifyStep: (root) =>
                 runPackageUpdateDoctor({
@@ -594,7 +589,11 @@ export async function updateGitInstall(params: {
         ...updateResult,
         before,
         status: packageUpdate.failedStep ? "error" : "ok",
-        reason: packageUpdate.failedStep?.name,
+        reason:
+          packageUpdate.reason ??
+          (packageUpdate.failedStep
+            ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+            : undefined),
         recovery: packageUpdate.recovery,
         steps: [...steps, ...packageUpdate.steps],
         durationMs: Date.now() - params.startedAt,

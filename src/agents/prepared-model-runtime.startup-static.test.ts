@@ -774,7 +774,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
-      registryProvider === "registry-only" && registryModelId === "MIXED"
+      registryProvider === "registry-only" &&
+      ["MIXED", "Shadow", "shadow"].includes(registryModelId)
         ? {
             provider: registryProvider,
             id: registryModelId,
@@ -805,6 +806,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
               `${provider}/${modelId}`,
               "registry-only/mixed",
               "REGISTRY-ONLY/MIXED",
+              "registry-only/Shadow",
+              "registry-only/shadow",
               "bare-alias",
               "provider-only/",
             ],
@@ -855,6 +858,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
         `${provider}/${modelId}`,
         "openai/gpt-5.5",
         "registry-only/MIXED",
+        "registry-only/Shadow",
+        "registry-only/shadow",
       ]);
     }
     expect(

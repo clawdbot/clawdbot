@@ -20,8 +20,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
-import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
+import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
   markCompleteReplyConfig,
   withFastReplyConfig,
@@ -53,14 +54,7 @@ const mocks = vi.hoisted(() => ({
   handleCommands: vi.fn(),
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
-  loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
-    {
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      reasoning: true,
-    },
-  ]),
+  loadModelCatalog: vi.fn<LoadModelCatalogFn>(),
   resolveReplyDirectives: vi.fn(),
 }));
 
@@ -103,11 +97,7 @@ async function loadGetReplyRuntimeForTest() {
 }
 
 function requirePreparedReplyParams() {
-  const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-  if (!preparedReplyParams) {
-    throw new Error("expected prepared reply params");
-  }
-  return preparedReplyParams;
+  return expectDefined(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0], "prepared reply params");
 }
 
 function requireDirectiveParams() {
@@ -123,6 +113,26 @@ function requireDirectiveParams() {
     throw new Error("expected directive params");
   }
   return directiveParams;
+}
+
+function continuePlainTextReply() {
+  mocks.resolveReplyDirectives.mockResolvedValueOnce(
+    createGetReplyContinueDirectivesResult({
+      body: "hello",
+      commandSource: "hello",
+      abortKey: "agent:main:telegram:123",
+      from: "telegram:user:42",
+      to: "telegram:123",
+      senderId: "telegram:user:42",
+      senderIsOwner: false,
+      resetHookTriggered: false,
+    }),
+  );
+  mocks.handleInlineActions.mockResolvedValueOnce({
+    kind: "continue",
+    directives: {},
+    cleanedBody: "hello",
+  });
 }
 
 async function seedFastPathSessionStore(
@@ -235,32 +245,39 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
-  it("skips getRuntimeConfig, workspace bootstrap, and session bootstrap for marked test configs", async () => {
-    const cfg = markCompleteReplyConfig({
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          workspace: state.workspaceDir,
+  it.each([
+    { mode: "complete", mark: markCompleteReplyConfig },
+    { mode: "fast", mark: withFastReplyConfig },
+  ])(
+    "uses $mode configs through directives without config, workspace, or session bootstrap",
+    async ({ mark }) => {
+      continuePlainTextReply();
+      const cfg = mark({
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            workspace: state.workspaceDir,
+          },
         },
-      },
-      channels: { telegram: { allowFrom: ["*"] } },
-      session: { store: isolatedStorePath },
-    } as OpenClawConfig);
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: isolatedStorePath },
+      } as OpenClawConfig);
 
-    // Check the mocked runtime resolver before fast bootstrap can create its workspace.
-    expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
+      // Check the mocked runtime resolver before fast bootstrap can create its workspace.
+      expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
 
-    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
-      text: "ok",
-    });
-    expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
-    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(mocks.initSessionState).not.toHaveBeenCalled();
-    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const preparedReplyParams = requirePreparedReplyParams();
-    expect(preparedReplyParams.cfg).toBe(cfg);
-  });
+      await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+        text: "ok",
+      });
+      expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
+      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(mocks.initSessionState).not.toHaveBeenCalled();
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+      const preparedReplyParams = requirePreparedReplyParams();
+      expect(preparedReplyParams.cfg).toBe(cfg);
+    },
+  );
 
   it("still merges partial config overrides against getRuntimeConfig()", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
@@ -335,20 +352,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
-  });
-
-  it("marks configs through withFastReplyConfig()", async () => {
-    const cfg = withFastReplyConfig({
-      agents: { defaults: { workspace: state.workspaceDir } },
-      session: { store: isolatedStorePath },
-    } satisfies OpenClawConfig);
-
-    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
-      text: "ok",
-    });
-    expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
-    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
   });
 
   it("clears stale ack-only heartbeat pending delivery before running heartbeat", async () => {
@@ -982,7 +985,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.initialSessionEntry).not.toBe(result.sessionEntry);
   });
   it("maps explicit gateway origin into command context", () => {
-    const command = buildFastReplyCommandContext({
+    const command = buildCommandContext({
       ctx: buildGetReplyCtx({
         Provider: "internal",
         Surface: "internal",
@@ -1007,7 +1010,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   it("preserves multiline slash skill payloads in fast command context", () => {
     const body = "/skill demo_skill first line\nsecond line";
-    const command = buildFastReplyCommandContext({
+    const command = buildCommandContext({
       ctx: buildGetReplyCtx({
         Body: body,
         RawBody: body,

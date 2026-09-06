@@ -23,6 +23,6 @@ export {
 export {
   finishUpdateRun,
   getUpdateRun,
-  recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";

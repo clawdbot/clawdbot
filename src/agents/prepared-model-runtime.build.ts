@@ -16,6 +16,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -31,10 +32,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  modelCatalogEntryKey,
-  prepareConfiguredRuntimeFacts,
-} from "./prepared-model-runtime.configured-catalog.js";
+import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
@@ -191,13 +189,13 @@ function createFullModelCatalogAccess(params: {
     );
     projected.entries = dedupeByKey(
       [...projected.entries, ...current.entries],
-      modelCatalogEntryKey,
+      resolveModelCatalogIdentityKey,
     );
     projected.routeVariants = dedupeByKey(
       [...projected.routeVariants, ...current.routeVariants],
       (entry) =>
         JSON.stringify([
-          modelCatalogEntryKey(entry),
+          resolveModelCatalogIdentityKey(entry),
           entry.api,
           entry.baseUrl,
           entry.nativeRuntime,

@@ -28,6 +28,7 @@ import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -1905,35 +1906,27 @@ private fun SettingsListRow(
   onClick: () -> Unit,
 ) {
   val localizedTitle = title.resolveNativeTextResource()
-  val localizedValue = value.resolveNativeTextResource()
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .heightIn(min = 54.dp)
-        .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .clickable(onClick = onClick)
-        .padding(horizontal = 0.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-  ) {
-    Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-    Text(text = localizedTitle, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      if (localizedValue.isNotBlank()) {
-        Text(text = localizedValue, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+  ClawListItem(
+    title = localizedTitle,
+    subtitle = value.resolveNativeTextResource().takeIf { it.isNotBlank() },
+    leading = {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+    },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        status?.let { active ->
+          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+        }
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = opensRoute),
+          modifier = Modifier.size(17.dp),
+          tint = ClawTheme.colors.text,
+        )
       }
-      status?.let { active ->
-        Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
-      }
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = opensRoute),
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.text,
-      )
-    }
-  }
+    },
+    onClick = onClick,
+  )
 }
 
 internal fun settingsRowDisclosureDescription(

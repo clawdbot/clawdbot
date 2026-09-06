@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import { runCommandBuffered, runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
@@ -5,6 +6,23 @@ import { runCommandBuffered, runCommandWithTimeout, type CommandOptions } from "
 export const GIT_TIMEOUT_MS = 120_000;
 
 type GitCommandResult = SpawnResult & { timeoutMs: number };
+
+export function normalizeGitPathForFilesystem(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") {
+    return value;
+  }
+  // Translate only path-typed Git output at its filesystem boundary. Native
+  // paths must stay untouched because C:\c\... can be a real Windows path.
+  const match = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(value);
+  const drive = match?.[1];
+  if (!drive) {
+    return value;
+  }
+  return path.win32.normalize(`${drive.toUpperCase()}:/${match[2] ?? ""}`);
+}
 
 export function withForegroundGitMaintenance(argv: string[]): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
