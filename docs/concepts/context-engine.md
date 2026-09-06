@@ -240,6 +240,11 @@ then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
 
+For these admitted turns, embedded tool-loop `assemble()` receives the history
+before the current turn, with a token budget that reserves space for pending user
+and tool messages. The host appends those pending messages to the assembled history before
+the next model request, so they remain visible without entering the engine's store.
+
 Without the full declaration and method, OpenClaw uses the legacy context path
 for the whole logical turn, including retries. The configured context-engine
 slot is not changed, and OpenClaw tries the configured engine again on the next

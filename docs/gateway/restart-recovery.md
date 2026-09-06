@@ -159,7 +159,7 @@ openclaw triage --agent codex
 ```
 
 JSON, `--yes`, and non-interactive update invocations collect diagnostics without
-starting a coding agent. `openclaw triage --non-interactive` also prepares
+starting an external coding agent. `openclaw triage --non-interactive` also prepares
 diagnostics without launching an agent; `--update-result <path>` includes an
 updater's saved failure artifact. Printed handoff commands preserve installation
 selectors and use PowerShell on Windows or POSIX shells on macOS, Linux, and WSL.
@@ -168,7 +168,10 @@ Staging and validation run while the old Gateway serves. The candidate runs
 Doctor lint, config and plugin planning, and an isolated canary boot against
 copied configuration and verified database snapshots. Migrations on these
 copies rehearse the upgrade without changing live state. A validation failure
-leaves the old Gateway running; an `already-current` no-op never stops it.
+can enter [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
+while the old Gateway keeps serving. Activation requires the failed check to
+pass; otherwise the candidate is discarded. An `already-current` no-op never
+stops the Gateway.
 Older targets that predate migration continuation record runtime validation as
 unavailable and use the [existing downgrade finalization path](/install/updating#roll-back-a-package-install).
 The detached helper also waits for the `activating` phase before parking its
@@ -196,9 +199,9 @@ does not block this intentional recovery; its allowance is scoped to rollback
 service commands and never persisted. See
 [Automatic rollback](/install/updating#automatic-schema-neutral-rollback).
 If configuration content or a schema version changed, automatic rollback is
-refused (`state-migrated-no-rollback`): a reachable candidate remains running for
-diagnosis, and an unreachable candidate remains stopped. Code rollback cannot
-reverse state migrations. An unavailable schema comparison also prevents
+refused (`state-migrated-no-rollback`) and the updater attempts bounded repair on
+the installed candidate. The same repair slot can run when rollback itself fails.
+Code rollback cannot reverse state migrations. An unavailable schema comparison also prevents
 automatic rollback (`rollback-state-unverified`). After migration,
 a fresh candidate process finishes verification and the same durable run report;
 the old updater does not reopen the newer database. Git activation failures before live migrations can restore
@@ -211,6 +214,19 @@ does not become a restart grant. The previous runtime was verified before the
 update, so rollback across unchanged configuration and schemas may restart it
 under that prior verification and must verify it again afterward. A detached
 helper or Windows task autostart cannot bypass this decision.
+
+During post-activation repair, the orchestrator starts or restarts a stopped or
+unhealthy service once after each turn, then reruns verification. Passing checks
+allow the run to succeed; if rollback already restored the previous release,
+successful repair finishes `rolled-back` and the command still exits nonzero.
+Otherwise it fails with the original reason and repair summaries. The agent
+cannot issue service lifecycle commands.
+
+On Windows, captured Scheduled Task autostart stays suspended through Doctor
+finalization. The updater enables the task for activation and restores
+suspension if final verification fails, including after a migrated-state handoff.
+Native task-control failures appear in the update report; failed suspension
+never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
@@ -251,8 +267,8 @@ downtime. Missing recovery proof, migrated state, or failed restoration still
 requires repair before restart. A service that is observed stopped is recorded
 as stopped; the report does not reuse its pre-activation running status.
 
-A failed update still exits nonzero when service recovery or the repair agent
-succeeds. Error and skip notifications are attempted before recovery; the helper
+A terminal failed update still exits nonzero when later service recovery or
+triage repair succeeds. Error and skip notifications are attempted before recovery; the helper
 does not recreate them after the recovering Gateway consumes them. Check the
 final CLI result and the handoff log for the recovery outcome.
 

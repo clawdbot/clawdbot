@@ -3454,7 +3454,7 @@ jobs:
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node --import tsx "$runner"
+          time -p node --import tsx "$runner"
 
       - &runner_memory_peak_step
         name: Record runner memory peak
