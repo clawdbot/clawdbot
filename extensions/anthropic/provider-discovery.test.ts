@@ -26,18 +26,21 @@ it("prepares native availability once for a 632-workspace roster", async () => {
   };
   const env = { CLAUDE_CONFIG_DIR: "/synthetic/native-account" };
   probeClaudeCliAuthStatus.mockImplementation(
-    () => new Promise((resolve) => setTimeout(() => resolve({ status: "missing" }), 250)),
+    () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve({ status: "missing" }), 250);
+      }),
   );
-  let prepared = 0;
+  const prepared = new Set<string>();
   const publication = (async () => {
-    for (const _agent of Object.values(config.agents.entries)) {
+    for (const agentId of Object.keys(config.agents.entries)) {
       await provider.prepareSyntheticAuth!({ config, env, provider: "claude-cli" });
-      prepared += 1;
+      prepared.add(agentId);
     }
   })();
   try {
     await vi.advanceTimersByTimeAsync(250);
-    expect(prepared).toBe(632);
+    expect(prepared.size).toBe(632);
     expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
   } finally {
     await vi.runAllTimersAsync();
@@ -80,7 +83,7 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
     .mockImplementationOnce(
       ({ signal }: { signal: AbortSignal }) =>
         new Promise((_, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener("abort", () => reject(reason), { once: true });
         }),
     )
     .mockImplementationOnce(
