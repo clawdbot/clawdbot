@@ -12,7 +12,6 @@ import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-se
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
-import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
@@ -20,6 +19,7 @@ import {
   WorkerRunnerUnavailableError,
   type WorkerTunnelHandle,
 } from "./tunnel-contract.js";
+import { success } from "./tunnel.test-support.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
   ENVIRONMENT_ID,
@@ -58,7 +58,7 @@ describe("worker turn launcher failure recovery", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
@@ -410,8 +410,12 @@ describe("worker turn launcher failure recovery", () => {
         error: STALE_WORKER_BUILD_REASON,
       };
     });
-    const environments: WorkerTurnEnvironmentService & WorkerDispatchEnvironmentService = {
+    const environments: WorkerTurnEnvironmentService &
+      Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
       ...unusedEnvironments(),
+      recordError: vi.fn(() => {
+        throw new Error("unexpected provisioning interruption");
+      }),
       supportsProviderExecutionMode: vi.fn(() => true),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),
@@ -439,17 +443,18 @@ describe("worker turn launcher failure recovery", () => {
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run(root),
+      runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim({ kind: "local", path: root }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
-      resolveWorkspacePath: async () => root,
+      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
@@ -558,19 +563,17 @@ describe("worker turn launcher failure recovery", () => {
       throw new Error("unexpected worker handoff");
     });
     const acknowledgeCredentialDelivery = vi.fn(() => true);
-    const startTunnel = vi.fn(
-      async (): Promise<WorkerTunnelHandle> => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      }),
-    );
+    const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> => ({
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      quiesceWorkspace: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
+      launchTurn,
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(),
+      stop: vi.fn(async () => {}),
+    }));
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {
@@ -730,7 +733,10 @@ describe("worker turn launcher failure recovery", () => {
           throw new Error("unexpected workspace sync");
         }),
         reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

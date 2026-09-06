@@ -5,10 +5,12 @@ import path from "node:path";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -17,6 +19,13 @@ type WorktreeListEntry = {
   lockedReason?: string;
 };
 
+function withNoGlob(value: string | undefined): string {
+  if (value?.trim().split(/\s+/).at(-1) === "noglob") {
+    return value;
+  }
+  return value ? `${value} noglob` : "noglob";
+}
+
 /**
  * Gateway-run Git must never execute repository hooks or filesystem monitors;
  * the admin-gated setup script is the sole intentional repository-code path.
@@ -24,9 +33,30 @@ type WorktreeListEntry = {
  * `requireGit*` wrappers (e.g. a buffered, non-throwing invocation with a
  * custom timeout) still pin the same invariant instead of reimplementing it.
  */
-export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function gitEnvironment(
+  env?: NodeJS.ProcessEnv,
+  args: readonly string[] = [],
+  platform: NodeJS.Platform = process.platform,
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const baseEnv = env ?? inheritedEnv;
+  // Callers may supply only Git-specific overrides. Resolve against the inherited
+  // child environment first so preserving revision arguments cannot discard policy.
+  const effectiveWindowsEnv =
+    platform === "win32" && args.some((arg) => arg.endsWith("^{commit}"))
+      ? mergeProcessEnv([inheritedEnv, env], platform)
+      : undefined;
+  const windowsNoGlob = effectiveWindowsEnv
+    ? {
+        // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
+        // expressions such as HEAD^{commit} literal within this Git owner.
+        MSYS: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "MSYS", platform)),
+        CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
+      }
+    : {};
   return {
-    ...(env ?? process.env),
+    ...baseEnv,
+    ...windowsNoGlob,
     GIT_CONFIG_COUNT: "2",
     GIT_CONFIG_KEY_0: "core.hooksPath",
     GIT_CONFIG_VALUE_0: os.devNull,
@@ -45,7 +75,7 @@ export async function runGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<GitResult> {
-  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -62,11 +92,11 @@ export async function requireGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<string> {
-  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment() });
+  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment(undefined, args) });
 }
 
 export async function requireGitBuffer(
@@ -74,7 +104,10 @@ export async function requireGitBuffer(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
 ): Promise<Buffer> {
-  return await requireGitCommandBuffer(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  return await requireGitCommandBuffer(cwd, args, {
+    ...options,
+    env: gitEnvironment(options.env, args),
+  });
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
@@ -92,7 +125,9 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       if (current) {
         entries.push(current);
       }
-      current = { path: field.slice("worktree ".length) };
+      current = {
+        path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
+      };
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {

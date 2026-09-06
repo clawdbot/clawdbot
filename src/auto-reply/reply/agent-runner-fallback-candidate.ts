@@ -5,9 +5,9 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -28,7 +28,9 @@ import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-li
 import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
+  resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -61,7 +63,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
-  let assistantErrorPersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
     toolCallIds: new Set(),
     completed: false,
@@ -191,6 +192,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         kind: "reconcile-completed",
         reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
       },
+      onAcceptedTerminal: () => {
+        params.commitTerminalOutcome();
+        return turn.replyOperation
+          ? beginReplyOperationFinalizationWork(turn.replyOperation, RUN_STALE_TAKEOVER_MS)
+          : undefined;
+      },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
@@ -215,11 +222,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
           sourceReplyDeliveryRuntime.applyMode(candidateRun, candidateSourceReplyDeliveryMode);
         }
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
+        const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,
           provider,
           modelId: model,
-          level: turn.followupRun.run.thinkLevel,
+          run: turn.followupRun.run,
           catalog: turn.followupRun.run.thinkingCatalog,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
@@ -267,6 +274,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           userTurnTranscriptRecorder,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+          assistantErrorTranscript: runOptions.assistantErrorTranscript,
           notifyUserMessagePersisted: () => {
             queuedUserMessagePersistedAcrossFallback = true;
           },
@@ -286,7 +294,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           deferredLifecycle: params.state.deferredLifecycle,
         } satisfies AgentFallbackCandidateCommonParams;
         if (runtime.useCliExecution) {
-          params.state.deferredLifecycle.handoffToCli();
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
@@ -314,10 +321,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.state.lifecycleGeneration = generation;
           },
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          suppressAssistantErrorPersistenceForCandidate: assistantErrorPersistedAcrossFallback,
-          onAssistantErrorMessagePersisted: () => {
-            assistantErrorPersistedAcrossFallback = true;
-          },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           messageToolDeliveryState,
           onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {

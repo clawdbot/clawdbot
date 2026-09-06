@@ -1,6 +1,7 @@
 // Control UI chat module implements chat welcome behavior.
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { identityAvatarImage } from "../../../components/identity-avatar-view.ts";
 import "../../../components/openclaw-mascot.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
@@ -162,13 +163,19 @@ function renderWelcomeHero(
   const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   return html`
     <div class="agent-chat__welcome-identity">
-      ${avatar
-        ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
-        : avatarText
-          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
-              ${avatarText}
-            </div>`
-          : renderWelcomeClawd()}
+      ${
+        avatar
+          ? html`<img
+              class="agent-chat__welcome-avatar"
+              src=${identityAvatarImage(avatar)}
+              alt=${name}
+            />`
+          : avatarText
+            ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+                ${avatarText}
+              </div>`
+            : renderWelcomeClawd()
+      }
       <div class="agent-chat__welcome-identity-copy">
         <h2>${name}</h2>
         <p class="agent-chat__hint">${props.hint}</p>
@@ -244,21 +251,25 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
             )}`,
       })}
       ${props.composer ?? nothing}
-      ${props.hideSecondaryContent
-        ? nothing
-        : html`<div
-            class="agent-chat__welcome-secondary ${props.fadeSecondaryContent
-              ? "agent-chat__welcome-secondary--hidden"
-              : ""}"
-            aria-hidden=${props.fadeSecondaryContent ? "true" : "false"}
-            ?inert=${props.fadeSecondaryContent}
-          >
-            <div class="agent-chat__welcome-secondary-inner">
-              ${recentSessions.length > 0
-                ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
-                : renderWelcomeSuggestions(props)}
-            </div>
-          </div>`}
+      ${
+        props.hideSecondaryContent
+          ? nothing
+          : html`<div
+              class="agent-chat__welcome-secondary ${
+                props.fadeSecondaryContent ? "agent-chat__welcome-secondary--hidden" : ""
+              }"
+              aria-hidden=${props.fadeSecondaryContent ? "true" : "false"}
+              ?inert=${props.fadeSecondaryContent}
+            >
+              <div class="agent-chat__welcome-secondary-inner">
+                ${
+                  recentSessions.length > 0
+                    ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
+                    : renderWelcomeSuggestions(props)
+                }
+              </div>
+            </div>`
+      }
     </div>
   `;
 }

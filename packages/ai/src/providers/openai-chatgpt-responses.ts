@@ -76,6 +76,7 @@ import {
   convertResponsesToolPayload,
   createResponsesAssistantOutput,
   resolveResponsesReasoningEffort,
+  resolveResponsesRequestReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -511,22 +512,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           readChatGptResponsesErrorTextLimited(attemptResponse, activeSignal),
           hookStream[Symbol.asyncIterator]().next(),
         ]);
-        const info = parseErrorResponseText(
-          errorText,
-          attemptResponse.status,
-          attemptResponse.statusText,
-        );
-        const retryAfterSeconds = parseRetryAfterSeconds(attemptResponse.headers);
-        // Keep retry timing in the canonical error text so every retry owner sees
-        // the same bounded signal without extending the public AssistantMessage
-        // contract; mirrors formatAnthropicMessagesHttpError.
-        const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
-          ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
-          : "";
-        const terminalResponseError = new CodexApiError(
-          `${info.friendlyMessage || info.message}${retryAfterSuffix}`,
-          { code: info.code },
-        );
+        const terminalResponseError = parseErrorResponse(errorText, attemptResponse);
         if (activeSignal?.aborted) {
           throw transportAbortError(activeSignal);
         }
@@ -682,17 +668,15 @@ function buildRequestBody(
     }
   }
 
-  if (options?.reasoningEffort !== undefined) {
-    const effort =
-      options.reasoningEffort === "none"
-        ? (model.thinkingLevelMap?.off ?? "none")
-        : (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
-    if (effort !== null) {
-      body.reasoning = {
-        effort,
-        summary: options.reasoningSummary ?? "auto",
-      };
-    }
+  const effort =
+    options?.reasoningEffort === undefined
+      ? undefined
+      : resolveResponsesRequestReasoningEffort(model, options.reasoningEffort);
+  if (effort !== undefined) {
+    body.reasoning = {
+      effort,
+      summary: options?.reasoningSummary ?? "auto",
+    };
   }
 
   return body;
@@ -740,15 +724,22 @@ function resolveCodexWebSocketUrl(baseUrl?: string): string {
 
 class CodexApiError extends Error {
   readonly code?: string;
+  readonly status?: number;
   readonly payload?: Record<string, unknown>;
 
   constructor(
     message: string,
-    options?: { code?: string; payload?: Record<string, unknown>; cause?: unknown },
+    options?: {
+      code?: string;
+      status?: number;
+      payload?: Record<string, unknown>;
+      cause?: unknown;
+    },
   ) {
     super(message);
     this.name = "CodexApiError";
     this.code = options?.code;
+    this.status = options?.status;
     this.payload = options?.payload;
     this.cause = options?.cause;
   }
@@ -1625,11 +1616,8 @@ async function readChatGptResponsesErrorTextLimited(
   return text;
 }
 
-function parseErrorResponseText(
-  raw: string,
-  status: number,
-  statusText: string,
-): { code?: string; message: string; friendlyMessage?: string } {
+function parseErrorResponse(raw: string, response: Response): CodexApiError {
+  const { status, statusText } = response;
   let message = raw || statusText || "Request failed";
   let friendlyMessage: string | undefined;
   let code: string | undefined;
@@ -1662,7 +1650,13 @@ function parseErrorResponseText(
     }
   } catch {}
 
-  return { ...(code ? { code } : {}), message, friendlyMessage };
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+  // The canonical projection retains HTTP status; retry owners read its bounded
+  // terminal text for pacing, matching formatAnthropicMessagesHttpError.
+  const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
+    ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
+    : "";
+  return new CodexApiError(`${friendlyMessage || message}${retryAfterSuffix}`, { code, status });
 }
 
 // ============================================================================

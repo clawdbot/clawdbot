@@ -43,6 +43,22 @@ export type ReliabilityStateProof = {
   sha256: string;
 };
 
+export function assertSameReliabilityState(
+  actual: ReliabilityStateProof,
+  expected: ReliabilityStateProof,
+  label: string,
+): void {
+  if (
+    actual.batches !== expected.batches ||
+    actual.rows !== expected.rows ||
+    actual.sha256 !== expected.sha256
+  ) {
+    throw new Error(
+      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
+    );
+  }
+}
+
 export function formatReliabilityStderr(stderr: string): string {
   const text = stderr.trim();
   return text ? ` stderr=${JSON.stringify(text)}` : "";

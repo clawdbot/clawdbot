@@ -85,6 +85,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
   const emitSubagentEndedHookForRun = vi.fn();
   const notifyContextEngineSubagentEnded = vi.fn();
   const callGateway = vi.fn();
+  const resumeRequesterSettleWake = vi.fn();
   const warn = vi.fn();
   const sweeper = createSubagentRegistrySweeper({
     runs,
@@ -97,6 +98,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     getGatewayRecoveryRuntime: () => runtime.current,
     abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
     clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
+    clearPendingSubagentRecoveryNotice: vi.fn(() => true),
     resumeSettledSubagentRestartRecovery: vi.fn(() => true),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
     markSubagentRestartRecoveryLaunchAttempted: vi.fn((params) => ({
@@ -123,7 +125,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     ),
     resetSubagentRestartRecoveryLaunchAttempt: vi.fn(() => true),
     finalizeInterruptedSubagentRun,
-    resumeRequesterSettleWake: vi.fn(),
+    resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
     discardTerminalDelivery: vi.fn(),
@@ -147,6 +149,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     emitSubagentEndedHookForRun,
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
+    resumeRequesterSettleWake,
     sweeper,
     warn,
   };
@@ -179,6 +182,34 @@ describe("subagent registry recovery scheduling", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
+
+  it.each(["terminal", "running"] as const)(
+    "only gives ended %s children requester-wake priority over suspended delivery cleanup",
+    async (executionStatus) => {
+      const { entry, resumeRequesterSettleWake, completeCleanupBookkeeping, sweeper } =
+        createHarness({});
+      entry.execution = {
+        status: executionStatus,
+        endedAt: Date.now() - 60_000,
+        outcome: { status: "ok" },
+      };
+      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      entry.delivery = {
+        status: "suspended",
+        suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
+        suspendedReason: "expiry",
+      };
+
+      await sweeper.sweepOnce();
+
+      expect(resumeRequesterSettleWake).toHaveBeenCalledTimes(
+        executionStatus === "terminal" ? 1 : 0,
+      );
+      if (executionStatus === "terminal") {
+        expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("makes four dispatch attempts and three separate terminal attempts", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };

@@ -339,59 +339,62 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("keeps hidden incognito rows from changing non-owner list path metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const incognitoKey = "agent:main:dashboard:incognito-private";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:main" },
-        { sessionId: "session-main", updatedAt: 1 },
-      );
-      const viewer = identifiedClient("viewer@example.com");
-      const admin = soloClient();
-      admin.connect.scopes = ["operator.admin"];
-      const listFor = async (client: GatewayClient) => {
-        const responses: Parameters<RespondFn>[] = [];
-        await sessionReadHandlers["sessions.list"]?.({
-          params: {},
-          client,
-          context: {
-            ...context(vi.fn()),
-            loadGatewayModelCatalog: async () => [],
-          } as unknown as GatewayRequestContext,
-          respond: (...response: Parameters<RespondFn>) => responses.push(response),
-        } as never);
-        return responses[0]?.[1] as
-          | { path?: string; sessions?: Array<{ key: string }> }
-          | undefined;
-      };
+  it.each([undefined, "idle"])(
+    "keeps hidden incognito rows from changing non-owner list metadata (search: %s)",
+    async (search) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const incognitoKey = "agent:main:dashboard:incognito-private";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main" },
+          { sessionId: "session-main", updatedAt: 1 },
+        );
+        const viewer = identifiedClient("viewer@example.com");
+        const admin = soloClient();
+        admin.connect.scopes = ["operator.admin"];
+        const listFor = async (client: GatewayClient) => {
+          const responses: Parameters<RespondFn>[] = [];
+          await sessionReadHandlers["sessions.list"]?.({
+            params: { search },
+            client,
+            context: {
+              ...context(vi.fn()),
+              loadGatewayModelCatalog: async () => [],
+            } as unknown as GatewayRequestContext,
+            respond: (...response: Parameters<RespondFn>) => responses.push(response),
+          } as never);
+          return responses[0]?.[1] as
+            | { path?: string; sessions?: Array<{ key: string }> }
+            | undefined;
+        };
 
-      const before = await listFor(viewer);
-      await upsertSessionEntryCore(
-        {
-          agentId: "main",
-          sessionKey: incognitoKey,
-          storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-        },
-        {
-          sessionId: "session-incognito",
-          updatedAt: 2,
-          incognito: true,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-        },
-      );
+        const before = await listFor(viewer);
+        await upsertSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: incognitoKey,
+            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+          },
+          {
+            sessionId: "session-incognito",
+            updatedAt: 2,
+            incognito: true,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          },
+        );
 
-      const hidden = await listFor(viewer);
-      expect(hidden?.path).toBe(before?.path);
-      expect(hidden?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
-      const creator = await listFor(identifiedClient("owner@example.com"));
-      expect(creator?.path).toBe(before?.path);
-      expect(creator?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
-      const visible = await listFor(admin);
-      expect(visible?.sessions?.some((session) => session.key === incognitoKey)).toBe(true);
-      expect(visible?.path).not.toBe(before?.path);
-    });
-  });
+        const hidden = await listFor(viewer);
+        expect(hidden?.path).toBe(before?.path);
+        expect(hidden?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
+        const creator = await listFor(identifiedClient("owner@example.com"));
+        expect(creator?.path).toBe(before?.path);
+        expect(creator?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
+        const visible = await listFor(admin);
+        expect(visible?.sessions?.some((session) => session.key === incognitoKey)).toBe(true);
+        expect(visible?.path).not.toBe(before?.path);
+      });
+    },
+  );
 
   it("never previews sessions hidden from sessions.list", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -559,86 +562,88 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("drops a session flipped to draft during the list await from a non-owner", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:mid-await-draft";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-mid-await",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-          visibility: "shared",
-        },
-      );
-      // A member of the (soon-draft) session must also lose it: drafts are
-      // owner+admin only.
-      expect(
-        addSessionMember(
+  it.each([undefined, "direct"])(
+    "hides drafts after asynchronous catalog preparation (search: %s)",
+    async (search) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:mid-await-draft";
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
-          { identityId: "member@example.com", addedBy: "owner@example.com", addedAt: 1 },
-        ).inserted,
-      ).toBe(true);
-      const outsider = identifiedClient("outsider@example.com");
-      // The awaited model-catalog step flips the session to draft after the
-      // pre-await draft filter ran, exercising the final fresh-target filter.
-      const listWith = async (client: GatewayClient) => {
-        await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-          visibility: "shared",
-        }));
-        invalidateSessionSharingSnapshot(sessionKey);
-        const responses: Parameters<RespondFn>[] = [];
-        await sessionReadHandlers["sessions.list"]?.({
-          params: { agentId: "main" },
-          client,
-          context: {
-            ...context(vi.fn()),
-            readPreparedGatewayModelCatalog: async () => {
-              await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-                visibility: "draft",
-              }));
-              invalidateSessionSharingSnapshot(sessionKey);
-              return { entries: [] };
-            },
-          } as unknown as GatewayRequestContext,
-          respond: (...response: Parameters<RespondFn>) => responses.push(response),
-        } as never);
-        return responses[0]?.[1] as
-          | {
-              count: number;
-              totalCount: number;
-              nextOffset: number | null;
-              hasMore: boolean;
-              owners: Array<{ type: "human" | "agent"; id: string }>;
-              sessions: Array<{ key: string }>;
-            }
-          | undefined;
-      };
+          {
+            sessionId: "session-mid-await",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+            visibility: "shared",
+          },
+        );
+        // A member of the (soon-draft) session must also lose it: drafts are
+        // owner+admin only.
+        expect(
+          addSessionMember(
+            { agentId: "main", sessionKey },
+            { identityId: "member@example.com", addedBy: "owner@example.com", addedAt: 1 },
+          ).inserted,
+        ).toBe(true);
+        const outsider = identifiedClient("outsider@example.com");
+        // Catalog preparation precedes store selection; use the new visibility state.
+        const listWith = async (client: GatewayClient) => {
+          await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+            visibility: "shared",
+          }));
+          invalidateSessionSharingSnapshot(sessionKey);
+          const responses: Parameters<RespondFn>[] = [];
+          await sessionReadHandlers["sessions.list"]?.({
+            params: { agentId: "main", search },
+            client,
+            context: {
+              ...context(vi.fn()),
+              readPreparedGatewayModelCatalog: async () => {
+                await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+                  visibility: "draft",
+                }));
+                invalidateSessionSharingSnapshot(sessionKey);
+                return { entries: [] };
+              },
+            } as unknown as GatewayRequestContext,
+            respond: (...response: Parameters<RespondFn>) => responses.push(response),
+          } as never);
+          return responses[0]?.[1] as
+            | {
+                count: number;
+                totalCount: number;
+                nextOffset: number | null;
+                hasMore: boolean;
+                owners: Array<{ type: "human" | "agent"; id: string }>;
+                sessions: Array<{ key: string }>;
+              }
+            | undefined;
+        };
 
-      // Non-owner must not receive the now-draft row (no preview/metadata leak).
-      const outsiderList = await listWith(outsider);
-      expect(outsiderList?.sessions.some((session) => session.key === sessionKey)).toBe(false);
-      expect(outsiderList).toMatchObject({
-        count: 0,
-        totalCount: 0,
-        nextOffset: null,
-        hasMore: false,
-        owners: [],
+        // Non-owner must not receive the now-draft row (no preview/metadata leak).
+        const outsiderList = await listWith(outsider);
+        expect(outsiderList?.sessions.some((session) => session.key === sessionKey)).toBe(false);
+        expect(outsiderList).toMatchObject({
+          count: 0,
+          totalCount: 0,
+          nextOffset: null,
+          hasMore: false,
+          owners: [],
+        });
+        // A member also loses a draft (owner+admin only).
+        expect(
+          (await listWith(identifiedClient("member@example.com")))?.sessions.some(
+            (session) => session.key === sessionKey,
+          ),
+        ).toBe(false);
+        // The owner still sees their own draft.
+        expect(
+          (await listWith(identifiedClient("owner@example.com")))?.sessions.some(
+            (session) => session.key === sessionKey,
+          ),
+        ).toBe(true);
       });
-      // A member also loses a draft (owner+admin only).
-      expect(
-        (await listWith(identifiedClient("member@example.com")))?.sessions.some(
-          (session) => session.key === sessionKey,
-        ),
-      ).toBe(false);
-      // The owner still sees their own draft.
-      expect(
-        (await listWith(identifiedClient("owner@example.com")))?.sessions.some(
-          (session) => session.key === sessionKey,
-        ),
-      ).toBe(true);
-    });
-  });
+    },
+  );
 
   it("refills a paged session list after its first row becomes a draft", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

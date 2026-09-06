@@ -25,14 +25,13 @@ import {
   isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
-  isTransientHttpError,
+  isReplayInvalidErrorMessage,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
   toReasonClassification,
 } from "./classification-rules.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow.js";
 import {
-  GENERIC_MODEL_NOT_FOUND_RE,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -71,16 +70,6 @@ export {
 export { extractFailoverSignalDetails } from "./signal-details.js";
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
-const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
-const THINKING_SIGNATURE_ERROR_RE =
-  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
-function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
-}
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -152,11 +141,6 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  // Billing/plan entitlement wording owns "model ... not available" first;
-  // the generic provider phrase should only displace unclassified/rate-limit text.
-  if (GENERIC_MODEL_NOT_FOUND_RE.test(raw)) {
-    return toReasonClassification("model_not_found");
-  }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");
   }
@@ -177,13 +161,6 @@ function classifyFailoverClassificationFromMessage(
     !isAuthErrorMessage(raw)
   ) {
     return toReasonClassification("server_error");
-  }
-  if (isTransientHttpError(raw)) {
-    const status = extractLeadingHttpStatus(raw.trim());
-    if (status?.code === 529) {
-      return toReasonClassification("overloaded");
-    }
-    return toReasonClassification("timeout");
   }
   if (isGenericProviderInternalError(raw)) {
     return toReasonClassification("timeout");
@@ -226,7 +203,13 @@ function classifyFailoverClassificationFromMessage(
   if (apiErrorReason) {
     return toReasonClassification(apiErrorReason);
   }
-  return null;
+  return classifyFailoverClassificationFromHttpStatus(
+    inferSignalStatus({ message: raw }),
+    raw,
+    null,
+    undefined,
+    provider,
+  );
 }
 function classificationReason(
   classification: FailoverClassification | null,

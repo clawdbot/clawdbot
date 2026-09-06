@@ -1,5 +1,4 @@
-// Gateway connection authorization.
-// Authorizes HTTP/websocket gateway requests across shared-secret, Tailscale, and proxy modes.
+// Gateway authorization checks.
 import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -19,6 +18,7 @@ import {
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
 } from "./ingress-attribution.js";
+import { isInvalidGatewayToken } from "./known-weak-gateway-secrets.js";
 import {
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -28,11 +28,7 @@ import {
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-export {
-  resolveEffectiveSharedGatewayAuth,
-  resolveGatewayAuth,
-  type ResolvedGatewayAuth,
-} from "./auth-resolve.js";
+export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
@@ -62,11 +58,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface =
-  | "http"
-  | "http-control-ui-read"
-  | "http-user-profile-avatar"
-  | "ws-control-ui";
+type GatewayAuthSurface = "http" | "http-control-ui-read" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
@@ -159,6 +151,11 @@ export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
+  if (auth.mode === "token" && isInvalidGatewayToken(auth.token)) {
+    throw new Error(
+      "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
+    );
+  }
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale) {
       return;
@@ -258,11 +255,7 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return (
-    authSurface === "ws-control-ui" ||
-    authSurface === "http-control-ui-read" ||
-    authSurface === "http-user-profile-avatar"
-  );
+  return authSurface === "ws-control-ui" || authSurface === "http-control-ui-read";
 }
 
 function authorizeHttpBrowserOrigin(params: {
@@ -323,7 +316,7 @@ async function authorizeTokenAuth(params: {
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
-  if (!params.authToken) {
+  if (!params.authToken || isInvalidGatewayToken(params.authToken)) {
     return { ok: false, reason: "token_missing_config" };
   }
   if (!params.connectToken) {
@@ -457,7 +450,7 @@ async function authorizeGatewayConnectCore(
   const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
 
   if (
-    (authSurface === "http-control-ui-read" || authSurface === "http-user-profile-avatar") &&
+    authSurface === "http-control-ui-read" &&
     auth.allowTailscale &&
     !localDirect &&
     !explicitSharedSecretAuth
@@ -607,16 +600,6 @@ export async function authorizeControlUiReadHttpGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "http-control-ui-read",
-  });
-}
-
-/** Authorize the read-only profile avatar route, including verified Tailscale identity. */
-export async function authorizeUserProfileAvatarHttpGatewayConnect(
-  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
-): Promise<GatewayAuthResult> {
-  return authorizeGatewayConnect({
-    ...params,
-    authSurface: "http-user-profile-avatar",
   });
 }
 

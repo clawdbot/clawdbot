@@ -81,15 +81,11 @@ function resolveTerminalShell(params: {
  */
 function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
-  enabled: boolean;
   agentId?: string;
   configuredShell?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }): TerminalLaunchResolution {
-  if (!params.enabled) {
-    return { ok: false, block: { kind: "disabled" } };
-  }
   const env = params.env ?? process.env;
   const requested = params.agentId?.trim();
   let agentId: string;
@@ -138,20 +134,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   });
   const restartRestrictions = createRestrictions();
   const commitRestrictions = createRestrictions();
-  const preserveRestartTerminalConfig = (config: OpenClawConfig, owner: OpenClawConfig) => {
-    const { terminal: _ignored, ...gateway } = config.gateway ?? {};
-    return {
-      ...config,
-      gateway: {
-        ...gateway,
-        terminal: { ...owner.gateway?.terminal, shell: config.gateway?.terminal?.shell },
-      },
-    };
-  };
+  const committedTerminalConfig = () => appliedConfigWhileRestartPending ?? activeConfig;
   const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) => {
     return resolveTerminalLaunch({
       config,
-      enabled: isTerminalConfigEnabled(config),
       agentId,
       configuredShell: shellConfig.gateway?.terminal?.shell,
     });
@@ -161,8 +147,9 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     restrictions: ReturnType<typeof createRestrictions>,
   ) => {
     if (!isTerminalConfigEnabled(config)) {
-      restrictions.disabled = true;
-      return;
+      // Preserve new revocations, not an unchanged disabled baseline that a
+      // later hot commit can enable. Agent restrictions remain independent.
+      restrictions.disabled ||= isTerminalConfigEnabled(committedTerminalConfig());
     }
     const activeAgentIds = new Set(listAgentIds(activeConfig));
     for (const agentId of activeAgentIds) {
@@ -176,21 +163,22 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     restrictions.disabled = false;
     restrictions.blockedAgents.clear();
   };
+  const isEnabled = () =>
+    isTerminalConfigEnabled(committedTerminalConfig()) &&
+    !restartRestrictions.disabled &&
+    !commitRestrictions.disabled &&
+    (preparedConfig === null || isTerminalConfigEnabled(preparedConfig));
 
   return {
     resolve: (agentId) => {
-      // A committed shell change affects future opens even while unrelated
-      // restart debt keeps admission and workspace restrictions in force.
-      const active = resolveForConfig(
-        activeConfig,
-        agentId,
-        appliedConfigWhileRestartPending ?? activeConfig,
-      );
+      if (!isEnabled()) {
+        return { ok: false, block: { kind: "disabled" } };
+      }
+      // Committed terminal settings apply while restart debt preserves the
+      // active agent/workspace ownership and any pending revocations.
+      const active = resolveForConfig(activeConfig, agentId, committedTerminalConfig());
       if (!active.ok) {
         return active;
-      }
-      if (restartRestrictions.disabled) {
-        return { ok: false, block: { kind: "disabled" } };
       }
       const pendingBlock = restartRestrictions.blockedAgents.get(active.plan.agentId);
       if (pendingBlock) {
@@ -209,11 +197,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       }
       return active;
     },
-    isEnabled: () =>
-      isTerminalConfigEnabled(activeConfig) &&
-      !restartRestrictions.disabled &&
-      !commitRestrictions.disabled &&
-      (preparedConfig === null || isTerminalConfigEnabled(preparedConfig)),
+    isEnabled,
     prepareConfig: (config, options) => {
       if (options.restartPending) {
         hasPendingRestart = true;
@@ -223,10 +207,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
         accumulateRestrictions(config, restartRestrictions);
         return;
       }
-      // No-op/hot plans may arrive with restart-only terminal fields that an
-      // earlier reload mode ignored. Advance agent policy, but preserve the
-      // enabled/detach policy already owned by the active or pending process.
-      preparedConfig = preserveRestartTerminalConfig(config, activeConfig);
+      preparedConfig = config;
       accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {
@@ -251,7 +232,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
-      // intentionally skipped by reload policy. Only onConfigApplied may stage
+      // intentionally skipped by reload policy. Only committed publication stages
       // runtime truth for promotion after a rejected restart.
       preparedConfig = null;
       clearRestrictions(commitRestrictions);

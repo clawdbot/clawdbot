@@ -1,5 +1,11 @@
 function historyMessage(role: "assistant" | "user", text: string, timestamp: number) {
-  return { content: [{ type: "text", text }], role, timestamp };
+  return {
+    content: [{ type: "text", text }],
+    role,
+    timestamp,
+    __openclaw:
+      role === "user" ? { senderId: "mock-operator", senderName: "Riley Example" } : undefined,
+  };
 }
 
 function finishedTask(n: number, now: number) {
@@ -49,6 +55,7 @@ export function buildBackgroundTasksMock(baseTime: number) {
       startedAt: now - 25_000,
       updatedAt: now,
       toolUseCount: 7,
+      diffStat: { files: 3, added: 128, removed: 20 },
       lastToolName: "read",
       progressSummary: "Tracing task events through the background task rail",
       sessionKey: requesterSessionKey,
@@ -66,6 +73,7 @@ export function buildBackgroundTasksMock(baseTime: number) {
       startedAt: now - 95_000,
       updatedAt: now - 1_000,
       progressSummary: "Comparing agent-scoped task event paths",
+      diffStat: { files: 2, added: 55, removed: 21 },
       sessionKey: requesterSessionKey,
       ownerKey: requesterSessionKey,
       childSessionKey: secondTaskSessionKey,

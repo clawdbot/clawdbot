@@ -15,9 +15,6 @@ is_android_release() {
 
 resolve_child_workflow_ref() {
   local workflow_full_ref="$1"
-  local workflow_sha="$2"
-  local workflow_prefix="${workflow_sha:0:12}"
-  local child_workflow_ref matching_ref_prefix matching_refs
 
   if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
     # Request validation already proves this is the exact live
@@ -31,32 +28,8 @@ resolve_child_workflow_ref() {
     return 0
   fi
 
-  if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
-    echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
-    return 1
-  fi
-
-  matching_ref_prefix="$(
-    jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
-  )"
-  matching_refs="$(
-    gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
-  )"
-  if ! child_workflow_ref="$(
-    jq -er \
-      --arg prefix "${workflow_prefix}" \
-      --arg sha "${workflow_sha}" \
-      '[.[] |
-        select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
-        select(.object.type == "commit" and .object.sha == $sha) |
-        .ref | sub("^refs/tags/"; "")
-      ] | sort | last | select(type == "string" and length > 0)' \
-      <<<"${matching_refs}"
-  )"; then
-    echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
-    return 1
-  fi
-  printf '%s\n' "${child_workflow_ref}"
+  echo "Publish children require the parent to run from a protected release-publish tag or a validated Tideclaw alpha branch." >&2
+  return 1
 }
 
 verify_child_run_sha() {
@@ -85,6 +58,26 @@ verify_child_run_sha() {
     gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >/dev/null 2>&1 || true
     return 1
   fi
+}
+
+require_clawhub_dispatch_available() {
+  local workflow_ref="$1"
+  local run_state runs run_id run_url endpoint
+  # Query each non-completed status separately so recent completed runs cannot
+  # hide an older environment-gated child on the same workflow ref; `requested`
+  # and `action_required` precede `queued`/`waiting` and are just as active.
+  for run_state in requested action_required waiting pending queued in_progress; do
+    runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow plugin-clawhub-release.yml \
+      --branch "$workflow_ref" --status "$run_state" --limit 1 --json databaseId,url)" || return 1
+    run_id="$(jq -r '.[0].databaseId // empty' <<< "$runs")" || return 1
+    if [[ -n "$run_id" ]]; then
+      run_url="$(jq -r '.[0].url' <<< "$runs")"
+      endpoint="repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments"
+      echo "ClawHub dispatch blocked by ${run_state} run on ${workflow_ref}: ${run_url}" >&2
+      echo "Either wait for that run, or reject its pending deployment: GET ${endpoint} for environment IDs, then gh api -X POST ${endpoint} -F 'environment_ids[]=<id>' -f state=rejected -f comment='Reject stale release gate'." >&2
+      return 1
+    fi
+  done
 }
 
 dispatch_workflow_at_ref() {
@@ -136,6 +129,9 @@ dispatch_workflow_at_ref() {
     node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
       "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
   fi
+  if [[ "$workflow" == "plugin-clawhub-release.yml" && "$(jq -r '.dry_run // "false"' <<< "$inputs_json")" != "true" ]]; then
+    require_clawhub_dispatch_available "$workflow_ref" || return 1
+  fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
@@ -164,6 +160,8 @@ verify_bootstrap_workflow_sha() {
   approved_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
   approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
   if [[ "${approved_ref}" == "main" ]]; then
+    # Tideclaw bootstrap uses separately approved main tooling because the
+    # token-gated bootstrap workflow does not accept alpha branch tooling.
     current_main_sha="$(
       gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
         --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
@@ -796,11 +794,11 @@ create_or_update_github_release() {
         return 0
       fi
     fi
+    # Latest promotion is invalid while this existing release remains a draft.
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --title "${title}" \
       --notes-file "${prepared_release_notes_file}" \
-      "${prerelease_arg}" \
-      "${latest_arg}"
+      "${prerelease_arg}"
   else
     gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --verify-tag \

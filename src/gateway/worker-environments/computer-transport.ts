@@ -7,7 +7,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../../infra/node-commands.js";
 import { parseComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../../plugins/runtime-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";

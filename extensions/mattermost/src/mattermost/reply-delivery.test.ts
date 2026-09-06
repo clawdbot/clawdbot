@@ -526,17 +526,15 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("returns provider-finalized visible content instead of the requested text", async () => {
-    const sendMessage = vi.fn(
-      async (): Promise<MattermostSendResult> => ({
-        messageId: "post-final",
-        channelId: "channel-1",
-        content: "provider-finalized",
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "mattermost", messageId: "post-final", channelId: "channel-1" }],
-          kind: "text",
-        }),
+    const sendMessage = vi.fn(async (): Promise<MattermostSendResult> => ({
+      messageId: "post-final",
+      channelId: "channel-1",
+      content: "provider-finalized",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "mattermost", messageId: "post-final", channelId: "channel-1" }],
+        kind: "text",
       }),
-    );
+    }));
 
     const result = await deliverMattermostReplyPayload({
       core: createReplyDeliveryCore(),

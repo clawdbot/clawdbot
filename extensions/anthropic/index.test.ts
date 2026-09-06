@@ -1457,15 +1457,15 @@ describe("anthropic provider replay hooks", () => {
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
     async ({ status, authenticated }) => {
-      probeClaudeCliAuthStatusMock.mockReturnValue({ status });
+      probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const config = {};
 
-      const runtimeAuth = provider.resolveSyntheticAuth?.({
+      const runtimeAuth = await provider.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
-      const discoveryAuth = anthropicProviderDiscovery.resolveSyntheticAuth?.({
+      const discoveryAuth = await anthropicProviderDiscovery.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
@@ -1480,40 +1480,12 @@ describe("anthropic provider replay hooks", () => {
             : undefined,
         );
       }
+      expect(
+        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
+      ).toBeUndefined();
       expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
     },
   );
-
-  it("reuses native login facts within one config generation and reprobes its replacement", async () => {
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const firstConfig = {};
-
-    for (let request = 0; request < 4; request += 1) {
-      expect(
-        anthropicProviderDiscovery.resolveSyntheticAuth?.({
-          config: firstConfig,
-          provider: "claude-cli",
-        } as never)?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-      expect(
-        provider.resolveSyntheticAuth?.({ config: firstConfig, provider: "claude-cli" } as never)
-          ?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-    }
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
-
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "missing" });
-    expect(
-      anthropicProviderDiscovery.resolveSyntheticAuth?.({
-        config: {},
-        provider: "claude-cli",
-      } as never),
-    ).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-    expect(provider.resolveSyntheticAuth?.({ provider: "claude-cli" } as never)).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-  });
 
   it("does not copy native Claude auth during anthropic cli migration", async () => {
     probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });

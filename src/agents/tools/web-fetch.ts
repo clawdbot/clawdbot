@@ -195,13 +195,6 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
 
-function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.fetch?.enabled === "boolean") {
-    return params.fetch.enabled;
-  }
-  return true;
-}
-
 function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   if (typeof fetch?.readability === "boolean") {
     return fetch.readability;
@@ -964,7 +957,7 @@ export function createWebFetchTool(options?: {
   hostnameAllowlistRef?: { value?: string[] };
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
-  if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
+  if (fetch?.enabled === false) {
     return null;
   }
   const tool: AnyAgentTool = {
@@ -982,7 +975,7 @@ export function createWebFetchTool(options?: {
           runtimeWebFetch: options?.runtimeWebFetch,
         });
       const executionFetch = resolveFetchConfig(config);
-      if (!resolveFetchEnabled({ fetch: executionFetch, sandboxed: options?.sandboxed })) {
+      if (executionFetch?.enabled === false) {
         throw new Error("web_fetch is disabled.");
       }
       if (providerSelectionId) {

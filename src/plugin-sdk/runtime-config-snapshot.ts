@@ -3,6 +3,7 @@
  */
 export {
   clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
   getRuntimeConfigSnapshot,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,

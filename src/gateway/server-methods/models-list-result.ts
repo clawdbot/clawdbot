@@ -1,18 +1,10 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
@@ -31,7 +23,10 @@ import {
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
+import {
+  dedupeModelCatalogEntries,
+  modelCatalogLogicalKey,
+} from "../../agents/model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -53,9 +48,13 @@ import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalo
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import {
-  createModelsListAuthResolver,
-  createModelsListEntryEvaluator,
+  createModelsListAuthProjection,
+  type ModelsListAuthProjectionParams,
 } from "./models-list-auth-resolver.js";
+import {
+  listConfiguredRuntimeDiscoveryProviderIds,
+  resolveProviderConfigInventoryEntries,
+} from "./models-list-configured-static.js";
 import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
@@ -85,106 +84,12 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
-/** Configured dynamic-catalog providers that omit explicit model inventory. */
-function listConfiguredRuntimeDiscoveryProviderIds(
-  cfg: OpenClawConfig,
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
-): Set<string> {
-  const ids = new Set<string>();
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object" || !metadataSnapshot) {
-    return ids;
-  }
-  const dynamicProviders = new Set<string>();
-  for (const plugin of metadataSnapshot.plugins) {
-    for (const [providerRaw, mode] of Object.entries(plugin.modelCatalog?.discovery ?? {})) {
-      const providerId = normalizeProviderId(providerRaw);
-      if (providerId && (mode === "runtime" || mode === "refreshable")) {
-        dynamicProviders.add(providerId);
-      }
-    }
-  }
-  for (const [providerRaw, provider] of Object.entries(providers)) {
-    const providerId = normalizeProviderId(providerRaw);
-    if (providerId && dynamicProviders.has(providerId) && !Array.isArray(provider?.models)) {
-      ids.add(providerId);
-    }
-  }
-  return ids;
-}
-
-function resolveProviderConfigInventoryEntries(params: {
-  authoredEntries: readonly ModelCatalogEntry[];
-  canonicalEntries: readonly ModelCatalogEntry[];
-  discoveryOnlyProviderIds?: ReadonlySet<string>;
-}): ModelCatalogEntry[] {
-  const canonicalByKey = new Map<string, ModelCatalogEntry>();
-  for (const entry of params.canonicalEntries) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!canonicalByKey.has(key)) {
-      canonicalByKey.set(key, entry);
-    }
-  }
-  const seen = new Set<string>();
-  const inventory: ModelCatalogEntry[] = [];
-  for (const authoredEntry of params.authoredEntries) {
-    const key = resolveModelCatalogIdentityKey(authoredEntry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    // Authored config owns inventory membership. Canonical catalog rows own
-    // route metadata; configured logical overrides are applied by the projector.
-    inventory.push(canonicalByKey.get(key) ?? authoredEntry);
-  }
-  if (params.discoveryOnlyProviderIds) {
-    // Providers configured without explicit model lists (for example litellm)
-    // surface their key-scoped discovered rows as the configured inventory.
-    for (const canonicalEntry of params.canonicalEntries) {
-      const key = resolveModelCatalogIdentityKey(canonicalEntry);
-      if (seen.has(key)) {
-        continue;
-      }
-      if (!params.discoveryOnlyProviderIds.has(normalizeProviderId(canonicalEntry.provider))) {
-        continue;
-      }
-      seen.add(key);
-      inventory.push(canonicalEntry);
-    }
-  }
-  return inventory;
-}
-
 /** Builds one per-agent, snapshot-scoped route projection for Gateway thinking metadata. */
-export function createGatewayAgentModelCatalogProjector(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  snapshot: ModelCatalogSnapshot;
-  metadataSnapshot: PluginMetadataSnapshot;
-  preparedAuthStore: AuthProfileStore;
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
-  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
-  preferredProfileId?: string;
-  lockedProfileId?: string;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-}) {
-  // The Gateway owns one process-lifecycle plugin metadata snapshot. Carry it
-  // through the whole projection so per-model normalization cannot rediscover it.
-  const metadataSnapshot = params.metadataSnapshot;
-  const workspaceDir =
-    resolveAgentWorkspaceDir(params.cfg, params.agentId) ?? resolveDefaultAgentWorkspaceDir();
-  const evaluateNative = createAgentHarnessCatalogEvaluator({
-    config: params.cfg,
-    agentId: params.agentId,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
-    workspaceDir,
-    preferredProfileId: params.preferredProfileId,
-    lockedProfileId: params.lockedProfileId,
-  });
+export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthProjectionParams) {
+  const authProjection = createModelsListAuthProjection(params);
+  const { evaluateEntry, evaluateNative, snapshot } = authProjection;
   const projectionCatalog =
-    params.snapshot.routeVariants.length > 0
-      ? params.snapshot.routeVariants
-      : params.snapshot.entries;
+    snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries;
   const routeVariantsByKey = new Map<string, ModelCatalogEntry[]>();
   for (const entry of projectionCatalog) {
     const key = resolveModelCatalogIdentityKey(entry);
@@ -196,41 +101,16 @@ export function createGatewayAgentModelCatalogProjector(params: {
     routeVariantsByKey.get(resolveModelCatalogIdentityKey(entry)) ?? [entry];
   const logicalEntries: ModelCatalogEntry[] = [];
   const logicalEntryKeys = new Set<string>();
-  for (const entry of params.snapshot.entries) {
+  for (const entry of snapshot.entries) {
     const key = resolveModelCatalogIdentityKey(entry);
     if (!logicalEntryKeys.has(key)) {
       logicalEntryKeys.add(key);
       logicalEntries.push(entry);
     }
   }
-  const authResolver = createModelsListAuthResolver({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    metadataSnapshot,
-    preparedAuthStore: params.preparedAuthStore,
-    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
-    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
-    preparedSyntheticAuthComplete: isPreparedModelCatalogFull(params.snapshot),
-    workspaceDir,
-    routeResolverFactory: params.routeResolverFactory,
-  });
-  const evaluateEntry = createModelsListEntryEvaluator({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    authResolver,
-    metadataSnapshot,
-    providerOutcomes: params.snapshot.providerOutcomes,
-    ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
-  });
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
-    evaluateEntry,
-    evaluateNative,
-    metadataSnapshot,
-    authStore: params.preparedAuthStore,
-    authModes: params.preparedRuntimeAuthModes,
-    authMaterializations: params.preparedRuntimeAuthMaterializations,
+    ...authProjection,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
         logicalEntries.map(async (entry) => {
@@ -376,6 +256,7 @@ function apiKeyProviderCapabilities(params: {
 type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;
+  requesterProfileId?: string;
   params: Record<string, unknown>;
   preloadedCatalog?: {
     agentId: string;
@@ -515,6 +396,11 @@ export async function prepareModelsListResult(
   const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
   const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
+  const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
+  const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
+  // Native readiness belongs to the prepared generation, even across config publication.
+  const isCurrent = () =>
+    params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent?.() === true;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -526,6 +412,9 @@ export async function prepareModelsListResult(
     snapshot,
     view,
     metadataSnapshot,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
     allowHarnessDiscovery: params.preloadedOnly !== true && !preparedOnly,
     onError: (error) =>
       params.context.logGateway.debug(
@@ -533,35 +422,45 @@ export async function prepareModelsListResult(
       ),
   });
   snapshot = preparedCatalog.snapshot;
-  const { catalog, defaultModel } = preparedCatalog;
-  const nativeEvaluator =
-    (usedPreloadedCatalog ? params.catalogProjector?.evaluateNative : undefined) ??
-    createAgentHarnessCatalogEvaluator({
-      config: cfg,
+  const { defaultModel } = preparedCatalog;
+  const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
+  const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
+  const projector =
+    (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
+    createGatewayAgentModelCatalogProjector({
+      cfg,
       agentId,
-      agentDir: ownerSnapshot?.agentDir ?? resolveAgentDir(cfg, agentId),
+      agentDir: ownerSnapshot?.agentDir,
       workspaceDir,
-      isCurrent: () => params.context.getRuntimeConfig() === initialConfig,
+      snapshot: { ...snapshot, entries: preparedCatalog.catalog },
+      metadataSnapshot,
+      preparedAuthStore,
+      preparedRuntimeAuthModes,
+      preparedRuntimeAuthMaterializations,
+      // A complete catalog and its synthetic-auth probes cross the worker boundary together.
+      preparedSyntheticAuthComplete: ownerSnapshot?.catalogComplete === true,
+      // Provider-config inventory describes shared authored configuration, not personal accounts.
+      requesterProfileId: view === "provider-config" ? undefined : params.requesterProfileId,
+      routeResolverFactory: params.routeResolverFactory,
+      pluginRegistry: preparedPluginRegistry,
+      isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
     });
-  const evaluateNative: typeof nativeEvaluator = (entry, host) => {
-    const native = nativeEvaluator(entry, host);
+  const catalog = dedupeModelCatalogEntries([
+    ...preparedCatalog.catalog,
+    ...projector.snapshot.entries,
+  ]);
+  const evaluateNative: typeof projector.evaluateNative = (entry, host) => {
+    const native = projector.evaluateNative(entry, host);
     return native !== host && params.context.getRuntimeConfig() !== initialConfig
       ? { ...native, availability: false }
       : native;
   };
-  // Config turnover still invalidates prepared host facts. Native readiness is read live,
-  // so account publication/revocation never repeats host preparation or discovery.
-  const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
-  const { routeVariants, providerOutcomes } = snapshot;
+  const { routeVariants, providerOutcomes } = projector.snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const outcomeProjection = publicProviderOutcomes?.length
     ? { providerOutcomes: publicProviderOutcomes }
     : {};
-  const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
-  const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
-  // A complete catalog and its synthetic-auth probe results cross the worker boundary together.
-  // Only that paired generation may turn an absent synthetic credential into missing-auth.
-  const preparedSyntheticAuthComplete = ownerSnapshot?.catalogComplete === true;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
@@ -599,6 +498,9 @@ export async function prepareModelsListResult(
       preparedAuthStore,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
+      pluginRegistry: preparedPluginRegistry,
+      isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();
@@ -634,25 +536,7 @@ export async function prepareModelsListResult(
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: metadataSnapshot,
   });
-  const evaluateEntry =
-    (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??
-    createModelsListEntryEvaluator({
-      cfg,
-      agentId,
-      authResolver: createModelsListAuthResolver({
-        cfg,
-        agentId,
-        metadataSnapshot,
-        preparedAuthStore,
-        preparedRuntimeAuthModes,
-        preparedRuntimeAuthMaterializations,
-        preparedSyntheticAuthComplete,
-        workspaceDir,
-        routeResolverFactory: params.routeResolverFactory,
-      }),
-      metadataSnapshot,
-      providerOutcomes,
-    });
+  const { evaluateEntry } = projector;
   const evaluationKey = (entry: ModelCatalogEntry) =>
     openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();

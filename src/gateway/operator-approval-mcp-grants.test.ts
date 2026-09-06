@@ -1,6 +1,4 @@
-import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildCodexUserMcpServersThreadConfigPatch } from "../agents/cli-runner/bundle-mcp-codex.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,12 +14,16 @@ import {
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { registerMcpToolApprovalBinding } from "../infra/mcp-tool-approval-binding.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
+let fixture: OpenClawTestState | undefined;
 const cfg: OpenClawConfig = {
   agents: { list: [{ id: "main" }, { id: "other" }] },
   mcp: { servers: { "project.docs": { command: "docs-mcp" } } },
@@ -49,20 +51,23 @@ function gateway() {
   return aux;
 }
 
-beforeEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.stubEnv("OPENCLAW_STATE_DIR", fs.realpathSync(dirs.make("mcp-tool-grants-")));
+beforeEach(async () => {
+  if (fixture) {
+    throw new Error("Previous auxiliary owner cleanup did not finish");
+  }
+  fixture = await createOpenClawTestState({ label: "mcp-tool-grants" });
   setRuntimeConfigSnapshot(cfg);
 });
-afterEach(() => {
-  for (const aux of auxiliaries.splice(0)) {
-    aux.unregisterApprovalAuthorityObserver();
-    aux.questionManager.reset();
+afterEach(async () => {
+  for (const aux of auxiliaries) {
+    await aux.stopOperatorInteractions();
   }
+  auxiliaries.length = 0;
   resetAgentRunRegistryForTest();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
-  vi.unstubAllEnvs();
+  await fixture?.cleanup();
+  fixture = undefined;
 });
 
 async function requestGrant(
@@ -156,6 +161,7 @@ describe("gateway MCP tool grants", () => {
     };
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
     expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    await aux.stopOperatorInteractions();
     closeOpenClawStateDatabaseForTest();
     const restarted = gateway();
     expect(restarted.pluginApprovalManager.runtimeEpoch).not.toBe(

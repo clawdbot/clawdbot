@@ -1,6 +1,10 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
+import type {
+  QaEvidenceRttMeasurement,
+  QaEvidenceTiming,
+  QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -19,6 +23,7 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 export type QaSuiteStepOutcome = {
   details?: string;
   timing?: QaEvidenceTiming;
+  rttMeasurement?: QaEvidenceRttMeasurement;
 };
 
 export type QaSuiteStep = {
@@ -32,6 +37,7 @@ export type QaSuiteScenarioResult = {
   steps: QaReportCheck[];
   details?: string;
   timing?: QaEvidenceTiming;
+  rttMeasurement?: QaEvidenceRttMeasurement;
   modelSwitchEvidence?: Record<string, unknown>;
   runtimeParity?: RuntimeParityResult;
 };

@@ -1,15 +1,187 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
   ControlUiGitHubError,
   fetchGitHubApi,
+  fetchGitHubJson,
   formatControlUiGitHubPreviewError,
   readGitHubJsonResponse,
 } from "./control-ui-github-api.js";
 
 describe("Control UI GitHub failures", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("keeps the default JSON byte cap when a caller supplies a larger metadata budget", async () => {
+    const body = JSON.stringify({ summary: "x".repeat(256 * 1024) });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(body));
+    const url = "https://api.github.com/repos/owner/repo";
+
+    await expect(fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({
+      statusCode: 502,
+      message: "GitHub response exceeded the size limit",
+    });
+    await expect(fetchGitHubJson(url, fetchImpl, undefined, 512 * 1024)).resolves.toBeTypeOf(
+      "object",
+    );
+    await expect(fetchGitHubJson(url, fetchImpl)).rejects.toMatchObject({ statusCode: 502 });
+  });
+
+  it.each([
+    {
+      resource: "core",
+      limited: "/user/1",
+      sibling: "/repos/owner/repo",
+      independent: "/search/repositories",
+    },
+    {
+      resource: "search",
+      limited: "/search/repositories",
+      sibling: "/search/issues",
+      independent: "/user/1",
+    },
+    {
+      resource: "code_search",
+      limited: "/search/code?q=first",
+      sibling: "/search/code?q=second",
+      independent: "/search/repositories",
+    },
+  ])(
+    "shares $resource quota cooldown without blocking other buckets or credentials",
+    async ({ resource, limited, sibling, independent }) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 403,
+            headers: {
+              "x-ratelimit-resource": resource,
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": "1800000090",
+            },
+          }),
+        )
+        .mockImplementation(async () => new Response("{}"));
+      const request = async (path: string, token = "quota-token") =>
+        readGitHubJsonResponse(
+          await fetchGitHubApi(`https://api.github.com${path}`, fetchMock, token),
+        );
+      await expect(request(limited)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 90_000,
+      });
+      clock.mockReturnValue(1_800_000_010_000);
+      await expect(request(sibling)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 80_000,
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      await expect(request(independent)).resolves.toEqual({});
+      await expect(request(sibling, "rotated-token")).resolves.toEqual({});
+      clock.mockReturnValue(1_800_000_090_000);
+      await expect(request(sibling)).resolves.toEqual({});
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it.each<{ headers: Record<string, string>; delay: number }>([
+    { headers: { "retry-after": "90" }, delay: 90_000 },
+    { headers: {}, delay: 60_000 },
+    { headers: { "retry-after": "invalid", "x-ratelimit-reset": "Infinity" }, delay: 60_000 },
+    {
+      headers: { "x-ratelimit-remaining": "42", "x-ratelimit-reset": "1800000010" },
+      delay: 60_000,
+    },
+    {
+      headers: { "x-ratelimit-remaining": "42", "x-ratelimit-reset": "1800003000" },
+      delay: 60_000,
+    },
+  ])(
+    "shares secondary quota cooldown across REST buckets: $delay ms",
+    async ({ headers, delay }) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () => new Response(null, { status: 429, headers }));
+      await expect(
+        fetchGitHubJson("https://api.github.com/search/repositories", fetchMock),
+      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: delay });
+      await expect(
+        fetchGitHubJson("https://api.github.com/user/1", fetchMock),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      clock.mockReturnValue(1_800_000_000_000 + delay);
+      await expect(
+        fetchGitHubJson("https://api.github.com/user/1", fetchMock),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    [60, 120],
+    [120, 60],
+  ])(
+    "reports the first recovering credential when reset times are %j",
+    async (authSeconds, anonymousSeconds) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+        async (_url, init) =>
+          new Response(null, {
+            status: 403,
+            headers: {
+              "x-ratelimit-resource": "core",
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": String(
+                1_800_000_000 +
+                  (new Headers(init?.headers).has("Authorization")
+                    ? authSeconds
+                    : anonymousSeconds),
+              ),
+            },
+          }),
+      );
+      await expect(
+        fetchGitHubJson("https://api.github.com/user/1", fetchMock, "quota-token"),
+      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 60_000 });
+      await expect(
+        fetchGitHubJson("https://api.github.com/repos/owner/repo", fetchMock, "quota-token"),
+      ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: 60_000 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("retains the longest concurrent cooldown and rechecks live identity before rejecting", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => firstResponse.promise)
+      .mockImplementationOnce(async () => secondResponse.promise);
+    const request = () =>
+      fetchGitHubJson("https://api.github.com/user/1", fetchMock).catch((error: unknown) => error);
+    const first = request();
+    const second = request();
+    firstResponse.resolve(new Response(null, { status: 429, headers: { "retry-after": "90" } }));
+    await expect(first).resolves.toMatchObject({ retryAfterMs: 90_000 });
+    secondResponse.resolve(new Response(null, { status: 429, headers: { "retry-after": "30" } }));
+    await expect(second).resolves.toMatchObject({ retryAfterMs: 90_000 });
+    const retired = new Error("identity retired");
+    const identity = {
+      revalidate: vi.fn(async () => {
+        throw retired;
+      }),
+      assertSelected: vi.fn(),
+    };
+    await expect(
+      fetchGitHubApi("https://api.github.com/user/1", fetchMock, undefined, undefined, identity),
+    ).rejects.toBe(retired);
+    expect(identity.revalidate).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each<{ status: number; headers: Record<string, string>; delay: number }>([
     {
@@ -76,7 +248,8 @@ describe("Control UI GitHub failures", () => {
     ).toEqual(formatControlUiGitHubPreviewError(missing));
   });
 
-  it("ignores malformed rate-limit timing", async () => {
+  it("uses a bounded cooldown when rate-limit timing is malformed", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const error = await readGitHubJsonResponse(
       new Response(null, {
         status: 429,
@@ -85,7 +258,7 @@ describe("Control UI GitHub failures", () => {
     ).catch((failure: unknown) => failure);
     const display = formatControlUiGitHubPreviewError(error);
 
-    expect(display.retryAfterMs).toBeUndefined();
+    expect(display.retryAfterMs).toBe(60_000);
     expect(display.message).toMatch(/rate limit/i);
     expect(display.message).not.toContain("secret-upstream-header");
   });

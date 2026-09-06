@@ -16,7 +16,6 @@ import { createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.j
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
@@ -187,28 +186,6 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       }
     },
   );
-
-  it("records core read entitlement without plugin or channel shadows", () => {
-    const coreRead = createStubTool("read");
-    const pluginRead = createStubTool("read");
-    const channelRead = createStubTool("read");
-    const catalogRef = createToolSearchCatalogRef();
-    setPluginToolMeta(pluginRead, { pluginId: "example-plugin", optional: false });
-    setChannelAgentToolMeta(channelRead as never, { channelId: "example-channel" });
-
-    expect(
-      [coreRead, pluginRead, channelRead].map(
-        (tool) =>
-          prepare({
-            codeModeControlsEnabledForRun: false,
-            attemptConfig: CATALOGS_DISABLED_CONFIG,
-            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-            catalogRef,
-            uncompactedEffectiveTools: [tool],
-          }).coreReadAuthorized,
-      ),
-    ).toEqual([true, false, false]);
-  });
 
   it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
     const catalogRef = createToolSearchCatalogRef();

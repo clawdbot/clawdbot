@@ -45,7 +45,7 @@
           "type": "function"
         },
         {
-          "description": "End turn for announced child completion events. Collector runs require explicit collection instead. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+          "description": "End turn for announced child completion events. Collector runs require agents_wait instead. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
           "inputSchema": {
             "properties": {
               "acknowledgment": {

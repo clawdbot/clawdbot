@@ -6,17 +6,15 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 type PermissionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps a saved permission mode when its list refresh fails", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:permission-refresh",
@@ -36,13 +34,13 @@ suite.define(() => {
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
-      const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
 
       await trigger.click();
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       await gateway.waitForRequest("sessions.patch");
-      await gateway.waitForRequest("sessions.list", { after: listRequests });
+      await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
       await gateway.rejectDeferred("sessions.list", {
         code: "UNAVAILABLE",
         message: "Roster refresh unavailable",
@@ -64,11 +62,7 @@ suite.define(() => {
   });
 
   it("keeps a newer permission event after an older patch response arrives", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:permission-ordering",
@@ -88,13 +82,13 @@ suite.define(() => {
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
-      const listRequests = (await gateway.getRequests("sessions.list")).length;
+      const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.deferNext("sessions.patch", { permissionMode: "workspace" });
 
       await trigger.click();
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       await gateway.waitForRequest("sessions.patch");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
         sessionKey: session.key,
@@ -112,7 +106,7 @@ suite.define(() => {
           }, session.key),
         )
         .toBe("full");
-      await gateway.waitForRequest("sessions.list", { after: listRequests });
+      await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
       await gateway.resolveDeferred("sessions.patch", {
         key: session.key,
         entry: {
@@ -124,7 +118,9 @@ suite.define(() => {
 
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("full");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequests + 1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
+        listRequests + 1,
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

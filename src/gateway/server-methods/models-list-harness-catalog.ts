@@ -4,6 +4,7 @@ import { augmentModelCatalogWithAgentHarness } from "../../agents/harness/model-
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { includeConfiguredStaticCatalogEntries } from "./models-list-configured-static.js";
 
 export async function prepareModelsListHarnessCatalog(params: {
@@ -14,6 +15,9 @@ export async function prepareModelsListHarnessCatalog(params: {
   snapshot: ModelCatalogSnapshot;
   view: "default" | "configured" | "provider-config" | "all";
   metadataSnapshot: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   allowHarnessDiscovery: boolean;
   onError?: (error: unknown) => void;
 }) {
@@ -27,6 +31,9 @@ export async function prepareModelsListHarnessCatalog(params: {
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel,
         snapshot: params.snapshot,
+        pluginRegistry: params.pluginRegistry,
+        isCurrent: params.isCurrent,
+        observationConfig: params.observationConfig,
         onError: params.onError,
       })
     : params.snapshot;

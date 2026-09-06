@@ -1,7 +1,6 @@
 /** Main ACP session manager implementation and public control-plane facade. */
 import type {
   AcpRuntime,
-  AcpRuntimeCapabilities,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
@@ -16,7 +15,6 @@ import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
-import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
@@ -168,16 +166,30 @@ export class AcpSessionManager {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
+    sessionEntry: SessionEntry;
+    closeRuntimeOnFailure: () => Promise<void>;
   }> {
     const target = resolveAcpSessionTarget(input);
     return await this.withSessionActor(target, async () => {
-      return await runManagerInitializeSession({
+      const initialized = await runManagerInitializeSession({
         input,
         ...target,
         deps: this.deps,
         runtimeHandles: this.runtimeHandles,
         writeSessionMeta: this.writeSessionMeta.bind(this),
       });
+      return {
+        ...initialized,
+        // Deletion and shutdown may have already released this exact handle.
+        closeRuntimeOnFailure: () =>
+          this.withSessionActor(target, () =>
+            this.runtimeHandles.close({
+              ...target,
+              reason: "spawn-failed",
+              expectedHandle: initialized.handle,
+            }),
+          ),
+      };
     });
   }
 
@@ -199,7 +211,6 @@ export class AcpSessionManager {
           throwIfAborted: this.throwIfAborted.bind(this),
           resolveSession: this.resolveSession.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
-          resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
         }),
       params.signal,
@@ -366,7 +377,6 @@ export class AcpSessionManager {
       runtimeHandles: this.runtimeHandles,
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
-      resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
       writeSessionMeta: this.writeSessionMeta.bind(this),
     };
   }
@@ -386,14 +396,6 @@ export class AcpSessionManager {
   private recordErrorCode(code: string): void {
     const normalized = normalizeAcpErrorCode(code);
     this.errorCountsByCode.set(normalized, (this.errorCountsByCode.get(normalized) ?? 0) + 1);
-  }
-
-  private async resolveRuntimeCapabilities(params: {
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-    includeStatusConfigOptionKeys?: boolean;
-  }): Promise<AcpRuntimeCapabilities> {
-    return await resolveManagerRuntimeCapabilities(params);
   }
 
   private async setSessionState(params: {
@@ -468,6 +470,7 @@ export class AcpSessionManager {
   }
 
   private async writeSessionMeta(params: {
+    assertCommitAllowed?: () => void;
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId: string;
@@ -485,6 +488,7 @@ export class AcpSessionManager {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         mutate: params.mutate,
+        assertCommitAllowed: params.assertCommitAllowed,
         ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
         ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
       });

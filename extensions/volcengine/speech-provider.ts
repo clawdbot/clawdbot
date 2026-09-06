@@ -9,9 +9,12 @@ import type {
 import {
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/speech-provider";
+import {
+  asFiniteNumberInRange,
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { volcengineTTS, type VolcengineTtsEncoding } from "./tts.js";
 
 const DEFAULT_VOICE = "en_female_anna_mars_bigtts";

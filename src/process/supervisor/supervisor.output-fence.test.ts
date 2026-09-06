@@ -96,27 +96,24 @@ describe("process supervisor output fence", () => {
       let callbackOutputAtMs: number | undefined;
       const run = await spawnChild(supervisor, {
         runId,
-        sessionId: "s-raw-output-deadline",
         argv: createSilentIdleArgv(),
         noOutputTimeoutMs: 10,
         ...(observeRaw
           ? {
               onStdoutRaw: () => {
-                callbackOutputAtMs = supervisor.getRecord(runId)?.lastOutputAtMs;
+                callbackOutputAtMs = run.activity.lastOutputAtMs;
               },
             }
           : {}),
       });
-      const startedAtMs = supervisor.getRecord(runId)?.startedAtMs;
+      const startedAtMs = run.startedAtMs;
 
       await vi.advanceTimersByTimeAsync(9);
       adapter.emitStdoutRaw(Buffer.from([0xe2]));
 
-      expect(supervisor.getRecord(runId)?.lastOutputAtMs).toBeGreaterThan(
-        startedAtMs ?? Number.POSITIVE_INFINITY,
-      );
+      expect(run.activity.lastOutputAtMs).toBeGreaterThan(startedAtMs);
       if (observeRaw) {
-        expect(callbackOutputAtMs).toBe(supervisor.getRecord(runId)?.lastOutputAtMs);
+        expect(callbackOutputAtMs).toBe(run.activity.lastOutputAtMs);
       }
       await vi.advanceTimersByTimeAsync(9);
       expect(adapter.killMock).not.toHaveBeenCalled();
@@ -141,7 +138,6 @@ describe("process supervisor output fence", () => {
       const supervisor = createProcessSupervisor();
       const delivered: string[] = [];
       const run = await spawnChild(supervisor, {
-        sessionId: "s-late-output",
         argv: createSilentIdleArgv(),
         timeoutMs: 1_000,
         stdinMode: "pipe-closed",
@@ -161,7 +157,7 @@ describe("process supervisor output fence", () => {
 
       expect(delivered).toEqual(["live"]);
       expect(exit[stream]).toBe("live");
-      expect(supervisor.getRecord(run.runId)?.lastOutputAtMs).toBe(2_000);
+      expect(run.activity.lastOutputAtMs).toBe(2_000);
       extinction.resolve();
       await expect(run.waitForExtinction?.()).resolves.toBeUndefined();
       expect(adapter.disposeMock).toHaveBeenCalledOnce();
@@ -178,7 +174,6 @@ describe("process supervisor output fence", () => {
       const supervisor = createProcessSupervisor();
       const delivered: string[] = [];
       const run = await spawnChild(supervisor, {
-        sessionId: "s-detach-output",
         argv: createSilentIdleArgv(),
         timeoutMs: 1_000,
         stdinMode: "pipe-closed",
@@ -195,7 +190,7 @@ describe("process supervisor output fence", () => {
 
       expect(delivered).toEqual(["attached"]);
       expect(exit[stream]).toBe("attached");
-      expect(supervisor.getRecord(run.runId)?.lastOutputAtMs).toBe(2_000);
+      expect(run.activity.lastOutputAtMs).toBe(2_000);
     },
   );
 });

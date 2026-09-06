@@ -18,7 +18,7 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyOperation,
   type ReplyOperationPhase,
-  type ReplyToolAuthorityProjector,
+  type ReplyToolAuthoritySnapshot,
   type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 import {
@@ -30,6 +30,7 @@ import {
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
   getAttachedBackend,
+  hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
   isReplyOperationPreBackendPhase,
   markReplyRunDiagnosticProgress,
@@ -42,7 +43,6 @@ import {
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
-  type ReplyOperationStaleExpiryOptions,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
   waitForReplyBarrierSettlement,
@@ -99,17 +99,10 @@ export function createReplyOperation(params: {
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let toolAuthorityFingerprint: string | undefined;
-  let toolAuthorityProjector: ReplyToolAuthorityProjector | undefined;
+  let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
-  let ownerSettled = false;
-  const settleOwner = () => {
-    if (ownerSettled) {
-      return;
-    }
-    ownerSettled = true;
-    ownerSettlement.resolve(undefined);
-  };
+  const settleOwner = () => ownerSettlement.resolve(undefined);
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
@@ -233,9 +226,7 @@ export function createReplyOperation(params: {
     get originatingLeafEntryId() {
       return params.originatingLeafEntryId;
     },
-    get abortSignal() {
-      return controller.signal;
-    },
+    abortSignal: controller.signal,
     get resetTriggered() {
       return params.resetTriggered;
     },
@@ -334,39 +325,48 @@ export function createReplyOperation(params: {
     markAcceptedSteeredInboundAudio() {
       acceptedSteeredInboundAudio = true;
     },
-    bindToolAuthorityFingerprint(fingerprint) {
-      const normalized = normalizeOptionalString(fingerprint);
-      if (!normalized) {
-        throw new Error("Reply operation tool authority fingerprint is required");
-      }
-      if (toolAuthorityFingerprint && toolAuthorityFingerprint !== normalized) {
+    bindToolAuthoritySnapshot(snapshot) {
+      if (result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
         throw new Error("Reply operation cannot change tool authority after admission");
       }
-      toolAuthorityFingerprint = normalized;
-    },
-    bindToolAuthorityProjector(projector) {
-      if (toolAuthorityProjector && toolAuthorityProjector !== projector) {
-        throw new Error("Reply operation cannot change tool authority projector after admission");
+      if (toolAuthoritySnapshot) {
+        return;
       }
-      toolAuthorityProjector = projector;
+      const fingerprint = normalizeOptionalString(snapshot.fingerprint());
+      if (!fingerprint) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      toolAuthoritySnapshot = snapshot;
+      toolAuthorityFingerprint = fingerprint;
     },
     projectToolAuthorityFingerprint(overlay) {
-      if (result || !toolAuthorityProjector || !toolAuthorityRoute) {
+      if (result || !toolAuthoritySnapshot || !toolAuthorityRoute) {
         return undefined;
       }
       try {
-        return normalizeOptionalString(toolAuthorityProjector(overlay, toolAuthorityRoute));
+        return normalizeOptionalString(toolAuthoritySnapshot.project(overlay, toolAuthorityRoute));
       } catch {
         return undefined;
       }
     },
     bindToolAuthorityRoute(route) {
+      if (
+        result ||
+        !toolAuthoritySnapshot ||
+        replyRunState.activeRunsByKey.get(currentSessionKey) !== operation
+      ) {
+        throw new Error("Reply operation has no active tool authority snapshot");
+      }
       const provider = normalizeOptionalString(route.provider);
       const model = normalizeOptionalString(route.model);
       if (!provider || !model) {
         throw new Error("Reply operation tool authority route is required");
       }
-      toolAuthorityRoute = { provider, model };
+      const preparedRoute = { provider, model };
+      const fingerprint = toolAuthoritySnapshot.fingerprint(preparedRoute);
+      toolAuthorityRoute = preparedRoute;
+      toolAuthorityFingerprint = fingerprint;
+      return fingerprint;
     },
     updateSessionId(nextSessionId) {
       if (result) {
@@ -561,7 +561,10 @@ export function createReplyOperation(params: {
   };
 
   expireReplyOperationByOperation.set(operation, (reason, options) => {
-    if (replyRunState.activeRunsByKey.get(currentSessionKey) !== operation) {
+    if (
+      replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
+      (reason !== "finalization_stalled" && hasCommittedReplyOperationOutcome(operation))
+    ) {
       return false;
     }
     // Set the terminal result BEFORE cancelling the backend: cancel can
@@ -721,14 +724,6 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function expireStaleReplyOperation(
-  operation: ReplyOperation,
-  reason: replyRunSettle.ReplyOperationStaleReason,
-  options?: ReplyOperationStaleExpiryOptions,
-): boolean {
-  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
 }
 
 export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {

@@ -1,4 +1,5 @@
 // Skill refresh tests cover runtime reload events and refresh-state updates.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,6 +61,7 @@ describe("ensureSkillsWatcher", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     await refreshTestSupport.resetSkillsRefreshForTest();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -318,23 +320,33 @@ describe("ensureSkillsWatcher", () => {
     ]);
   });
 
-  it("does not publish a pending raw-file refresh after watchers close", async () => {
+  it("retires raw-file stability polling without publishing after watchers close", async () => {
     vi.useFakeTimers();
     const skillDir = await createFixtureDirectory("workspace/skills/demo");
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "skill content");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(skillFile, "skill content");
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => seen.push(change));
     refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
     const watched = watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills"));
     const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
+    const stat = vi.spyOn(fsSync, "statSync");
 
     watched.watcher.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
     await refreshModule.closeSkillsWatchers();
     expect(watched.watcher.close).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(500);
+    stat.mockClear();
+    for (let tick = 0; tick < 4; tick += 1) {
+      await fs.appendFile(skillFile, " still writing");
+      await vi.advanceTimersByTimeAsync(100);
+    }
 
     expect(seen).toEqual([]);
     expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBe(versionBefore);
+    expect({
+      postCloseReads: stat.mock.calls.filter(([file]) => file === skillFile).length,
+      pendingTimers: vi.getTimerCount(),
+    }).toEqual({ postCloseReads: 0, pendingTimers: 0 });
   });
 
   it.runIf(process.platform !== "win32")(

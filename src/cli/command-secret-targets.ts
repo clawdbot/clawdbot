@@ -8,14 +8,13 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -564,7 +563,7 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
   return getCapabilityWebProviderAutoDetectTargets({
     config,
     baseTargetIds: getCapabilityWebSearchCommandSecretTargetIds(),
-    providers: sortWebSearchProvidersForAutoDetect(
+    providers: sortPluginEntriesForAutoDetect(
       resolvePluginWebSearchProviders({
         config,
       }),
@@ -577,7 +576,7 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
   return getCapabilityWebProviderAutoDetectTargets({
     config,
     baseTargetIds: getCapabilityWebFetchCommandSecretTargetIds(),
-    providers: sortWebFetchProvidersForAutoDetect(
+    providers: sortPluginEntriesForAutoDetect(
       resolvePluginWebFetchProviders({
         config,
       }),

@@ -6,11 +6,14 @@ import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { GatewayClient } from "../../../gateway/client.js";
 import { startGatewayServer, type GatewayServer } from "../../../gateway/server.js";
+import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import { extractPayloadText } from "../../../gateway/test-helpers.agent-results.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
+import { normalizeInputProvenance } from "../../../sessions/input-provenance.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -37,15 +40,21 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-type LiveSubagentModelConfig = {
-  modelKey: string;
-  provider: "openai" | "google";
-  requiredEnv: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY";
-};
+type LiveSubagentModelConfig =
+  | { modelKey: string; provider: "ollama" }
+  | { modelKey: string; provider: "openai"; requiredEnv: "OPENAI_API_KEY" }
+  | {
+      modelKey: string;
+      provider: "google";
+      requiredEnv: "GEMINI_API_KEY" | "GOOGLE_API_KEY";
+    };
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
   const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
+  if (modelKey.startsWith("ollama/")) {
+    return { modelKey, provider: "ollama" };
+  }
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,
@@ -59,7 +68,9 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
   // Live E2E runs need the provider credential that matches the selected model
   // family; fail early before gateway startup.
-  expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
+  if (config.provider !== "ollama") {
+    expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
+  }
 }
 
 function liveSubagentConfig(
@@ -73,9 +84,32 @@ function liveSubagentConfig(
   },
 ): OpenClawConfig {
   const providerConfig = resolveLiveSubagentModelConfig();
-  const modelId = modelKey.replace(/^(openai|google)\//u, "");
+  const modelId = modelKey.replace(/^(openai|google|ollama)\//u, "");
   const providers: LiveSubagentModelProviders = {};
-  if (providerConfig.provider === "google") {
+  if (providerConfig.provider === "ollama") {
+    providers.ollama = {
+      api: "ollama" as const,
+      agentRuntime: { id: "openclaw" },
+      baseUrl:
+        process.env.OPENCLAW_LIVE_SUBAGENT_E2E_OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434",
+      apiKey: "ollama-local",
+      timeoutSeconds: 300,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          api: "ollama" as const,
+          agentRuntime: { id: "openclaw" },
+          input: ["text" as const],
+          reasoning: false,
+          contextWindow: 32_768,
+          maxTokens: 2_048,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          params: { num_ctx: 32_768, keep_alive: "5m" },
+        },
+      ],
+    };
+  } else if (providerConfig.provider === "google") {
     providers.google = {
       api: "google-generative-ai" as const,
       agentRuntime: { id: "openclaw" },
@@ -133,7 +167,7 @@ function liveSubagentConfig(
       auth: { mode: "token", token },
       controlUi: { enabled: false },
     },
-    plugins: { enabled: false },
+    plugins: { enabled: providerConfig.provider === "ollama" },
     tools: { allow: options?.toolAllow ?? ["sessions_spawn", "sessions_yield", "subagents"] },
     ...(options?.queue ? { messages: { queue: options.queue } } : {}),
     models: {
@@ -195,6 +229,30 @@ function createGatewayClient(params: {
   });
 }
 
+async function readCompletionProvenance(sessionKey: string, agentId: string) {
+  const entry = loadSessionEntry({ agentId, sessionKey });
+  if (!entry?.sessionId) {
+    return undefined;
+  }
+  const messages = await readSessionMessagesAsync(
+    {
+      agentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+    },
+    { mode: "full", reason: "live subagent completion provenance verification" },
+  );
+  for (const message of messages) {
+    const record = message as { role?: unknown; provenance?: unknown };
+    const provenance = normalizeInputProvenance(record.provenance);
+    if (record.role === "user" && provenance?.sourceTool === "subagent_announce") {
+      return provenance;
+    }
+  }
+  return undefined;
+}
+
 describeLive("subagent announce live", () => {
   let state: OpenClawTestState | undefined;
   let server: GatewayServer | undefined;
@@ -210,6 +268,81 @@ describeLive("subagent announce live", () => {
     server = undefined;
     state = undefined;
   });
+
+  it(
+    "records internal provenance through a real Gateway and provider",
+    async () => {
+      const modelConfig = resolveLiveSubagentModelConfig();
+      requireLiveSubagentAuth(modelConfig);
+
+      const token = `subagent-provenance-${randomUUID()}`;
+      const port = await getFreePort();
+      const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const childToken = `PROVENANCE_CHILD_${nonce}`;
+      const sessionKey = `agent:main:live-subagent-provenance-${nonce.toLowerCase()}`;
+
+      state = await createOpenClawTestState({
+        label: "subagent-provenance-live",
+        layout: "split",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
+          OPENCLAW_PLUGINS_PATHS: undefined,
+        },
+      });
+      await state.writeConfig(
+        liveSubagentConfig(modelConfig.modelKey, state.workspaceDir, port, token),
+      );
+      clearRuntimeConfigSnapshot();
+      resetPluginRuntimeStateForTest();
+
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      await server.startupSettled;
+      client = await createGatewayClient({ port, token });
+
+      await client.request<AgentPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `subagent-provenance-${randomUUID()}`,
+          deliver: false,
+          timeout: 300,
+          message: [
+            "Run this exact OpenClaw subagent scenario. Use tool calls, not prose.",
+            `Call sessions_spawn once with exactly this JSON input: ${JSON.stringify({
+              task: `Reply exactly ${childToken} and nothing else.`,
+              taskName: "provenance_child",
+              cleanup: "keep",
+              context: "isolated",
+            })}.`,
+            `After the spawn is accepted, call sessions_yield with message="waiting for ${childToken}".`,
+          ].join("\n"),
+        },
+        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+
+      const provenance = await waitFor("internal completion provenance", () =>
+        readCompletionProvenance(sessionKey, "main"),
+      );
+      expect(provenance).toMatchObject({
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      });
+    },
+    10 * 60_000,
+  );
 
   it(
     "keeps issue 82913 busy-parent completion announce pending until transcript delivery",

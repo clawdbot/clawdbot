@@ -78,14 +78,24 @@ describe("gateway update action", () => {
   });
 
   it.each([false, undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
-    const result = await createGatewayTool({ senderIsOwner }).execute("update", {
-      action: "update.run",
-    });
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:123456789",
+        turnSourceChannel: "telegram",
+      },
+      () =>
+        createGatewayTool({ senderIsOwner, requesterSenderId: "123456789" }).execute("update", {
+          action: "update.run",
+          requesterSenderId: "spoofed",
+          channel: "discord",
+        }),
+    );
     expect(result.details).toEqual({
       ok: false,
       code: "owner_required",
       message:
-        "Only the OpenClaw owner can start an update from chat. Tell the user to run `openclaw update` in a terminal or use the Control UI.",
+        "Only the OpenClaw owner can start an update from chat. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
     });
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -242,7 +252,7 @@ describe("gateway update action", () => {
     });
     expect(result.details).toMatchObject({ handoff: { command, message } });
     expect(JSON.stringify(result.details, null, 2).length).toBeLessThan(4000);
-    expect(JSON.stringify(result.details)).toContain("exact manual instructions in handoff");
+    expect(JSON.stringify(result.details)).toContain("exact manual instructions");
   });
 
   it("preserves oversized manual instructions without throwing or truncating", async () => {

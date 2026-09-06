@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLegacyGatewayLaunchAgentLabels } from "./constants.js";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -40,7 +40,7 @@ export async function uninstallLaunchAgent({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
-  assertExternalLaunchAgentMutation(env, "uninstall");
+  await assertExternalLaunchAgentMutation(env, "uninstall");
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
@@ -91,26 +91,27 @@ function createLaunchAgentRemovalError(error: unknown): Error {
     `LaunchAgent removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
   );
 }
-function currentGatewayLaunchAgentLabel(
+async function currentGatewayLaunchAgentLabel(
   targetEnv: Record<string, string | undefined>,
-): string | undefined {
+): Promise<string | undefined> {
   const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
   const candidates = new Set([
     resolveLaunchAgentLabel(targetEnv),
     ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
   ]);
-  return [...candidates].find((label) =>
-    isCurrentProcessLaunchdServiceLabel(label, process.env, {
-      allowConfiguredLabelFallback: false,
-    }),
-  );
+  for (const label of candidates) {
+    if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
+      return label;
+    }
+  }
+  return undefined;
 }
 
-function assertExternalLaunchAgentMutation(
+async function assertExternalLaunchAgentMutation(
   env: Record<string, string | undefined>,
   action: "install" | "uninstall",
-): void {
-  const currentLabel = currentGatewayLaunchAgentLabel(env);
+): Promise<void> {
+  const currentLabel = await currentGatewayLaunchAgentLabel(env);
   if (!currentLabel) {
     return;
   }
@@ -356,7 +357,7 @@ async function activateLaunchAgent(params: {
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
-  assertExternalLaunchAgentMutation(args.env, "install");
+  await assertExternalLaunchAgentMutation(args.env, "install");
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);
   const label = resolveLaunchAgentLabel(args.env);

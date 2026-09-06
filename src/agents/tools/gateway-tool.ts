@@ -1,6 +1,7 @@
 /** Gateway config reads and owner-requested self-updates. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   DEFAULT_UPDATE_TIMEOUT_MS,
@@ -132,16 +133,19 @@ export function createGatewayTool(options?: {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (action === "update.run") {
+        const caller = getGatewayToolCallerIdentity();
         if (options?.senderIsOwner !== true) {
+          const hint = formatCommandOwnerHint({
+            channel: caller?.turnSourceChannel,
+            id: options?.requesterSenderId,
+          });
           return jsonResult({
             ok: false,
             code: "owner_required",
-            message:
-              "Only the OpenClaw owner can start an update from chat. Tell the user to run `openclaw update` in a terminal or use the Control UI.",
+            message: `Only the OpenClaw owner can start an update from chat. ${hint}`,
           });
         }
         // Routing comes from the admitted caller, never model-authored destinations or credentials.
-        const caller = getGatewayToolCallerIdentity();
         const deliveryContext = caller
           ? {
               channel: caller.turnSourceChannel,

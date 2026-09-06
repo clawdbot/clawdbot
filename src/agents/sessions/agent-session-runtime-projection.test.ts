@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
@@ -12,15 +13,58 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
+  testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import { AuthStorage } from "./auth-storage.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
+import { ModelRegistry } from "./model-registry.js";
+import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
+import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("AgentSession runtime and transcript projections", () => {
+  it("keeps grep-only truncation results free of unavailable read-tool instructions", async () => {
+    const cwd = await fs.realpath(tempDirs.make("openclaw-sdk-grep-guidance-"));
+    const line = `needle ${"x".repeat(600)} OMITTED_END`;
+    await fs.writeFile(path.join(cwd, "long-line.txt"), `${line}\n`);
+    const { session } = await createAgentSession({
+      cwd,
+      tools: ["grep"],
+      model: testModel,
+      resourceLoader: createResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+    try {
+      expect(session.getActiveToolNames()).toEqual(["grep"]);
+      session.setActiveToolsByName(["read", "grep"]);
+      expect(session.getActiveToolNames()).toEqual(["grep"]);
+      const grep = session.agent.state.tools[0];
+      if (!grep) {
+        throw new Error("Expected the selected grep tool");
+      }
+      const result = await grep.execute("grep-long-line", {
+        pattern: "needle",
+        path: "long-line.txt",
+      });
+      const text = result.content
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      expect(result.details).toMatchObject({ linesTruncated: true });
+      expect(text).toContain(`long-line.txt:1: ${line.slice(0, 500)}... [truncated]`);
+      expect(text).toContain("Some lines truncated to 500 chars");
+      expect(text).not.toContain("OMITTED_END");
+      expect(text).not.toMatch(/\bread tool\b/u);
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("preserves execution correlation IDs through redacted transcript persistence", async () => {
     const dir = tempDirs.make("openclaw-correlation-projection-");
     const scope = {

@@ -140,6 +140,8 @@ openclaw gateway restart --wait 30s
 
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
+On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
+
 External terminals without Gateway-service markers, externally supervised Gateways, node services, and non-Windows callers keep their existing routing. Explicit `--force`, `--wait`, `--preserve-definition`, or `--skip-deferral` also retain their existing behavior and validation; they do not implicitly enable `--safe`.
 
 <Warning>
@@ -228,11 +230,23 @@ External supervisor implementations should also apply these acceptance rules:
 ### Gateway profiling
 
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work).
-- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs restart-scoped `restart trace:` lines: signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
+- `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics. Ordinary stops also start a fresh trace with `stop.signal.received` and `stop.drain` timing. Named shutdown steps and coarse close phases emit `.begin` before waiting, then a duration when they settle; an unmatched begin identifies an entered phase that has not settled. These phases do not time every nested cleanup operation individually.
 - `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` writes a best-effort JSONL startup diagnostics timeline for external QA harnesses (equivalent to config `diagnostics.flags: ["timeline"]`; the path is still env-only). Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - `pnpm build` then `pnpm test:startup:gateway -- --runs 5 --warmup 1` benchmarks Gateway startup against the built CLI entry: first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing.
 - `pnpm build` then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` benchmarks in-process restart on macOS or Linux (not supported on Windows; restart requires `SIGUSR1`). Uses `SIGUSR1`, enables both traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
+
+Without tracing, stops and restarts report nonzero active-work category counts at
+the first drain snapshot and at most once every 30 seconds while still pending.
+These reports omit task identities and request origins; categories can overlap.
+An ordinary stop logs `active-work drain settled; beginning server close` before
+teardown, including after a drain timeout or failure. Diagnostics do not change
+drain budgets or the service manager's stop deadline.
+
+A client disconnect leaves interactive setup available for reconnect. A Gateway
+stop or restart closes setup prompts before draining work. Settings writes already
+in progress may finish, but setup will not wait for another answer during shutdown.
+After the Gateway starts again, reopen setup and check the saved settings.
 
 ## Query a running Gateway
 
@@ -424,6 +438,7 @@ openclaw gateway status --port 19001
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
@@ -605,6 +620,78 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+### Recover an unreadable native service definition
+
+If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first
+restore access to the service files and native service manager. `--force` does not
+bypass unknown service facts. Inspect the selected service with
+`openclaw gateway status --deep` from the account and profile that own it.
+
+For a malformed definition or unsupported environment syntax, privately back up
+the service files and any values stored only in its environment. Correct unresolved
+or unsupported values before reinstalling; OpenClaw cannot infer their intended
+values. Then, from an external shell using the same account and profile:
+
+```bash
+openclaw gateway uninstall
+openclaw gateway install
+openclaw gateway health
+```
+
+Uninstall removes the native registration and launcher, preserving configuration,
+plugin installations, session state, and workspaces. Reinstallation rebuilds the
+service environment from the current configuration and installation inputs;
+service-only values must be supplied again. If native service status is itself
+unavailable, uninstall also refuses: restore native manager access first instead
+of deleting state or bypassing inspection.
+
+### Lifecycle requests from Gateway chat
+
+Gateway-hosted OpenClaw chat controls the exact Gateway serving that session.
+An approved start request reports **Gateway already running** without discovering
+or starting another service. Restart keeps the safe local restart behavior.
+
+An approved stop reports **Scheduled Gateway stop** after the host has prepared
+the stop for its exact instance. This acknowledges scheduling, not completed
+termination. An exclusive foreground host drains work, finishes teardown, and
+exits successfully without discovering or changing an installed service. A host
+managed by launchd or systemd verifies native ownership and prepares an executor,
+then drains work and finishes teardown before asking the native manager to stop
+the service. The requesting operation can finish its audit, history, and response
+submission during that drain;
+this does not guarantee that the client receives the response before disconnecting.
+
+After the normal grace period, stop cancels the remaining runs owned by that
+Gateway and waits for their commands and cleanup to settle. Ordinary stop does
+not schedule restart recovery. A required cleanup failure produces a nonzero exit and
+prevents an in-process replacement, including when startup failed before the
+Gateway became ready.
+
+Ownership or preparation failures leave the Gateway serving and return an error.
+Linux uses an independent transient control scope, in the owning systemd manager,
+so the stop command survives service cgroup termination. On macOS, hosted stop
+requests ordinary `launchctl bootout` without changing persistent enablement.
+If the native manager sends `SIGTERM` during the final stop handoff, the host
+finishes its graceful exit after joining cleanup, including the owned stop client.
+
+On Windows, a run loop that exclusively owns the Gateway process also uses
+graceful process exit under Task Scheduler. It does not select or stop a task by
+name. The generated task supervisor waits for the child process tree to exit and
+propagates the child exit result through the launcher. Its
+[`RestartOnFailure` policy](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-restartonfailure-settingstype-element)
+does not restart a successful task exit. Custom wrappers can have different exit
+or restart behavior; check their policy separately. This stop path does not change
+the task definition or its restart policy. Externally supervised Gateways direct
+stop requests to their supervisor.
+
+If systemd definitively refuses a stop after teardown and the same native instance
+remains active with no pending job, the host logs the failed stop and starts a fresh
+Gateway generation in the same process. An uncertain native result is recorded as
+a failed shutdown, without claiming success or starting an in-process replacement.
+After an unexpected disconnect, check `openclaw gateway status` and the native
+service logs from an external shell before retrying. Standalone CLI lifecycle
+commands retain their service-management behavior.
+
 ### Install with a wrapper
 
 Use `--wrapper` when the managed service must start through another executable, for example a secrets manager shim or a run-as helper. The wrapper receives the normal Gateway args and is responsible for eventually exec'ing `openclaw` or Node with those args.
@@ -661,6 +748,7 @@ openclaw gateway restart
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.
     - Gateway lifecycle mutations append best-effort key-value audit records to `<state-dir>/logs/gateway-restart.log`, including CLI start, stop, and restart operations, safe restart requests, supervisor restarts, and detached handoffs.
     - Lifecycle commands accept `--json` for scripting.
+    - A restart that completes native activation or accepted recovery but fails its health check emits `action: "restart"`, `ok: false`, and `result: "restart-health-failed"`, retaining its error, hints, warnings, and exit code 1. This diagnostic does not authorize another activation. Refusals, unexpected exceptions, and definition repair without confirmed activation do not emit this result. A scheduled restart reports acceptance, without claiming successor health.
 
   </Accordion>
   <Accordion title="Managed Gateway heap sizing">

@@ -189,11 +189,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
   without checkout or dependency setup. This removes one Blacksmith registration
   from previously eligible runs; hosted assignment can still delay completion.
-  `preflight` keeps its existing routing, and `security-fast` stays hosted outside
-  eligible hybrid first attempts. Security hooks use pinned installed packages
+  `preflight` uses GitHub-hosted Ubuntu in hybrid mode; its logical planner
+  profile and cache trust stay unchanged. Default Blacksmith preflight routing
+  remains intact. `security-fast` stays hosted outside eligible hybrid first
+  attempts. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
   outage override remains intact. Budget one control-job registration per eligible
-  Blacksmith run and two per eligible hybrid first attempt.
+  Blacksmith run or eligible hybrid first attempt.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - Current fast plugin/channel contract families each share one checkout/setup.
@@ -211,9 +213,10 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   project readers start. Native proof must cover available CPUs/RAM, concurrent
   fixture memory and cleanup. This adds no runner registrations.
 - macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
-  release compilation and the complete shared/app test workload. This adds one
-  registration per eligible Blacksmith native run: up to four across the two
-  active and two pending main slots, plus one for each eligible trusted PR.
+  release compilation and the complete shared/app test workload. Both phases
+  always use the existing GitHub-hosted `macos-26` image and 30-minute budget;
+  unassigned Blacksmith Mac jobs must not hold both main parity slots.
+  This removes two Blacksmith registrations per previously eligible native run.
   Build caches are phase-owned; only the release phase writes the shared
   SwiftPM dependency cache.
 - iOS Release, Debug/simulator tests, and both screenshot shards always use
@@ -221,10 +224,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   hosted image; do not require a failed first attempt to select that capacity.
   The conservative non-Node inventory, including Control UI performance, is
   86 rows, or 87 for historical UI targets. Excluding those four hosted rows
-  and the always-hosted aggregate gate leaves at most 82 potentially eligible jobs.
-  The enforced Node caps therefore give 146 registrations per main run and
-  202 per PR: `4 × 146 + 21 × 202 = 4,826` in the retained peak arrival
-  envelope. The old 19-arrival estimate is obsolete. The remaining 1,174 below
+  plus both macOS Swift phases and the always-hosted aggregate gate leaves at
+  most 80 potentially eligible jobs. The enforced Node caps therefore give
+  144 registrations per main run and 200 per PR:
+  `4 × 144 + 21 × 200 = 4,776` in the retained peak arrival envelope.
+  The old 19-arrival estimate is obsolete. The remaining 1,224 below
   the 6,000 reference target must cover adjacent repositories, releases and
   carryover; the bounded 2026-09-02 census did not prove that upper bound.
   Treat a single PR concurrency trial separately from a global rollout.
@@ -239,23 +243,31 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   full named shards.
 - The combined Node matrix admits compact and plugin descriptors by estimated
   duration within the same cap. Catch-all, QA and provider configs use the
-  existing 90-file job budget with native Vitest sharding; retain complete
+  existing 90-file envelope budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
-- Plugin fallback groups retain separate child processes, including process-bounded
-  configs. Different compatible configs share up to 240 predicted seconds without
-  a pair-count limit; expanded serial compact jobs use 210. Runtime preparation stays
-  separate; no process/file/worker limits are relaxed. The complete supplemental boundary list runs in one job
+- Precise and fallback plugin groups retain separate child processes, including process-bounded
+  configs. Compatible envelopes, including repeated configs, run one at a time
+  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  jobs use 210. Runtime preparation stays separate. Each original envelope retains
+  its file/process bounds, native shard arguments and worker limits. The complete supplemental boundary list runs in one job
   with four concurrent checks and one full-root focused-rule scan.
 - Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
   outliers reuse the existing file splitter. Preserve serial execution, worker
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
-  Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
-  exclusive bins retain 150s, and groups above their serial cap stay alone.
+  Compatible two-slot bins use the time budget without the ten-group cutoff;
+  serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
+  exclusive bins retain 150s by default, and groups above their serial cap stay alone.
+  Complete ordinary hybrid bins containing only non-build CLI groups may use
+  250s and co-locate split siblings, provided each original child still fits
+  150s. Keep file splits, workers, process isolation and other profiles unchanged.
   Runtime consumers in ordinary bins share preparation only with other consumers;
-  hybrid exclusive/dist sharing is unchanged. Complete inventories remain intact.
+  Affordable generated CLI runtime children may share one preparation in an
+  exclusive serial bin within the same 150s budget; fixed stripe families remain
+  separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
+  remain intact.
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
@@ -284,6 +296,21 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
   native timing proof and does not refresh stale timing weights.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- Normal canonical hybrid first attempts use the existing four-part QA smoke
+  plan, removing two repeated checkouts, setups and private runtime builds.
+  Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
+  retry/manual plans retain six. Failed-job-only retries retain their original
+  matrix. Keep the complete scenario inventory, separate Matrix run, worker
+  limits, stagger, cleanup and deadlines. Measure the four-part jobs natively;
+  summed build intervals are not a wall-time saving estimate.
+- GitHub/hybrid test types use three jobs: two paired core rows run the original
+  stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
+  extensions/scripts/root tail. Keep all 16 core graphs, at most two compiler
+  children per stripe, and one builder per child. The central fifth stripe
+  retains the standalone core resource environment. A failing stripe stops its
+  row; other matrix rows keep running. Pure Blacksmith and targets without
+  stripe support retain the full central path. Measure the combined jobs
+  natively; fewer registrations alone do not prove the eight-minute target.
 - CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
   jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
   [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)

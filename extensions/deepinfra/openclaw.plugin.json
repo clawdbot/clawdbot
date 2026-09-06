@@ -1,5 +1,6 @@
 {
   "id": "deepinfra",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },
@@ -32,6 +33,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepinfra": "deepinfra"
+    },
     "providers": {
       "deepinfra": {
         "baseUrl": "https://api.deepinfra.com/v1/openai",

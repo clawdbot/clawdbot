@@ -13,7 +13,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
@@ -284,31 +283,6 @@ describe("cron controller", () => {
     expect(
       resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
     ).toStrictEqual([]);
-  });
-
-  it("loads model suggestions from the configured model view", async () => {
-    const request = vi.fn(async () => ({
-      models: [
-        { id: "z-model", provider: "zai" },
-        { id: "a-model", provider: "anthropic" },
-        { id: "z-model", provider: "other" },
-        { provider: "missing-id" },
-      ],
-    }));
-    const state = {
-      client: { request } as unknown as CronState["client"],
-      connected: true,
-      cronModelSuggestions: [],
-    };
-
-    await loadCronModelSuggestions(state, "writer");
-
-    expect(request).toHaveBeenCalledWith("models.list", {
-      agentId: "writer",
-      view: "configured",
-      preparedOnly: true,
-    });
-    expect(state.cronModelSuggestions).toEqual(["a-model", "z-model"]);
   });
 
   it("normalizes stale announce mode when session/payload no longer support announce", () => {
@@ -1185,6 +1159,26 @@ describe("cron controller", () => {
     startCronEdit(state, job);
 
     expect(state.cronForm.timeoutSeconds).toBe("0");
+  });
+
+  it("loads declared Workshop review jobs as locked rows", async () => {
+    const legacyJob = createCronJob({
+      id: "skill-review",
+      name: "Skill review",
+      declarationKey: "skill-collection-review:main",
+      payload: { kind: "agentTurn", message: "Review the Workshop collection." },
+    });
+    const request = createMethodRequest({
+      "cron.list": cronJobsListResponse([legacyJob]),
+    });
+    const state = createStateWithRequest(request);
+
+    await loadCronJobsPage(state);
+    expect(state.cronJobs).toEqual([legacyJob]);
+
+    startCronEdit(state, legacyJob);
+    expect(state.cronForm.payloadKind).toBe("agentTurn");
+    expect(state.cronForm.payloadLocked).toBe(true);
   });
 
   it("preserves command payloads when editing Control UI metadata", async () => {
@@ -2231,6 +2225,289 @@ describe("cron controller", () => {
       expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
     );
   });
+
+  it.each([
+    { name: "omitted cap", policy: {} },
+    { name: "empty cap", policy: { toolsAllow: [] } },
+    { name: "finite cap", policy: { toolsAllow: ["read"] } },
+    { name: "wildcard cap", policy: { toolsAllow: ["*"] }, effectiveUnrestricted: true },
+    {
+      name: "default-marked cap as a new explicit restriction",
+      policy: { toolsAllow: ["read"], toolsAllowIsDefault: true },
+    },
+  ] satisfies Array<{
+    name: string;
+    effectiveUnrestricted?: boolean;
+    policy: Pick<
+      Extract<CronJob["payload"], { kind: "agentTurn" }>,
+      "toolsAllow" | "toolsAllowIsDefault"
+    >;
+  }>)("clone payload policy: retains $name without a capture marker", async (scenario) => {
+    const { policy } = scenario;
+    const source = createCronJob({
+      id: "cap-source",
+      name: "Public cap source",
+      payload: { kind: "agentTurn", message: "Synthetic clone task", ...policy },
+      delivery: { mode: "none" },
+    });
+    const original = structuredClone(source);
+    const request = createCronRequest("cap-clone");
+    const state = createStateWithRequest(request, { cronJobs: [source] });
+
+    startCronClone(state, source);
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "cap-clone" });
+
+    const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+    const payload = requireRecord(submitted.payload, "cloned payload");
+    expect(validateCronAddParams(submitted)).toBe(true);
+    expect(source).toEqual(original);
+    expect(payload).not.toHaveProperty("toolsAllowIsDefault");
+    if ("effectiveUnrestricted" in scenario) {
+      // Fresh trusted creation defaults an omitted cap to wildcard.
+      expect(payload.toolsAllow ?? ["*"]).toEqual(["*"]);
+    } else if ("toolsAllow" in policy) {
+      expect(payload.toolsAllow).toEqual(policy.toolsAllow);
+    } else {
+      expect(payload).not.toHaveProperty("toolsAllow");
+    }
+  });
+
+  it.each([
+    { name: "empty fallbacks", policy: { fallbacks: [] } },
+    { name: "explicit fallbacks", policy: { fallbacks: ["openai/gpt-5.5"] } },
+    { name: "unsafe-content false", policy: { allowUnsafeExternalContent: false } },
+    { name: "unsafe-content true", policy: { allowUnsafeExternalContent: true } },
+    { name: "light-context false", policy: { lightContext: false } },
+    { name: "light-context true", policy: { lightContext: true } },
+    { name: "inherited light context", policy: {} },
+  ] satisfies Array<{
+    name: string;
+    policy: Partial<Extract<CronJob["payload"], { kind: "agentTurn" }>>;
+  }>)("clone payload policy: preserves $name for an agent task", async ({ policy }) => {
+    const source = createCronJob({
+      id: "agent-policy-source",
+      name: "Agent policy source",
+      payload: { kind: "agentTurn", message: "Synthetic agent task", ...policy },
+      delivery: { mode: "none" },
+    });
+    const original = structuredClone(source);
+    const request = createCronRequest("agent-policy-clone");
+    const state = createStateWithRequest(request, { cronJobs: [source] });
+
+    startCronClone(state, source);
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "agent-policy-clone" });
+
+    const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+    expect(validateCronAddParams(submitted)).toBe(true);
+    expect(source).toEqual(original);
+    expect(submitted.payload).toEqual({
+      kind: "agentTurn",
+      message: "Synthetic agent task",
+      ...policy,
+    });
+  });
+
+  it("clone payload policy: visible edits replace stored values including unchecked light context", async () => {
+    const source = createCronJob({
+      id: "edited-payload-source",
+      name: "Editable source",
+      payload: {
+        kind: "agentTurn",
+        message: "Original task",
+        model: "openai/gpt-5.4",
+        thinking: "high",
+        timeoutSeconds: 45,
+        lightContext: true,
+      },
+      delivery: { mode: "none" },
+    });
+    const original = structuredClone(source);
+    const request = createCronRequest("edited-payload-clone");
+    const state = createStateWithRequest(request, { cronJobs: [source] });
+    startCronClone(state, source);
+    Object.assign(state.cronForm, {
+      payloadText: "  Edited task  ",
+      payloadModel: " openai/gpt-5.5 ",
+      payloadThinking: " low ",
+      timeoutSeconds: "0.25",
+      payloadLightContext: false,
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "edited-payload-clone" });
+
+    const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+    expect(validateCronAddParams(submitted)).toBe(true);
+    expect(source).toEqual(original);
+    expect(submitted.payload).toEqual({
+      kind: "agentTurn",
+      message: "Edited task",
+      model: "openai/gpt-5.5",
+      thinking: "low",
+      timeoutSeconds: 0.25,
+      lightContext: false,
+    });
+  });
+
+  it("clone payload policy: blank visible overrides stay omitted instead of restoring the source", async () => {
+    const source = createCronJob({
+      id: "blank-payload-source",
+      name: "Blank overrides source",
+      payload: {
+        kind: "agentTurn",
+        message: "Synthetic task",
+        model: "openai/gpt-5.5",
+        thinking: "high",
+        timeoutSeconds: 45,
+      },
+      delivery: { mode: "none" },
+    });
+    const original = structuredClone(source);
+    const request = createCronRequest("blank-payload-clone");
+    const state = createStateWithRequest(request, { cronJobs: [source] });
+    startCronClone(state, source);
+    Object.assign(state.cronForm, {
+      payloadModel: " ",
+      payloadThinking: " ",
+      timeoutSeconds: " ",
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "blank-payload-clone" });
+
+    const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+    expect(validateCronAddParams(submitted)).toBe(true);
+    expect(source).toEqual(original);
+    expect(submitted.payload).toEqual({ kind: "agentTurn", message: "Synthetic task" });
+  });
+
+  it.each([
+    {
+      name: "system event with a trigger",
+      payload: { kind: "systemEvent", text: "Original event", toolsAllow: ["read"] },
+      trigger: { script: "return { fire: true }", once: true },
+      target: "systemEvent",
+    },
+    {
+      name: "system event to agent task",
+      payload: { kind: "systemEvent", text: "Original event", toolsAllow: [] },
+      trigger: { script: "return { fire: true }", once: true },
+      target: "agentTurn",
+    },
+    {
+      name: "agent task to system event",
+      payload: {
+        kind: "agentTurn",
+        message: "Original task",
+        toolsAllow: ["read"],
+        fallbacks: [],
+        allowUnsafeExternalContent: true,
+        lightContext: false,
+      },
+      trigger: undefined,
+      target: "systemEvent",
+    },
+    {
+      name: "command to new agent task",
+      payload: { kind: "command", argv: ["node", "synthetic.mjs"], toolsAllow: [] },
+      trigger: undefined,
+      target: "agentTurn",
+    },
+    {
+      name: "script to new agent task",
+      payload: { kind: "script", script: "return { ok: true }", toolsAllow: ["read"] },
+      trigger: undefined,
+      target: "agentTurn",
+    },
+  ] satisfies Array<{
+    name: string;
+    payload: CronJob["payload"];
+    trigger: CronJob["trigger"];
+    target: "agentTurn" | "systemEvent";
+  }>)("clone payload policy: retains common restrictions for $name", async (scenario) => {
+    const source = createCronJob({
+      id: "kind-source",
+      name: "Kind transition source",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: scenario.payload.kind === "systemEvent" ? "main" : "isolated",
+      payload: scenario.payload,
+      trigger: scenario.trigger,
+      delivery: { mode: "none" },
+    });
+    const original = structuredClone(source);
+    const request = createCronRequest("kind-clone");
+    const state = createStateWithRequest(request, { cronJobs: [source] });
+    startCronClone(state, source);
+    if (scenario.payload.kind === "command" || scenario.payload.kind === "script") {
+      expect(state.cronForm.payloadText).toBe("");
+      expect(await addCronJob(state)).toEqual({ saved: false });
+      expect(state.cronFieldErrors.payloadText).toBe("cron.errors.agentMessageRequired");
+      expect(request).not.toHaveBeenCalled();
+    }
+    Object.assign(state.cronForm, {
+      payloadKind: scenario.target,
+      sessionTarget: scenario.target === "systemEvent" ? "main" : "isolated",
+      payloadText: "New operator-authored task",
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "kind-clone" });
+
+    const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+    expect(validateCronAddParams(submitted)).toBe(true);
+    expect(source).toEqual(original);
+    expect(submitted.trigger).toEqual(scenario.trigger);
+    expect(submitted.payload).toEqual({
+      kind: scenario.target,
+      ...(scenario.target === "systemEvent"
+        ? { text: "New operator-authored task" }
+        : { message: "New operator-authored task" }),
+      toolsAllow: scenario.payload.toolsAllow,
+    });
+  });
+
+  it.each([
+    { name: "explicit cap", toolsAllowIsDefault: undefined, target: "agentTurn" },
+    { name: "default-marked cap", toolsAllowIsDefault: true, target: "agentTurn" },
+    { name: "payload kind change", toolsAllowIsDefault: true, target: "systemEvent" },
+  ] as const)(
+    "clone payload policy: does not echo hidden policy during an update with $name",
+    async (scenario) => {
+      const source = createCronJob({
+        id: "update-policy-source",
+        name: "Update policy source",
+        payload: {
+          kind: "agentTurn",
+          message: "Synthetic task",
+          toolsAllow: ["read"],
+          ...(scenario.toolsAllowIsDefault ? { toolsAllowIsDefault: true } : {}),
+          fallbacks: [],
+          allowUnsafeExternalContent: true,
+          lightContext: false,
+        },
+        delivery: { mode: "none" },
+      });
+      const original = structuredClone(source);
+      const { state, submit } = createCronEditHarness(source);
+      state.cronForm.description = "Metadata changed";
+      Object.assign(state.cronForm, {
+        payloadKind: scenario.target,
+        sessionTarget: scenario.target === "systemEvent" ? "main" : "isolated",
+      });
+
+      const call = await submit();
+
+      expect(validateCronUpdateParams(requestPayload(call))).toBe(true);
+      expect(source).toEqual(original);
+      const payload = requireRecord(requestPatch(call).payload, "updated payload");
+      expect(payload.kind).toBe(scenario.target);
+      for (const field of [
+        "toolsAllow",
+        "toolsAllowIsDefault",
+        "fallbacks",
+        "allowUnsafeExternalContent",
+      ]) {
+        expect(payload).not.toHaveProperty(field);
+      }
+    },
+  );
 
   it.each([
     { name: "precise one-shot", schedule: { kind: "at", at: "2030-01-02T03:04:56.789Z" } },

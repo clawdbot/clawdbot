@@ -197,7 +197,10 @@ describe("staged worker placement result recovery", () => {
       let claim: ReturnType<PlacementStore["claimTurn"]> | undefined;
       vi.spyOn(tunnels, "start").mockImplementation(async (request) => ({
         ...(await fixtureStart(request)),
-        reconcileWorkspace: async ({ journal }) => {
+        reconcileWorkspace: async ({ source }) => {
+          if (source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           const owned = placementStore.get(REQUEST.sessionId);
           if (owned?.state !== "draining" || !owned.turnClaim) {
             throw new Error("reclaim fixture lost its claim");
@@ -220,7 +223,7 @@ describe("staged worker placement result recovery", () => {
             root: workspacePath,
             stagedResultRef: staged.stagedResultRef,
             expectedBaseManifestRef: staged.baseManifestRef,
-            journal,
+            journal: source.journal,
           });
           return {
             ...applied,
@@ -260,7 +263,7 @@ describe("staged worker placement result recovery", () => {
       Object.assign(harness.environments, environments);
 
       await expect(harness.service.reclaim(REQUEST)).rejects.toThrow(
-        "Worker provider operation failed",
+        "provider deletion unavailable",
       );
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "destroying",

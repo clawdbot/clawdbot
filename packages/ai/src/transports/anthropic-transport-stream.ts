@@ -2,12 +2,9 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StreamFn,
-  TextContent,
-  ToolCall,
 } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
@@ -18,14 +15,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import {
-  createAnthropicInlineImageBudget,
-  normalizeAnthropicInlineContent,
-  resolveAnthropicImageMediaType,
-  type AnthropicInlineImageBudget,
-} from "../internal/anthropic-inline-images.js";
-import { calculateCost } from "../model-utils.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
+import type { AnthropicOptions } from "../provider-options.js";
 import {
   isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
@@ -36,95 +26,58 @@ import {
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
   defaultsClaudeAdaptiveThinking,
-  mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../providers/anthropic-refusal.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
-  applyAnthropicFallbackBoundary,
-  readAnthropicFallbackBoundary,
-  resolveAnthropicFallbackServingModelCost,
 } from "../providers/anthropic-server-fallback.js";
-import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  applyAnthropicThinkingBindingControls,
-  findActiveAnthropicToolTurnAssistantIndex,
-  logAnthropicThinkingDrops,
-  readAnthropicInputTransformations,
-} from "../providers/anthropic-thinking-replay.js";
+import { applyAnthropicThinkingBindingControls } from "../providers/anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
-  normalizeAnthropicToolChoice,
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  toClaudeCodeToolName,
   type AnthropicToolProjection,
 } from "../providers/anthropic-tool-projection.js";
-import {
-  applyAnthropicMessageDeltaUsage,
-  applyAnthropicMessageStartUsage,
-  type AnthropicPromptUsageSnapshot,
-} from "../providers/anthropic-usage.js";
 import { adjustMaxTokensForThinking } from "../providers/simple-options.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultBlockText,
-  extractToolResultText,
-  isImageWithMediaPayload,
-} from "../providers/tool-result-text.js";
-import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
-  createToolArgumentPreviewSchedule,
-  parseStreamingJson,
-  type ToolArgumentPreviewSchedule,
-} from "../utils/json-parse.js";
-import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import {
   buildAnthropicReplayPlan,
-  createCompactionCapture,
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
-  type AnthropicCompactionBlock,
 } from "./anthropic-compaction-replay.js";
+import {
+  convertAnthropicMessages,
+  convertAnthropicTools,
+  buildAnthropicGenerationParams,
+} from "./anthropic-messages.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  logAnthropicContextEdits,
   resolveAnthropicContextManagementBetaHeader,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
+import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
 import {
   buildGuardedModelFetch,
   resolveProviderEndpoint,
   transformTransportMessages,
 } from "./host-policy.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
-  coerceTransportToolCallArguments,
   copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
-  finalizeTerminalToolCallArguments,
   finalizeTransportStream,
   mergeTransportHeaders,
   notifyProviderHttpResponse,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
-  transportAbortError,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -169,29 +122,6 @@ function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string 
   }
   return model.id;
 }
-
-type TransportContentBlock =
-  | { type: "text"; text: string; index?: number; textSignature?: string }
-  | {
-      type: "thinking";
-      thinking: string;
-      thinkingSignature: string;
-      redacted?: boolean;
-      index?: number;
-    }
-  | ({
-      type: "toolCall";
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-      partialJson?: string;
-      index?: number;
-    } & ToolCall);
-
-type MutableAssistantOutput = Omit<AssistantMessage, "api" | "content"> & {
-  content: Array<TransportContentBlock>;
-  api: "anthropic-messages";
-};
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
@@ -270,309 +200,10 @@ function buildAnthropicBetaHeader(
     : betaFeatures.join(",");
 }
 
-const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
-
-async function convertContentBlocks(
-  content: readonly unknown[],
-  model: { input: readonly string[] },
-  imageBudget: AnthropicInlineImageBudget,
-) {
-  const text = extractToolResultText(content);
-  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages = model.input.includes("image") && content.some(isImageWithMediaPayload);
-  if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
-  }
-  const blocks: Array<
-    | { type: "text"; text: string }
-    | {
-        type: "image";
-        source: { type: "base64"; media_type: string; data: string };
-      }
-  > = [];
-  let hasTextBlock = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    const blockText = extractToolResultBlockText(block);
-    if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
-      hasTextBlock = true;
-    }
-    if (!isImageWithMediaPayload(record)) {
-      continue;
-    }
-    const [normalizedImage] = await normalizeAnthropicInlineContent(
-      [
-        {
-          type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
-          mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        },
-      ],
-      imageBudget,
-    );
-    if (normalizedImage?.type !== "image") {
-      continue;
-    }
-    blocks.push({
-      type: "image" as const,
-      source: {
-        type: "base64",
-        media_type: resolveAnthropicImageMediaType(normalizedImage.mimeType),
-        data: normalizedImage.data,
-      },
-    });
-  }
-  if (!hasTextBlock) {
-    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
-  }
-  return blocks;
-}
-
-async function convertAnthropicMessages(
-  messages: Context["messages"],
-  model: AnthropicTransportModel,
-  isOAuthToken: boolean,
-  options: {
-    allowReasoningContentReplay?: boolean;
-    compaction?: AnthropicCompactionBlock;
-    replayThinkingEnabled?: boolean;
-  },
-): Promise<Array<Record<string, unknown>>> {
-  const params: Array<Record<string, unknown>> = [];
-  const imageBudget = createAnthropicInlineImageBudget();
-  const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options.replayThinkingEnabled !== false;
-  const transformedMessages = transformTransportMessages(
-    messages,
-    model,
-    normalizeAnthropicToolCallId,
-  );
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
-  for (let i = 0; i < transformedMessages.length; i += 1) {
-    const msg = transformedMessages[i];
-    if (!msg) {
-      continue;
-    }
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        if (msg.content.trim().length > 0) {
-          const userParam = {
-            role: "user",
-            content: sanitizeTransportPayloadText(msg.content),
-          };
-          params.push(userParam);
-        }
-        continue;
-      }
-      const normalizedContent = model.input.includes("image")
-        ? await normalizeAnthropicInlineContent(
-            msg.content as readonly (TextContent | ImageContent)[],
-            imageBudget,
-          )
-        : msg.content.map((item) =>
-            item.type === "image"
-              ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
-              : item,
-          );
-      const blocks: Array<
-        | { type: "text"; text: string }
-        | {
-            type: "image";
-            source: { type: "base64"; media_type: string; data: string };
-          }
-      > = normalizedContent.map((item) =>
-        item.type === "text"
-          ? {
-              type: "text",
-              text: sanitizeTransportPayloadText(item.text),
-            }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: resolveAnthropicImageMediaType(item.mimeType),
-                data: item.data,
-              },
-            },
-      );
-      let filteredBlocks = model.input.includes("image")
-        ? blocks
-        : blocks.filter((block) => block.type !== "image");
-      filteredBlocks = filteredBlocks.filter(
-        (block) => block.type !== "text" || block.text.trim().length > 0,
-      );
-      if (filteredBlocks.length === 0) {
-        continue;
-      }
-      const userParam = {
-        role: "user",
-        content: filteredBlocks,
-      };
-      params.push(userParam);
-      continue;
-    }
-    if (msg.role === "assistant") {
-      const blocks: Array<Record<string, unknown>> =
-        i === 0 && options.compaction ? [options.compaction] : [];
-      const reasoningContent: string[] = [];
-      let omittedThinking = false;
-      for (const block of msg.content) {
-        if (block.type === "text") {
-          if (block.text.trim().length > 0) {
-            blocks.push({
-              type: "text",
-              text: sanitizeTransportPayloadText(block.text),
-            });
-          }
-          continue;
-        }
-        if (block.type === "thinking") {
-          const thinkingSignature = block.thinkingSignature?.trim();
-          const isReasoningContent = thinkingSignature === "reasoning_content";
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
-            omittedThinking = true;
-            continue;
-          }
-          if (block.redacted) {
-            blocks.push({
-              type: "redacted_thinking",
-              data: block.thinkingSignature,
-            });
-            continue;
-          }
-          const hasNativeThinkingSignature = Boolean(thinkingSignature) && !isReasoningContent;
-          if (block.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
-            continue;
-          }
-          if (!thinkingSignature) {
-            blocks.push({
-              type: "text",
-              text: sanitizeTransportPayloadText(block.thinking),
-            });
-          } else {
-            const thinking =
-              thinkingSignature === "reasoning_content"
-                ? sanitizeTransportPayloadText(block.thinking)
-                : block.thinking;
-            if (thinkingSignature === "reasoning_content") {
-              if (allowReasoningContentReplay) {
-                blocks.push({
-                  type: "thinking",
-                  thinking,
-                  signature: thinkingSignature,
-                });
-                reasoningContent.push(thinking);
-              }
-              continue;
-            }
-            blocks.push({
-              type: "thinking",
-              thinking,
-              signature: thinkingSignature,
-            });
-          }
-          continue;
-        }
-        if (block.type === "toolCall") {
-          blocks.push({
-            type: "tool_use",
-            id: block.id,
-            name: isOAuthToken ? toClaudeCodeToolName(block.name) : block.name,
-            input: coerceTransportToolCallArguments(block.arguments),
-          });
-        }
-      }
-      if (blocks.length === 0 && omittedThinking) {
-        blocks.push({ type: "text", text: ANTHROPIC_OMITTED_REASONING_TEXT });
-      }
-      if (blocks.length > 0) {
-        const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
-        if (reasoningContent.length > 0) {
-          assistantMsg.reasoning_content = reasoningContent.join("\n");
-        } else if (allowReasoningContentReplay) {
-          blocks.unshift({
-            type: "thinking",
-            thinking: "",
-            signature: "reasoning_content",
-          });
-        }
-        params.push(assistantMsg);
-      }
-      continue;
-    }
-    if (msg.role === "toolResult") {
-      const toolResult = msg;
-      const toolResults: Array<Record<string, unknown>> = [
-        {
-          type: "tool_result",
-          tool_use_id: toolResult.toolCallId,
-          content: await convertContentBlocks(toolResult.content, model, imageBudget),
-          is_error: toolResult.isError,
-        },
-      ];
-      let j = i + 1;
-      while (j < transformedMessages.length) {
-        const nextMsg = transformedMessages.at(j);
-        if (nextMsg?.role !== "toolResult") {
-          break;
-        }
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: nextMsg.toolCallId,
-          content: await convertContentBlocks(nextMsg.content, model, imageBudget),
-          is_error: nextMsg.isError,
-        });
-        j += 1;
-      }
-      i = j - 1;
-      params.push({
-        role: "user",
-        content: toolResults,
-      });
-    }
-  }
-  return params;
-}
-
 function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>>) {
   return messages.length > 0
     ? messages
     : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
-}
-
-function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
-  const projection = projectAnthropicTools(tools ?? [], (name) =>
-    isOAuthToken ? toClaudeCodeToolName(name) : name,
-  );
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
-  for (const tool of projection.tools) {
-    converted.push({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    });
-  }
-  return { projection, tools: converted };
-}
-
-function parseAnthropicToolCallArguments(inputJson: string): Record<string, unknown> {
-  return coerceTransportToolCallArguments(
-    parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson),
-  );
 }
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
@@ -952,11 +583,17 @@ async function buildAnthropicParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
-  const messages = await convertAnthropicMessages(replayPlan.messages, model, isOAuthToken, {
-    allowReasoningContentReplay: supportsReasoningContentReplay(model),
-    compaction: replayPlan.compaction,
-    replayThinkingEnabled,
-  });
+  const messages = await convertAnthropicMessages(
+    transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
+    model,
+    isOAuthToken,
+    {
+      profile: "transport",
+      allowReasoningContentReplay: supportsReasoningContentReplay(model),
+      compaction: replayPlan.compaction,
+      replayThinkingEnabled,
+    },
+  );
   const params: Record<string, unknown> = {
     model: resolveAnthropicRequestModelId(model),
     messages: ensureNonEmptyAnthropicMessages(messages),
@@ -997,63 +634,20 @@ async function buildAnthropicParams(
       },
     ];
   }
-  if (
-    options?.temperature !== undefined &&
-    !options.thinkingEnabled &&
-    !supportsClaudeNativeXhighEffort(model)
-  ) {
-    params.temperature = options.temperature;
-  }
-  if (options?.stop !== undefined && options.stop.length > 0) {
-    params.stop_sequences = options.stop;
-  }
-  let toolProjection: AnthropicToolProjection | undefined;
-  if (context.tools) {
-    const convertedTools = convertAnthropicTools(context.tools, isOAuthToken);
-    toolProjection = convertedTools.projection;
-    if (convertedTools.tools.length > 0) {
-      params.tools = convertedTools.tools;
-    }
-  }
-  if (mandatoryAdaptiveThinking || model.reasoning || supportsClaudeAdaptiveThinking(model)) {
-    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
-      if (supportsClaudeAdaptiveThinking(model)) {
-        // Default display to "summarized" so Opus 4.7+/Fable 5 return a thinking
-        // summary like older Claude 4 models — mirrors the provider path
-        // (llm/providers/anthropic.ts). Without it the adaptive request omits the
-        // summary and only an encrypted signature comes back, so the 🧠 lane is
-        // blank (the live agent transport previously sent this for opus-4-8).
-        const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
-        params.thinking = { type: "adaptive", display };
-        const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
-        if (effort) {
-          params.output_config = { effort };
-        }
-      } else {
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
-        };
-      }
-    } else if (options?.thinkingEnabled === false) {
-      params.thinking = { type: "disabled" };
-    }
-  }
-  if (options?.metadata && typeof options.metadata.user_id === "string") {
-    params.metadata = { user_id: options.metadata.user_id };
-  }
-  if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(
-      replayThinkingEnabled,
-      options.toolChoice,
-    );
-    const projectedToolChoice = toolProjection
-      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
-      : normalizedToolChoice;
-    if (projectedToolChoice) {
-      params.tool_choice = projectedToolChoice;
-    }
-  }
+  const convertedTools = context.tools
+    ? convertAnthropicTools(context.tools, isOAuthToken)
+    : undefined;
+  const toolProjection = convertedTools?.projection;
+  Object.assign(
+    params,
+    buildAnthropicGenerationParams({
+      model,
+      options,
+      tools: convertedTools?.tools,
+      toolProjection,
+      profile: "transport",
+    }),
+  );
   // Anthropic-family carriers are append-only, so they are stable cache anchors too.
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy, new Set());
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
@@ -1144,7 +738,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
+      const output: AssistantMessage = {
         role: "assistant",
         content: [],
         api: "anthropic-messages",
@@ -1157,17 +751,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-            notifyLlmRequestActivity(options?.signal),
-          )
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
         : undefined;
-      const eventSink = refusalBuffer ?? stream;
-      // Fallback-served turns bill at the serving model's rates; a boundary
-      // swaps this to the fallback model's cost table.
-      let costModel = model;
-      let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
       let usedCompactionReplay = false;
-      let inputTransformations: unknown[] | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1217,580 +803,17 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
           throw new Error(formatAnthropicMessagesHttpError(response, detail));
         }
-        const blocks = output.content;
-        const blockIndexes = new Map<number, number>();
-        // Preview schedules are per active tool call; WeakMap keys die with the block.
-        const toolArgumentPreviewSchedules = new WeakMap<
-          Extract<TransportContentBlock, { type: "toolCall" }>,
-          ToolArgumentPreviewSchedule
-        >();
-        const sealedToolCalls: Array<{
-          block: Extract<TransportContentBlock, { type: "toolCall" }>;
-          contentIndex: number;
-        }> = [];
-        const compactionCapture = createCompactionCapture(output, model, transportOptions);
-        // Signature deltas are opaque and only complete at content_block_stop.
-        // Keep partial bytes out of output so interrupted streams cannot poison replay.
-        const pendingThinkingSignatures = new Map<number, string>();
-        const allowReasoningContentReplay = supportsReasoningContentReplay(model);
-        const reasoningContentThinkingBlocks = new Map<number, number>();
-        const reasoningContentTextBlocks = new Map<number, number>();
-        let sawMessageStop = false;
-        const pendingTextEnds: Array<Parameters<typeof eventSink.push>[0]> = [];
-        // Hold text_end until tool-boundary classification is known.
-        const flushPendingTextEnds = () => {
-          for (const event of pendingTextEnds) {
-            eventSink.push(event);
-          }
-          pendingTextEnds.length = 0;
-        };
-        const eventIndexKey = (eventIndex: unknown) =>
-          typeof eventIndex === "number" ? eventIndex : -1;
-        const appendReasoningContentThinkingDelta = (
-          eventIndex: unknown,
-          rawText: unknown,
-        ): boolean => {
-          if (typeof rawText !== "string") {
-            return false;
-          }
-          const text = sanitizeTransportPayloadText(rawText);
-          if (text.length === 0) {
-            return false;
-          }
-          const key = eventIndexKey(eventIndex);
-          let contentIndex = reasoningContentThinkingBlocks.get(key);
-          let block =
-            contentIndex === undefined
-              ? undefined
-              : (output.content[contentIndex] as TransportContentBlock | undefined);
-          if (!block || block.type !== "thinking") {
-            block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
-            output.content.push(block);
-            contentIndex = output.content.length - 1;
-            reasoningContentThinkingBlocks.set(key, contentIndex);
-            eventSink.push({
-              type: "thinking_start",
-              contentIndex,
-              partial: output,
-            });
-          }
-          if (contentIndex === undefined) {
-            return false;
-          }
-          block.thinking += text;
-          block.thinkingSignature = "reasoning_content";
-          eventSink.push({
-            type: "thinking_delta",
-            contentIndex,
-            delta: text,
-            partial: output,
-          });
-          return true;
-        };
-        const appendReasoningContentTextDelta = (
-          eventIndex: unknown,
-          rawText: unknown,
-        ): boolean => {
-          if (typeof rawText !== "string") {
-            return false;
-          }
-          const text = sanitizeTransportPayloadText(rawText);
-          if (text.length === 0) {
-            return false;
-          }
-          const key = eventIndexKey(eventIndex);
-          let contentIndex = reasoningContentTextBlocks.get(key);
-          let block =
-            contentIndex === undefined
-              ? undefined
-              : (output.content[contentIndex] as TransportContentBlock | undefined);
-          if (!block || block.type !== "text") {
-            block = { type: "text", text: "" };
-            output.content.push(block);
-            contentIndex = output.content.length - 1;
-            reasoningContentTextBlocks.set(key, contentIndex);
-            eventSink.push({
-              type: "text_start",
-              contentIndex,
-              partial: output,
-            });
-          }
-          if (contentIndex === undefined) {
-            return false;
-          }
-          block.text += text;
-          eventSink.push({
-            type: "text_delta",
-            contentIndex,
-            delta: text,
-            partial: output,
-          });
-          return true;
-        };
-        const finishReasoningContentSidecars = (eventIndex: unknown) => {
-          const key = eventIndexKey(eventIndex);
-          const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
-          if (thinkingContentIndex !== undefined) {
-            reasoningContentThinkingBlocks.delete(key);
-            const block = output.content[thinkingContentIndex];
-            if (block?.type === "thinking") {
-              eventSink.push({
-                type: "thinking_end",
-                contentIndex: thinkingContentIndex,
-                content: block.thinking,
-                partial: output,
-              });
-            }
-          }
-          const textContentIndex = reasoningContentTextBlocks.get(key);
-          if (textContentIndex === undefined) {
-            return;
-          }
-          reasoningContentTextBlocks.delete(key);
-          const block = output.content[textContentIndex];
-          if (block?.type === "text") {
-            eventSink.push({
-              type: "text_end",
-              contentIndex: textContentIndex,
-              content: block.text,
-              partial: output,
-            });
-          }
-        };
-        for await (const event of anthropicStream) {
-          // A serving-model fallback replaces the initial snapshot; report only once at completion.
-          inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
-          if (event.type === "error") {
-            const error = event.error as { message?: string } | undefined;
-            throw new Error(error?.message || "Anthropic Messages stream failed");
-          }
-          if (event.type === "message_start") {
-            const message = event.message as
-              | { id?: string; model?: string; usage?: Record<string, unknown> }
-              | undefined;
-            const usage = message?.usage ?? {};
-            output.responseId = typeof message?.id === "string" ? message.id : undefined;
-            output.responseModel = typeof message?.model === "string" ? message.model : undefined;
-            messageStartPromptUsage = applyAnthropicMessageStartUsage(output.usage, usage);
-            calculateCost(costModel, output.usage);
-            // Defer start until after message_start so that pre-stream SSE errors
-            // (e.g. invalid thinking signatures) arrive before any non-error event
-            // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
-            // and allowing the thinking-block recovery retry to fire.
-            eventSink.push({ type: "start", partial: output });
-            continue;
-          }
-          if (event.type === "message_stop") {
-            sawMessageStop = true;
-            continue;
-          }
-          if (event.type === "content_block_start") {
-            const contentBlock = event.content_block as Record<string, unknown> | undefined;
-            const index = typeof event.index === "number" ? event.index : -1;
-            if (
-              transportOptions.anthropicServerCompaction === true &&
-              compactionCapture.begin(index, contentBlock, output.content.length)
-            ) {
-              continue;
-            }
-            const fallbackBoundary = refusalBuffer
-              ? readAnthropicFallbackBoundary(contentBlock)
-              : null;
-            if (fallbackBoundary) {
-              // Server-side fallback boundary: pre-boundary thinking/tool
-              // blocks must not replay or execute, and the buffered preview
-              // events reference them, so rebuild the deferred timeline from
-              // the surviving text prefix the fallback model continued from.
-              refusalBuffer?.discard();
-              sealedToolCalls.length = 0;
-              pendingTextEnds.length = 0;
-              blockIndexes.clear();
-              pendingThinkingSignatures.clear();
-              applyAnthropicFallbackBoundary({
-                output,
-                boundary: fallbackBoundary,
-                provider: model.provider,
-              });
-              // Fallback-only iteration partials stay outside the serving-model
-              // estimate. Compaction responses are the exception: usage policy
-              // aggregates their complete billed iteration list.
-              costModel = {
-                ...model,
-                cost: resolveAnthropicFallbackServingModelCost({
-                  requestedModelId: model.id,
-                  servingModelId: fallbackBoundary.toModel,
-                  requestedCost: model.cost,
-                }),
-              };
-              calculateCost(costModel, output.usage);
-              eventSink.push({ type: "start", partial: output });
-              for (const [i, block] of output.content.entries()) {
-                if (block.type !== "text") {
-                  continue;
-                }
-                delete block.index;
-                eventSink.push({
-                  type: "text_start",
-                  contentIndex: i,
-                  partial: output,
-                });
-                if (block.text) {
-                  eventSink.push({
-                    type: "text_delta",
-                    contentIndex: i,
-                    delta: block.text,
-                    partial: output,
-                  });
-                }
-                pendingTextEnds.push({
-                  type: "text_end",
-                  contentIndex: i,
-                  content: block.text,
-                  partial: output,
-                });
-              }
-              continue;
-            }
-            pendingThinkingSignatures.delete(index);
-            if (contentBlock?.type === "text") {
-              const text =
-                typeof contentBlock.text === "string"
-                  ? sanitizeTransportPayloadText(contentBlock.text)
-                  : "";
-              const block: TransportContentBlock = { type: "text", text, index };
-              output.content.push(block);
-              const contentIndex = output.content.length - 1;
-              blockIndexes.set(index, contentIndex);
-              eventSink.push({
-                type: "text_start",
-                contentIndex,
-                partial: output,
-              });
-              if (text.length > 0) {
-                eventSink.push({
-                  type: "text_delta",
-                  contentIndex,
-                  delta: text,
-                  partial: output,
-                });
-              }
-              continue;
-            }
-            if (contentBlock?.type === "thinking") {
-              const thinking =
-                typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
-              const block: TransportContentBlock = {
-                type: "thinking",
-                thinking,
-                thinkingSignature:
-                  typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-                index,
-              };
-              output.content.push(block);
-              const contentIndex = output.content.length - 1;
-              blockIndexes.set(index, contentIndex);
-              eventSink.push({
-                type: "thinking_start",
-                contentIndex,
-                partial: output,
-              });
-              if (thinking.length > 0) {
-                eventSink.push({
-                  type: "thinking_delta",
-                  contentIndex,
-                  delta: thinking,
-                  partial: output,
-                });
-              }
-              continue;
-            }
-            if (contentBlock?.type === "redacted_thinking") {
-              const block: TransportContentBlock = {
-                type: "thinking",
-                thinking: "[Reasoning redacted]",
-                thinkingSignature: typeof contentBlock.data === "string" ? contentBlock.data : "",
-                redacted: true,
-                index,
-              };
-              output.content.push(block);
-              blockIndexes.set(index, output.content.length - 1);
-              eventSink.push({
-                type: "thinking_start",
-                contentIndex: output.content.length - 1,
-                partial: output,
-              });
-              continue;
-            }
-            if (contentBlock?.type === "tool_use") {
-              tagPendingCommentaryText(output.content);
-              flushPendingTextEnds();
-              const block: TransportContentBlock = {
-                type: "toolCall",
-                id: typeof contentBlock.id === "string" ? contentBlock.id : "",
-                name:
-                  typeof contentBlock.name === "string"
-                    ? isOAuthToken
-                      ? resolveOriginalAnthropicToolName(contentBlock.name, toolProjection)
-                      : contentBlock.name
-                    : "",
-                arguments:
-                  contentBlock.input && typeof contentBlock.input === "object"
-                    ? (contentBlock.input as Record<string, unknown>)
-                    : {},
-                partialJson: "",
-                index,
-              };
-              output.content.push(block);
-              blockIndexes.set(index, output.content.length - 1);
-              toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
-              eventSink.push({
-                type: "toolcall_start",
-                contentIndex: output.content.length - 1,
-                partial: output,
-              });
-            }
-            continue;
-          }
-          if (event.type === "content_block_delta") {
-            const delta = event.delta as Record<string, unknown> | undefined;
-            const eventIndex = typeof event.index === "number" ? event.index : undefined;
-            if (eventIndex !== undefined && compactionCapture.delta(eventIndex, delta)) {
-              continue;
-            }
-            let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
-            let block = index === undefined ? undefined : blocks[index];
-            if (allowReasoningContentReplay) {
-              const appendedThinking = appendReasoningContentThinkingDelta(
-                event.index,
-                delta?.reasoning_content,
-              );
-              const hasNativeAnthropicDelta =
-                (delta?.type === "text_delta" && typeof delta.text === "string") ||
-                (delta?.type === "thinking_delta" && typeof delta.thinking === "string") ||
-                (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") ||
-                (delta?.type === "signature_delta" && typeof delta.signature === "string");
-              let appendedContent = false;
-              if (
-                !hasNativeAnthropicDelta &&
-                typeof delta?.content === "string" &&
-                delta.content.length > 0
-              ) {
-                const text = sanitizeTransportPayloadText(delta.content);
-                if (text.length > 0) {
-                  if (block?.type === "text" && index !== undefined) {
-                    block.text += text;
-                    eventSink.push({
-                      type: "text_delta",
-                      contentIndex: index,
-                      delta: text,
-                      partial: output,
-                    });
-                    appendedContent = true;
-                  } else {
-                    appendedContent = appendReasoningContentTextDelta(event.index, text);
-                  }
-                }
-              }
-              if ((appendedThinking || appendedContent) && !hasNativeAnthropicDelta) {
-                continue;
-              }
-            }
-            if (!block && delta?.type === "text_delta" && typeof delta.text === "string") {
-              const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
-              block = { type: "text", text: "", index: recoveredIndex };
-              output.content.push(block);
-              index = output.content.length - 1;
-              if (typeof event.index === "number") {
-                blockIndexes.set(event.index, index);
-              }
-              eventSink.push({
-                type: "text_start",
-                contentIndex: index,
-                partial: output,
-              });
-            }
-            if (index === undefined) {
-              continue;
-            }
-            if (
-              block?.type === "text" &&
-              delta?.type === "text_delta" &&
-              typeof delta.text === "string"
-            ) {
-              block.text += delta.text;
-              eventSink.push({
-                type: "text_delta",
-                contentIndex: index,
-                delta: delta.text,
-                partial: output,
-              });
-              continue;
-            }
-            if (
-              block?.type === "thinking" &&
-              delta?.type === "thinking_delta" &&
-              typeof delta.thinking === "string"
-            ) {
-              block.thinking += delta.thinking;
-              eventSink.push({
-                type: "thinking_delta",
-                contentIndex: index,
-                delta: delta.thinking,
-                partial: output,
-              });
-              continue;
-            }
-            if (
-              block?.type === "toolCall" &&
-              delta?.type === "input_json_delta" &&
-              typeof delta.partial_json === "string"
-            ) {
-              const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
-              block.partialJson = partialJson;
-              // Preview refresh is scheduled geometrically; content_block_stop
-              // re-parses the full buffer authoritatively either way.
-              if (toolArgumentPreviewSchedules.get(block)?.(partialJson.length)) {
-                block.arguments = parseAnthropicToolCallArguments(partialJson);
-              }
-              eventSink.push({
-                type: "toolcall_delta",
-                contentIndex: index,
-                delta: delta.partial_json,
-                partial: output,
-              });
-              continue;
-            }
-            if (
-              block?.type === "thinking" &&
-              delta?.type === "signature_delta" &&
-              typeof delta.signature === "string"
-            ) {
-              const signatureIndex = eventIndexKey(event.index);
-              const pendingSignature = pendingThinkingSignatures.get(signatureIndex);
-              if (pendingSignature === undefined) {
-                block.thinkingSignature = "";
-                pendingThinkingSignatures.set(signatureIndex, delta.signature);
-              } else {
-                pendingThinkingSignatures.set(signatureIndex, pendingSignature + delta.signature);
-              }
-            }
-            continue;
-          }
-          if (event.type === "content_block_stop") {
-            const eventIndex = typeof event.index === "number" ? event.index : undefined;
-            if (eventIndex !== undefined && compactionCapture.complete(eventIndex)) {
-              continue;
-            }
-            const pendingSignature =
-              eventIndex === undefined ? undefined : pendingThinkingSignatures.get(eventIndex);
-            if (eventIndex !== undefined) {
-              pendingThinkingSignatures.delete(eventIndex);
-            }
-            const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
-            const block = index === undefined ? undefined : blocks[index];
-            if (eventIndex === undefined || index === undefined || !block) {
-              finishReasoningContentSidecars(event.index);
-              continue;
-            }
-            blockIndexes.delete(eventIndex);
-            delete block.index;
-            if (block.type === "text") {
-              pendingTextEnds.push({
-                type: "text_end",
-                contentIndex: index,
-                content: block.text,
-                partial: output,
-              });
-              finishReasoningContentSidecars(event.index);
-              continue;
-            }
-            if (block.type === "thinking") {
-              if (pendingSignature !== undefined) {
-                block.thinkingSignature = pendingSignature;
-              }
-              eventSink.push({
-                type: "thinking_end",
-                contentIndex: index,
-                content: block.thinking,
-                partial: output,
-              });
-              finishReasoningContentSidecars(event.index);
-              continue;
-            }
-            if (block.type === "toolCall") {
-              sealedToolCalls.push({ block, contentIndex: index });
-              finishReasoningContentSidecars(event.index);
-            }
-            continue;
-          }
-          if (event.type === "message_delta") {
-            logAnthropicContextEdits(event);
-            const delta = event.delta as
-              | { stop_reason?: string; stop_details?: unknown }
-              | undefined;
-            const usage = event.usage as Record<string, unknown> | undefined;
-            if (delta?.stop_reason) {
-              if (delta.stop_reason === "refusal") {
-                applyAnthropicRefusal(output, delta.stop_details, model.provider);
-              } else {
-                output.stopReason = mapAnthropicStopReason(delta.stop_reason);
-              }
-            }
-            applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
-            calculateCost(costModel, output.usage);
-            // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
-            // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
-            // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
-            if (
-              output.stopReason === "toolUse" ||
-              output.content.some((block) => block.type === "toolCall")
-            ) {
-              tagPendingCommentaryText(output.content);
-            }
-            flushPendingTextEnds();
-          }
-        }
-        // Anthropic completes every SSE response with message_stop. Compatible
-        // proxy providers are not held to that first-party transport contract.
-        if (isDirectAnthropicModel(model) && !sawMessageStop) {
-          throw new Error("Anthropic stream ended before message_stop");
-        }
-        if (transportOptions.signal?.aborted) {
-          throw transportAbortError(transportOptions.signal);
-        }
-        if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error(output.errorMessage ?? "An unknown error occurred");
-        }
-        if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
-          throw new Error("Provider completed stream with an incomplete tool call");
-        }
-        finalizeTerminalToolCallArguments(
-          sealedToolCalls.map(({ block }) => block),
-          (block) =>
-            block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
-        );
-        for (const sealed of sealedToolCalls) {
-          delete sealed.block.partialJson;
-          eventSink.push({
-            type: "toolcall_end",
-            contentIndex: sealed.contentIndex,
-            toolCall: sealed.block,
-            partial: output,
-          });
-        }
-        refusalBuffer?.flush();
-        // Backstop: streaming tags commentary at the tool-boundary above, but
-        // replay/non-streaming assembly may reach here with tool calls untagged.
-        // Idempotent, so it never double-tags the streaming path. Gate on the turn
-        // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
-        // that mislabel tool turns as "end_turn" still tag their narration.
-        if (
-          output.stopReason === "toolUse" ||
-          output.content.some((block) => block.type === "toolCall")
-        ) {
-          tagPendingCommentaryText(output.content);
-        }
-        flushPendingTextEnds();
+        await consumeAnthropicStream({
+          events: anthropicStream,
+          model,
+          options: transportOptions,
+          output,
+          stream,
+          refusalBuffer,
+          isOAuthToken,
+          toolProjection,
+          profile: "transport",
+        });
         finalizeTransportStream({ stream, output });
       } catch (error) {
         failTransportStream({
@@ -1809,12 +832,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               suppressAnthropicCompaction(output, model, options);
             }
             for (const block of output.content) {
-              delete block.index;
+              delete (block as AnthropicStreamBlock).index;
             }
           },
         });
-      } finally {
-        logAnthropicThinkingDrops(inputTransformations);
       }
     })();
     return eventStream;

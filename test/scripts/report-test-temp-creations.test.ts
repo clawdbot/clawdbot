@@ -380,6 +380,90 @@ describe("report-test-temp-creations", () => {
     );
   });
 
+  it("ignores large non-test diffs in staged and branch reports", () => {
+    const root = tempDirs.make("openclaw-temp-report-large-diff-");
+    const env = createNestedGitEnv();
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args],
+        { cwd: root, env },
+      );
+    const report = (...args: string[]) => {
+      const result = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), ...args, "--json"],
+        { cwd: root, encoding: "utf8", env },
+      );
+      expect(result.status, result.stderr.split("\n")[0]).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    git("init", "-q", "--initial-branch=main");
+    git("commit", "--allow-empty", "-q", "-m", "base");
+    fs.mkdirSync(path.join(root, "generated"));
+    fs.writeFileSync(
+      path.join(root, "generated", "catalog.json"),
+      Buffer.alloc(65 * 1024 * 1024, "x"),
+    );
+    git("add", "generated/catalog.json");
+    expect(report("--staged")).toEqual([]);
+
+    fs.mkdirSync(path.join(root, "src"));
+    const file = "src/case[1].test.ts";
+    const source = ["const root = fs.", "mkdtemp", 'Sync("case-");'].join("");
+    fs.writeFileSync(path.join(root, file), `${source}\n`);
+    git("--literal-pathspecs", "add", "--", file);
+    const expected = [{ file, line: 1, reason: "new mkdtemp temp directory creation", source }];
+    expect(report("--staged")).toEqual(expected);
+    git("commit", "-q", "-m", "generated data and test");
+    expect(report("--base", "HEAD^", "--head", "HEAD")).toEqual(expected);
+    expect(report("--base", "HEAD^", "--head", "HEAD", "--no-merge-base")).toEqual(expected);
+  });
+
+  it.each(["rename", "copy"])("preserves added-line scope for %s into and out of tests", (mode) => {
+    const root = tempDirs.make("openclaw-temp-report-renames-");
+    const env = createNestedGitEnv();
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args],
+        { cwd: root, env },
+      );
+    git("init", "-q", "--initial-branch=main");
+    git("config", "diff.renames", mode === "copy" ? "copies" : "true");
+    fs.mkdirSync(path.join(root, "src"));
+    const existing = ["const existing = fs.", "mkdtemp", 'Sync("old-");'].join("");
+    fs.writeFileSync(path.join(root, "src", "enter.ts"), `${existing}\n// entering tests\n`);
+    fs.writeFileSync(path.join(root, "src", "leave.test.ts"), `${existing}\n// leaving tests\n`);
+    git("add", "src");
+    git("commit", "-q", "-m", "base");
+    for (const [from, to] of Object.entries({
+      "src/enter.ts": "src/enter.test.ts",
+      "src/leave.test.ts": "src/leave.ts",
+    })) {
+      if (mode === "rename") {
+        git("mv", from, to);
+      } else {
+        fs.copyFileSync(path.join(root, from), path.join(root, to));
+        fs.appendFileSync(path.join(root, from), "// changed copy source\n");
+      }
+    }
+    const source = ["const added = fs.", "mkdtemp", 'Sync("new-");'].join("");
+    fs.appendFileSync(path.join(root, "src", "enter.test.ts"), `${source}\n`);
+    fs.appendFileSync(path.join(root, "src", "leave.ts"), `${source}\n`);
+    git("add", "src");
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--staged", "--json"],
+      { cwd: root, encoding: "utf8", env },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { file: "src/enter.test.ts", line: 3, reason: "new mkdtemp temp directory creation", source },
+    ]);
+  });
+
   it("reads staged source for manual helper scans", () => {
     const root = tempDirs.make("openclaw-temp-report-staged-source-");
     const env = createNestedGitEnv();

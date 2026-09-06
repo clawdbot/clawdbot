@@ -66,7 +66,11 @@ The default `browser` tool is a bundled plugin. Disable it to replace it with an
 
 Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
-Browser config changes require a Gateway restart so the plugin can re-register its service.
+Profiles, launch settings, snapshot defaults, tab cleanup, and
+`browser.allowSystemProfileImport` hot-reload. Import permission changes apply to
+new imports; an import already in progress keeps its admission. Browser
+enablement, evaluation, SSRF policy, and extension relay settings require a Gateway
+restart. See [Config hot reload](/gateway/configuration#config-hot-reload).
 
 ## Agent guidance
 
@@ -165,6 +169,11 @@ blocked it or its address could not be verified. Select another tab, enter an
 allowed address, or refresh after a temporary lookup failure. Blocked URLs stay
 hidden; displaying a tab title does not grant access to its contents.
 
+Following a historical tab never starts a stopped managed browser: a fresh
+launch cannot contain that tab. The panel shows **Start browser** instead, and
+preview cards keep their title and URL without a thumbnail when that target
+is unavailable. Click **Start browser** to launch the browser and show its current tabs.
+
 ## Configuration
 
 Browser settings live in `~/.openclaw/openclaw.json`.
@@ -214,8 +223,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 `browser.snapshotDefaults.mode: "efficient"` changes the default `snapshot`
 extraction mode when a caller does not pass an explicit `snapshotFormat` or
-`mode`; see [Browser control API](/tools/browser-control) for per-call
-snapshot options.
+`mode`. Changes apply to the next snapshot; see
+[Browser control API](/tools/browser-control) for per-call snapshot options.
 
 On drivers with stable document identity, repeated AI or role snapshots of the
 same tab, document, and option family mark newly appeared ref-bearing elements
@@ -228,7 +237,12 @@ Session tab cleanup applies only to tabs created by the OpenClaw browser tool
 with `action: "open"`. OpenClaw does not adopt tabs that were already open,
 opened by the user, or otherwise have unknown ownership. The
 `browser.tabCleanup` block controls periodic idle and cap sweeps for primary
-sessions; disabling it does not disable explicit session lifecycle cleanup.
+sessions. Changes apply on the next sweep without restarting the browser;
+disabling it does not disable explicit session lifecycle cleanup.
+
+OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
+tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
+remote and attach-only profiles do not use it.
 
 For host-local opens, ownership with a stable native CDP target and browser
 identity is stored in the shared SQLite state. Those records survive a Gateway
@@ -462,6 +476,9 @@ instead, and remote CDP profiles use the browser behind `cdpUrl`.
 ## Local vs remote control
 
 - **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
+  Targetless actions can launch it (for example, `open`, `navigate`, or `openclaw browser start`). Actions that name a
+  tab by `targetId`, tab id, or label never start a stopped browser, because a new browser cannot
+  contain that tab; start the browser or open a new tab, then select a current target.
 - **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
@@ -795,19 +812,26 @@ What to check if attach does not work:
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you
 
+For startup failures, check the `browser/chrome-mcp` logs for a bounded, redacted
+tail of subprocess stderr when available.
+
 Agent use:
 
 - Use `profile="user"` when you need the user's logged-in browser state.
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.
-- The Gateway or node host can spawn `npx -y chrome-devtools-mcp@1.8.0 --autoConnect`.
+- The Gateway or node host can spawn `npx -y --audit=false chrome-devtools-mcp@1.8.0 --autoConnect`.
 
 Notes:
 
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
 - OpenClaw does not launch the browser for this driver; it only attaches.
+- Stopping or failing an attach closes the owned MCP subprocess and its verified
+  descendants, not the already-running browser. Replacement attaches wait for
+  cleanup; if cleanup cannot be verified, OpenClaw reports an error instead of
+  treating the session as closed.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
   `userDataDir` is set, it is passed through to target that user data directory.
 - Existing-session can attach on the selected host or through a connected
@@ -827,7 +851,7 @@ Notes:
 ### Custom Chrome MCP launch
 
 Override the spawned Chrome DevTools MCP server per profile when the default
-`npx -y chrome-devtools-mcp@1.8.0` flow is not what you want (offline hosts,
+`npx -y --audit=false chrome-devtools-mcp@1.8.0` flow is not what you want (offline hosts,
 different versions, vendored binaries). OpenClaw pins the default server to the
 version validated with its endpoint-policy parser. Custom executables and versions
 are operator-managed and must preserve Chrome MCP's connection-argument semantics.
@@ -838,7 +862,8 @@ are operator-managed and must preserve Chrome MCP's connection-argument semantic
 | `mcpArgs`    | Extra arguments passed unchanged to `mcpCommand`. Connection options override the generated endpoint or auto-connect arguments. |
 
 Using `mcpArgs` does not replace the package prefix: when `mcpCommand` is `npx`,
-OpenClaw still prepends `-y chrome-devtools-mcp@1.8.0`.
+OpenClaw still prepends `-y --audit=false chrome-devtools-mcp@1.8.0`. The optional npm
+install audit is disabled so registry audit availability does not delay browser startup.
 
 When `mcpArgs` does not set a connection option, OpenClaw forwards a configured
 `cdpUrl` to Chrome MCP instead of generating `--autoConnect`:
@@ -866,7 +891,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. Playwright is not required for page or ref-based element screenshots. (`--full-page` cannot combine with `--ref` or `--element` on any profile, not just existing-session.)
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts a single value. `batch` is not supported; send actions individually.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef` and do not support CSS `element`; pass multiple paths when the page's file input accepts multiple files. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Playwright-only features** - PDF export, download interception, `responsebody`, and the agent actions `requests`, `errors`, `text`, and `emulate` require a Playwright-backed profile, such as the managed `openclaw` profile. Use `snapshot` to inspect an existing-session page.
 

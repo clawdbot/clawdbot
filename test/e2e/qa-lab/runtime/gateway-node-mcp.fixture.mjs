@@ -305,6 +305,7 @@ async function runHttp() {
   }
   const app = createMcpExpressApp();
   const sessions = new Map();
+  const pendingSessionExpirations = new Map();
   const records = new Set();
   const catalogState = { rotated: false, expiryCalls: 0 };
   const appFixtureEnabled = process.env.MCP_APP_GRANT_REVALIDATION_FIXTURE === "1";
@@ -353,14 +354,26 @@ async function runHttp() {
       const sessionId = req.headers["mcp-session-id"];
       let transport;
       if (typeof sessionId === "string") {
-        if (req.body?.params?.arguments?.marker === "expire-session") {
+        const marker = req.body?.params?.arguments?.marker;
+        if (marker === "expire-session" || marker === "expire-concurrent-session") {
           catalogState.expiryCalls += 1;
+          const pending = pendingSessionExpirations.get(sessionId) ?? [];
+          pending.push({ response: res, id: req.body?.id ?? null });
+          if (marker === "expire-concurrent-session" && pending.length < 2) {
+            // Expire only after both calls reach this session. The first 404
+            // otherwise retires the transport before the second request arrives.
+            pendingSessionExpirations.set(sessionId, pending);
+            return;
+          }
+          pendingSessionExpirations.delete(sessionId);
           sessions.delete(sessionId);
-          res.status(404).json({
-            jsonrpc: "2.0",
-            error: { code: -32001, message: "Session not found" },
-            id: req.body?.id ?? null,
-          });
+          for (const { response, id } of pending) {
+            response.status(404).json({
+              jsonrpc: "2.0",
+              error: { code: -32001, message: "Session not found" },
+              id,
+            });
+          }
           return;
         }
         const record = sessions.get(sessionId);
