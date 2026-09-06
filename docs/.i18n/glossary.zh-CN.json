@@ -2076,6 +2076,14 @@
     "target": "第 8 部分，共 8 部分"
   },
   {
+    "source": "Chat channels",
+    "target": "聊天渠道"
+  },
+  {
+    "source": "Installer internals",
+    "target": "安装程序内部机制"
+  },
+  {
     "source": "Connect and pair",
     "target": "连接与配对"
   },

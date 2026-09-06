@@ -3424,7 +3424,7 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Choose the account for each purpose. Your verified sign-in identity and co-author credit stay separate.",
+      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
@@ -3434,7 +3434,10 @@ export const en: TranslationMap & {
     signInRequired: "Personal sign-in required",
     connected: "Connected",
     disconnected: "Not connected",
-    notLoaded: "Not verified",
+    notLoaded: "Status not loaded",
+    checking: "Checking connection…",
+    statusUnavailable: "Connection status unavailable",
+    manage: "Manage connections",
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
@@ -3480,7 +3483,8 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
       githubAccount: "GitHub account",
-      githubAccountDescription: "Automatically verified from your GitHub-backed sign-in.",
+      githubAccountDescription:
+        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
