@@ -1,6 +1,6 @@
 // Verifies agent cleanup steps time out with bounded diagnostic logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runAgentCleanupStep } from "./run-cleanup-timeout.js";
+import { runAgentCleanupStep, createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
@@ -268,6 +268,39 @@ describe("agent cleanup timeout", () => {
     );
   });
 
+  it.each([false, true])(
+    "preserves nested cleanup uncertainty and the original run outcome (fails=%s)",
+    async (fails) => {
+      const failure = new Error("run failed");
+      const outer = createAgentCleanupScope();
+      const inner = createAgentCleanupScope();
+      const result = outer.run(() =>
+        inner.run(async () => {
+          await runAgentCleanupStep({
+            runId: "nested",
+            sessionId: "isolated",
+            step: "registered-owner",
+            cleanup: async () => {
+              throw new Error("cleanup failed");
+            },
+            log,
+          });
+          if (fails) {
+            throw failure;
+          }
+          return "result";
+        }),
+      );
+      if (fails) {
+        await expect(result).rejects.toBe(failure);
+      } else {
+        await expect(result).resolves.toBe("result");
+      }
+      expect(inner.outcome).toBe("uncertain");
+      expect(outer.outcome).toBe("uncertain");
+    },
+  );
+
   it.each([
     {
       runId: "run-invalid-env-number",
@@ -325,4 +358,45 @@ describe("agent cleanup timeout", () => {
       "agent cleanup failed: runId=run-2 sessionId=session-2 step=context-engine-dispose error=dispose failed",
     );
   });
+  it.each([
+    { label: "completed", settles: true, fails: false, outcome: "closed" },
+    { label: "failed", settles: true, fails: true, outcome: "uncertain" },
+    { label: "stalled", settles: false, fails: false, outcome: "uncertain" },
+    { label: "late rejection", settles: false, fails: true, outcome: "uncertain" },
+  ])(
+    "bounds automatic cleanup and records $label ownership",
+    async ({ settles, fails, outcome }) => {
+      let settle!: () => void;
+      const held = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const scope = createAgentCleanupScope();
+      const result = scope.run(() =>
+        runAgentCleanupStep({
+          runId: "automatic",
+          sessionId: "isolated",
+          step: "registered-owner",
+          log,
+          timeoutMs: 5,
+          cleanup: async () => {
+            await held;
+            if (fails) {
+              throw new Error("teardown failed");
+            }
+          },
+        }),
+      );
+      try {
+        if (settles) {
+          settle();
+        }
+        await vi.advanceTimersByTimeAsync(5);
+        expect(scope.outcome).toBe(outcome);
+        await expect(result).resolves.toBeUndefined();
+      } finally {
+        settle();
+        await result;
+      }
+    },
+  );
 });

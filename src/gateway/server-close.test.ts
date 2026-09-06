@@ -3,6 +3,7 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -11,6 +12,10 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
+import {
+  emitTrustedDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -22,9 +27,11 @@ import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
 } from "../plugins/services.js";
+import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
@@ -286,6 +293,101 @@ describe("createGatewayCloseHandler", () => {
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("does not retire Gateway dependencies after real diagnostic shutdown rejects with exports pending", async () => {
+    const { createDiagnosticsOtelService } = await loadBundledPluginFacade<{
+      createDiagnosticsOtelService: () => OpenClawPluginService;
+    }>({ pluginId: "diagnostics-otel", artifactBasename: "runtime-api.js" });
+    vi.stubEnv("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "2");
+    vi.stubEnv("OTEL_BSP_MAX_QUEUE_SIZE", "100");
+    vi.stubEnv("OTEL_NODE_RESOURCE_DETECTORS", "none");
+    const pending = new Set<import("node:http").ServerResponse>();
+    const requestsReady = createDeferredCore();
+    let requests = 0;
+    const collector = createServer((req, res) => {
+      req.resume();
+      requests++;
+      if (requests === 2) {
+        res.statusCode = 400;
+        res.end("synthetic rejected batch");
+      } else {
+        pending.add(res);
+        res.on("close", () => pending.delete(res));
+      }
+      if (requests === 4) {
+        requestsReady.resolve();
+      }
+    });
+    collector.listen(0, "127.0.0.1");
+    await once(collector, "listening");
+    const address = collector.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing collector address");
+    }
+    const service = createDiagnosticsOtelService();
+    const registry = createEmptyPluginRegistry();
+    registry.services.push({
+      pluginId: "diagnostics-otel",
+      service,
+      source: "test",
+      origin: "bundled",
+    });
+    setActivePluginRegistry(registry);
+    const pluginServices = await startPluginServices({
+      registry,
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: `http://127.0.0.1:${address.port}`,
+            traces: true,
+            metrics: false,
+            logs: false,
+            sampleRate: 1,
+            flushIntervalMs: 60_000,
+          },
+        },
+      },
+    });
+    try {
+      for (let index = 0; index < 7; index++) {
+        emitTrustedDiagnosticEvent({
+          type: "message.processed",
+          channel: "synthetic",
+          outcome: "completed",
+          durationMs: 1,
+        });
+      }
+      await waitForDiagnosticEventsDrained();
+      const clearSecretsRuntimeSnapshot = vi.fn();
+      const deps = createGatewayCloseTestDeps({ pluginServices, clearSecretsRuntimeSnapshot });
+      const outcome = await createGatewayCloseHandler(deps)({
+        reason: "gateway startup failed",
+      }).then(
+        (result) => ({ status: "fulfilled", result }),
+        (error: unknown) => ({ status: "rejected", error }),
+      );
+      await requestsReady.promise;
+      expect(pending.size).toBe(3);
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(outcome.status).toBe("rejected");
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+    } finally {
+      for (const response of pending) {
+        response.end();
+      }
+      collector.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        collector.close(() => resolve());
+      });
+      await pluginServices.stop().catch(() => {});
+      await waitForDiagnosticEventsDrained();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
