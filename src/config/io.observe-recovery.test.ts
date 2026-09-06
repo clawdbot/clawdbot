@@ -340,6 +340,30 @@ describe("config observe recovery", () => {
       },
     };
   }
+  function withClobberLockMkdirFailure(
+    deps: ObserveRecoveryDeps,
+    configPath: string,
+    error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+  ): ObserveRecoveryDeps {
+    const lockPath = `${configPath}.clobber.lock`;
+    const mkdir = deps.fs.promises.mkdir.bind(deps.fs.promises);
+    return {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          mkdir: (async (targetPath: fs.PathLike, options?: unknown) => {
+            if (targetPath === lockPath) {
+              throw error;
+            }
+            return await mkdir(targetPath, options as Parameters<typeof mkdir>[1]);
+          }) as typeof deps.fs.promises.mkdir,
+        },
+      },
+    };
+  }
+
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
@@ -470,6 +494,55 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
+    });
+  });
+
+  it("leaves the live config untouched when the async clobbered snapshot cannot be written", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const recovered = await recoverSuspiciousConfigRead({
+        deps: withClobberLockMkdirFailure(deps, configPath),
+        configPath,
+        ...clobbered,
+      });
+
+      expect(recovered.raw).toBe(clobbered.raw);
+      expect(recovered.parsed).toEqual(clobbered.parsed);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expectWarnContaining(
+        warn,
+        `Config backup restore skipped: could not write the .clobbered.* copy of the current config: ${configPath}`,
+      );
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("leaves the live config untouched when the sync clobbered snapshot cannot be written", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      const lockPath = `${configPath}.clobber.lock`;
+      await fsp.mkdir(lockPath, { mode: 0o700 });
+      try {
+        const recovered = recoverClobberedUpdateChannelSync({ deps, configPath });
+
+        expect(recovered.raw).toBe(clobberedUpdateChannelRaw);
+        expect(recovered.parsed).toEqual(clobberedUpdateChannelConfig);
+        await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobberedUpdateChannelRaw);
+        expect(await listClobberFiles(configPath)).toEqual([]);
+        expectWarnContaining(
+          warn,
+          `Config backup restore skipped: could not write the .clobbered.* copy of the current config: ${configPath}`,
+        );
+        expectWarnNotContaining(warn, "Config auto-restored from backup:");
+      } finally {
+        await fsp.rmdir(lockPath);
+      }
     });
   });
 
@@ -1279,6 +1352,45 @@ describe("config observe recovery", () => {
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
       await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
       expectWarnContaining(warn, "candidate cannot converge under the current schema");
+    });
+  });
+
+  it("refuses last-known-good recovery when the clobbered snapshot cannot be written", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+      await expect(
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+
+      const brokenRaw = "{ gateway: { mode: 123 } }\n";
+      await fsp.writeFile(configPath, brokenRaw, "utf-8");
+      const restored = await recoverConfigFromLastKnownGoodCore({
+        deps: withClobberLockMkdirFailure(deps, configPath),
+        snapshot: {
+          ...snapshot,
+          raw: brokenRaw,
+          parsed: { gateway: { mode: 123 } },
+          valid: false,
+          issues: [{ path: "gateway.mode", message: "Expected string" }],
+        },
+        reason: "test-invalid-config",
+        prepareCandidate: approveRecoveryCandidate,
+      });
+
+      expect(restored).toBe(false);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expectWarnContaining(
+        warn,
+        `Config last-known-good recovery skipped: could not write the .clobbered.* copy of the current config: ${configPath} (test-invalid-config)`,
+      );
+      expectWarnNotContaining(warn, "Config auto-restored from last-known-good:");
+      const observe = await readLastObserveEvent(auditPath);
+      expect(observe?.restoredFromBackup).not.toBe(true);
     });
   });
 

@@ -717,6 +717,46 @@ describe("config io write", () => {
     ]);
   });
 
+  itWithHome(
+    "leaves the prefixed config untouched when the clobbered snapshot cannot be written",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      const cleanConfig = {
+        gateway: { mode: "local" },
+        agents: { entries: { main: { default: true } } },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `Found and updated: False\n${formatConfig(cleanConfig)}`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const warn = vi.fn();
+      const io = createHomeConfigIO(home, {
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        logger: { warn, error: vi.fn() },
+      });
+
+      const initialSnapshot = await io.readConfigFileSnapshot();
+      expect(initialSnapshot.valid).toBe(false);
+
+      const lockPath = `${configPath}.clobber.lock`;
+      await fs.mkdir(lockPath, { mode: 0o700 });
+      try {
+        await expect(io.recoverConfigFromJsonRootSuffix(initialSnapshot)).resolves.toBe(false);
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+        const entries = await fs.readdir(path.dirname(configPath));
+        expect(entries.filter((entry) => entry.includes(".clobbered."))).toEqual([]);
+        expectWarnContaining(
+          warn,
+          `Config prefix recovery skipped: could not write the .clobbered.* copy of the current config: ${configPath} (non-JSON prefix)`,
+        );
+        expect(warnMessages(warn).join("\n")).not.toContain(
+          "Config auto-stripped non-JSON prefix:",
+        );
+      } finally {
+        await fs.rmdir(lockPath);
+      }
+    },
+  );
+
   itWithHome("warns when prefix recovery cannot tighten config permissions", async (home) => {
     const configPath = configPathForHome(home);
     const cleanConfig = {

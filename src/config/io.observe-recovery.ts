@@ -5,6 +5,7 @@ import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.
 import { isRecord } from "../utils.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
+  formatClobberSnapshotSkipWarning,
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
@@ -440,6 +441,10 @@ function* recoverSuspiciousConfigRead(
     sync: () => persistBoundedClobberedConfigSnapshotSync(snapshotParams),
     async: () => persistBoundedClobberedConfigSnapshot(snapshotParams),
   }) as string | null;
+  if (!clobberedPath) {
+    deps.logger.warn(formatClobberSnapshotSkipWarning("backup restore", configPath, suspicious));
+    return returnOriginalConfigRead(params);
+  }
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
@@ -616,6 +621,12 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     snapshot,
     observedAt: now,
   });
+  if (!clobberedPath) {
+    deps.logger.warn(
+      formatClobberSnapshotSkipWarning("last-known-good recovery", snapshot.path, [params.reason]),
+    );
+    return false;
+  }
   if (recoveryCandidate.raw !== backupRaw) {
     warnIfJSON5CommentsWillBeStripped({
       raw: backupRaw,

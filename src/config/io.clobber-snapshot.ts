@@ -259,6 +259,14 @@ function rotateOldestClobberedSiblingsSync(
   return true;
 }
 
+export function formatClobberSnapshotSkipWarning(
+  context: string,
+  configPath: string,
+  reasons: string[],
+): string {
+  return `Config ${context} skipped: could not write the .clobbered.* copy of the current config: ${configPath} (${reasons.join(", ")})`;
+}
+
 function buildClobberedTargetPath(configPath: string, observedAt: string, attempt: number): string {
   const basePath = `${configPath}.clobbered.${formatConfigArtifactTimestamp(observedAt)}`;
   return attempt === 0 ? basePath : `${basePath}-${String(attempt).padStart(2, "0")}`;
