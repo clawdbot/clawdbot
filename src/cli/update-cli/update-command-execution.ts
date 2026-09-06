@@ -562,7 +562,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
-        managedServiceEnv: preManagedServiceStop?.serviceEnv,
+        getManagedServiceEnv: () => preManagedServiceStop?.serviceEnv,
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {

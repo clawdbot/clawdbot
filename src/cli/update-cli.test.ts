@@ -9051,9 +9051,40 @@ describe("update-cli", () => {
       builtSha: sha,
     });
     const canonicalGitRoot = await fs.realpath(gitRoot);
+    const callerState = profileStateDir("caller");
+    const managedState = profileStateDir("managed");
+    const callerConfig = path.join(callerState, "openclaw.json");
+    const managedConfig = path.join(managedState, "openclaw.json");
+    await Promise.all([fs.mkdir(callerState), fs.mkdir(managedState)]);
+    tempDirsToCleanup.add(callerState);
+    tempDirsToCleanup.add(managedState);
+    const callerBytes = '{"gateway":{"mode":"local"},"env":{"vars":{"CANARY":"caller"}}}\n';
+    const managedBytes = '{"gateway":{"mode":"local"},"env":{"vars":{"CANARY":"managed"}}}\n';
+    const existingCallerBackup = "synthetic-previous-caller-backup\n";
+    await fs.writeFile(callerConfig, callerBytes);
+    await fs.writeFile(`${callerConfig}.pre-update`, existingCallerBackup);
+    await fs.writeFile(managedConfig, managedBytes);
+    const { createPreUpdateConfigSnapshot } = await vi.importActual<
+      typeof import("../config/backup-rotation.js")
+    >("../config/backup-rotation.js");
+    createPreUpdateConfigSnapshotMock.mockImplementation(createPreUpdateConfigSnapshot);
+    let backupAtDoctorEntry: string | undefined;
+    let doctorEnv: NodeJS.ProcessEnv | undefined;
     mockPackageInstallStatus(packageRoot);
     mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
+    mockNpmGlobalCommands(
+      nodeModules,
+      async (argv, options) => {
+        if (argv[2] === "doctor") {
+          doctorEnv = typeof options === "number" ? undefined : options.env;
+          backupAtDoctorEntry = await fs
+            .readFile(`${managedConfig}.pre-update`, "utf8")
+            .catch(() => undefined);
+        }
+        return undefined;
+      },
+      canonicalGitRoot,
+    );
     mockRunningManagedGateway(["node", packageEntrypoint, "gateway", "run"]);
     mockGatewayHealth("2026.4.21", "updated-checkout");
     serviceReadCommand.mockImplementation(async () => ({
@@ -9066,6 +9097,9 @@ describe("update-cli", () => {
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "managed",
+        OPENCLAW_CONFIG_PATH: managedConfig,
+        OPENCLAW_STATE_DIR: managedState,
       },
     }));
     const preparations = mockGitUpdateAfterMutation(
@@ -9076,15 +9110,40 @@ describe("update-cli", () => {
       }),
     );
 
-    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-      await updateCommand({ channel: "dev", yes: true });
-    });
+    await withEnvAsync(
+      {
+        OPENCLAW_GIT_DIR: gitRoot,
+        OPENCLAW_PROFILE: "caller",
+        OPENCLAW_CONFIG_PATH: callerConfig,
+        OPENCLAW_STATE_DIR: callerState,
+      },
+      async () => {
+        await updateCommand({ channel: "dev", yes: true });
+        expect(process.env.OPENCLAW_PROFILE).toBe("caller");
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(callerConfig);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(callerState);
+      },
+    );
 
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
-    expect(preparations).toEqual([
-      { allowGatewayServiceRepair: false, allowGatewayActivation: false },
-    ]);
+    expect
+      .soft({
+        OPENCLAW_PROFILE: doctorEnv?.OPENCLAW_PROFILE,
+        OPENCLAW_CONFIG_PATH: doctorEnv?.OPENCLAW_CONFIG_PATH,
+        OPENCLAW_STATE_DIR: doctorEnv?.OPENCLAW_STATE_DIR,
+      })
+      .toEqual({
+        OPENCLAW_PROFILE: "managed",
+        OPENCLAW_CONFIG_PATH: managedConfig,
+        OPENCLAW_STATE_DIR: managedState,
+      });
+    expect.soft(backupAtDoctorEntry).toBe(managedBytes);
+    expect.soft(await fs.readFile(callerConfig, "utf8")).toBe(callerBytes);
+    expect.soft(await fs.readFile(`${callerConfig}.pre-update`, "utf8")).toBe(existingCallerBackup);
+    expect.soft(serviceStop, getErrorOutput() + getLogOutput()).toHaveBeenCalledTimes(1);
+    expect.soft(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    expect
+      .soft(preparations)
+      .toEqual([{ allowGatewayServiceRepair: false, allowGatewayActivation: false }]);
     expect(gatewayCommandCall(gitEntrypoint, "install")).toBeDefined();
     expect(runRestartScript).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.exit, getErrorOutput() + getLogOutput()).not.toHaveBeenCalledWith(1);
