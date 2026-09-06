@@ -1,0 +1,107 @@
+name: Watch RTC same-host toolchain reinstallation
+
+on:
+  push:
+    branches: [codex/watch-rtc-reinstall-probe-20260906]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-rtc-reinstall-probe-20260906
+  cancel-in-progress: true
+
+jobs:
+  same-host-reinstallation:
+    if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/codex/watch-rtc-reinstall-probe-20260906'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode and install the exact Watch toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          [[ "$xcode_version" == 26.6* ]]
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          [[ "$watch_toolchain" == nightly-2026-09-05 ]]
+          time rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src --component llvm-tools-preview
+          command -v tar
+          command -v zstd
+
+      - name: Produce the cold baseline and local archive
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo 'diagnostic_kind=same-host-toolchain-reinstallation'
+          python3 .github/watch-rtc-probe.py produce
+
+      - name: Measure the normal same-toolchain warm build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          probe_work_root="$RUNNER_TEMP/watch-rtc-freshness-probe"
+          TIMEFORMAT='same_toolchain_warm_seconds=%R'
+          {
+            time bash apps/shared/OpenClawWatchRTC/build.sh watchsimulator "$probe_work_root/WatchRTC" arm64 x86_64
+          } 2>&1 | tee "$probe_work_root/same-toolchain-warm.log"
+          awk '/^[[:space:]]*Compiling / { count++ } END { printf "same_toolchain_warm_compiling_lines=%d\n", count }' "$probe_work_root/same-toolchain-warm.log"
+          xcrun lipo -archs "$probe_work_root/WatchRTC/libopenclaw_watch_rtc.a"
+          git diff --exit-code -- apps/shared/OpenClawWatchRTC
+
+      - name: Preserve the owned baseline and reinstall the same toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # This job owns the ephemeral VM. Refuse removal while a compiler or
+          # build-script process is present; do not kill or inspect its arguments.
+          compiler_check=0
+          pgrep -x '(cargo|rustc|rust-lld|clang.*|cc|c\+\+|ld|ld-prime|ld64|lld|build[-_]script[-_].*|cmake|ninja|make)' >/dev/null || compiler_check=$?
+          if [[ "$compiler_check" != 1 ]]; then
+            echo 'error: compiler processes remain or the process check failed' >&2
+            exit 1
+          fi
+          probe_work_root="$RUNNER_TEMP/watch-rtc-freshness-probe"
+          saved_work_root="$RUNNER_TEMP/watch-rtc-before-reinstall"
+          test -d "$probe_work_root"
+          test ! -e "$saved_work_root"
+          mv "$probe_work_root" "$saved_work_root"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          [[ "$watch_toolchain" == nightly-2026-09-05 ]]
+          watch_sysroot="$(rustc "+$watch_toolchain" --print sysroot)"
+          test -d "$watch_sysroot"
+          time rustup toolchain uninstall "$watch_toolchain"
+          # A proxy invocation could auto-install again; inspect the captured path.
+          if [[ -e "$watch_sysroot" || -L "$watch_sysroot" ]]; then
+            echo 'error: captured sysroot remains after uninstall' >&2
+            exit 1
+          fi
+          time rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src --component llvm-tools-preview
+
+      - name: Compare after same-host reinstallation with all existing gates
+        shell: bash
+        env:
+          PROBE_ARCHIVE: ${{ runner.temp }}/watch-rtc-before-reinstall/${{ steps.baseline.outputs.archive_name }}
+          PROBE_ARCHIVE_SHA256: ${{ steps.baseline.outputs.archive_sha256 }}
+          PROBE_IDENTITY_SHA256: ${{ steps.baseline.outputs.identity_sha256 }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo 'diagnostic_kind=same-host-toolchain-reinstallation'
+          python3 .github/watch-rtc-probe.py consume
