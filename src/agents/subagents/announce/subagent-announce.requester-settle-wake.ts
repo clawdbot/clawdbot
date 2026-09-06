@@ -332,15 +332,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
+  const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
+  // A nested requester that has explicitly yielded is actively waiting for its
+  // children to settle. Unlike a passive nested orchestrator (left to the
+  // descendant-settle wake), a yielded requester must receive its owed wake
+  // dispatch regardless of depth — otherwise the yield batch is armed, never
+  // dispatched, and silently cleared as fulfilled. (#139963)
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey, {
-      cfg,
-      agentId: requesterAgentId,
-    }) >= 1
+    (!requesterYieldedAfterDelivery && requesterDepth >= 1)
   ) {
     completeBatch(settledBatch, selectedState.rearmGeneration);
     return false;
@@ -477,7 +483,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         sourceSessionKey: currentSettledEntry.childSessionKey,
         sourceTool: "subagent_announce",
         targetRequesterSessionKey: requesterSessionKey,
-        requesterIsSubagent: false,
+        requesterIsSubagent: requesterDepth >= 1,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
