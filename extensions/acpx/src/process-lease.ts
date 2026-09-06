@@ -7,7 +7,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { splitCommandParts } from "./command-line.js";
+import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
 /** CLI argument carrying the ACPX process lease id. */
@@ -24,9 +24,18 @@ export type AcpxProcessLeaseIdentity = {
 
 /** Read OpenClaw lease identity from a generated wrapper command. */
 export function readAcpxProcessLeaseIdentity(
-  command: string | undefined,
+  command: AcpxAgentCommand | undefined,
 ): AcpxProcessLeaseIdentity | undefined {
-  const parts = splitCommandParts(command?.trim() ?? "");
+  // ps displays arguments verbatim. Parse only our fields so quotes and
+  // backslashes in unrelated arguments cannot swallow the lease identity.
+  const parts =
+    typeof command === "string"
+      ? Array.from(
+          command.matchAll(
+            /(?:^|\s)(--openclaw-(?:acpx-lease-id|gateway-instance-id))\s+(?:"([^"]*)"|'([^']*)'|(\S+))(?=\s|$)/g,
+          ),
+        ).flatMap((match) => [match[1]!, match[2] ?? match[3] ?? match[4]!])
+      : (command ?? []);
   const leaseIndex = parts.lastIndexOf(OPENCLAW_ACPX_LEASE_ID_ARG);
   const gatewayIndex = parts.lastIndexOf(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
   const leaseId = leaseIndex >= 0 ? parts[leaseIndex + 1]?.trim() : "";
@@ -181,33 +190,21 @@ export function createAcpxProcessLeaseId(): string {
 }
 
 /** Hash a wrapper command so process leases can detect command drift. */
-export function hashAcpxProcessCommand(command: string): string {
-  return createHash("sha256").update(command).digest("hex");
+export function hashAcpxProcessCommand(command: AcpxAgentCommand): string {
+  return createHash("sha256").update(renderAgentCommand(command)).digest("hex");
 }
 
-function quoteEnvValue(value: string): string {
-  return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function appendAcpxLeaseArgs(params: {
-  command: string;
+/** Append portable wrapper arguments without changing the executable or argument bytes. */
+export function withAcpxLeaseArgs(params: {
+  command: AcpxAgentCommand;
   leaseId: string;
   gatewayInstanceId: string;
-}): string {
+}): string[] {
   return [
-    params.command,
+    ...splitCommandParts(params.command),
     OPENCLAW_ACPX_LEASE_ID_ARG,
-    quoteEnvValue(params.leaseId),
+    params.leaseId,
     OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-    quoteEnvValue(params.gatewayInstanceId),
-  ].join(" ");
-}
-
-/** Add ACPX lease identity to a command through portable wrapper arguments. */
-export function withAcpxLeaseEnvironment(params: {
-  command: string;
-  leaseId: string;
-  gatewayInstanceId: string;
-}): string {
-  return appendAcpxLeaseArgs(params);
+    params.gatewayInstanceId,
+  ];
 }
