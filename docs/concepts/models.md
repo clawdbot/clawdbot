@@ -86,6 +86,14 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+After a Gateway restart, the first ordinary `models.list` or `/models` browse
+initializes provider inventory. A bounded request may show configured models while
+discovery finishes; later reads reuse the completed inventory. Startup, turn-path
+reads, and `models.list` with `preparedOnly: true` do not start discovery.
+For models configured to use a CLI runtime, channel picker availability follows that
+runtime's prepared authentication; a provider API key does not substitute for its
+native login.
+
 Once the Gateway has discovered a provider inventory, model-selection hot reloads
 retain it without running discovery again. Aliases, policy, and runtime capabilities
 use the new configuration. A successful catalog refresh replaces that inventory,
