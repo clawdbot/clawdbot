@@ -3089,6 +3089,83 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
+  it("retires a stale transcript-only claim after gateway stall instead of throwing", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      status: "done",
+    });
+    const onAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    // Drifted (not aborted) — should retire the stale claim and unwind cleanly
+    // via the "duplicate-source" path rather than wedging the agent with a
+    // "claim changed" throw. The embedded agent must not run for this turn.
+    // Receipt is not terminal-pending, so retirement is accepted.
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("throws and preserves a terminal-pending transcript-only claim instead of retiring it", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      status: "done",
+    });
+    const onAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    // Drifted AND the receipt is still terminal-pending (unknown provider
+    // outcome). Retirement must be declined so the claim stays visible for
+    // restart-safe provider reconciliation. The run rejects with the "claim
+    // changed" throw; the embedded agent must not run; the terminal-pending
+    // receipt must remain on disk unchanged.
+    await expect(run()).rejects.toThrow(/restart recovery claim changed before agent adoption/);
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryRunId).toBe("msg");
+    expect(stored.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
+    expect(stored.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
+    // No terminal source recorded — retirement was declined, so the field
+    // stays in its fixture state (undefined / not populated).
+    expect(stored.restartRecoveryTerminalRunIds ?? []).toEqual([]);
+  });
+
   it("clears an adopted transcript-only claim after user cancellation", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
