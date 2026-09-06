@@ -5,6 +5,7 @@ struct SettingsHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
+    @State private var embedCompatibility = DashboardEmbedCompatibility()
     @Binding var navigationPath: [SettingsRoute]
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onRouteChange: ((SettingsRoute?) -> Void)?
@@ -37,7 +38,9 @@ struct SettingsHubScreen: View {
                 gatewayController: self.gatewayController,
                 url: url,
                 config: config,
-                openPanel: self.openPanel)
+                openPanel: self.openPanel,
+                embedCompatibility: self.embedCompatibility,
+                openGateway: { self.push(.gateway) })
                 .navigationTitle("Settings")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -126,8 +129,10 @@ struct SettingsHubScreen: View {
 
 struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
+    let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
     let config: GatewayConnectConfig?
+    let openGateway: (() -> Void)?
 
     init(
         appModel: NodeAppModel,
@@ -135,32 +140,61 @@ struct EmbeddedDashboardContent: View {
         gatewayController: GatewayConnectionController,
         url: URL,
         config: GatewayConnectConfig?,
-        openPanel: @escaping (DeviceSettingsPanel) -> Void)
+        openPanel: @escaping (DeviceSettingsPanel) -> Void,
+        embedCompatibility: DashboardEmbedCompatibility? = nil,
+        openGateway: (() -> Void)? = nil)
     {
         self.url = url
         self.config = config
+        self.openGateway = openGateway
+        self.embedCompatibility = embedCompatibility
         self._bridge = State(initialValue: IOSDeviceSettingsBridge(
             appModel: appModel,
             appearanceModel: appearanceModel,
             gatewayController: gatewayController,
-            openPanel: openPanel))
+            openPanel: openPanel,
+            onStatusRequest: { [weak embedCompatibility] in
+                embedCompatibility?.didReceiveStatusRequest()
+            }))
     }
 
     var body: some View {
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: self.config)
-        AuthenticatedControlUIWebView(
-            url: self.url,
-            authScript: AuthenticatedControlUI.authUserScript(
-                config: self.config,
-                pageURL: self.url,
-                storedOperatorToken: storedOperatorToken,
-                usesNativeNavigationChrome: true),
-            tls: self.config?.tls,
-            deviceSettingsBridge: self.bridge,
-            usesNativeEmbed: true)
-            .id(AuthenticatedControlUI.webContentIdentity(
-                config: self.config,
-                storedOperatorToken: storedOperatorToken))
-            .accessibilityIdentifier("SettingsHub.Dashboard")
+        VStack(spacing: 0) {
+            self.gatewayUpgradeBanner
+            AuthenticatedControlUIWebView(
+                url: self.url,
+                authScript: AuthenticatedControlUI.authUserScript(
+                    config: self.config,
+                    pageURL: self.url,
+                    storedOperatorToken: storedOperatorToken,
+                    usesNativeNavigationChrome: true),
+                tls: self.config?.tls,
+                deviceSettingsBridge: self.bridge,
+                usesNativeEmbed: true,
+                embedCompatibility: self.embedCompatibility)
+                .id(AuthenticatedControlUI.webContentIdentity(
+                    config: self.config,
+                    storedOperatorToken: storedOperatorToken))
+                .accessibilityIdentifier("SettingsHub.Dashboard")
+        }
+    }
+
+    @ViewBuilder private var gatewayUpgradeBanner: some View {
+        if let openGateway, self.embedCompatibility?.needsGatewayUpgrade == true {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("This Gateway's Dashboard is older than the app; update the Gateway to manage app settings here")
+                    .font(OpenClawType.footnote)
+                    .accessibilityIdentifier("SettingsHub.GatewayUpgradeWarning")
+                Button(action: openGateway) {
+                    Text("Open Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .accessibilityIdentifier("SettingsHub.UpgradeGateway")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(OpenClawBrand.warn.opacity(0.12))
+        }
     }
 }

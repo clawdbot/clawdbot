@@ -36,35 +36,42 @@ final class IOSDeviceSettingsPermissions {
         ]
     }
 
-    func request(_ permission: DeviceSettingsPermission) async throws {
+    func request(
+        _ permission: DeviceSettingsPermission,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool) async throws
+    {
         try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
         switch permission {
         case .camera:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
+            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 AVCaptureDevice.requestAccess(for: .video, completionHandler: completion)
             }
         case .microphone:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
+            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
             }
         case .speechRecognition:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
+            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 SFSpeechRecognizer.requestAuthorization { completion($0 == .authorized) }
             }
         case .contacts:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
+            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 CNContactStore().requestAccess(for: .contacts) { granted, _ in completion(granted) }
             }
         case .calendars:
-            _ = await self.eventKit.requestFullAccessToEvents()
+            _ = await self.eventKit.requestFullAccessToEvents(isCurrent: isCurrent)
         case .reminders:
-            _ = await self.eventKit.requestFullAccessToReminders()
+            _ = await self.eventKit.requestFullAccessToReminders(isCurrent: isCurrent)
         case .photos:
-            _ = await PhotoLibraryAccess.requestReadWrite()
+            _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { completion(PhotoLibraryAccess.canRead($0)) }
+            }
         case .notifications, .location, .accessibility, .screenRecording, .automation:
             break
         }
         try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
     }
 
     static func notifications(_ status: UNAuthorizationStatus?) -> DeviceSettingsPermissionStatus {

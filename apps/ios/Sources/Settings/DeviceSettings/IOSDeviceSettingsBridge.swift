@@ -14,6 +14,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
     private let appearanceModel: AppAppearanceModel
     private let gatewayController: GatewayConnectionController
     private let openPanel: (DeviceSettingsPanel) -> Void
+    private let onStatusRequest: (() -> Void)?
     private let producer: IOSDeviceSettingsSnapshotProducer
     private let permissions = IOSDeviceSettingsPermissions()
     private let requests = IOSDeviceSettingsRequestQueue()
@@ -35,12 +36,14 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         appModel: NodeAppModel,
         appearanceModel: AppAppearanceModel,
         gatewayController: GatewayConnectionController,
-        openPanel: @escaping (DeviceSettingsPanel) -> Void)
+        openPanel: @escaping (DeviceSettingsPanel) -> Void,
+        onStatusRequest: (() -> Void)? = nil)
     {
         self.appModel = appModel
         self.appearanceModel = appearanceModel
         self.gatewayController = gatewayController
         self.openPanel = openPanel
+        self.onStatusRequest = onStatusRequest
         self.producer = IOSDeviceSettingsSnapshotProducer(appModel: appModel, appearanceModel: appearanceModel)
     }
 
@@ -190,6 +193,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             reply.retire()
             return
         }
+        if request == .status { self.onStatusRequest?() }
         self.requests.enqueue(operation: { [weak self] in
             guard let self, self.isCurrent(sourceID) else {
                 reply.retire()
@@ -198,9 +202,15 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             do {
                 let registrationChanged = try await self.apply(request, sourceID: sourceID)
                 defer {
-                    // Once a write commits, registration belongs to the device even if its document retires.
-                    // Deliver or reject its reply first because registration can reconnect the operator.
-                    if registrationChanged { self.gatewayController.refreshActiveGatewayRegistrationFromSettings() }
+                    // Committed settings belong to the device; permission results retain their document's authority.
+                    // Reply first because registration can reconnect the operator.
+                    var needsRegistrationRefresh = registrationChanged
+                    if case .requestPermission = request {
+                        needsRegistrationRefresh = needsRegistrationRefresh && self.isCurrent(sourceID)
+                    }
+                    if needsRegistrationRefresh {
+                        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+                    }
                 }
                 guard let snapshot = await self.readSnapshot(sourceID: sourceID) else {
                     reply.retire()
@@ -249,7 +259,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     private func apply(_ request: DeviceSettingsRequest, sourceID: RequestIdentity) async throws -> Bool {
-        let isCurrent: @MainActor () -> Bool = { [weak self] in self?.isCurrent(sourceID) == true }
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in self?.isCurrent(sourceID) == true }
         switch request {
         case .status:
             self.refreshLocationAvailability()
@@ -258,26 +268,21 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         case let .set(key, value):
             return try await self.set(key, value: value, sourceID: sourceID)
         case let .requestPermission(permission):
-            // System prompts outlive documents. Keep their waiter alive so a late grant still
-            // refreshes device registration; preference writes retain their document checks.
-            return try await Task { @MainActor in
-                guard isCurrent() else { throw CancellationError() }
-                switch permission {
-                case .notifications:
-                    _ = await IOSDeviceSettingsActions.requestNotificationPermission(
-                        confirmDisclosure: { await self.confirm(.notificationEnrollment) },
-                        isCurrent: isCurrent)
-                    return false
-                case .location:
-                    let mode = self.locationMode == .off ? .whileUsing : self.locationMode
-                    _ = await self.appModel.requestLocationPermissions(mode: mode, isCurrent: isCurrent)
-                    return true
-                default:
-                    try await self.permissions.request(permission)
-                    return [.camera, .microphone, .speechRecognition, .contacts, .calendars, .reminders, .photos]
-                        .contains(permission)
-                }
-            }.value
+            switch permission {
+            case .notifications:
+                _ = await IOSDeviceSettingsActions.requestNotificationPermission(
+                    confirmDisclosure: { await self.confirm(.notificationEnrollment) },
+                    isCurrent: isCurrent)
+                return false
+            case .location:
+                let mode = self.locationMode == .off ? .whileUsing : self.locationMode
+                _ = await self.appModel.requestLocationPermissions(mode: mode, isCurrent: isCurrent)
+                return true
+            default:
+                try await self.permissions.request(permission, isCurrent: isCurrent)
+                return [.camera, .microphone, .speechRecognition, .contacts, .calendars, .reminders, .photos]
+                    .contains(permission)
+            }
         case .openSystemSettings:
             if let url = URL(string: UIApplication.openSettingsURLString) { await UIApplication.shared.open(url) }
         case let .open(panel):

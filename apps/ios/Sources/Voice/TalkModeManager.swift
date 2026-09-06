@@ -493,6 +493,8 @@ final class TalkModeManager: NSObject {
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
         audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil)
     {
+        // The Gateway owns speech language; discard the retired app preference.
+        UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
@@ -1454,9 +1456,7 @@ final class TalkModeManager: NSObject {
         }
         #endif
 
-        let localSpeechLocale = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey)
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
-            localSelection: localSpeechLocale,
             gatewaySelection: self.gatewaySpeechLocaleID)
         self.speechRecognizer = resolvedSpeech.recognizer
         guard let recognizer = speechRecognizer else {
@@ -3116,7 +3116,6 @@ final class TalkModeManager: NSObject {
 
     private func resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String? = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey),
         isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
         -> TalkSpeechLanguageSelection
     {
@@ -3124,7 +3123,6 @@ final class TalkModeManager: NSObject {
             provider: ElevenLabsTTSClient.validatedLanguage(directiveLanguage),
             systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
                 directiveLanguage: directiveLanguage,
-                localSelection: localSelection,
                 gatewaySelection: self.gatewaySpeechLocaleID,
                 isVoiceAvailable: isSystemVoiceAvailable))
     }
@@ -4880,13 +4878,11 @@ extension TalkModeManager {
 
     func _test_resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String?,
         isSystemVoiceAvailable: (String) -> Bool = { _ in true })
         -> (provider: String?, systemVoice: String?)
     {
         let selection = self.resolvedSpeechLanguages(
             directiveLanguage: directiveLanguage,
-            localSelection: localSelection,
             isSystemVoiceAvailable: isSystemVoiceAvailable)
         return (selection.provider, selection.systemVoice)
     }

@@ -20,7 +20,7 @@ enum IOSDeviceSettingsActions {
     static func setNotificationsEnabled(
         _ enabled: Bool,
         confirmDisclosure: @MainActor () async -> Bool,
-        isCurrent: @MainActor () -> Bool = { true }) async -> UNAuthorizationStatus?
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> UNAuthorizationStatus?
     {
         guard !Task.isCancelled, isCurrent() else { return nil }
         if !enabled {
@@ -49,7 +49,7 @@ enum IOSDeviceSettingsActions {
 
     static func requestNotificationPermission(
         confirmDisclosure: @MainActor () async -> Bool,
-        isCurrent: @MainActor () -> Bool = { true }) async -> UNAuthorizationStatus?
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> UNAuthorizationStatus?
     {
         guard await self.prepareNotificationEnrollment(
             confirmDisclosure: confirmDisclosure,
@@ -79,11 +79,13 @@ enum IOSDeviceSettingsActions {
     }
 
     private static func authorizeNotifications(
-        isCurrent: @MainActor () -> Bool) async -> UNAuthorizationStatus?
+        isCurrent: @escaping @MainActor @Sendable () -> Bool) async -> UNAuthorizationStatus?
     {
         guard !Task.isCancelled, isCurrent() else { return nil }
         let center = UNUserNotificationCenter.current()
-        let granted = await (try? center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        let granted = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
+            center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in completion(granted) }
+        }
         guard !Task.isCancelled, isCurrent() else { return nil }
         let status = await center.notificationSettings().authorizationStatus
         guard !Task.isCancelled, isCurrent() else { return nil }

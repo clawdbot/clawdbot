@@ -1581,7 +1581,7 @@ final class NodeAppModel {
                 authorizationStatus: self.locationService.authorizationStatus())
             return true
         }
-        let status = await locationService.ensureAuthorization(mode: mode)
+        let status = await locationService.ensureAuthorization(mode: mode, isCurrent: isCurrent)
         guard !Task.isCancelled, isCurrent() else { return false }
         switch status {
         case .authorizedAlways:

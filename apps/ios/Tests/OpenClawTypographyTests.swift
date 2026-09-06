@@ -264,10 +264,15 @@ struct OpenClawTypographyTests {
         #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
-        for label in ["Gateway", "Approvals"] {
+        for label in ["Gateway", "Approvals", "Open Gateway"] {
             let text = try Self.extract(settingsHub, from: "Text(\"\(label)\")", to: "}")
             #expect(text.contains(".font(OpenClawType.subheadSemiBold)"))
         }
+        let upgradeWarning = try Self.extract(
+            settingsHub,
+            from: "\"This Gateway's Dashboard is older than the app;",
+            to: ".accessibilityIdentifier(\"SettingsHub.GatewayUpgradeWarning\")")
+        #expect(upgradeWarning.contains(".font(OpenClawType.footnote)"))
         let approvalBadge = try Self.extract(
             settingsHub,
             from: "Text(self.appModel.pendingExecApprovalCount.formatted())",

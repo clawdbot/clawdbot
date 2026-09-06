@@ -56,12 +56,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.cachedAuthorizationSnapshot
     }
 
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
+    func ensureAuthorization(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool) async -> CLAuthorizationStatus
+    {
+        guard !Task.isCancelled, isCurrent() else { return self.authorizationStatus() }
         guard CLLocationManager.locationServicesEnabled() else { return .denied }
 
         let status = self.authorizationStatus()
         if status == .notDetermined {
-            let updated = await self.requestAuthorization(requiresDeterminedStatus: true) {
+            let updated = await self.requestAuthorization(requiresDeterminedStatus: true, isCurrent: isCurrent) {
                 self.manager.requestWhenInUseAuthorization()
             }
             if mode != .always { return updated }
@@ -70,7 +74,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         if mode == .always {
             let current = self.authorizationStatus()
             if current == .authorizedWhenInUse {
-                return await self.requestAuthorization(requiresDeterminedStatus: false) {
+                return await self.requestAuthorization(requiresDeterminedStatus: false, isCurrent: isCurrent) {
                     self.manager.requestAlwaysAuthorization()
                 }
             }
@@ -100,9 +104,15 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
 
     private func requestAuthorization(
         requiresDeterminedStatus: Bool,
+        isCurrent: @MainActor () -> Bool,
         request: () -> Void) async -> CLAuthorizationStatus
     {
         await withCheckedContinuation { cont in
+            // Revalidate before each OS prompt, including Always escalation after an awaited grant.
+            guard !Task.isCancelled, isCurrent() else {
+                cont.resume(returning: self.authorizationStatus())
+                return
+            }
             let waitID = UUID()
             self.authWaitID = waitID
             self.authWaitRequiresDeterminedStatus = requiresDeterminedStatus

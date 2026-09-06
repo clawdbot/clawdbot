@@ -135,7 +135,7 @@ struct IOSDeviceSettingsSnapshotTests {
     func `cancelled permission requests retire before native prompts`(_ permission: DeviceSettingsPermission) async {
         let requester = IOSDeviceSettingsPermissions()
         let task = Task { @MainActor in
-            try await requester.request(permission)
+            try await requester.request(permission, isCurrent: { true })
         }
         task.cancel()
         await #expect(throws: CancellationError.self) {
@@ -157,7 +157,10 @@ private final class SnapshotLocationService: LocationServicing {
         self.accuracy
     }
 
-    func ensureAuthorization(mode _: OpenClawLocationMode) async -> CLAuthorizationStatus {
+    func ensureAuthorization(
+        mode _: OpenClawLocationMode,
+        isCurrent _: @MainActor () -> Bool) async -> CLAuthorizationStatus
+    {
         self.authorizationStatus()
     }
 

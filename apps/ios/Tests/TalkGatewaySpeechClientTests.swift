@@ -302,17 +302,13 @@ struct TalkGatewaySpeechClientTests {
             Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"))
 
         let configured = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: nil,
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: nil)
         let directive = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "de_DE",
-            localSelection: "fr-FR")
+            directiveLanguage: "de_DE")
         let providerCompatible = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "tr",
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: "tr")
         let unavailableDirective = manager._test_resolvedSpeechLanguages(
             directiveLanguage: "zz-ZZ",
-            localSelection: TalkSpeechLocale.automaticID,
             isSystemVoiceAvailable: { $0 == "tr-TR" })
 
         #expect(configured.provider == nil)

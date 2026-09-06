@@ -312,7 +312,10 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
         self.accuracy
     }
 
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
+    func ensureAuthorization(
+        mode: OpenClawLocationMode,
+        isCurrent _: @MainActor () -> Bool) async -> CLAuthorizationStatus
+    {
         if let ensureAuthorizationHandler {
             self.status = await ensureAuthorizationHandler(mode)
         }

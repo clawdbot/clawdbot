@@ -37,6 +37,12 @@ The toolbar's **Gateway** button opens the native connection screen, including
 setup, paired gateways, manual connection, and advanced connection options.
 **Approvals** opens the native approval inbox and shows the pending count.
 
+The Gateway must serve Dashboard pages that support the companion iOS app.
+If a loaded Settings page does not report that support, a native banner asks you
+to update the Gateway. **Open Gateway** opens the native connection screen;
+Gateway setup and pairing remain available. The offline **Device** section also
+remains available without Dashboard support.
+
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
 Its **Permissions** page shows notification, camera, microphone, speech, location,
@@ -46,6 +52,12 @@ Settings. The Dashboard **Talk** page contains this device's Voice Wake, Talk,
 Talk control, background listening, and speakerphone settings. Enabling Voice
 Wake, camera access, Health summaries, or Always location first asks for native
 confirmation.
+
+The Gateway's Talk configuration owns provider, voice, and speech language.
+Saved iOS overrides no longer apply; the retired app speech-language preference
+is cleared at startup. The default share instruction is also retired and cleared
+at startup. Share messages include only an instruction explicitly supplied for
+that share. These changes do not remove the Gateway's `talk.speechLocale` option.
 
 **This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
 **Licenses**, and **About** screens. When disconnected, connected without admin
