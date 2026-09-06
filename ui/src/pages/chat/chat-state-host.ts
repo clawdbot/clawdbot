@@ -56,7 +56,6 @@ export type ChatPageHost = ChatHost &
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
-    localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     automaticallyFetchFavicons: boolean;

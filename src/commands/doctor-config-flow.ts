@@ -202,8 +202,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pluginMetadataSnapshot: refreshed.pluginMetadataSnapshot,
     };
   }
-  const snapshot = preflight.snapshot;
-  const baseCfg = preflight.baseConfig;
+  const { snapshot, baseConfig: baseCfg } = preflight;
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
   };
@@ -238,6 +237,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
+  let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const applyConfigMutation = (
@@ -282,8 +282,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
-  const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   const persistCanonicalAgentRoster =
     snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
@@ -500,6 +498,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const staleAgentModelRepair = runWithCurrentPluginMetadata(state.candidate, () =>
       repairStaleAgentModelRefs(state.candidate, { env: process.env }),
     );
+    retiredModelRefConfig = staleAgentModelRepair.retiredModelRefConfig;
     applyConfigMutation(staleAgentModelRepair, {
       fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
       sanitize: true,
@@ -586,6 +585,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state = repairSequence.state;
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
+    retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -674,7 +674,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   const cfg = finalized.cfg;
-  const shouldWriteConfig = finalized.shouldWriteConfig && !legacyMigrationBlocksWrite;
+  const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
   const singleTopLevelIncludeWrite =
     shouldWriteConfig &&
     isSingleTopLevelIncludeMigration({
@@ -711,6 +711,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
+  const receipts = preflight.stateMigrationStepReceipts;
+  const postSession = preflight.postSessionPluginMigration;
+  const planBound = preflight.postSessionPluginMigrationPlanBound;
 
   return {
     cfg,
@@ -720,7 +723,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
-    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(shouldWriteConfig && persistCanonicalAgentRoster
       ? { persistCanonicalAgentRoster: true }
@@ -738,9 +741,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
     ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
+    ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     ...(pluginMetadataSnapshotState.current
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
       : {}),
+    ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
+    ...(postSession ? { postSessionPluginMigration: postSession } : {}),
+    ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,
   };

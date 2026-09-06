@@ -155,7 +155,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.
+Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. If a saved target cannot be resolved or no longer advertises execution support, its binding stays selected and is marked **Unavailable**. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
 
 ### Python environments (`uv`)
 

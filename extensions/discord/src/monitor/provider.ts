@@ -24,6 +24,7 @@ import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
+import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
@@ -427,7 +428,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
-      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,

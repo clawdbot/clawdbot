@@ -91,11 +91,14 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
+  async function withInvalidWorkspaceBackupConfig<T>(
+    raw: string,
+    fn: (runtime: RuntimeEnv) => Promise<T>,
+  ) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+    await fs.writeFile(configPath, raw, "utf8");
 
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -578,27 +581,40 @@ describe("backup commands", () => {
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 
-  it("handles invalid config according to backup scope", async () => {
-    await withInvalidWorkspaceBackupConfig(async (runtime) => {
-      await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
-        /--no-include-workspace/i,
-      );
+  it.each(["syntax", "workspace"])(
+    "handles invalid %s according to backup scope",
+    async (invalid) => {
+      const raw =
+        invalid === "syntax"
+          ? '{"agents": { defaults: { workspace: '
+          : JSON.stringify({
+              agents: {
+                ownership: "explicit",
+                defaults: { workspace: 42 },
+                entries: { main: { workspace: path.join(tempHome.home, "workspace") } },
+              },
+            });
+      await withInvalidWorkspaceBackupConfig(raw, async (runtime) => {
+        await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
+          /--no-include-workspace/i,
+        );
 
-      const result = await backupCreateCommand(runtime, {
-        dryRun: true,
-        includeWorkspace: false,
+        const result = await backupCreateCommand(runtime, {
+          dryRun: true,
+          includeWorkspace: false,
+        });
+
+        expect(result.includeWorkspace).toBe(false);
+        expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
+
+        const configOnly = await backupCreateCommand(runtime, {
+          dryRun: true,
+          onlyConfig: true,
+        });
+        expectOnlyAssetKind(configOnly.assets, "config");
       });
-
-      expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
-
-      const configOnly = await backupCreateCommand(runtime, {
-        dryRun: true,
-        onlyConfig: true,
-      });
-      expectOnlyAssetKind(configOnly.assets, "config");
-    });
-  });
+    },
+  );
 
   it("discovers workspaces through the stable upgrade compatibility view", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");

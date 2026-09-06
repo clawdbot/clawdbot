@@ -8,6 +8,7 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
   clearRetainedManagedNpmInstallMarker,
@@ -224,7 +225,8 @@ async function repairMissingPluginInstallsWithLease(
     // A later failed attempt does not resolve an earlier consent refusal.
     let outcome = failedPlugins.get(pluginId);
     const retainedEnabledInstall =
-      code === PLUGIN_CAPABILITY_CONSENT_REQUIRED &&
+      (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED ||
+        code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE) &&
       knownIds.has(pluginId) &&
       !isPayloadMissing(env, records[pluginId]?.installPath) &&
       !installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) &&
@@ -236,8 +238,7 @@ async function repairMissingPluginInstallsWithLease(
         config: normalizedPluginConfig,
         rootConfig: params.cfg,
       }).enabled;
-    // Consent refusal rolls back the replacement; a retained enabled artifact is
-    // still subject to the caller's payload smoke check, not a failed activation.
+    // Deferred replacements leave the installed artifact for the caller's payload smoke check.
     if (retainedEnabledInstall) {
       notices.push(
         `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
@@ -311,8 +312,16 @@ async function repairMissingPluginInstallsWithLease(
     // Dropping resolved fields forces an installer attempt, not a record mutation.
     const repairRecords = { ...nextRecords };
     for (const [pluginId, record] of missingRecordedPlugins) {
-      repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
       const missingDependencies = installedPluginMissingRequiredDependencies.get(pluginId);
+      if (
+        missingDependencies ||
+        !installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
+        installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) ||
+        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
+        isPayloadMissing(env, record.installPath)
+      ) {
+        repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
+      }
       if (missingDependencies) {
         await params.beforePersistentEffect?.();
         if (!hasRetainedManagedNpmInstallMarker(missingDependencies.rootDir)) {
@@ -353,7 +362,13 @@ async function repairMissingPluginInstallsWithLease(
       beforePersistentEffect: params.beforePersistentEffect,
     });
     for (const outcome of updateResult.outcomes) {
-      if (outcome.status === "updated" || outcome.status === "unchanged") {
+      if (
+        outcome.status === "unchanged" &&
+        updateResult.config.plugins?.installs?.[outcome.pluginId] ===
+          repairRecords[outcome.pluginId]
+      ) {
+        notices.push(outcome.message);
+      } else if (outcome.status === "updated" || outcome.status === "unchanged") {
         repairedPluginIds.add(outcome.pluginId);
         failedPlugins.delete(outcome.pluginId);
         changes.push(
@@ -451,7 +466,10 @@ async function repairMissingPluginInstallsWithLease(
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
-      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
+      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId) &&
+      !installedPluginIdsWithRepairablePackageDiagnostics.has(candidate.pluginId) &&
+      !configuredPluginIdsWithStaleDescriptors.has(candidate.pluginId) &&
+      hasUsableRecord
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
@@ -478,7 +496,11 @@ async function repairMissingPluginInstallsWithLease(
     nextRecords = installed.records;
     changes.push(...installed.changes);
     notices.push(...installed.notices);
-    if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
+    if (
+      !installed.failedPluginId &&
+      installed.records !== previousRecords &&
+      installed.records[candidate.pluginId]
+    ) {
       repairedPluginIds.add(candidate.pluginId);
       failedPlugins.delete(candidate.pluginId);
     }

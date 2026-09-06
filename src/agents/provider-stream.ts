@@ -14,7 +14,6 @@ import {
   getModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
-  wrapProviderStreamFn,
 } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
@@ -94,21 +93,14 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   }
   const providerWrappedStreamFn =
     params.wrapProviderStream && runtimeHandle
-      ? (wrapProviderStreamFn({
-          provider: runtimeModel.provider,
+      ? (runtimeHandle.plugin?.wrapStreamFn?.({
           config: params.cfg,
+          agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
-          env: params.env,
-          runtimeHandle,
-          context: {
-            config: params.cfg,
-            agentDir: params.agentDir,
-            workspaceDir: params.workspaceDir,
-            provider: runtimeModel.provider,
-            modelId: runtimeModel.id,
-            model: runtimeModel,
-            streamFn,
-          },
+          provider: runtimeModel.provider,
+          modelId: runtimeModel.id,
+          model: runtimeModel,
+          streamFn,
         }) ?? streamFn)
       : streamFn;
   const preparedStreamFn = runtimeHandle

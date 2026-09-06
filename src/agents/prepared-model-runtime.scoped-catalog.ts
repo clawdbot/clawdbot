@@ -49,13 +49,17 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
-  const { modelCatalog } = await prepareFullCatalogFacts(
+  const { modelCatalog, configuredRuntimeModels } = await prepareFullCatalogFacts(
     agentFactsForInput,
     pluginGeneration,
     catalogMode,
     catalogSource,
   );
-  return materializePreparedModelCatalog(modelCatalog, agentFactsForInput.runtimeCapabilityModels);
+  return materializePreparedModelCatalog(
+    modelCatalog,
+    agentFactsForInput.runtimeCapabilityModels,
+    configuredRuntimeModels,
+  );
 }
 
 /** Resolves provider-scoped, secret-free auth modes without live model discovery. */

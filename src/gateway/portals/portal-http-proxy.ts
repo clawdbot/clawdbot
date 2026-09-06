@@ -451,6 +451,8 @@ export function handlePortalProxyUpgrade(params: {
   upgradedSockets: Set<Duplex>;
 }): void {
   const { req, socket, head, target, upgradedSockets } = params;
+  // Node releases socket errors on upgrade; own them before replies or worker attachment.
+  socket.once("error", () => socket.destroy());
   const authorization = authorizePortalRequest(req, target);
   if (authorization.kind !== "authorized") {
     rejectPortalUpgrade(socket);
@@ -460,59 +462,45 @@ export function handlePortalProxyUpgrade(params: {
   const targetPort = target.target.kind === "local" ? target.target.port : target.target.remotePort;
   upgradedSockets.add(socket);
   socket.once("close", () => upgradedSockets.delete(socket));
-  void connectPortalTarget(target.target).then(
-    (targetSocket) => {
-      if (socket.destroyed) {
-        targetSocket.destroy();
-        return;
+  let responseStarted = false;
+  const closeUpgrade = () => {
+    if (target.target.kind === "worker" && !responseStarted && !socket.destroyed) {
+      if (!socket.writableEnded) {
+        respondUpgradeWaiting(socket, targetPort);
       }
-      upgradedSockets.add(targetSocket);
-      let responseStarted = false;
-      let waitingResponseSent = false;
-      const closeUpgrade = () => {
-        if (target.target.kind === "worker" && !responseStarted && !socket.destroyed) {
-          if (!waitingResponseSent) {
-            waitingResponseSent = true;
-            respondUpgradeWaiting(socket, targetPort);
-          }
-          return;
-        }
-        socket.destroy();
-      };
-      socket.once("close", () => targetSocket.destroy());
-      targetSocket.once("close", () => {
-        upgradedSockets.delete(targetSocket);
-        closeUpgrade();
+      return;
+    }
+    socket.destroy();
+  };
+  void connectPortalTarget(target.target).then((targetSocket) => {
+    if (socket.destroyed) {
+      targetSocket.destroy();
+      return;
+    }
+    upgradedSockets.add(targetSocket);
+    socket.once("close", () => targetSocket.destroy());
+    targetSocket.once("close", () => {
+      upgradedSockets.delete(targetSocket);
+      closeUpgrade();
+    });
+    targetSocket.once("end", closeUpgrade);
+    targetSocket.once("error", closeUpgrade);
+    const spliceUpgrade = () => {
+      forwardWebSocketResponse(targetSocket, socket, target.cookieNamespace, () => {
+        responseStarted = true;
       });
-      targetSocket.once("end", closeUpgrade);
-      socket.once("error", () => targetSocket.destroy());
-      targetSocket.once("error", closeUpgrade);
-      const spliceUpgrade = () => {
-        forwardWebSocketResponse(targetSocket, socket, target.cookieNamespace, () => {
-          responseStarted = true;
-        });
-        targetSocket.write(
-          websocketHeaders(req, targetPort, target.cookieNamespace, authorization.requestPath),
-        );
-        if (head.length > 0) {
-          targetSocket.write(head);
-        }
-        socket.pipe(targetSocket);
-      };
-      if (target.target.kind === "worker") {
-        spliceUpgrade();
-      } else {
-        targetSocket.once("connect", spliceUpgrade);
+      targetSocket.write(
+        websocketHeaders(req, targetPort, target.cookieNamespace, authorization.requestPath),
+      );
+      if (head.length > 0) {
+        targetSocket.write(head);
       }
-    },
-    () => {
-      if (!socket.destroyed) {
-        if (target.target.kind === "worker") {
-          respondUpgradeWaiting(socket, targetPort);
-        } else {
-          socket.destroy();
-        }
-      }
-    },
-  );
+      socket.pipe(targetSocket);
+    };
+    if (target.target.kind === "worker") {
+      spliceUpgrade();
+    } else {
+      targetSocket.once("connect", spliceUpgrade);
+    }
+  }, closeUpgrade);
 }

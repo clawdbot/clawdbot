@@ -23,6 +23,8 @@ export function buildGatewaySessionEventFields(params: {
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  const omitUnscopedSwarm =
+    (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
@@ -53,6 +55,16 @@ export function buildGatewaySessionEventFields(params: {
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
     swarmGroupId: sessionRow.swarmGroupId,
+    ...(!Object.hasOwn(sessionRow, "swarm") || omitUnscopedSwarm
+      ? {}
+      : {
+          swarm: sessionRow.swarm
+            ? {
+                ...sessionRow.swarm,
+                groups: sessionRow.swarm.groups.map(({ children: _children, ...counts }) => counts),
+              }
+            : null,
+        }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
@@ -212,6 +224,9 @@ export function buildGatewaySessionSnapshot(params: {
     : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
+  }
+  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+    delete session.swarm;
   }
   return {
     ...(session ? { session } : {}),

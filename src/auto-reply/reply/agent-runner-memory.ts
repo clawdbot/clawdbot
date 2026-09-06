@@ -557,12 +557,14 @@ type TranscriptTokenEstimate = {
   transcriptByteSize?: number;
 };
 
-async function estimateProviderPromptTokensFromMessages(
+// Fresh totals include the provider usage anchor and any later projected messages.
+async function estimateProviderPromptTokens(
   messages: AgentMessage[],
   contextWindowTokens: number,
+  priorPromptTokens = 0,
 ): Promise<number | undefined> {
   if (messages.length === 0) {
-    return 0;
+    return Math.ceil(priorPromptTokens);
   }
   const { truncateOversizedToolResultsInMessages } = await toolResultTruncationRuntimeLoader.load();
   // Match first-dispatch trailing-result protection without freezing replacements
@@ -575,7 +577,9 @@ async function estimateProviderPromptTokensFromMessages(
     createToolResultPromptProjectionState(),
   ).messages;
   const tokens = estimateMessagesTokens(projected);
-  return Number.isFinite(tokens) && tokens >= 0 ? Math.ceil(tokens) : undefined;
+  return Number.isFinite(tokens) && tokens >= 0
+    ? Math.ceil(priorPromptTokens) + Math.ceil(tokens)
+    : undefined;
 }
 
 async function estimatePromptTokensFromSessionTranscript(params: {
@@ -621,18 +625,20 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(usage.outputTokens)
         : undefined;
     if (hasUsableProviderPromptUsage(usage)) {
-      const trailingMessages = usage.trailingMessages;
-      const trailingTokens = await estimateProviderPromptTokensFromMessages(
-        trailingMessages,
+      const promptTokens = await estimateProviderPromptTokens(
+        usage.trailingMessages,
         params.contextWindowTokens,
+        usage.promptTokens,
       );
-      if (trailingTokens === undefined) {
+      if (promptTokens === undefined) {
         return undefined;
       }
       return {
-        promptTokens: Math.ceil(usage.promptTokens) + trailingTokens,
+        promptTokens,
         promptTokenSource:
-          trailingMessages.length > 0 ? "provider_usage_plus_prompt_projection" : "provider_usage",
+          usage.trailingMessages.length > 0
+            ? "provider_usage_plus_prompt_projection"
+            : "provider_usage",
         outputTokens: normalizedOutputTokens,
         transcriptByteSize: snapshot.byteSize,
       };
@@ -649,7 +655,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         reason: "preflight-compaction-estimate",
       },
     )) as AgentMessage[];
-    const estimatedTokens = await estimateProviderPromptTokensFromMessages(
+    const estimatedTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
     );
@@ -1297,14 +1303,8 @@ export async function runMemoryFlushIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const persistedPromptTokensRaw = entry?.totalTokens;
-  const persistedPromptTokens =
-    typeof persistedPromptTokensRaw === "number" &&
-    Number.isFinite(persistedPromptTokensRaw) &&
-    persistedPromptTokensRaw > 0
-      ? persistedPromptTokensRaw
-      : undefined;
-  const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
+  const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
+  const hasFreshPersistedPromptTokens = persistedPromptTokens !== undefined;
 
   // The soft margin belongs only to early flushing, leaving room before blocking compaction.
   const flushThreshold = Math.max(
@@ -1356,12 +1356,15 @@ export async function runMemoryFlushIfNeeded(params: {
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
-  const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
-  const hasReliableTranscriptPromptTokens =
-    typeof transcriptPromptTokens === "number" &&
-    Number.isFinite(transcriptPromptTokens) &&
-    transcriptPromptTokens > 0;
+  const transcriptPromptTokens = hasUsableProviderPromptUsage(transcriptUsageSnapshot)
+    ? await estimateProviderPromptTokens(
+        transcriptUsageSnapshot.trailingMessages,
+        contextWindowTokens,
+        transcriptUsageSnapshot.promptTokens,
+      )
+    : undefined;
+  const hasReliableTranscriptPromptTokens = typeof transcriptPromptTokens === "number";
   const shouldPersistTranscriptPromptTokens =
     hasReliableTranscriptPromptTokens &&
     (!hasFreshPersistedPromptTokens ||
@@ -1411,17 +1414,14 @@ export async function runMemoryFlushIfNeeded(params: {
     hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
     hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
   );
-  const hasFreshPromptTokensSnapshot =
-    promptTokensSnapshot > 0 &&
-    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
-
-  const projectedTokenCount = hasFreshPromptTokensSnapshot
-    ? resolveEffectivePromptTokens(
-        promptTokensSnapshot,
-        transcriptOutputTokens,
-        promptTokenEstimate,
-      )
-    : undefined;
+  const projectedTokenCount =
+    promptTokensSnapshot > 0
+      ? resolveEffectivePromptTokens(
+          promptTokensSnapshot,
+          transcriptOutputTokens,
+          promptTokenEstimate,
+        )
+      : undefined;
   const tokenCountForFlush =
     typeof projectedTokenCount === "number" &&
     Number.isFinite(projectedTokenCount) &&
@@ -1650,6 +1650,7 @@ export async function runMemoryFlushIfNeeded(params: {
             onDeferredLifecycleOwner: deferredLifecycle.adopt,
             onDeferredLifecycleAbort: deferredLifecycle.abort,
             replyOperation: params.replyOperation,
+            assistantErrorTranscript: runOptions.assistantErrorTranscript,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           });

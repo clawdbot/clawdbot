@@ -1,24 +1,23 @@
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import type { AssistantMessage } from "../../../llm/types.js";
 import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import { findCliTerminalStopError, resolveFailoverReasonFromError } from "../../failover-error.js";
+import { classifyFailoverSignal } from "../../failover/classify.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
-import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import {
-  hasAsyncActivity,
-  hasNonToolTerminalState,
-  isCurrentAttemptReplaySafe,
-} from "./attempt-terminal-evidence.js";
+import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -30,26 +29,11 @@ import { buildErrorAgentMeta } from "./helpers.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
+import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
-
-const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
-
-/** Errored assistant turn with transient transport evidence and no visible output. */
-function isSilentTransportDropAssistant(assistant: AssistantMessage | undefined): boolean {
-  if (
-    !assistant ||
-    assistant.stopReason !== "error" ||
-    !isRetryableAssistantError(assistant) ||
-    !assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
-  ) {
-    return false;
-  }
-  const content = Array.isArray(assistant.content) ? assistant.content : [];
-  return content.length === 0 || hasOnlyAssistantReasoningContent(assistant);
-}
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type NormalizedAttempt = Extract<
@@ -91,11 +75,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       authRetryPending: boolean;
       codexAppServerRecoveryRetries: number;
       lastRetryFailoverReason: FailoverReason | null;
-      thinkLevel: PreparedRuntime["snapshot"] extends () => infer Snapshot
-        ? Snapshot extends { thinkLevel: infer ThinkLevel }
-          ? ThinkLevel
-          : never
-        : never;
+      thinkLevel: ReturnType<PreparedRuntime["snapshot"]>["thinkLevel"];
     }
   | { action: "proceed" }
 > {
@@ -133,6 +113,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutDuringCompaction,
     timedOutDuringToolExecution,
     timedOutByRunBudget,
+    idleTimedOut,
   } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
@@ -144,37 +125,11 @@ export async function recoverEmbeddedRunAttempt(input: {
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
   const midTurnBatchSettled =
     settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
-  // Failed results need closed lifecycle proof; the parked-run exception is
-  // only safe for a successful Code Mode result that the model can resume via wait.
-  const transportBatchSettled =
-    settledEvidence.allToolsProvenSettled ||
-    (settledEvidence.failedToolNames.size === 0 && settledEvidence.parkedCodeModeRun);
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
     midTurnBatchSettled &&
     !hasAsyncActivity(attempt.toolMetas);
-  // A transient transport failure that lands after the whole tool batch settled
-  // is a resume, not a replay: the continuation prompt re-enters after the
-  // persisted tool results and nothing from the failed attempt is resubmitted.
-  // Only a silent errored assistant qualifies; partial visible text would be
-  // duplicated or replaced. Everything #122516 closed for side-effecting
-  // attempts (prompt resubmission, profile rotation, model fallback) stays
-  // closed below this branch.
-  const settledTransportDropAssistant =
-    !currentAttemptReplaySafe &&
-    !promptError &&
-    !aborted &&
-    !timedOut &&
-    !terminalInterrupted &&
-    !hasNonToolTerminalState(attempt) &&
-    !settledEvidence.hasUnsettledToolError &&
-    transportBatchSettled &&
-    // A parked Code Mode result is persisted same-session state. Continuing is
-    // how the model reaches wait; it does not resubmit the prompt or exec call.
-    isSilentTransportDropAssistant(currentAttemptAssistant)
-      ? currentAttemptAssistant
-      : undefined;
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
@@ -231,14 +186,6 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  if (
-    !currentAttemptReplaySafe &&
-    !canContinueSettledMidTurnOverflow &&
-    !settledTransportDropAssistant
-  ) {
-    return { action: "proceed" };
-  }
-
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
     sessionPersistence: params.sessionPersistence,
@@ -269,6 +216,27 @@ export async function recoverEmbeddedRunAttempt(input: {
     );
     throw new LiveSessionModelSwitchError(requestedSelection);
   }
+  const assistantSignal =
+    attemptAssistant?.stopReason === "error"
+      ? buildAssistantFailoverSignal(attemptAssistant)
+      : undefined;
+  const assistantFailure = assistantSignal
+    ? classifyFailoverSignal(assistantSignal, {
+        providerPlugin: runtime.providerRuntimeHandle?.plugin,
+      })
+    : null;
+  const failureReason = promptError
+    ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
+    : assistantFailure?.kind === "reason"
+      ? assistantFailure.reason
+      : idleTimedOut ||
+          (attemptAssistant &&
+            isRetryableAssistantError(attemptAssistant) &&
+            attemptAssistant.diagnostics?.some(
+              (diagnostic) => diagnostic.type === "provider_transport_failure",
+            ))
+        ? "timeout"
+        : null;
   const compactionSelection = resolveCompactionLiveModelSelection({
     current: {
       provider: preparedRuntime.provider,
@@ -314,7 +282,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     usageAccumulator: input.usageAccumulator,
   };
   if (
-    await recoverEmbeddedRunTimeout({
+    (currentAttemptReplaySafe || canContinueSettledMidTurnOverflow) &&
+    (await recoverEmbeddedRunTimeout({
       ...commonRecoveryInput,
       timedOut,
       signalOwnedInterruption,
@@ -322,10 +291,64 @@ export async function recoverEmbeddedRunAttempt(input: {
       timedOutDuringToolExecution,
       timedOutByRunBudget,
       lastRunPromptUsage: input.lastRunPromptUsage,
-    })
+    }))
   ) {
     return retry();
   }
+  // The finished attempt has released its tools. Continue its transcript, including
+  // partial output and uncertain effects; never resubmit the original user request.
+  if (
+    !externalAbort &&
+    !terminalState.signalOwnedInterruption &&
+    !timedOutByRunBudget &&
+    !timedOutDuringCompaction &&
+    !timedOutDuringToolExecution &&
+    (!terminalInterrupted || (currentAttemptReplaySafe && !runtime.pluginHarnessOwnsTransport)) &&
+    !attempt.yieldDetected &&
+    !attempt.clientToolCalls &&
+    !attempt.codexAppServerFailure &&
+    !findCliTerminalStopError(promptError) &&
+    (!promptError || promptErrorSource === "prompt") &&
+    !isProviderRefusalAssistantError(attemptAssistant) &&
+    failureReason &&
+    (await failoverRetryController.maybeRetryTransient({
+      reason: failureReason,
+      retryAfterMs: promptError
+        ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
+        : assistantSignal?.retryAfterMs,
+      onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
+        const event = {
+          stream: "run_status",
+          data: {
+            phase: "retrying",
+            message:
+              reason === "rate_limit"
+                ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+                : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+            retryAttempt,
+            maxRetries,
+            delayMs,
+            attempt: retryAttempt + 1,
+            maxAttempts: maxRetries + 1,
+            reason,
+          },
+        };
+        emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
+        await params.onAgentEvent?.(event);
+      },
+    }))
+  ) {
+    runInput.laneController.throwIfAborted();
+    sessionPromptState.markOwnedTranscriptRetry();
+    sessionPromptState.continueFromCurrentTranscript({
+      includeToolFailureInstruction: Boolean(attempt.lastToolError),
+    });
+    return retry({ lastRetryFailoverReason: failureReason });
+  }
+  if (!currentAttemptReplaySafe && !canContinueSettledMidTurnOverflow) {
+    return { action: "proceed" };
+  }
+
   const overflowRecovery = await recoverEmbeddedRunOverflow({
     ...commonRecoveryInput,
     aborted,
@@ -357,29 +380,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  const recoveryState = input.contextRecoveryState;
-  if (
-    settledTransportDropAssistant &&
-    recoveryState.transportDropContinuations < MAX_TRANSPORT_DROP_CONTINUATIONS
-  ) {
-    runInput.laneController.throwIfAborted();
-    recoveryState.transportDropContinuations += 1;
-    sessionPromptState.markOwnedTranscriptRetry();
-    sessionPromptState.continueFromCurrentTranscript({
-      includeToolFailureInstruction: settledEvidence.failedToolNames.size > 0,
-    });
-    log.warn(
-      `provider transport dropped after a settled tool batch; continuing from the transcript ` +
-        `attempt=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
-        `provider=${preparedRuntime.provider} model=${preparedRuntime.modelId} ` +
-        `error=${settledTransportDropAssistant.errorMessage?.trim() ?? "unknown"} ` +
-        `runId=${params.runId} sessionId=${params.sessionId}`,
-    );
-    return retry();
-  }
-  // Settled-tool continuation authorizes only current-transcript overflow and
-  // transport-drop recovery. Every path below can replay or replace the original
-  // attempt and remains fail-closed.
+  // Profile rotation and original-prompt replay still require replay-safe evidence.
   if (!currentAttemptReplaySafe) {
     return { action: "proceed" };
   }
@@ -437,12 +438,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       externalAbort,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
-      resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
-      advanceAuthProfile: failoverRetryController.advanceAuthProfile,
-      advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
-      maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
-      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
+      failover: failoverRetryController,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,

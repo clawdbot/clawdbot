@@ -315,8 +315,12 @@ suite.define(() => {
         expect(await skill.inputValue()).toBe(own.content);
         await picker.selectOption("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
+        const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+        // The saved receipt precedes refresh completion; press() does not wait for enabled controls.
+        await expect.poll(() => deleteFile.isEnabled()).toBe(true);
         page.once("dialog", (dialog) => void dialog.accept());
-        await page.getByRole("button", { name: "Delete file", exact: true }).press("Enter");
+        await deleteFile.press("Enter");
+        await picker.locator('option[value="references/lilac.txt"]').waitFor({ state: "detached" });
         expect(await picker.inputValue()).toBe("SKILL.md");
         expect(await skill.inputValue()).toBe(own.content);
         expect(await picker.locator('option[value="references/lilac.txt"]').count()).toBe(0);

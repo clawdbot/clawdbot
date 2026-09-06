@@ -1,35 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  resolveControlUiAssetHealth,
-  resolveControlUiDistIndexPathForRoot,
-} from "./control-ui-assets.js";
+import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
-import {
-  managerInstallArgs,
-  managerInstallIgnoreScriptsArgs,
-  managerScriptArgs,
-  resolveUpdateBuildManager,
-} from "./update-package-manager.js";
 import { runStep } from "./update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
 } from "./update-runner-doctor.js";
-import {
-  gitCleanCheckArgs,
-  resolveBuildEnv,
-  resolveInstallEnv,
-  shouldInstallWithoutScriptsOnWindows,
-} from "./update-runner-git-commands.js";
-import { runGitDevPreflight } from "./update-runner-git-preflight.js";
-import {
-  readCurrentGitUpdateRecovery,
-  rebuildRolledBackGitRuntime,
-} from "./update-runner-git-recovery.js";
+import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
+import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
+import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import {
   prepareGitMutation,
   readBranchName,
@@ -70,7 +54,15 @@ export async function updateGitCheckout(params: {
     timeoutMs,
   });
   const beforeSha = beforeShaResult.stdout.trim() || null;
-  const beforeVersion = await readPackageVersion(gitRoot);
+  const [beforeVersion, beforeBuildId] = await Promise.all([
+    readPackageVersion(gitRoot),
+    readBuiltGatewayBuildId(gitRoot),
+  ]);
+  const before = {
+    sha: beforeSha,
+    version: beforeVersion,
+    ...(beforeBuildId ? { buildId: beforeBuildId } : {}),
+  };
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
@@ -99,9 +91,8 @@ export async function updateGitCheckout(params: {
   let allowGatewayServiceRepair = opts.allowGatewayServiceRepair !== false;
   let allowGatewayActivation = opts.allowGatewayActivation === true;
   let createdDevBranchDuringUpdate = false;
-  let devPreflight: Awaited<ReturnType<typeof runGitDevPreflight>> | undefined;
   let mutationPrepared = false;
-  let runtimeMutationStarted = false;
+  let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   const prepareMutation = async (revision: string) => {
@@ -122,7 +113,7 @@ export async function updateGitCheckout(params: {
     mode: "git",
     root: gitRoot,
     reason,
-    before: { sha: beforeSha, version: beforeVersion },
+    before,
     recovery,
     steps,
     durationMs: Date.now() - startedAt,
@@ -245,18 +236,24 @@ export async function updateGitCheckout(params: {
       return buildError(reason);
     }
     const sourceRestored = await rollback();
+    let runtimeRestored = true;
+    try {
+      await runtimePromotion?.restore();
+    } catch (error) {
+      runtimeRestored = false;
+      steps.push({
+        name: "git runtime rollback",
+        command: "restore previous runtime",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: String(error),
+      });
+    }
     recovery = !sourceRestored
       ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
-      : runtimeMutationStarted && beforeSha
-        ? await rebuildRolledBackGitRuntime({
-            gitRoot,
-            expectedSha: beforeSha,
-            channel,
-            runCommand,
-            defaultCommandEnv,
-            timeoutMs,
-            steps,
-          })
+      : !runtimeRestored
+        ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
         : await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
     return buildError(reason);
   };
@@ -276,309 +273,198 @@ export async function updateGitCheckout(params: {
     return buildError("dirty", "skipped");
   }
 
-  if (channel === "dev") {
+  try {
     const fetchFailure = await runRequiredStep(
       "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
+      [
+        "git",
+        "-C",
+        gitRoot,
+        "fetch",
+        "--all",
+        "--prune",
+        channel === "dev" ? "--no-tags" : "--tags",
+      ],
       "fetch-failed",
     );
     if (fetchFailure) {
       return fetchFailure;
     }
-    devPreflight = await runGitDevPreflight({
+    const tag =
+      channel === "dev"
+        ? undefined
+        : await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
+    if (channel !== "dev" && !tag) {
+      return buildError("no-release-tag");
+    }
+    const preflight = await runGitCandidatePreflight({
       gitRoot,
       devTarget,
+      targetRevision: tag ?? undefined,
+      beforeSha,
       needsCheckoutMain,
       runCommand,
       timeoutMs,
       defaultCommandEnv,
       steps,
       step,
+      validateCandidate: opts.validateCandidate,
+      prepareGitExposure: opts.prepareGitExposure,
+      prepareCandidate: async (root, cleanupRoot) => {
+        runtimePromotion = await prepareGitRuntimePromotion(
+          gitRoot,
+          root,
+          runCommand,
+          timeoutMs,
+          cleanupRoot,
+        );
+      },
     });
-    const preflight = devPreflight;
     if (preflight.status !== "ok") {
       return buildError(preflight.reason, preflight.status);
     }
-    await prepareMutation(preflight.selectedSha);
-    if (hasDevTarget) {
-      const failure = await runRequiredStep(
-        `git checkout ${preflight.selectedSha}`,
-        ["git", "-C", gitRoot, "checkout", "--detach", preflight.selectedSha],
-        "checkout-failed",
-      );
-      if (failure) {
-        return failure;
-      }
-    } else {
-      let createdAtSelectedSha = false;
-      if (needsCheckoutMain) {
-        const hasLocalMain = preflight.localDevBranchExists !== false;
-        const failure = await runRequiredStep(
-          hasLocalMain
-            ? `git checkout ${DEV_BRANCH}`
-            : `git checkout -B ${DEV_BRANCH} ${preflight.selectedSha}`,
-          hasLocalMain
-            ? ["git", "-C", gitRoot, "checkout", DEV_BRANCH]
-            : ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.selectedSha],
-          "checkout-failed",
-        );
-        if (failure) {
-          return failure;
-        }
-        createdAtSelectedSha = !hasLocalMain;
-        createdDevBranchDuringUpdate = createdAtSelectedSha;
-        if (createdAtSelectedSha && preflight.selectedDevUpstream) {
-          const upstreamFailure = await runRequiredStep(
-            `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
-            [
-              "git",
-              "-C",
-              gitRoot,
-              "branch",
-              "--set-upstream-to",
-              preflight.selectedDevUpstream,
-              DEV_BRANCH,
-            ],
-            "checkout-failed",
-          );
-          if (upstreamFailure) {
-            return upstreamFailure;
-          }
-        }
-      }
-      if (createdAtSelectedSha) {
-        steps.push({
-          name: "git rebase",
-          command: `git rebase ${preflight.selectedSha}`,
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 0,
-          stdoutTail: `skipped; ${DEV_BRANCH} was created at selected preflight SHA`,
-        });
-      } else {
-        const rebaseStep = await runStep(
-          step("git rebase", ["git", "-C", gitRoot, "rebase", preflight.selectedSha], gitRoot),
-        );
-        if (rebaseStep.exitCode !== 0) {
-          await runStep({
-            runCommand,
-            name: "git rebase --abort",
-            argv: ["git", "-C", gitRoot, "rebase", "--abort"],
-            cwd: gitRoot,
-            timeoutMs,
-            stepIndex: 0,
-            totalSteps: 1,
-            results: steps,
-          });
-          return await rollbackError("rebase-failed");
-        }
-      }
+    // Candidate validation and worktree cleanup finish while the old gateway serves.
+    // Its exact build is retained on this filesystem; activation never installs or builds.
+    const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
+      cwd: gitRoot,
+      timeoutMs,
+    });
+    const currentStatus = await runCommand(gitCleanCheckArgs(gitRoot), { cwd: gitRoot, timeoutMs });
+    if (currentHead.code !== 0 || currentStatus.code !== 0) {
+      return buildError("clean-check-failed");
     }
-  } else {
-    const fetchFailure = await runRequiredStep(
-      "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
-      "fetch-failed",
-    );
-    if (fetchFailure) {
-      return fetchFailure;
+    const currentBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
+    if (
+      currentHead.stdout.trim() !== beforeSha ||
+      currentBranch !== branch ||
+      currentStatus.stdout.trim()
+    ) {
+      return buildError("dirty", "skipped");
     }
-    const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
-    if (!tag) {
-      return buildError("no-release-tag");
-    }
-    await prepareMutation(tag);
+    await prepareMutation(preflight.candidateSha);
+    const activateBranch = channel === "dev" && !hasDevTarget;
     const failure = await runRequiredStep(
-      `git checkout ${tag}`,
-      ["git", "-C", gitRoot, "checkout", "--detach", tag],
+      `git checkout ${activateBranch ? DEV_BRANCH : preflight.candidateSha}`,
+      activateBranch
+        ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
+        : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
       "checkout-failed",
     );
     if (failure) {
       return failure;
     }
-  }
-
-  const manager = await resolveUpdateBuildManager(
-    runCommand,
-    gitRoot,
-    timeoutMs,
-    defaultCommandEnv,
-    "require-preferred",
-  );
-  if (manager.kind === "missing-required") {
-    return await rollbackError(manager.reason);
-  }
-  try {
-    const installEnv = await resolveInstallEnv(
-      manager.manager,
-      manager.env ?? defaultCommandEnv,
-      gitRoot,
-      runCommand,
-      timeoutMs,
-    );
-    // A failed install can already replace dependencies or run lifecycle scripts.
-    // Restore the runtime, not only Git HEAD, after any attempted live install.
-    runtimeMutationStarted = true;
-    let installStep = await runStep(
-      step(
-        "deps install",
-        managerInstallArgs(manager.manager, {
-          compatFallback: manager.fallback && manager.manager === "npm",
-        }),
-        gitRoot,
-        installEnv,
-      ),
-    );
-    if (installStep.exitCode !== 0 && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
-      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-      if (retryArgv) {
-        installStep = await runStep(
-          step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
-        );
-      }
-    }
-    if (installStep.exitCode !== 0) {
-      return await rollbackError("deps-install-failed");
-    }
-    const buildStep = await runStep(
-      step(
-        "build",
-        managerScriptArgs(manager.manager, "build"),
-        gitRoot,
-        resolveBuildEnv(
-          manager.env ?? defaultCommandEnv,
-          channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
-        ),
-      ),
-    );
-    if (buildStep.exitCode !== 0) {
-      return await rollbackError("build-failed");
-    }
-    const buildCleanCheck = await runStep(
-      step("build clean check", gitCleanCheckArgs(gitRoot), gitRoot),
-    );
-    if (buildCleanCheck.exitCode !== 0) {
-      return await rollbackError("build-failed");
-    }
-    if (buildCleanCheck.stdoutTail?.trim()) {
-      return await rollbackError("build-dirty");
-    }
-    const builtUiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
-    if (builtUiHealth.kind !== "ready") {
-      const uiBuildStep = await runStep(
-        step(
-          "ui:build (build fallback)",
-          managerScriptArgs(manager.manager, "ui:build"),
+    createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
+    if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
+      const upstreamFailure = await runRequiredStep(
+        `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
+        [
+          "git",
+          "-C",
           gitRoot,
-          manager.env,
-        ),
+          "branch",
+          "--set-upstream-to",
+          preflight.selectedDevUpstream,
+          DEV_BRANCH,
+        ],
+        "checkout-failed",
       );
-      if (uiBuildStep.exitCode !== 0) {
-        return await rollbackError("ui-build-failed");
+      if (upstreamFailure) {
+        return upstreamFailure;
       }
     }
-
-    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-    const doctorEntryExists = await fs.stat(doctorEntry).then(
-      () => true,
-      () => false,
-    );
-    if (!doctorEntryExists) {
+    if (!runtimePromotion) {
+      return await rollbackError("runtime-verification-failed");
+    }
+    try {
+      await runtimePromotion.activate();
+    } catch (error) {
       steps.push({
-        name: "openclaw doctor entry",
-        command: `verify ${doctorEntry}`,
+        name: "git runtime activation",
+        command: "activate validated runtime",
         cwd: gitRoot,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: `missing ${doctorEntry}`,
+        stderrTail: String(error),
       });
-      return await rollbackError("doctor-entry-missing");
-    }
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorTargetVersion = await readPackageVersion(gitRoot);
-    const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
-      targetVersion: doctorTargetVersion,
-      allowGatewayServiceRepair,
-    });
-    stateMigrationStarted = true;
-    recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-    const doctorStep = await runStep(
-      step(
-        "openclaw doctor",
-        [
-          doctorNodePath,
-          doctorEntry,
-          "doctor",
-          "--non-interactive",
-          ...(doctorPolicy.fix ? ["--fix"] : []),
-        ],
-        gitRoot,
-        buildUpdateDoctorEnv({
-          allowGatewayServiceRepair,
-          allowGatewayActivation,
-          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-        }),
-      ),
-    );
-    if (doctorStep.exitCode !== 0) {
-      return await rollbackError("doctor-failed");
+      return await rollbackError("runtime-verification-failed");
     }
 
-    const uiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
-    if (uiHealth.kind !== "ready") {
-      const repairStep = await runStep({
-        runCommand,
-        name: "ui:build (post-doctor repair)",
-        argv: managerScriptArgs(manager.manager, "ui:build"),
-        cwd: gitRoot,
-        timeoutMs,
-        env: manager.env,
-        stepIndex: 0,
-        totalSteps: 1,
-        results: steps,
-      });
-      if (repairStep.exitCode !== 0) {
-        return await rollbackError("ui-build-failed");
-      }
-      const repairedHealth = await resolveControlUiAssetHealth({ root: gitRoot });
-      if (repairedHealth.kind !== "ready") {
-        const uiIndexPath =
-          repairedHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+    // Source conversion migrates only after its prepared global exposure is swapped.
+    if (!opts.prepareGitExposure) {
+      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+      const doctorEntryExists = await fs.stat(doctorEntry).then(
+        () => true,
+        () => false,
+      );
+      if (!doctorEntryExists) {
         steps.push({
-          name: "ui assets verify",
-          command: `verify ${uiIndexPath}`,
+          name: "openclaw doctor entry",
+          command: `verify ${doctorEntry}`,
           cwd: gitRoot,
           durationMs: 0,
           exitCode: 1,
-          stderrTail:
-            repairedHealth.kind === "incomplete"
-              ? `missing startup asset ${repairedHealth.missingAsset} referenced by ${uiIndexPath}`
-              : `missing ${uiIndexPath}`,
+          stderrTail: `missing ${doctorEntry}`,
         });
-        return await rollbackError("ui-assets-missing");
+        return await rollbackError("doctor-entry-missing");
+      }
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const doctorTargetVersion = await readPackageVersion(gitRoot);
+      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: doctorTargetVersion,
+        allowGatewayServiceRepair,
+      });
+      stateMigrationStarted = true;
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      const doctorStep = await runStep(
+        step(
+          "openclaw doctor",
+          [
+            doctorNodePath,
+            doctorEntry,
+            "doctor",
+            "--non-interactive",
+            ...(doctorPolicy.fix ? ["--fix"] : []),
+          ],
+          gitRoot,
+          buildUpdateDoctorEnv({
+            allowGatewayServiceRepair,
+            allowGatewayActivation,
+            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+            deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+          }),
+        ),
+      );
+      if (doctorStep.exitCode !== 0) {
+        return await rollbackError("doctor-failed");
       }
     }
 
-    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
+    if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {
+      steps.push({
+        name: "ui assets verify",
+        command: "verify startup assets",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "Control UI startup assets are missing or incomplete after Doctor",
+      });
+      return await rollbackError("ui-assets-missing");
+    }
+    const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
     if (afterShaStep.exitCode !== 0) {
       return await rollbackError("head-verification-failed");
     }
-    if (
-      devTarget?.mode === "tracked" &&
-      devPreflight?.status === "ok" &&
-      afterShaStep.stdoutTail?.trim() !== devPreflight.selectedSha
-    ) {
+    if (afterShaStep.stdoutTail?.trim() !== preflight.candidateSha) {
       return await rollbackError("target-sha-mismatch");
     }
     return {
       status: "ok",
       mode: "git",
       root: gitRoot,
-      before: { sha: beforeSha, version: beforeVersion },
+      before,
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
@@ -589,6 +475,9 @@ export async function updateGitCheckout(params: {
       durationMs: Date.now() - startedAt,
     };
   } catch (error) {
+    if (!mutationPrepared) {
+      throw error;
+    }
     steps.push({
       name: "git update",
       command: "update checkout",
@@ -599,6 +488,6 @@ export async function updateGitCheckout(params: {
     });
     return await rollbackError("unexpected-error");
   } finally {
-    await manager.cleanup?.();
+    await runtimePromotion?.cleanup();
   }
 }

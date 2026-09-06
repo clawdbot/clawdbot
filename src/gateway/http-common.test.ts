@@ -515,13 +515,23 @@ describe("watchClientDisconnect", () => {
     expect(typeof resOnCall[1]).toBe("function");
   });
 
-  it("cleanup detaches the close listener from each socket", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    expect(socket.listenerCount("close")).toBe(1);
-    cleanup();
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+  it.each(["cleanup", "response completion"])(
+    "keeps completed work un-aborted after %s",
+    (phase) => {
+      const socket = new EventEmitter();
+      const { req, res } = makeMockHttpReqRes(socket, null);
+      const controller = new AbortController();
+      const cleanup = watchClientDisconnect(req, res, controller);
+      expect(socket.listenerCount("close")).toBe(1);
+      if (phase === "cleanup") {
+        cleanup();
+      } else {
+        res.emit("finish");
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close");
+      expect(controller.signal.aborted).toBe(false);
+      res.emit("close");
+    },
+  );
 });

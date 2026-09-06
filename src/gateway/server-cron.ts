@@ -149,12 +149,11 @@ export type GatewayCronState = {
   storePath: string;
   cronEnabled: boolean;
   prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
-  // Required hooks keep the lazy proxy from silently skipping system-job
-  // reconciliation before configuration publication.
+  // The lazy proxy must preserve system-job reconciliation on the serving config.
   reconcileExitWatchers: () => Promise<void>;
   reconcileStreamWatchers: () => Promise<void>;
   stopStreamWatchers: () => Promise<void>;
-  reconcileSystemJobs: (cfg?: OpenClawConfig) => Promise<GatewaySystemJobReconciliationResult>;
+  reconcileSystemJobs: () => Promise<GatewaySystemJobReconciliationResult>;
 };
 
 export type GatewayCronExitWatcherHandoff = {
@@ -1554,59 +1553,60 @@ export function buildGatewayCronService(params: {
   cron.stopAndDrain = async () => {
     await stopAndDrainCron();
   };
-  // Reconciliations serialize on one tail and only the latest requested epoch
-  // executes, so an older reload's convergence can never clobber a newer one.
-  // A failed pass schedules one bounded retry; a newer request supersedes it.
+  // Serialize accepted-config convergence; newer requests and stop supersede this tail.
   let systemJobReconcileEpoch = 0;
-  let systemJobReconcileTail: Promise<GatewaySystemJobReconciliationResult> =
-    Promise.resolve("converged");
+  let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
   let systemJobRetryTimer: NodeJS.Timeout | undefined;
   const stopSystemJobReconcileRetry = () => {
     // Also invalidate any in-flight pass so a post-stop retry cannot fire.
     systemJobReconcileEpoch += 1;
-    if (systemJobRetryTimer) {
-      clearTimeout(systemJobRetryTimer);
-      systemJobRetryTimer = undefined;
-    }
+    clearTimeout(systemJobRetryTimer);
+    systemJobRetryTimer = undefined;
   };
-  const reconcileSystemJobs = (
-    cfgOverride?: OpenClawConfig,
-  ): Promise<GatewaySystemJobReconciliationResult> => {
+  const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
     stopSystemJobReconcileRetry();
     const epoch = systemJobReconcileEpoch;
     const pass = async (): Promise<GatewaySystemJobReconciliationResult> => {
+      const cfg = getRuntimeConfig();
       const assertCurrent = () => {
-        if (epoch !== systemJobReconcileEpoch) {
+        if (epoch !== systemJobReconcileEpoch || cfg !== getRuntimeConfig()) {
           throw new GatewaySystemJobReconciliationSupersededError();
         }
       };
-      assertCurrent();
-      let converged = true;
-      for (const reconcile of [reconcileHeartbeatMonitorJobs, reconcileSkillCollectionReviewJobs]) {
-        const { ok } = await reconcile({
-          cron,
-          cfg: cfgOverride ?? getRuntimeConfig(),
-          logger: cronLogger,
-          commitGuard: assertCurrent,
-        });
+      try {
         assertCurrent();
-        converged &&= ok;
+        let converged = true;
+        for (const reconcile of [
+          reconcileHeartbeatMonitorJobs,
+          reconcileSkillCollectionReviewJobs,
+        ]) {
+          const { ok } = await reconcile({
+            cron,
+            cfg,
+            logger: cronLogger,
+            commitGuard: assertCurrent,
+          });
+          assertCurrent();
+          converged &&= ok;
+        }
+        if (!converged) {
+          systemJobRetryTimer = setTimeout(() => {
+            systemJobRetryTimer = undefined;
+            void reconcileSystemJobs();
+          }, 30_000);
+          systemJobRetryTimer.unref?.();
+        }
+        return converged ? "converged" : "retry-scheduled";
+      } catch (error) {
+        if (!(error instanceof GatewaySystemJobReconciliationSupersededError)) {
+          throw error;
+        }
+        // A no-op accepted replacement may not request another pass. Finish
+        // against its config; an explicit newer request or stop owns its own tail.
+        return epoch === systemJobReconcileEpoch ? await pass() : "superseded";
       }
-      if (!converged) {
-        systemJobRetryTimer = setTimeout(() => {
-          systemJobRetryTimer = undefined;
-          void reconcileSystemJobs(cfgOverride);
-        }, 30_000);
-        systemJobRetryTimer.unref?.();
-      }
-      return converged ? "converged" : "retry-scheduled";
     };
-    systemJobReconcileTail = systemJobReconcileTail.then(pass, pass).catch((error: unknown) => {
-      if (error instanceof GatewaySystemJobReconciliationSupersededError) {
-        return "superseded";
-      }
-      throw error;
-    });
+    systemJobReconcileTail = systemJobReconcileTail.then(pass, pass);
     return systemJobReconcileTail;
   };
   const startCron = cron.start.bind(cron);

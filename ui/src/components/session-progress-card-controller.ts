@@ -11,7 +11,7 @@ type SessionProgressCardControllerOptions = {
   target: () => ProgressCardGetParams | null | undefined;
 };
 
-/** Keeps one chat pane on the gateway-scoped durable progress-card snapshot. */
+/** Keeps one view on the gateway-scoped durable progress-card snapshot. */
 export class SessionProgressCardController implements ReactiveController {
   private store: SessionProgressCardStore | null = null;
   private stopUpdates: (() => void) | null = null;
@@ -26,6 +26,20 @@ export class SessionProgressCardController implements ReactiveController {
 
   get card(): ProgressCard | null {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
+  }
+
+  get loading(): boolean {
+    return !this.target || this.store?.get(this.target) === undefined;
+  }
+
+  retry = (): void => {
+    if (this.target?.sessionKey) {
+      void this.store?.load(this.target).catch(() => undefined);
+    }
+  };
+
+  get error() {
+    return this.target ? this.store?.getError(this.target) : undefined;
   }
 
   dismiss = (card: ProgressCard): Promise<boolean> =>

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
@@ -65,7 +66,7 @@ import { createPluginSdkVitestConfig } from "./vitest/vitest.plugin-sdk.config.t
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createProcessVitestConfig } from "./vitest/vitest.process.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
-import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
+import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
@@ -160,7 +161,7 @@ function expectForkedIsolatedRunner(config: {
   expect(testConfig.runner).toBeUndefined();
 }
 
-describe("resolveVitestIsolation", () => {
+describe("scoped Vitest configuration", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     for (const subpath of PRIVATE_PLUGIN_SDK_SUBPATHS) {
       expect(findAlias(sharedVitestConfig.resolve.alias, `openclaw/plugin-sdk/${subpath}`)).toEqual(
@@ -205,9 +206,13 @@ describe("resolveVitestIsolation", () => {
   });
 
   it("ignores the legacy isolation escape hatches", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
+    for (const env of [
+      { OPENCLAW_TEST_ISOLATE: "1" },
+      { OPENCLAW_TEST_NO_ISOLATE: "0" },
+      { OPENCLAW_TEST_NO_ISOLATE: "false" },
+    ]) {
+      expect(requireTestConfig(createScopedVitestConfig([], { env })).isolate).toBe(false);
+    }
   });
 
   it("resolves scoped discovery dirs from the repo root after config relocation", () => {
@@ -283,6 +288,12 @@ describe("createScopedVitestConfig", () => {
       includePattern: "extensions/**/*.test.ts",
       target: "extensions/browser/index.test.ts",
       expectedInclude: "browser/index.test.ts",
+    },
+    {
+      title: "keeps explicitly selected files owned by negative extglobs",
+      includePattern: "extensions/*/browser/**/!(*.browser).test.ts",
+      target: "extensions/example/browser/view.test.ts",
+      expectedInclude: "example/browser/view.test.ts",
     },
     {
       title: "narrows scoped includes to matching dot-prefixed CLI file filters",
@@ -1158,7 +1169,7 @@ describe("scoped vitest configs", () => {
       ["extensions/workboard/browser/native.browser.test.ts", false],
     ] as const) {
       expect(
-        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        testConfig.include?.some((pattern) => minimatch(file, pattern)),
         file,
       ).toBe(included);
     }

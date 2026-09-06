@@ -37,7 +37,10 @@ import {
   NON_ENV_SECRETREF_MARKER,
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
-import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import {
+  resolveDirectProviderCredentialMode,
+  type ResolvedProviderAuth,
+} from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
@@ -279,19 +282,6 @@ export function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
-}
-
-export function resolveDirectProviderCredentialMode(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  inferredMode: ResolvedProviderAuth["mode"];
-}): ResolvedProviderAuth["mode"] {
-  const configuredMode = resolveProviderAuthOverride(params.cfg, params.provider);
-  // apiKey is the generic provider credential slot. Explicit subscription
-  // strategy classifies its literal, SecretRef, and env material as one route.
-  return configuredMode === "oauth" || configuredMode === "token"
-    ? configuredMode
-    : params.inferredMode;
 }
 
 export function shouldUseImplicitAwsSdkAuth(params: {
@@ -651,16 +641,17 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
 }): boolean {
   const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
   const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
-  if (!inputProvider || !runtimeProvider) {
-    return false;
-  }
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
-  return (
-    hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
-    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
-  );
+  // Shared provider objects need no catalog traversal; distinct mutable inputs
+  // still compare their current bytes before reusing runtime SecretRef provenance.
+  return inputProvider && runtimeProvider
+    ? params.inputConfig === params.runtimeConfig ||
+        inputProvider === runtimeProvider ||
+        hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
+          hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
+    : false;
 }
 
 export function sentinelizeConfigSecretRefEnvApiKey(params: {
