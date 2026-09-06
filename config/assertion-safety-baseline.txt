@@ -2279,7 +2279,7 @@ src/cli/command-secret-gateway.ts	2
 src/cli/command-secret-targets.ts	2
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
-src/cli/config-cli-path.ts	6
+src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
