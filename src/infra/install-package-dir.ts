@@ -260,6 +260,9 @@ export async function installPackageDir<
   const assertOwned = transactionRequest?.assertOwned;
   const assertPersistentApply = () => {
     params.beforePersistentApply?.();
+    // A startup cancellation observed between the pre-move abort check and the
+    // rename must refuse publication; ownership guards alone do not see it.
+    params.signal?.throwIfAborted();
     assertOwned?.();
   };
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
