@@ -1539,6 +1539,8 @@ Exact npm version pinning already lives in `npmSpec`, for example `"npmSpec": "@
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list, or SecretRef scans need to identify configured accounts without loading the full runtime. The setup entry should expose channel metadata plus setup-safe config, status, and secrets adapters; keep network clients, gateway listeners, and transport runtimes in the main extension entrypoint.
 
+Before the first setup-entry load, OpenClaw applies the selected plugin root's file-boundary and hardlink policy, even when discovery metadata is already cached. Validated setup modules remain cached for that plugin cache generation; this check does not rediscover metadata on each status call.
+
 Runtime entrypoint fields do not override package-boundary checks for source entrypoint fields. For example, `openclaw.runtimeExtensions` cannot make an escaping `openclaw.extensions` path loadable.
 
 `openclaw.install.allowInvalidConfigRecovery` is intentionally narrow. It does not make arbitrary broken configs installable. Today it only allows install flows to recover from specific stale bundled-plugin upgrade failures, such as a missing bundled plugin path or a stale `channels.<id>` entry for that same bundled plugin. Unrelated config errors still block install and send operators to `openclaw doctor --fix`.
