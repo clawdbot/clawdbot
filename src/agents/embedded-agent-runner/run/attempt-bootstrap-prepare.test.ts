@@ -176,13 +176,12 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         isCanonicalWorkspace: true,
         config: { agents: { defaults: { workspace } } },
       } as EmbeddedRunAttemptParams,
-      effectiveWorkspace: workspace,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: workspace,
+        resolvedWorkspace: workspace,
+      }),
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => undefined,
-      resolvedWorkspace: workspace,
-      sessionAgentId: "main",
-      sessionLabel: "agent:main:session-slow",
     });
 
     const breakdownWarn = warnSpy.mock.calls
