@@ -656,7 +656,7 @@ describe("resolveSkippedExtraMemoryPathRoots", () => {
   const getTmpDir = setupTempDirLifecycle("symlink-roots-");
 
   it.skipIf(process.platform === "win32").each([
-    { label: "dir", type: undefined as const },
+    { label: "dir", type: undefined },
     { label: "file root", type: "file" as const },
   ])("surfaces a symlink $label configured as an extra path root", async ({ type }) => {
     const tmpDir = getTmpDir();

@@ -118,7 +118,10 @@ describe("inspectMemorySourceState symlink diagnostics", () => {
       const result = await inspectMemorySourceState({
         db,
         workspaceDir: tmpRoot,
-        settings: { extraPaths: [{ path: "obsidian" }], multimodal: undefined },
+        settings: {
+          extraPaths: [{ path: "obsidian" }],
+          multimodal: { enabled: false, modalities: [], maxFileBytes: 0 },
+        },
         concurrency: 1,
       });
 
@@ -137,7 +140,10 @@ describe("inspectMemorySourceState symlink diagnostics", () => {
     const result = await inspectMemorySourceState({
       db,
       workspaceDir: tmpRoot,
-      settings: { extraPaths: [{ path: "extra" }], multimodal: undefined },
+      settings: {
+        extraPaths: [{ path: "extra" }],
+        multimodal: { enabled: false, modalities: [], maxFileBytes: 0 },
+      },
       concurrency: 1,
     });
 
