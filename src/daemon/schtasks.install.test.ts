@@ -503,7 +503,7 @@ describe("installScheduledTask", () => {
       await expect(uninstallScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow(
         "schtasks delete failed: ERROR: Access is denied.",
       );
-      await expect(fs.access(scriptPath)).resolves.toBeUndefined();
+      await fs.access(scriptPath);
     });
   });
 
