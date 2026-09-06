@@ -1,14 +1,16 @@
 // Fork-regression coverage split from session-manager.test.ts (max-lines).
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
+import type { AppendPersistenceOptions } from "./session-manager-types.js";
+import { SessionManager, type SessionEntry, type SessionMessageEntry } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -95,6 +97,114 @@ describe("SessionManager stale-parent rebase", () => {
         usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: 3,
+      }),
+    ).toThrow("SQLite transcript changed while preparing rewrite");
+  });
+
+  it("fences a prepared assistant retry to the snapshot that passed validation", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-assistant-validation-race",
+      sessionKey: "agent:main:stale-assistant-validation-race",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const base = await appendTranscriptMessage(target, {
+      eventId: "base-user",
+      message: { role: "user", content: "base", timestamp: 1 },
+      now: 1,
+    });
+    const manager = SessionManager.open(target, dir);
+    await appendTranscriptMessage(target, {
+      eventId: "intermediate-assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "late" }], timestamp: 2 },
+      now: 2,
+    });
+    const branchBeforeRetry = manager.getBranch().map((entry) => entry.id);
+    const persistencePrototype = SessionManager.prototype as unknown as {
+      persist(
+        entry: SessionEntry,
+        options?: AppendPersistenceOptions & { expectedMutationAt?: number | null },
+      ): unknown;
+    };
+    const originalPersist = persistencePrototype.persist;
+    let persistCalls = 0;
+    vi.spyOn(persistencePrototype, "persist").mockImplementation(
+      function (this: SessionManager, entry, options) {
+        persistCalls += 1;
+        if (persistCalls === 1) {
+          const concurrent = appendTranscriptMessageSync(target, {
+            appendIntent: "active-branch",
+            eventId: "new-user",
+            message: { role: "user", content: "new", timestamp: 3 },
+            now: 3,
+          });
+          expect(concurrent.ok).toBe(true);
+        }
+        return originalPersist.call(this, entry, options);
+      },
+    );
+
+    expect(() =>
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "stale reply" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: createZeroUsageFixture(),
+        stopReason: "stop",
+        timestamp: 4,
+      }),
+    ).toThrow("SQLite transcript changed while preparing rewrite");
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual(branchBeforeRetry);
+    const messages = (
+      (await loadTranscriptEvents(target)) as Array<SessionMessageEntry & { type?: string }>
+    ).filter((entry) => entry.type === "message");
+    expect(messages.map((entry) => entry.id)).toEqual([
+      base.messageId,
+      "intermediate-assistant",
+      "new-user",
+    ]);
+  });
+
+  it("rejects a newer user outside the restored active ancestry", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-assistant-side-user",
+      sessionKey: "agent:main:stale-assistant-side-user",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = SessionManager.open(target, dir);
+    const baseId = source.appendMessage({ role: "user", content: "base", timestamp: 1 });
+    const preparedParentId = source.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "ready" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: createZeroUsageFixture(),
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const stale = SessionManager.open(target, dir);
+    source.branch(baseId);
+    source.appendMessage({ role: "user", content: "side user", timestamp: 3 });
+    source.branch(preparedParentId);
+
+    expect(() =>
+      stale.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "stale reply" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: createZeroUsageFixture(),
+        stopReason: "stop",
+        timestamp: 4,
       }),
     ).toThrow("SQLite transcript changed while preparing rewrite");
   });

@@ -37,6 +37,11 @@ type PersistRecordResult =
       effectiveParentId: string | null;
     };
 
+type PersistRecordOptions = AppendPersistenceOptions & {
+  /** Retry fence captured from the durable snapshot that passed validation. */
+  expectedMutationAt?: number | null;
+};
+
 function requireTranscriptEventAppend(
   result: ReturnType<typeof appendTranscriptEventSync>,
   message: string,
@@ -331,21 +336,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return removedEntries.length;
   }
 
-  protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): PersistRecordResult {
+  protected persistRecord(entry: unknown, options?: PersistRecordOptions): PersistRecordResult {
     if (this.persistenceTarget) {
       return this.persistSqliteRecord(entry, options);
     }
     return undefined;
   }
 
-  persist(entry: SessionEntry, options?: AppendPersistenceOptions): PersistRecordResult {
+  protected persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     return this.persistRecord(entry, options);
   }
 
-  private persistSqliteRecord(
-    entry: unknown,
-    options?: AppendPersistenceOptions,
-  ): PersistRecordResult {
+  private persistSqliteRecord(entry: unknown, options?: PersistRecordOptions): PersistRecordResult {
     if (!this.persistenceTarget) {
       return undefined;
     }
@@ -445,9 +447,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
       ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
-      ...(this.transcriptMutationAt !== undefined
-        ? { expectedMutationAt: this.transcriptMutationAt }
-        : {}),
+      ...(options?.expectedMutationAt !== undefined
+        ? { expectedMutationAt: options.expectedMutationAt }
+        : this.transcriptMutationAt !== undefined
+          ? { expectedMutationAt: this.transcriptMutationAt }
+          : {}),
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
