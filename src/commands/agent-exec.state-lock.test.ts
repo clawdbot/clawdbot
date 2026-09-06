@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  recordAgentCleanupFailure,
+  createAgentCleanupScope,
+} from "../agents/run-cleanup-timeout.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentExecCommand } from "./agent-exec.js";
@@ -67,6 +71,50 @@ function createSignalProcess() {
 }
 
 describe("agent exec retained-state ownership", () => {
+  it.each([false, true])(
+    "retains state after uncertain runtime cleanup (retained=%s)",
+    async (retained) => {
+      const root = tempDirs.make("openclaw-agent-exec-uncertain-cleanup-");
+      const lockOptions = createGatewayLockOptions(root);
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      const cleanupScope = createAgentCleanupScope();
+      let runStateDir: string | undefined;
+      try {
+        const result = await cleanupScope.run(() =>
+          agentExecCommand("inspect", retained ? { stateDir: root } : {}, createRuntime().runtime, {
+            gatewayLockOptions: lockOptions,
+            runAgent: async () => {
+              runStateDir = process.env.OPENCLAW_STATE_DIR;
+              if (!runStateDir) {
+                throw new Error("Expected the command's state directory");
+              }
+              await fs.writeFile(path.join(runStateDir, "owned-work"), "still owned");
+              recordAgentCleanupFailure();
+              return successResult();
+            },
+          }),
+        );
+        expect.soft(result.exitCode).toBe(1);
+        expect.soft(cleanupScope.outcome).toBe("uncertain");
+        expect.soft(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+        expect(runStateDir).toBeDefined();
+        await expect(fs.readFile(path.join(runStateDir!, "owned-work"), "utf8")).resolves.toBe(
+          "still owned",
+        );
+        if (retained) {
+          const owner = JSON.parse(
+            await fs.readFile(path.join(lockOptions.lockDir!, "gateway.state.lock"), "utf8"),
+          );
+          expect(owner).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+        }
+      } finally {
+        if (!retained && runStateDir) {
+          await fs.rm(runStateDir, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it("refuses a state directory owned by a live Gateway", async () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-gateway-owner-");
     const lockOptions = createGatewayLockOptions(stateDir, {

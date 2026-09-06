@@ -472,7 +472,7 @@ final class StatusMenuSummaries: NSObject {
         DashboardManager.shared.confirmSetPrimary(target)
     }
 
-    private static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
+    static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
         let (symbol, color, accessibility): (String, NSColor, String) = switch health {
         case .ok:
             ("circle.fill", .systemGreen, String(format: String(localized: "%@, healthy"), name))

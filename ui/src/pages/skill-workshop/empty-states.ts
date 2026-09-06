@@ -13,9 +13,7 @@ export function renderBoardEmptyDetail(query: string, statusFilter: SkillWorksho
   return html`
     <div class="sw-detail sw-detail--empty">
       <div class="sw-filter-empty">
-        <div class="sw-filter-empty__icon" aria-hidden="true">
-          ${renderEmptyStateIcon(empty.icon)}
-        </div>
+        <div class="sw-filter-empty__icon" aria-hidden="true">${emptyStateIcons[empty.icon]}</div>
         <p class="sw-empty__title">${empty.title}</p>
         <p class="sw-empty__sub">${empty.body}</p>
       </div>
@@ -71,11 +69,7 @@ function resolveBoardEmptyState(
         body: t("skillWorkshop.empty.staleBody"),
       };
     case "all":
-      return {
-        icon: "search",
-        title: t("skillWorkshop.empty.allTitle"),
-        body: t("skillWorkshop.empty.allBody"),
-      };
+      break;
   }
   return {
     icon: "search",
@@ -92,10 +86,6 @@ const emptyStateIcons: Record<SkillWorkshopEmptyIcon, (typeof icons)[keyof typeo
   shield: icons.shieldCheck,
   refresh: icons.refresh,
 };
-
-function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
-  return emptyStateIcons[icon];
-}
 
 export function renderWorkshopEmptyState(params: {
   agentName: string;

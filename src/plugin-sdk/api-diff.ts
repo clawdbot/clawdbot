@@ -11,10 +11,7 @@ const REPORT_ITEM_LIMIT = 40;
 const REPORT_TEXT_LINE_LIMIT = 20;
 const REPORT_BYTE_LIMIT = 64 * 1024;
 
-export type PluginSdkApiExportSnapshot = Pick<
-  PluginSdkApiExport,
-  "closureHash" | "declaration" | "kind"
->;
+type PluginSdkApiExportSnapshot = Pick<PluginSdkApiExport, "closureHash" | "declaration" | "kind">;
 
 type PluginSdkApiDiffExport = Pick<
   PluginSdkApiExport,
@@ -32,13 +29,13 @@ export type PluginSdkApiDiffSurface = {
   modules: PluginSdkApiDiffModule[];
 };
 
-export type PluginSdkApiDeclarationChange = {
+type PluginSdkApiDeclarationChange = {
   after: string | null;
   before: string | null;
   name: string;
 };
 
-export type PluginSdkApiExportChange = {
+type PluginSdkApiExportChange = {
   after: PluginSdkApiExportSnapshot | null;
   before: PluginSdkApiExportSnapshot | null;
   change: "added" | "reachable" | "removed" | "signature";
@@ -48,13 +45,13 @@ export type PluginSdkApiExportChange = {
   importSpecifier: string;
 };
 
-export type PluginSdkApiEntrypointChange = {
+type PluginSdkApiEntrypointChange = {
   entrypoint: string;
   exportNames: string[];
   importSpecifier: string;
 };
 
-export type PluginSdkApiDiffPayload = {
+type PluginSdkApiDiffPayload = {
   entrypointsAdded: PluginSdkApiEntrypointChange[];
   entrypointsRemoved: PluginSdkApiEntrypointChange[];
   exports: PluginSdkApiExportChange[];

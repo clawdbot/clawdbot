@@ -40,7 +40,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
-import { authorizeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
+import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -288,42 +288,20 @@ export function reclaimSqliteSessionInTransaction(
     return { kind: plan.kind, value };
   }
 
-  if (plan.kind === "history-eviction") {
-    const value = runOpenClawAgentWriteTransaction((transactionDb) => {
-      callbacks.beforeMutation?.();
-      const archivedTranscripts = deleteMaterializedSessionStatePlans(
-        transactionDb,
-        plan.materializedPlans,
-        new Set(plan.protectedSessionIds),
-      );
-      const db = getSessionKysely(transactionDb.db);
-      const deleted =
-        executeSqliteQuerySync(
-          transactionDb.db,
-          db
-            .selectFrom("session_windows")
-            .select("session_id")
-            .where("session_id", "=", plan.sessionId),
-        ).rows.length === 0;
-      if (deleted) {
-        callbacks.onCommit?.(transactionDb);
-      }
-      return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
-    }, plan.databaseOptions);
-    if (value.deleted) {
-      reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
-    }
-    return { kind: plan.kind, value };
-  }
-
   const value = runOpenClawAgentWriteTransaction((transactionDb) => {
     callbacks.beforeMutation?.();
-    const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
-    if (
-      !sqliteLifecycleTargetSnapshotsEqual(plan.preparedTargetSnapshot, snapshot) ||
-      !shouldDeleteSqliteSessionEntryLifecycle(transactionDb, snapshot[0]?.entry, plan.deleteParams)
-    ) {
-      return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+    if (plan.kind === "historical-generation") {
+      const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
+      if (
+        !sqliteLifecycleTargetSnapshotsEqual(plan.preparedTargetSnapshot, snapshot) ||
+        !shouldDeleteSqliteSessionEntryLifecycle(
+          transactionDb,
+          snapshot[0]?.entry,
+          plan.deleteParams,
+        )
+      ) {
+        return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+      }
     }
     const archivedTranscripts = deleteMaterializedSessionStatePlans(
       transactionDb,
@@ -344,22 +322,17 @@ export function reclaimSqliteSessionInTransaction(
     }
     return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
   }, plan.databaseOptions);
+  if (plan.kind === "history-eviction" && value.deleted) {
+    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
+  }
   return { kind: plan.kind, value };
 }
 
 function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOptions): void {
   try {
     const database = openOpenClawAgentDatabase(databaseOptions);
-    database.walMaintenance.checkpoint();
-    const row = database.db /* sqlite-allow-raw: page accounting is exposed only via PRAGMA */
-      .prepare("PRAGMA freelist_count")
-      .get() as { freelist_count: number | bigint }; // SAFETY: fixed numeric PRAGMA column.
-    const freePages = Number(row.freelist_count);
-    if (Number.isSafeInteger(freePages) && freePages > 0) {
-      // sqlite-allow-raw -- incremental vacuum is a maintenance PRAGMA, not a data query.
-      database.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
-    }
-    database.walMaintenance.checkpoint();
+    // sqlite-allow-raw -- PASSIVE never waits for readers; cap page release per pass.
+    database.db.exec("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(512);");
   } catch {
     // Deletion is already durable. The next budget pass can reclaim pages.
   }
@@ -415,21 +388,10 @@ export async function runSqliteSessionReclamation(params: {
     ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
     : undefined;
   const recoveredCommitErrors: unknown[] = [];
-  const [workerResult] =
-    await runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+  const runWorker = (authorize: () => unknown[]) =>
+    runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
       expectedMessageType: "reclaimed",
-      onCommitRequest:
-        commitGate && assertCommitAllowed
-          ? () => {
-              recoveredCommitErrors.push(
-                ...authorizeSqliteReclamationCommit(
-                  commitGate,
-                  params.plan.databaseOptions.path,
-                  assertCommitAllowed,
-                ),
-              );
-            }
-          : undefined,
+      onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
       transferList: prepareReclamationWorkerTransferList(params.plan),
       workerData: {
         commitGate,
@@ -438,6 +400,15 @@ export async function runSqliteSessionReclamation(params: {
         type: "sqlite-transcript-archive-v2",
       } satisfies SqliteSessionReclamationWorkerData,
     });
+  const [workerResult] =
+    commitGate && assertCommitAllowed
+      ? await withSqliteReclamationAuthorization(
+          commitGate,
+          openOpenClawAgentDatabase(params.plan.databaseOptions).db,
+          assertCommitAllowed,
+          runWorker,
+        )
+      : await runWorker(() => []);
   if (!workerResult) {
     throw new Error("SQLite session reclamation Worker returned no result");
   }

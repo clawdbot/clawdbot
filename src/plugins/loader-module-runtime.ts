@@ -213,7 +213,7 @@ export function createLazyPluginRuntime(params: {
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
     // Prepared metadata and host facades must not initialize broad runtime services.
     if (!resolvedRuntime) {
-      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+      if (prop === "gateway" || prop === "hooks" || prop === "nodes" || prop === "subagent") {
         const value = params.runtimeOptions?.[prop];
         if (value !== undefined) {
           return value;

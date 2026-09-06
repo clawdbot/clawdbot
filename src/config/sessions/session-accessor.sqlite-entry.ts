@@ -27,7 +27,10 @@ import type {
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  readSessionEntryCache,
+  type SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
@@ -296,6 +299,14 @@ function listSqliteSessionEntriesFromDatabase(
     latest: scope.readConsistency === "latest",
     projection,
   });
+  return projectSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false);
+}
+
+/** Applies the listing visibility and canonical-key contract to an owned snapshot. */
+export function projectSessionEntriesForListing(
+  snapshot: SessionEntryCacheSnapshot,
+  cloneEntries = false,
+): SessionEntrySummary[] {
   return snapshot.keys.flatMap((sessionKey) => {
     if (isInternalSessionEffectsKey(sessionKey)) {
       return [];
@@ -314,7 +325,7 @@ function listSqliteSessionEntriesFromDatabase(
     return [
       {
         sessionKey,
-        entry: projection === "list" && scope.clone !== false ? cloneSessionEntry(entry) : entry,
+        entry: cloneEntries ? cloneSessionEntry(entry) : entry,
       },
     ];
   });
@@ -525,7 +536,8 @@ async function patchSqliteSessionEntrySnapshot(
         previousEntry: selectedPreviousEntry,
       });
       wrote = true;
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      // Identity observers only consume sessionId, already owned by this canonical write.
+      currentIdentity = new Map([[sessionKey, persisted]]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {

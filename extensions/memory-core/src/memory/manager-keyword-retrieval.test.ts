@@ -127,14 +127,19 @@ describe("memory index", () => {
         [["unrelated-project"], 0.9],
         [["active-project"], 1.15],
       ] as const) {
+        const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
         const results = await manager.search("MEMORY.md", {
           maxResults: 1,
           activeProjectKeys: activeProjectKeys ? [...activeProjectKeys] : undefined,
           lexicalOnly: mode === "lexical-only",
+          onPartialResults: (snapshot) => partials.push(snapshot),
         });
         expect(results).toHaveLength(1);
         expect(results[0]?.path).toBe("MEMORY.md");
         expect(results[0]?.score).toBeCloseTo(score);
+        if (mode === "hybrid") {
+          expect(partials).toEqual([[expect.objectContaining({ path: "MEMORY.md", score })]]);
+        }
       }
     },
   );
@@ -159,12 +164,19 @@ describe("memory index", () => {
       );
       await manager.sync({ reason: "test" });
 
+      const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
       const results = await manager.search("MEMORY.md", {
         maxResults: 1,
         activeProjectKeys: ["active-project"],
+        onPartialResults: (snapshot) => partials.push(snapshot),
       });
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({ projectKey: "active-project", score: 1.15 });
+      if (mode === "hybrid") {
+        expect(partials).toEqual([
+          [expect.objectContaining({ projectKey: "active-project", score: 1.15 })],
+        ]);
+      }
     },
   );
 

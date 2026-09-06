@@ -32,7 +32,7 @@ export function catalogStartHandler(
     }
     const request = params as SessionsCatalogStartTerminalParams;
     const config = context.getRuntimeConfig();
-    if (config.gateway?.cliAgents?.enabled !== true) {
+    if (config.gateway?.cliAgents?.enabled === false) {
       respond(
         false,
         undefined,

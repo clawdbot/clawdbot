@@ -78,7 +78,6 @@ export type SkillWorkshopProposal = {
   recencyGroup: "today" | "yesterday" | "earlier";
   ageLabel: string;
   supportFiles: SkillWorkshopFile[];
-  isNew: boolean;
 };
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;

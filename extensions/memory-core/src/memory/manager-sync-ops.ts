@@ -323,9 +323,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
-          if (shouldSyncMemory) {
-            this.clearMemoryRetryState();
-          }
           if (shouldSyncSessions) {
             this.clearSessionRetryState();
           } else {
@@ -334,7 +331,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         } else {
           if (shouldSyncMemory) {
             await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-            this.clearMemoryRetryState();
           }
 
           if (shouldSyncSessions) {
@@ -349,6 +345,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
         }
       } catch (err) {
+        this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
         const shouldFallback = this.shouldFallbackOnError(err);
         if (shouldFallback) {
@@ -551,9 +548,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               needsFullReindex: true,
               progress: params.progress,
             });
-            if (shouldSyncMemory) {
-              this.clearMemoryRetryState();
-            }
             if (shouldSyncSessions) {
               this.clearSessionRetryState();
             } else {
@@ -562,7 +556,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           } else {
             if (shouldSyncMemory) {
               await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearMemoryRetryState();
             }
 
             if (shouldSyncSessions) {

@@ -3159,6 +3159,12 @@ export const en: TranslationMap & {
       description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed",
+      finished: "{done} completed · {failed} failed",
+      childOutcome: "Child runs finished. Check the conversation for the final response.",
+      details: "Child details",
+      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      otherGroups: "{count} more active groups",
     },
     toolSearch: {
       title: "Tool Search for all models",
@@ -3520,10 +3526,6 @@ export const en: TranslationMap & {
   skillWorkshop: {
     title: "Skill Workshop",
     header: {
-      useCurrentChat: "Use current chat",
-      useCurrentChatAria: "Use current chat for revision requests",
-      useCurrentChatTooltip:
-        "Send revision requests to the current chat session instead of the proposal's workshop session.",
       selfLearning: "Self-learning",
       selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
@@ -3692,7 +3694,6 @@ export const en: TranslationMap & {
     today: {
       emptyTitle: "Nothing waiting today",
       emptyBody: "Your agent hasn't drafted anything new. Switch to Board to browse history.",
-      new: "NEW",
       waiting: "WAITING",
       reviewed: "REVIEWED",
       agent: "agent",
@@ -3714,10 +3715,9 @@ export const en: TranslationMap & {
       notForMe: "Not for me",
       upNext: "Up next · {count} more waiting",
       seeAll: "See all proposals →",
-      collection: "Your collection · {count} in use",
-      manage: "Manage →",
-      workflowHeading: "How the agent will use it",
-      applicabilityHeading: "When the agent should use it",
+      recentlyApplied: "Recently applied",
+      manage: "View history →",
+      readSkill: "Read full skill",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -4650,6 +4650,12 @@ export const en: TranslationMap & {
       startingModel: "Waiting for a response…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    subagentViewOnly: "View-only subagent",
+    subagentSessionDisabled:
+      "This is a subagent of {parent}. Continue the conversation in its parent session.",
+    parentSession: "the parent session",
+    openParentSession: "Open parent session",
+    parentSessionUnavailable: "Parent session information is unavailable.",
     sessionRoute: {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
@@ -4868,20 +4874,14 @@ export const en: TranslationMap & {
     },
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
-      startWorktree: "Start in a worktree",
-      startLocal: "Start in current checkout",
-      startCloud: "Send to cloud · {profile}",
-      startCloudGeneric: "Send to cloud",
+      startSession: "Start in a new session",
       copyPrompt: "Copy prompt",
       copyPromptFailed: "Couldn't copy the prompt to the clipboard",
       promptCopied: "Copied",
-      fixInSession: "Fix in this session",
-      noCloudConfigured: "No cloud environment configured",
       showInstructions: "Show instructions",
       hideInstructions: "Hide instructions",
       previous: "Previous suggested task",
       next: "Next suggested task",
-      moreActions: "More ways to start this task",
       starting: "Starting…",
       dismiss: "Dismiss {title}",
       adminRequired: "Administrator access is required to start suggested tasks.",

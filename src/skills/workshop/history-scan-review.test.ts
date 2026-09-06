@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { runSkillHistoryScanReview } from "./history-scan-review.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn(async () => ({ meta: { durationMs: 1 } })));
 
@@ -11,6 +12,14 @@ describe("Skill Workshop history scan review", () => {
       agentId: "main",
       config: {},
       modelRef: { provider: "openai", model: "gpt-test" },
+      onComplete: async () => {},
+      onProgress: async () => {},
+      progress: {
+        proposalIds: [],
+        remaining: HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
+        successfulMutations: 0,
+      },
+      runId: "history-scan-review-test",
       sessions: [
         {
           instanceId: "session-1",
