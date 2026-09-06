@@ -1511,7 +1511,7 @@ export function createGatewayUpdateCheck(params: {
           if (result.status === "error") {
             params.log.info("remote model catalog refresh failed", { error: result.error });
           } else if (result.status === "updated") {
-            params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+            params.log.info("remote model catalog downloaded; restart the Gateway to apply it", {
               providers: result.providers,
               models: result.models,
               generatedAt: result.generatedAt,
