@@ -523,7 +523,7 @@ extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
-extensions/google/transport-stream.ts	15
+extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	6
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/accounts.ts	1
@@ -1460,7 +1460,7 @@ packages/ai/src/providers/anthropic-usage.ts	3
 packages/ai/src/providers/anthropic.ts	7
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	15
-packages/ai/src/providers/google-shared.ts	5
+packages/ai/src/providers/google-shared.ts	3
 packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	27

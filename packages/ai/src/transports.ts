@@ -27,3 +27,14 @@ export {
   isCodeModeModelVisibleToolName,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
 } from "./transports/transport-utils.js";
+export {
+  consumeGoogleGenerateContentStream,
+  type GoogleStreamChunk,
+} from "./providers/google-stream.js";
+export {
+  convertGoogleTools,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+  type GoogleContent,
+  type GoogleContentPart,
+} from "./providers/google-messages.js";
