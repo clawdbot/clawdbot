@@ -251,10 +251,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const conversationContext = {
       config: params.config,
       sessionKey: sandboxSessionKey,
-      runSessionKey:
-        params.sessionKey && params.sessionKey !== sandboxSessionKey
-          ? params.sessionKey
-          : undefined,
+      runSessionKey: params.sessionKey?.trim() || params.sessionId,
       sessionId: params.sessionId,
       runId: params.runId,
       agentDir,
@@ -459,7 +456,8 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: sandboxSessionKey,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
           agentId: sessionAgentId,
         }),
       }),

@@ -28,6 +28,7 @@ import {
 } from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
@@ -1179,21 +1180,40 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
-    await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sandboxSessionKey: "agent:main:telegram:default:direct:12345",
-      sessionFile: TEST_SESSION_KEY,
-      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-    });
-
-    expect(resolveSandboxContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        sessionKey: "agent:main:telegram:default:direct:12345",
+    const { addSession, deleteSession } = await import("../bash-process-registry.js");
+    const owned = createProcessSessionFixture({ id: "compaction-owned", backgrounded: true });
+    owned.scopeKey = "agent:main:main";
+    const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
+    other.scopeKey = "agent:main:telegram:default:direct:12345";
+    addSession(owned);
+    addSession(other);
+    try {
+      await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionKey: owned.scopeKey,
+        sandboxSessionKey: other.scopeKey,
+        sessionFile: TEST_SESSION_KEY,
         workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      }),
-    );
+      });
+
+      expect(resolveSandboxContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: {},
+          sessionKey: other.scopeKey,
+          workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        }),
+      );
+      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeInfo: expect.objectContaining({
+            activeProcessSessions: [expect.objectContaining({ sessionId: owned.id })],
+          }),
+        }),
+      );
+    } finally {
+      deleteSession(owned.id);
+      deleteSession(other.id);
+    }
   });
 
   it.each([

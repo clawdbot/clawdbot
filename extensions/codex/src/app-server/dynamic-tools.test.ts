@@ -3718,6 +3718,60 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("preserves successful execution when its observer throws an unreadable error", async () => {
+    const observerError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("observer message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn(() => {
+      throw observerError;
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
+    const execute = vi.fn(async () => rawResult);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+    });
+    const outcome = await bridge
+      .handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "observer-success",
+          namespace: null,
+          tool: "exec",
+          arguments: { command: "write synthetic effect" },
+        },
+        { onAgentToolResult },
+      )
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    expect(execute).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      result: {
+        success: true,
+        diagnosticTerminalType: "completed",
+        executionStarted: true,
+        sideEffectEvidence: true,
+        contentItems: [{ type: "inputText", text: "committed effect" }],
+      },
+    });
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: rawResult,
+      isError: false,
+    });
+    expect(rawResult).toEqual(textToolResult("committed effect", { receipt: "effect-1" }));
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "onAgentToolResult handler failed: tool=exec error=Error",
+    );
+  });
+
   it("reports thrown dynamic tool failures to the private result observer", async () => {
     const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
@@ -4718,12 +4772,26 @@ describe("createCodexDynamicToolBridge", () => {
       { onAgentToolResult },
     );
 
-    expect(result).toMatchObject({
+    const protocolResponse = {
       success: false,
-      diagnosticTerminalReason: "failed",
-      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+      contentItems: [{ type: "inputText", text: "Error" }],
+    };
+    expect(result.diagnosticTerminalReason).toBe("failed");
+    expect(result).toMatchObject({
+      ...protocolResponse,
+      diagnosticTerminalType: "error",
+      executionStarted: true,
+      sideEffectEvidence: true,
     });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual(protocolResponse);
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "exec",
+      result: {
+        content: [{ type: "text", text: "Error" }],
+        details: { status: "failed", error: "Error" },
+      },
+      isError: true,
+    });
   });
 
   it("preserves report-only approval blocks for the outer lifecycle owner", async () => {

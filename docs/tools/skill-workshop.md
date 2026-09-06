@@ -14,6 +14,11 @@ generated skills. Through this path, agents and operators create a **proposal** 
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
+Automatic background learning and weekly collection review instead maintain the
+Workshop directory with normal agent file tools. These direct edits do not create
+proposals or automatic rollback snapshots. Choose `propose` mode when each new
+capture needs review before publication.
+
 By default, Skill Workshop writes only under the active agent's
 `<state-dir>/agents/<agentId>/agent/workshop-skills`. When `agents.entries.<id>.agentDir` is
 configured, it writes under `<agentDir>/workshop-skills` instead. Operators edit
@@ -448,8 +453,10 @@ reports the original size, and points to smaller per-artifact reads or the
 unbounded operator CLI command shown above.
 
 Agents must use `skill_workshop` for generated skill work and must not create or
-change skill or proposal files directly. This rule is advisory and
-prompt-enforced. A hard guard is not currently possible at the tool-policy seam.
+change skill or proposal files directly during foreground authoring. Automatic
+background maintenance uses the rooted file-tool path described below instead.
+The foreground rule is advisory and prompt-enforced. A hard guard is not
+currently possible at the tool-policy seam.
 
 <Note>
 `skill_workshop` is a built-in agent tool and is included in
@@ -465,11 +472,11 @@ Use a normal host-side session or the CLI for Workshop proposal review.
 
 ## Self-learning
 
-After substantial work, an isolated background review can turn corrections and
-successful procedures into Workshop proposals; see
+After substantial work, a detached background review can turn corrections and
+successful procedures into reusable Workshop skills; see
 [Self-learning](/tools/self-learning). Set `skills.workshop.autonomous.mode` to
-`propose` to create pending proposals, or to `auto` to apply scanner-approved
-captures through the normal Workshop service. The Control UI Workshop tab shows
+`propose` to create pending proposals, or to `auto` to maintain complete skills
+with normal agent tools. The Control UI Workshop tab shows
 whether self-learning is on; use the config setting to choose all three modes.
 
 ### Scan past sessions
@@ -501,11 +508,13 @@ into scan state.
 In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
 after the agent system becomes idle. It records the finished turn's boundary and
 reads that turn's model context asynchronously with the same provider and model.
-It omits the general skill catalog
-whose read prerequisite cannot execute in this restricted run. Review transcript
-and session metadata changes stay detached. It can draft one pending create, patch, or update.
-In `auto` mode, creates and Workshop-generated updates use the scanner-gated
-apply path. A failed review is logged and dropped after one attempt.
+Review transcript and session metadata stay detached from foreground work.
+In `propose` mode, only `skill_workshop` executes and the reviewer can stage one
+pending mutation. In `auto` mode, ordinary file tools can inspect, edit, and
+verify several connected files in the Workshop directory. The review inherits
+source permissions and shell approvals. Its `process` tool cannot control
+foreground jobs; the Workshop file root is not a shell sandbox.
+A failed review is recorded after one attempt; completed direct edits remain.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -527,24 +536,29 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting           | Default  | Effect                                                                                                                                                                           |
-| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
-| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
-| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                                        |
-| `maxSkillBytes`   | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
+| Setting           | Default  | Effect                                                                                                                                                              |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending proposals, and `"auto"` enables direct per-turn and weekly Workshop maintenance.                   |
+| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                           |
+| `maxSkillBytes`   | `40000`  | Caps proposal body size in bytes (1024-200000). Autonomous proposals also have a 10,000-character cap; direct maintenance does not use proposal limits.             |
 
-In `propose` and `auto` modes, an isolated run of the selected model decides whether the
-completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
-to learn before it replies. The background reviewer preserves the foreground run as proposal
-provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
-mode, the capture pipeline applies every autonomous proposal only after the isolated run
-completes. The reviewer may read or prepare an exact span before its single mutation.
-Existing-skill changes require a complete read receipt or prepared exact-span authority, plus
-content-hash binding, before they are eligible for that apply step. The review starts
-only when the foreground runtime reports its resolved model
-and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
-fails closed and creates no proposal.
+The selected model reviews retained evidence before deciding whether a durable
+procedure needs an update. Foreground work does not wait for that review. It
+starts only when the foreground runtime reports its resolved model and actual
+`skill_workshop` availability; restrictive or unknown tool policy fails closed.
+
+In `auto` mode, the reviewer uses the same direct-maintenance guidance as weekly
+review. File tools stay rooted at Workshop; shell commands retain the source
+session's execution policy. Source deletion, replacement, or permission changes
+invalidate retained review authority. Direct maintenance does not run a post-turn
+proposal scanner or create rollback snapshots. Use backups for unwanted edits.
+
+In `propose` mode, the reviewer can read or prepare an exact span before staging
+one pending mutation. Existing-skill proposals retain read receipts, content-hash
+binding, size validation, and normal apply-time scanning and rollback metadata.
+Immediate foreground repair also retains the normal proposal apply path in
+`auto` mode; it is separate from direct background maintenance.
 
 See [Self-learning](/tools/self-learning) for the complete autonomous review behavior and safety
 model.
@@ -679,7 +693,7 @@ attestations keep their protection.
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Description                     | 160 bytes                                                                    |
 | Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
-| Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
+| Autonomous proposal `SKILL.md`  | 10,000 characters, or strictly shorter when already over the cap             |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per agent (default 50)                          |

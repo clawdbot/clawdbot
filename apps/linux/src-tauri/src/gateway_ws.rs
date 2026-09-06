@@ -1869,7 +1869,11 @@ esac
                     .prepare_dashboard_url(&ready.dashboard_url)
                     .expect("first-run dashboard");
                 assert_eq!(first_run.path(), "/control/settings/model-setup", "{mode}");
-                assert_eq!(first_run.query(), Some("keep=yes&firstRun=1"), "{mode}");
+                assert_eq!(
+                    first_run.query(),
+                    Some("keep=yes&firstRun=explicit"),
+                    "{mode}"
+                );
                 assert_eq!(
                     first_run.fragment(),
                     Some("bootstrapToken=fixture%2Bbrowser%2Fgrant%3D&bootstrapProfile=owner"),

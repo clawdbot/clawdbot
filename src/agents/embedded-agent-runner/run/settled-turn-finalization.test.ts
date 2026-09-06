@@ -15,7 +15,11 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
-import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
+import {
+  createSettledFinalizationTestInput,
+  createSettledProviderFailureAttempt,
+  projectSettledProviderFailureAttempt,
+} from "./settled-turn-finalization.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -344,6 +348,69 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
           expect.objectContaining({ text: "The tool run finished." }),
         ]);
       }
+    },
+  );
+
+  it.each([
+    { reported: false, outcome: "answered" },
+    { reported: true, outcome: "answered" },
+    { reported: false, outcome: "empty" },
+    { reported: true, outcome: "empty" },
+  ] as const)(
+    "recovers truncated completions after commentary (reported: $reported, finalizer: $outcome)",
+    async ({ reported, outcome }) => {
+      const commentary = "I am saving the note.";
+      const base = createSettledProviderFailureAttempt({ assistantTexts: [commentary] });
+      const toolAssistant = base.messagesSnapshot[1];
+      if (toolAssistant?.role !== "assistant" || !base.currentAttemptCompletedAssistant) {
+        throw new Error("Missing assistant fixture");
+      }
+      toolAssistant.content.unshift({ type: "text", text: commentary });
+      base.currentAttemptCompletedAssistant.errorMessage = "Stream ended without finish_reason";
+      base.terminal = reported
+        ? { kind: "ok" }
+        : {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("Stream ended without finish_reason"),
+          };
+      const attempt = projectSettledProviderFailureAttempt(base);
+      expect(attempt.settledTurnFinalizationContext).toBeDefined();
+      const finalText = "The note was saved.";
+      backendMocks.runSettledFinalization.mockResolvedValue({
+        outcome,
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: outcome === "answered" ? [{ type: "text", text: finalText }] : [],
+          }),
+        },
+      });
+      const input = finalizationInput(attempt);
+      input.terminalBase.runParams.trigger = "user";
+      input.finalization.modelApi = "openai-completions";
+
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+      expect(result.finalizationOutcome).toBe(
+        outcome === "answered" ? "answered" : "completed-empty",
+      );
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
+        outcome === "answered" ? 1 : 2,
+      );
+      for (const [preparedAttempt, settledAttempt] of backendMocks.runSettledFinalization.mock
+        .calls) {
+        expect(preparedAttempt).toMatchObject({
+          operation: "settled-tool-finalization",
+          disableTools: true,
+        });
+        expect(settledAttempt).toBe(attempt);
+      }
+      expect(result.prepared.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          text: outcome === "answered" ? finalText : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+        }),
+      ]);
+      expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
     },
   );
 

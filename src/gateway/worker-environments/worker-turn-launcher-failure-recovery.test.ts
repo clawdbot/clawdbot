@@ -425,6 +425,7 @@ describe("worker turn launcher failure recovery", () => {
       }),
       stopTunnel,
       destroy,
+      requestDestroy: destroy,
       attachSession: vi.fn(async () => {
         throw new Error("unexpected worker session attachment");
       }),

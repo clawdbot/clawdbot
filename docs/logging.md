@@ -413,6 +413,11 @@ replace logs — they feed metrics, traces, and exporters. Events are emitted
 in-process by default (set `diagnostics.enabled: false` to turn them off);
 exporting them is separate.
 
+When a session directive rejects a turn before model execution, its existing
+`message.processed` event reports `outcome: "skipped"` with a closed `reason`
+code and the usual channel, message, and session correlation. The rejection
+does not add the user's message, model token, or error reply to that event.
+
 Two adjacent surfaces:
 
 - **OpenTelemetry export** — send metrics, traces, and logs over OTLP/HTTP to

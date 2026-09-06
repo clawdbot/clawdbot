@@ -1452,7 +1452,7 @@ packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
-packages/ai/src/providers/anthropic.ts	7
+packages/ai/src/providers/anthropic.ts	6
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	15
 packages/ai/src/providers/google-shared.ts	3
@@ -2383,7 +2383,6 @@ src/commands/auth-choice.apply.api-providers.ts	1
 src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
-src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	10
@@ -3080,7 +3079,7 @@ src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	2
 src/infra/push-apns-http2.ts	1
 src/infra/push-apns.relay.ts	1
-src/infra/push-apns.ts	7
+src/infra/push-apns.ts	3
 src/infra/push-web.ts	2
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3

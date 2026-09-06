@@ -17,6 +17,7 @@ import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
+  captureModelSetupConnection,
   FirstRunSetup,
   type ModelSetupConnection,
   type ModelSetupRouteData,
@@ -66,12 +67,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private manualApiKey = "";
   @state() private manualError: string | null = null;
   @state() private moreSignInOpen = false;
+  @state() private nativeSessionCatalogsEnabled = false;
   @state() private iconUrls: Record<string, string> = {};
   @state() private setupRefreshWarning: string | null = null;
+  @state() private cancellationNotice: string | null = null;
 
-  private observedConnection:
-    | (ModelSetupConnection & { connected: boolean; firstRun: boolean })
-    | null = null;
+  private observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
@@ -84,8 +85,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     canUseSetup: (client) => this.canUseSetup(client),
     canVerify: (client) => this.canVerify(client),
     verify: () => this.verifyConnection().then(() => this.verifyTask.value),
-    activate: (candidate, targetId) =>
-      this.activate({ kind: candidate.kind, modelRef: candidate.modelRef }, targetId),
     setVerifyState: (next) => (this.verifyState = next),
     setActivationState: (next) => (this.activationState = next),
     setRefreshWarning: (warning) => (this.setupRefreshWarning = warning),
@@ -122,6 +121,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         next.phase === "step" && this.wizardMutationActive ? { ...next, busy: true } : next;
       if (next.phase === "step" && next.step.id !== previousStep) {
         this.wizardValue = initialWizardValue(next.step);
+      } else if (next.phase === "idle") {
+        this.wizardValue = undefined;
+        this.cancellationNotice = null;
       }
     },
     onStart: (method, intent) => {
@@ -201,7 +203,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         agentId: outcome.agentId,
       });
       this.pageState = { phase: "ready", result: outcome.value };
-      this.syncManualProvider(this.pageState);
+      if (
+        !outcome.value.manualProviders.some((provider) => provider.id === this.manualProviderId)
+      ) {
+        this.manualProviderId = "";
+      }
     },
   });
 
@@ -252,25 +258,58 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.isConnected || !routeData) {
       return;
     }
-    const connection = {
-      client: snapshot.client,
-      hello: snapshot.hello,
-      agentId: this.context.agentSelection.state.selectedId,
-      connected: snapshot.phase === "connected",
-      firstRun: routeData.firstRun,
-    };
     const previous = this.observedConnection;
+    const connection = captureModelSetupConnection(
+      this.context,
+      routeData.firstRun,
+      previous?.recoveryScope,
+    );
     if (
       previous &&
       connection.client === previous.client &&
       connection.hello === previous.hello &&
       connection.agentId === previous.agentId &&
       connection.connected === previous.connected &&
-      connection.firstRun === previous.firstRun
+      connection.firstRun === previous.firstRun &&
+      connection.connectionRevision === previous.connectionRevision &&
+      connection.recoveryScope === previous.recoveryScope
     ) {
       return;
     }
     this.observedConnection = connection;
+    const authenticatedOwnerLost =
+      previous &&
+      (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+    const ownerChanged =
+      previous &&
+      (connection.agentId !== previous.agentId ||
+        connection.firstRun !== previous.firstRun ||
+        connection.connectionRevision !== previous.connectionRevision ||
+        authenticatedOwnerLost);
+    const setupAuthorityLost =
+      connection.connected && !hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+    if (authenticatedOwnerLost || setupAuthorityLost) {
+      // A changed identity or reduced authority cannot cancel the old wizard.
+      // Retire local handles and expose the existing access/recovery state.
+      this.wizard.close({ retireOwner: true });
+    }
+    if (ownerChanged) {
+      this.nativeSessionCatalogsEnabled = false;
+      this.manualProviderId = "";
+      this.manualApiKey = "";
+      this.manualError = null;
+    }
+    const sameWizardOwner = previous && Boolean(connection.recoveryScope) && !ownerChanged;
+    if (sameWizardOwner && this.wizard.hasAdmittedSession) {
+      this.wizardMutationGeneration += 1;
+      this.wizardMutationActive = false;
+      this.wizard.suspend();
+      if (this.canUseSetup(connection.client)) {
+        this.firstRun.reconnectActivation(connection);
+        void this.runWizardMutation(() => this.wizard.resume());
+      }
+      return;
+    }
     // The router refreshes cached loader objects during the same visit. Only
     // a mode change or mounted/connection lifecycle can retire setup ownership.
     if (connection.firstRun !== previous?.firstRun) {
@@ -290,8 +329,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.wizardMutationActive = false;
     void this.detectTask.run([null, null, null]);
     this.activationState = { phase: "idle" };
-    this.verifyState = { phase: "idle" };
-    void this.verifyTask.run([null, null]);
+    this.resetVerify();
     this.iconLoader.reset();
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
@@ -305,17 +343,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
-  }
-
-  private syncManualProvider(pageState: ModelSetupPageState): void {
-    if (pageState.phase !== "ready") {
-      return;
-    }
-    if (
-      !pageState.result.manualProviders.some((provider) => provider.id === this.manualProviderId)
-    ) {
-      this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
-    }
   }
 
   private async detect(): Promise<SystemAgentSetupDetectResult | null> {
@@ -362,7 +389,16 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.activationState = { phase: "testing", targetId };
     this.pendingPrepareOption = null;
     this.wizardMode = "activate";
-    await this.runWizardMutation(() => this.wizard.activate(params, targetId));
+    await this.runWizardMutation(() =>
+      this.wizard.activate({ ...params, ...this.nativeSessionCatalogPreference() }, targetId),
+    );
+  }
+
+  private nativeSessionCatalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
+    return this.pageState.phase === "ready" &&
+      this.pageState.result.nativeSessionCatalogPreferenceRequired === true
+      ? { nativeSessionCatalogsEnabled: this.nativeSessionCatalogsEnabled }
+      : {};
   }
 
   private finishActivation(
@@ -429,12 +465,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }: ModelSetupWizardCompletion): Promise<void> {
     const prepareOption =
       startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
+    const nativeSessionCatalogPreference = this.nativeSessionCatalogPreference();
     this.pendingPrepareOption = null;
     if (prepareOption && preparedModelRef) {
       const kind = providerAutoSetupKind(prepareOption.id);
       this.wizard.close();
       void this.activate(
-        { kind, modelRef: preparedModelRef },
+        { kind, modelRef: preparedModelRef, ...nativeSessionCatalogPreference },
         activationTargetId(kind, preparedModelRef),
       );
       return;
@@ -482,7 +519,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return;
       }
       this.wizard.close();
-      this.activateCandidate(candidate);
+      void this.activate(
+        { kind: candidate.kind, modelRef: candidate.modelRef, ...nativeSessionCatalogPreference },
+        activationTargetId(candidate.kind, candidate.modelRef),
+      );
       return;
     }
     this.wizard.close();
@@ -567,14 +607,35 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     }
   }
 
-  private cancelWizard(): void {
-    this.wizardMutationGeneration += 1;
-    this.wizardMutationActive = false;
-    this.pendingPrepareOption = null;
-    this.activationState = { phase: "idle" };
-    // A Gateway-owned step can commit while cancellation is being handled.
-    // Hide this generation now, but let its mutation lane settle and refresh.
-    void this.wizard.cancel({ settleActiveRequest: true });
+  private async cancelWizard(): Promise<void> {
+    const generation = this.wizardMutationGeneration;
+    this.cancellationNotice = null;
+    try {
+      const outcome = await this.wizard.requestCancellation();
+      if (generation !== this.wizardMutationGeneration) {
+        return;
+      }
+      if (outcome === "running") {
+        this.cancellationNotice = t("modelSetup.wizard.finishingStep");
+        return;
+      }
+      if (outcome !== "cancelled") {
+        return;
+      }
+      this.wizardMutationGeneration += 1;
+      this.wizardMutationActive = false;
+      this.pendingPrepareOption = null;
+      this.activationState = { phase: "idle" };
+    } catch (error) {
+      if (
+        generation === this.wizardMutationGeneration &&
+        (this.wizardState.phase === "starting" || this.wizardState.phase === "step")
+      ) {
+        this.cancellationNotice = t("modelSetup.wizard.cancelFailed", {
+          error: formatModelSetupError(error),
+        });
+      }
+    }
   }
 
   private actionsDisabled(): boolean {
@@ -614,6 +675,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: this.setupRefreshWarning,
+      cancellationNotice: this.cancellationNotice,
       activationUnresolved: this.firstRun.unresolved,
       onUseCurrentModel: () => void this.firstRun.useCurrentModel(),
       actionsDisabled: this.actionsDisabled(),
@@ -621,6 +683,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      nativeSessionCatalogsEnabled: this.nativeSessionCatalogsEnabled,
+      onNativeSessionCatalogsChange: (enabled) => (this.nativeSessionCatalogsEnabled = enabled),
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
       onDetect: () => {
@@ -633,7 +697,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onStartAuth: (option) => {
         this.pendingPrepareOption = null;
         this.wizardMode = "auth";
-        void this.runWizardMutation(() => this.wizard.start(option.id));
+        void this.runWizardMutation(() =>
+          this.wizard.start(
+            option.id,
+            "openclaw.setup.auth.start",
+            this.nativeSessionCatalogPreference(),
+          ),
+        );
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         this.pendingPrepareOption = option;
@@ -659,7 +729,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) =>
         void this.runWizardMutation(() => this.wizard.answer(value, includeValue)),
-      onWizardCancel: () => this.cancelWizard(),
+      onWizardCancel: () => void this.cancelWizard(),
       onWizardClose: () => this.closeWizard(),
     });
   }
