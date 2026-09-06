@@ -11,6 +11,7 @@ import {
   reopenUpdateCheckpointRestorePlan,
   restoreUpdateCheckpointResource,
 } from "./update-checkpoint-restore.js";
+import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "./update-checkpoint.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import { createUpdateRecoveryCheckpointAdapter } from "./update-run-recovery-checkpoint.js";
@@ -40,6 +41,7 @@ function family(file: string) {
 }
 async function fixture() {
   const root = fs.realpathSync(dirs.make("recovery-checkpoint-adapter-"));
+  await buildCheckpointReaderRuntime(root);
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
   let held = true;
   const fence = {
