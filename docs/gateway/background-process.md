@@ -97,6 +97,17 @@ command or closed output pipe alone does not establish that its descendants have
 stopped. Forced termination without confirmed cleanup remains uncertain. Local
 TUI shell shutdown uses the same cleanup owner for its own commands.
 
+One-shot tool cleanup keeps configured sandbox runtimes on their
+[session, agent, or shared lifetime](/gateway/sandboxing#modes-scope-and-backend). It joins the local
+command transport and backend cleanup for that command. It does not stop a shared
+sandbox or claim that every remote descendant has exited. Host commands, including
+elevated commands from sandboxed sessions, still require owned process-tree cleanup.
+
+When a host command requires process-tree cleanup, a `pty` request falls back to
+the child-process path before starting a native PTY and reports a warning. Commands
+that require a terminal may fail under that fallback. Cleanup failures remain
+uncertain rather than being reported as a clean shutdown.
+
 ## process tool
 
 Actions:

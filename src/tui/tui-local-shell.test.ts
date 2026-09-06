@@ -254,7 +254,7 @@ describe("createLocalShellRunner", () => {
     const harness = createShellHarness();
     expect(harness.supervisor.acquireScopeCleanup).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
-      { requireProcessTree: true },
+      { processTree: "required-all" },
     );
     const run = harness.runLocalShellLine("!echo late");
     const selector = harness.getLastSelector();

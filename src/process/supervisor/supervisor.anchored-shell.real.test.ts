@@ -110,7 +110,7 @@ async function createDescendantScope(
   }
   const supervisor = createProcessSupervisor();
   const scopeKey = `anchored-shell:${cwd}`;
-  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const run = await supervisor.spawn({
     ...(options.oneShot
       ? {

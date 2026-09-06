@@ -36,7 +36,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let cancelPendingApproval: (() => void) | undefined;
   const supervisor = getProcessSupervisor();
   const scopeKey = `tui-local:${randomUUID()}`;
-  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+  const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
