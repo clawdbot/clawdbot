@@ -24,8 +24,8 @@ export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
-    ? 'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'
-    : "List configured agent ids with name/model/runtime metadata that can be used as subagent spawn targets.";
+    ? 'List configured agent ids with name/description/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'
+    : "List configured agent ids with name/description/model/runtime metadata that can be used as subagent spawn targets.";
 }
 
 export function describeAgentsWaitTool(sessionsSpawnAvailable: boolean): string {

@@ -461,9 +461,14 @@ that would run unsandboxed.
 ### Discovery
 
 Use `agents_list` to see which agent ids are currently allowed for
-`sessions_spawn`. The response includes each listed agent's effective
-model and embedded runtime metadata so callers can distinguish OpenClaw, Codex
-app-server, and other configured native runtimes.
+`sessions_spawn`. The response includes each listed agent's configured name and
+description when present, plus effective model and embedded runtime metadata so
+callers can distinguish OpenClaw, Codex app-server, and other configured native
+runtimes. Descriptions are model-visible capability summaries: do not include
+secrets or tenant-sensitive information. Each description is limited to 512 UTF-16
+code units without splitting surrogate pairs. A shared CJK-aware budget of 4096
+weighted character units limits description text across the result; later
+descriptions may be shortened or omitted, while all allowed agents remain listed.
 
 `allowAgents` entries must point at configured agent ids in `agents.entries.*`.
 `["*"]` means any configured target agent plus the requester. If an agent config
